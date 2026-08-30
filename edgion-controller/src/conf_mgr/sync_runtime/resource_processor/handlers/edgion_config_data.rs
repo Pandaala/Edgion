@@ -13,11 +13,11 @@
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, partially_invalid_condition, update_condition,
-    ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
+use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionConfigData;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataStatus};
 
@@ -67,6 +67,18 @@ async fn requeue_edgion_config_data_referrers(ed: &EdgionConfigData, ctx: &Handl
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
     fn preparse(&self, ed: &mut EdgionConfigData, _ctx: &HandlerContext) -> Vec<String> {
+        if !ed.spec.unknown_fields.is_empty() {
+            let paths = bounded_unknown_field_paths(&ed.spec.unknown_fields);
+            tracing::warn!(
+                component = "conf_mgr",
+                event = "unknown_config_fields_detected",
+                kind = "EdgionConfigData",
+                namespace = %ed.metadata.namespace.as_deref().unwrap_or("default"),
+                name = %ed.metadata.name.as_deref().unwrap_or(""),
+                paths = ?paths,
+                "EdgionConfigData document has keys the typed schema does not recognize; they are ignored and config still syncs"
+            );
+        }
         ed.validate_pre_parse()
     }
 
@@ -151,20 +163,140 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
         } else {
             None
         };
-
         let status = ed.status.get_or_insert_with(EdgionConfigDataStatus::default);
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         if let Some(partially_invalid) = partially_invalid {
             update_condition(&mut status.conditions, partially_invalid);
         }
+        super::super::unknown_fields_stamp::apply_unknown_fields_condition(
+            &mut status.conditions,
+            &ed.spec.unknown_fields,
+            generation,
+        );
     }
 }
 
-/// Resolve cross-EdgionConfigData references for update_status.
-///
-/// EdgionConfigData resources carry no external refs; always returns empty.
-#[allow(dead_code)]
-fn resolve_refs(_ed: &EdgionConfigData, _ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    vec![]
+#[cfg(test)]
+mod unknown_fields_tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+        condition_reasons, condition_true, condition_types,
+    };
+    use edgion_resources::resources::edgion_config_data::EdgionConfigDataSpec;
+    use std::sync::Arc;
+
+    fn resource(paths: Vec<String>) -> EdgionConfigData {
+        let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
+            "data": {"type": "Misc", "config": {}}
+        }))
+        .expect("minimal ConfigData spec");
+        let mut resource = EdgionConfigData::new("config", spec);
+        resource.metadata.namespace = Some("default".to_string());
+        resource.metadata.generation = Some(7);
+        resource.spec.unknown_fields = paths;
+        resource
+    }
+
+    #[test]
+    fn update_status_adds_and_clears_advisory_without_disturbing_other_conditions() {
+        let handler = EdgionConfigDataHandler::new();
+        let mut resource = resource(vec!["data.config.typo".to_string()]);
+        let ctx = HandlerContext::new(
+            None,
+            None,
+            Default::default(),
+            5,
+            20,
+            Arc::new(crate::conf_mgr::ControllerRuntime::default()),
+        );
+
+        handler.update_status(&mut resource, &ctx, &[]);
+        let conditions = &resource.status.as_ref().expect("status").conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == condition_types::UNKNOWN_CONFIG_FIELDS
+                && condition.reason == condition_reasons::UNKNOWN_FIELDS_DETECTED
+                && condition.status == "True"
+        }));
+        assert!(conditions
+            .iter()
+            .any(|condition| condition.type_ == condition_types::ACCEPTED && condition.status == "True"));
+
+        resource.spec.unknown_fields.clear();
+        resource
+            .status
+            .as_mut()
+            .expect("status")
+            .conditions
+            .push(condition_true("Unrelated", "Stable", "keep", Some(7)));
+        handler.update_status(&mut resource, &ctx, &[]);
+        let conditions = &resource.status.as_ref().expect("status").conditions;
+        assert!(conditions
+            .iter()
+            .all(|condition| condition.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
+        assert!(conditions.iter().any(|condition| condition.type_ == "Unrelated"));
+    }
+}
+
+#[cfg(test)]
+mod dependency_requeue_tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+    use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::prelude_resources::EdgionPlugins;
+    use edgion_resources::resources::edgion_config_data::EdgionConfigDataSpec;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct PluginsNoop;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionPlugins> for PluginsNoop {}
+
+    fn resource() -> EdgionConfigData {
+        let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
+            "data": {"type": "Misc", "config": {}}
+        }))
+        .expect("minimal ConfigData spec");
+        let mut resource = EdgionConfigData::new("url-list", spec);
+        resource.metadata.namespace = Some("default".to_string());
+        resource
+    }
+
+    async fn assert_plugins_requeued(processor: &ResourceProcessor<EdgionPlugins>) {
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .expect("dependent plugin should be requeued")
+            .expect("work item should exist");
+        assert_eq!(item.key, "default/policy");
+        processor.workqueue().done(&item.key);
+    }
+
+    #[tokio::test]
+    async fn config_data_apply_and_delete_requeue_request_access_policy_dependents() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            100,
+            Arc::new(PluginsNoop),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(processor.clone());
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+        let resource = resource();
+        let source_key = "default/url-list".to_string();
+        let dependent_key = "EdgionPlugins:default/policy".to_string();
+
+        runtime
+            .edgion_config_data_refs
+            .add_ref(source_key.clone(), dependent_key.clone());
+        EdgionConfigDataHandler::new().on_change(&resource, &ctx).await;
+        assert_plugins_requeued(&processor).await;
+
+        runtime.edgion_config_data_refs.add_ref(source_key, dependent_key);
+        EdgionConfigDataHandler::new().on_delete(&resource, &ctx).await;
+        assert_plugins_requeued(&processor).await;
+        assert!(runtime.edgion_config_data_refs.get_refs("default/url-list").is_empty());
+    }
 }

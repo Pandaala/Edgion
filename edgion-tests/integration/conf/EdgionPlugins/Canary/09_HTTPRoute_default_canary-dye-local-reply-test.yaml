@@ -1,0 +1,25 @@
+# Canary selects successfully (activeProfile: stable -> canary-app-v1) and
+# queues a response dye header; FaultInjection then aborts the request with a
+# local 403 via ErrResponse. See 08_EdgionPlugins_default_canary-dye-local-reply.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-dye-local-reply-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-dye-local-reply.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-dye-local-reply

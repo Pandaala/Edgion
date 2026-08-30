@@ -1,0 +1,16 @@
+# Per-backend connect-timeout override for ct-svc-a. The base
+# EdgionGatewayConfig (conf/base/EdgionGatewayConfig.yaml) sets
+# defaultConnectTimeout: 5s; this policy tightens it to 300ms for ct-svc-a
+# ONLY — ct-svc-b keeps the global 5s default, proving the per-backend
+# divergence.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ct-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ct-svc-a
+  connection:
+    connectTimeout: 300ms

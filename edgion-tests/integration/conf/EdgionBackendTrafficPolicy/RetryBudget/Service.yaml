@@ -1,0 +1,36 @@
+# Service anchoring the degrading backend for the RetryBudget scenario. It
+# points at the shared plain-HTTP test_server listener (127.0.0.1:30001); the
+# scenario drives it to a permanent-503 state by hitting test_server's
+# `/status/503` endpoint, so every original attempt is a retryable failure and
+# the route's retry policy is exercised on every request. The EBTP
+# `retryConstraint` is attached to THIS Service key ("edgion-test/rb-svc"), the
+# same key the gateway derives from the HTTPRoute backendRef at dial time.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rb-svc
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: rb-svc-slice
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: rb-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

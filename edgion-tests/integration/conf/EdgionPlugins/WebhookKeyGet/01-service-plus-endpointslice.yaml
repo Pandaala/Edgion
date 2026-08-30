@@ -7,7 +7,7 @@
 # Webhook forwards a single origin header transparently (X-Tenant-Id) and adds one
 # custom literal header. Method/path omitted -> frozen incoming values reused.
 #
-# Flow: HTTPRoute -> EdgionPlugins(CtxSet webhook KeyGet) -> LinkSys webhook
+# Flow: HTTPRoute -> EdgionPlugins(WebhookKeyGet) -> LinkSys webhook
 #       -> Service "wh1-svc" -> EndpointSlice ready addr 127.0.0.1:30001
 apiVersion: v1
 kind: Service
@@ -64,8 +64,8 @@ spec:
           - name: X-Caller
             value: "edgion-gateway"
     timeoutMs: 5000
-    successStatusCodes: [200]
-    allowDegradation: false
+    success:
+      statusCodes: [200]
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1
@@ -74,18 +74,20 @@ metadata:
   name: wh1-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh1_user_id
+      from: ctx
+      name: wh1_user_id
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh1_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh1-resolver"
-              extract:
-                source: body
-                path: "data.user_id"
+            webhookRef: "edgion-default/wh1-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
             default: "fallback-user"
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -93,8 +95,6 @@ kind: HTTPRoute
 metadata:
   name: wh1-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh1_user_id"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

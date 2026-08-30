@@ -27,7 +27,7 @@ message ListRequest {
 
 // List response
 message ListResponse {
-    string data = 1;
+    bytes data = 1;   // JSON payload; bytes (not string) so prost maps it to Bytes for zero-copy
     uint64 sync_version = 2;
     string server_id = 3;  // Server instance ID for detecting server restarts
 }

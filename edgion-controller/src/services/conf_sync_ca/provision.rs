@@ -4,8 +4,9 @@
 //! leaf Secret, and mints the controller-server cert IN MEMORY (never a Secret) so
 //! the controller does not depend on a mounted cert Secret to start.
 
-use super::secret_io::{ensure_ca, write_leaf};
+use super::secret_io::{ensure_ca, read_leaf, write_leaf};
 use anyhow::Result;
+use edgion_common::conf_sync::config::ConfSyncRotationConfig;
 use k8s_openapi::api::core::v1::Secret;
 use kube::{Api, Client};
 use zeroize::Zeroizing;
@@ -17,29 +18,101 @@ pub struct ServerIdentityPem {
     pub ca_cert_pem: String,
 }
 
-/// Root CA validity (long-lived; leaves rotate in Phase 2).
-const ROOT_DAYS: u32 = 3650;
-/// Leaf validity (1 year for v0; Phase 2 adds 50%-lifetime rotation).
-const LEAF_DAYS: u32 = 365;
+/// Pure adopt-or-rewrite decision for the gateway leaf Secret (spec §6 T2
+/// prerequisite): rewrite only when missing, unparsable, not chaining to the
+/// adopted CA, or within the emergency window. Everything else is adopted so
+/// replica restarts / rolling updates do not churn gateway certs.
+pub fn leaf_needs_rewrite(
+    existing: Option<(&str, &str)>,
+    ca_pem: &str,
+    emergency: time::Duration,
+    now: time::OffsetDateTime,
+) -> bool {
+    let Some((cert, key)) = existing else { return true };
+    if edgion_common::grpc_tls::validate_identity(cert.as_bytes(), key.as_bytes(), ca_pem.as_bytes()).is_err() {
+        return true;
+    }
+    match super::cert_util::parse_cert_window(cert) {
+        Ok((_, na)) => na - now <= emergency,
+        Err(_) => true,
+    }
+}
 
-/// Ensure the CA, provision the gateway-client leaf Secret, and mint the
-/// controller-server cert in memory. Idempotent (safe to run on every startup;
-/// the CA SSA-create adopts on a 409 race).
-pub async fn provision(client: Client, ns: &str, server_sans: Vec<String>) -> Result<ServerIdentityPem> {
+/// Ensure the CA, adopt-or-(re)provision the gateway-client leaf Secret, and mint
+/// the controller-server cert in memory. Idempotent (safe to run on every
+/// startup; the CA POST-create adopts on a 409 race). TTLs come from
+/// `rotation.leaf_ttl`/`rotation.ca_ttl`. The in-memory server leaf is minted
+/// fresh on every call regardless of the leaf-Secret adopt decision.
+///
+/// **This is the deliberate bootstrap exception to "the leader is the single
+/// writer"**: `cli/mod.rs` calls it on EVERY replica at startup, before leadership
+/// is known, because a replica cannot serve conf_sync mTLS until it holds a root and
+/// must not wait for an election to start. The CA half is race-safe by construction
+/// (POST + 409-adopt). The leaf half is a forced apply whose concurrent-boot race is
+/// benign (churn, not compromise) and is narrowed by the re-read below — see
+/// `secret_io::ensure_ca` for the full argument.
+pub async fn provision(
+    client: Client,
+    ns: &str,
+    server_sans: Vec<String>,
+    rotation: &ConfSyncRotationConfig,
+) -> Result<ServerIdentityPem> {
     let secret_api: Api<Secret> = Api::namespaced(client, ns);
-    let ca = ensure_ca(&secret_api, ns, ROOT_DAYS).await?;
+    let ca = ensure_ca(&secret_api, ns, rotation.ca_ttl.as_time()).await?;
 
-    // Gateway client leaf → Secret (controller-owned, overwrite to track the CA).
-    let client_leaf = ca.sign_client(LEAF_DAYS)?;
-    write_leaf(&secret_api, ns, &client_leaf, ca.ca_cert_pem()).await?;
+    // Gateway client leaf → Secret, adopted unless it needs rewrite (spec §6 T2).
+    let existing = read_leaf(&secret_api).await?;
+    let now = time::OffsetDateTime::now_utc();
+    if leaf_needs_rewrite(
+        existing.as_ref().map(|(c, k, _)| (c.as_str(), k.as_str())),
+        ca.ca_cert_pem(),
+        rotation.emergency_rotate_below.as_time(),
+        now,
+    ) {
+        // Re-read once, immediately before writing.
+        //
+        // `provision()` runs on EVERY replica at startup (before leadership is known),
+        // and `write_leaf` is a FORCED apply — last-writer-wins. Two replicas booting
+        // concurrently into a "needs rewrite" state (leaf Secret missing or inside its
+        // emergency window: a rolling restart right after a re-key, a node drain) would
+        // each mint a different leaf and force-apply it, causing two consecutive gateway
+        // Secret swaps and therefore two fleet-wide conf_sync channel rebuilds — exactly
+        // while an operator is trying to read whether the re-key landed.
+        //
+        // Between our first read above and here we have done a CA round-trip and, on the
+        // decision path, nothing else; the other replica has usually landed its write in
+        // that gap. Re-running the same check on fresh bytes lets us adopt its healthy
+        // leaf instead of clobbering it.
+        //
+        // This is a cheap read-then-act NARROWING, not a lock: it shrinks the race window
+        // from "the whole provision() prologue" to "one GET + one sign", it does not close
+        // it, and it does not need to — a double write is churn, never a split trust
+        // anchor (both leaves chain to the single 409-arbitrated root; see
+        // `secret_io::ensure_ca`).
+        let fresh = read_leaf(&secret_api).await?;
+        if !leaf_needs_rewrite(
+            fresh.as_ref().map(|(c, k, _)| (c.as_str(), k.as_str())),
+            ca.ca_cert_pem(),
+            rotation.emergency_rotate_below.as_time(),
+            time::OffsetDateTime::now_utc(),
+        ) {
+            tracing::info!(
+                component = "conf_sync_ca",
+                ns = %ns,
+                "another replica provisioned a healthy gateway leaf Secret concurrently; adopting it"
+            );
+        } else {
+            let client_leaf = ca.sign_client(rotation.leaf_ttl.as_time())?;
+            write_leaf(&secret_api, ns, &client_leaf, ca.ca_cert_pem()).await?;
+            tracing::info!(component = "conf_sync_ca", ns = %ns, "gateway leaf Secret (re)provisioned");
+        }
+    } else {
+        tracing::info!(component = "conf_sync_ca", ns = %ns, "existing gateway leaf Secret adopted");
+    }
 
-    // Controller server cert → in memory (never persisted as a Secret).
-    let server_leaf = ca.sign_server(&server_sans, LEAF_DAYS)?;
-    tracing::info!(
-        component = "conf_sync_ca",
-        ns = %ns,
-        "conf_sync auto-CA provisioned CA + gateway leaf Secret + in-memory server cert"
-    );
+    // Controller server cert → in memory (never persisted as a Secret); minted
+    // fresh every start regardless of the leaf-Secret adopt decision above.
+    let server_leaf = ca.sign_server(&server_sans, rotation.leaf_ttl.as_time())?;
     Ok(ServerIdentityPem {
         cert_pem: server_leaf.cert_pem,
         key_pem: server_leaf.key_pem,
@@ -80,5 +153,49 @@ mod tests {
         assert!(sans.contains(&"edgion-controller-leader.edgion-system.svc.cluster.local".to_string()));
         // The direct Service name is kept too.
         assert!(sans.contains(&"edgion-controller.edgion-system.svc.cluster.local".to_string()));
+    }
+
+    #[test]
+    fn leaf_needs_rewrite_decision_table() {
+        use crate::services::conf_sync_ca::cert_util::BACKDATE_SLACK;
+        use crate::services::conf_sync_ca::Ca;
+        let _ = BACKDATE_SLACK; // silence if unused
+        let ca = Ca::generate_root(time::Duration::days(365)).unwrap();
+        let leaf = ca.sign_client(time::Duration::days(30)).unwrap();
+        let now = time::OffsetDateTime::now_utc();
+        let emergency = time::Duration::hours(24);
+        // healthy existing leaf -> adopt
+        assert!(!leaf_needs_rewrite(
+            Some((&leaf.cert_pem, leaf.key_pem.as_str())),
+            ca.ca_cert_pem(),
+            emergency,
+            now
+        ));
+        // missing -> rewrite
+        assert!(leaf_needs_rewrite(None, ca.ca_cert_pem(), emergency, now));
+        // garbage -> rewrite
+        assert!(leaf_needs_rewrite(
+            Some(("bad", "bad")),
+            ca.ca_cert_pem(),
+            emergency,
+            now
+        ));
+        // wrong CA (stale BYO-root leaf) -> rewrite
+        let other = Ca::generate_root(time::Duration::days(365)).unwrap();
+        assert!(leaf_needs_rewrite(
+            Some((&leaf.cert_pem, leaf.key_pem.as_str())),
+            other.ca_cert_pem(),
+            emergency,
+            now
+        ));
+        // near expiry -> rewrite (1-day leaf, 25h emergency threshold: the leaf's
+        // entire remaining validity is inside the emergency window)
+        let dying = ca.sign_client(time::Duration::days(1)).unwrap();
+        assert!(leaf_needs_rewrite(
+            Some((&dying.cert_pem, dying.key_pem.as_str())),
+            ca.ca_cert_pem(),
+            time::Duration::hours(25),
+            now
+        ));
     }
 }

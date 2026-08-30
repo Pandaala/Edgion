@@ -8,6 +8,9 @@ metadata:
 spec:
   requestPlugins:
     - type: DynamicInternalUpstream
+      dye:
+        request:
+          - name: X-Dynamic-Internal-Upstream
       config:
         from:
           type: header
@@ -22,4 +25,3 @@ spec:
         onMissing: fallback
         onNoMatch: fallback
         onInvalid: reject
-        debugHeader: true

@@ -2,67 +2,60 @@
 
 > **🔌 Edgion extension**
 >
-> This feature enables active probing for backends via the `edgion.io/health-check` Annotation, and is an Edgion extension capability.
+> This feature enables active probing for backends via the `EdgionBackendTrafficPolicy` custom resource, and is an Edgion extension capability.
 
 ## Overview
 
 Active health checks periodically probe backend instances (HTTP/TCP/gRPC) from the gateway side, and automatically skip unhealthy instances during load balancing selection.
 This feature is primarily used when backends are reachable but the application layer is abnormal, or as a supplementary readiness check in non-Kubernetes scenarios.
 
+Health checks are configured via the `spec.healthCheck` section of an `EdgionBackendTrafficPolicy` resource attached to the target `Service` — not a Service annotation. `EdgionBackendTrafficPolicy` also carries [outlier detection](./circuit-breaker.md) and the [load balancing algorithm](../lb-algorithms.md) for the same Service; see the [full schema reference](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md) for all three sections together.
+
 ## Quick Start
 
-The most common usage is to configure it on a `Service`:
-
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: my-backend-policy
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: my-backend
+  healthCheck:
+    active:
+      type: http
+      path: /healthz
+      interval: 10s
+      timeout: 3s
+      healthyThreshold: 2
+      unhealthyThreshold: 3
+      expectedStatuses:
+        - 200
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: my-backend
   namespace: production
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: http
-        path: /healthz
-        interval: 10s
-        timeout: 3s
-        healthyThreshold: 2
-        unhealthyThreshold: 3
-        expectedStatuses:
-          - 200
 spec:
   ports:
     - port: 8080
       targetPort: 8080
 ```
 
-## Annotation Reference
-
-| Annotation | Applicable Resources | Type | Default | Description |
-|------------|---------------------|------|---------|-------------|
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | YAML string | none | Configure active health check parameters |
-
-Example value:
-
-```yaml
-active:
-  type: tcp
-  port: 6379
-  interval: 5s
-  timeout: 1s
-  healthyThreshold: 2
-  unhealthyThreshold: 3
-```
+The policy must live in the **same namespace** as the target Service (`spec.targetRefs[].kind: Service`, core API group only in v1).
 
 ## Configuration Parameters
 
-YAML structure of `edgion.io/health-check`:
+`spec.healthCheck`:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `active` | Object | none | Active probe configuration; health check is disabled if not configured |
 
-`active` sub-fields:
+`spec.healthCheck.active` sub-fields:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -77,22 +70,18 @@ YAML structure of `edgion.io/health-check`:
 | `host` | String | none | HTTP Host header override (only effective for `http`) |
 | `grpcServiceName` | String | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
 
-## Behavior Details and Priority
+## Behavior Details
 
-### Resource-Level Priority
+### Attachment Is Per-Service
 
-The configuration priority for the same `service_key` is:
-
-1. `EndpointSlice` annotation
-2. `Endpoints` annotation
-3. `Service` annotation
-
-### EndpointSlice Conflict Handling
-
-When multiple `EndpointSlice` resources under the same service have `edgion.io/health-check` set with inconsistent configurations:
-
-- `EndpointSlice`-level configuration will be disabled (to avoid non-deterministic behavior)
-- Falls back to the next level (`Endpoints` or `Service`)
+Health check configuration attaches at the Service level only — there is no
+EndpointSlice- or Endpoints-level override tier anymore. If more than one
+`EdgionBackendTrafficPolicy` targets the same Service, the **oldest**
+`creationTimestamp` wins (ties break by resource name); the losing policy's
+status reports `Accepted=False`/reason `Conflicted` on the affected ancestor
+Gateway(s) in `status.ancestors[]`. See
+[Conflict Resolution](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution)
+for the full rule and how the winner is promoted when deleted.
 
 ### Runtime Minimum Values (Safety Floor)
 
@@ -113,37 +102,47 @@ Therefore:
 
 ### Scenario 1: Standard K8s HTTP Service Health Check (Recommended)
 
-Configure HTTP probing on the `Service` to cover all backends of that service.
+Configure HTTP probing to cover all backends of a Service.
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
 metadata:
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: http
-        path: /healthz
-        interval: 10s
-        timeout: 3s
-        healthyThreshold: 2
-        unhealthyThreshold: 3
-        expectedStatuses: [200, 204]
+  name: web-policy
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: web-service
+  healthCheck:
+    active:
+      type: http
+      path: /healthz
+      interval: 10s
+      timeout: 3s
+      healthyThreshold: 2
+      unhealthyThreshold: 3
+      expectedStatuses: [200, 204]
 ```
 
-### Scenario 2: Non-K8s / Endpoint Mode (Endpoints Only)
+### Scenario 2: TCP Health Check
 
 ```yaml
-apiVersion: v1
-kind: Endpoints
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
 metadata:
-  name: legacy-backend
+  name: legacy-backend-policy
   namespace: production
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: tcp
-        port: 9000
-        interval: 5s
-        timeout: 1s
+spec:
+  targetRefs:
+    - kind: Service
+      name: legacy-backend
+  healthCheck:
+    active:
+      type: tcp
+      port: 9000
+      interval: 5s
+      timeout: 1s
 ```
 
 ### Scenario 3: gRPC Backend Health Check
@@ -151,57 +150,43 @@ metadata:
 For gRPC backends that implement the standard [gRPC Health Checking Protocol](https://github.com/grpc/grpc/blob/master/doc/health-checking.md) (`grpc.health.v1.Health`):
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
 metadata:
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: grpc
-        port: 9090
-        interval: 10s
-        timeout: 3s
-        healthyThreshold: 2
-        unhealthyThreshold: 3
-        grpcServiceName: "my.package.MyService"  # optional, empty = check whole server
+  name: grpc-backend-policy
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: grpc-backend
+  healthCheck:
+    active:
+      type: grpc
+      port: 9090
+      interval: 10s
+      timeout: 3s
+      healthyThreshold: 2
+      unhealthyThreshold: 3
+      grpcServiceName: "my.package.MyService"  # optional, empty = check whole server
 ```
 
 The gateway calls the `Health/Check` RPC and marks the backend as healthy only when the response status is `SERVING`.
 
-### Scenario 4: EndpointSlice-Level Overrides Service-Level
-
-```yaml
-# Service-level default configuration
-metadata:
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: http
-        path: /healthz
-
----
-# A specific EndpointSlice overrides with TCP probing
-metadata:
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: tcp
-        port: 8081
-```
-
 ## Notes
 
 1. `expectedStatuses` only applies to `http` mode; `tcp` and `grpc` modes ignore this field. For `http`, the list must be non-empty and every entry must be a valid HTTP status code (100–599).
-2. `path` applies to `http` mode only and must not be empty; an empty `path` makes the whole configuration invalid, so it is ignored. Use a leading-slash path such as `/healthz`.
+2. `path` applies to `http` mode only and must not be empty; an empty `path` makes the whole `EdgionBackendTrafficPolicy` invalid (`Accepted=False`).
 3. `healthyThreshold` and `unhealthyThreshold` must be greater than or equal to `1`.
-4. `interval` and `timeout` must parse to a non-zero duration (for example `10s`, `500ms`); otherwise the configuration is rejected.
-5. Services without health check configuration are not probed and participate in load balancing as "healthy" by default.
+4. `interval` and `timeout` must parse to a non-zero duration (for example `10s`, `500ms`); otherwise the resource is rejected (`Accepted=False`), following the lenient-admission pattern — it still syncs, and the gateway skips the invalid spec.
+5. Services without a health check section are not probed and participate in load balancing as "healthy" by default.
 6. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
 
 ## Current Limitations
 
 1. **Active probing only**
-   - What: Passive health checks (automatic degradation based on request failures) are not yet implemented
-   - Workaround: Use active probing to shorten failure detection time
-   - Tracking: Planned
+   - What: Passive health checks (automatic degradation based on request failures) live in a separate mechanism — see [Circuit Breaker (Outlier Detection)](./circuit-breaker.md).
+   - Workaround: Use active probing to shorten failure detection time, and combine with outlier detection for request-driven ejection.
+   - Tracking: N/A — this is by design.
 
 2. **HTTP probing supports plaintext HTTP only**
    - What: There is currently no dedicated HTTPS probe configuration option
@@ -210,24 +195,26 @@ metadata:
 
 ## Troubleshooting
 
-### Issue 1: Annotation is configured but does not seem to take effect
+### Issue 1: Policy is configured but does not seem to take effect
 
-Cause: The annotation YAML parsing failed or field validation failed, causing it to be ignored.
-Solution: Check YAML indentation, `path`, threshold values, and duration format.
+Cause: the `EdgionBackendTrafficPolicy` spec failed validation (an ancestor's `Accepted=False/Invalid`), or another policy targeting the same Service won oldest-wins arbitration (`Accepted=False/Conflicted`), or `targetRefs` does not resolve to an existing Service yet (`ResolvedRefs=False`).
+Solution: `kubectl get edgionbackendtrafficpolicy <name> -n <namespace> -o yaml` and check `status.ancestors[].conditions` (one entry per ancestor Gateway — see [EdgionBackendTrafficPolicy status schema](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#status-schema)).
 
 ### Issue 2: Probing too frequently causes increased backend pressure
 
 Cause: `interval` is configured too low.
 Solution: Increase `interval`; for production environments, start from `5s~30s`.
 
-### Issue 3: Unstable behavior with multiple EndpointSlices for the same service
+### Issue 3: Two policies target the same Service and only one seems active
 
-Cause: Configuration conflicts trigger EndpointSlice-level disabling and fallback.
-Solution: Unify health check configuration across EndpointSlices, or only keep the Service-level configuration.
+Cause: this is expected — whole-section, oldest-wins arbitration; only the oldest `EdgionBackendTrafficPolicy` targeting a Service is in effect for that Service at a time (per concern, atomically). Check for `status.ancestors[].conditions[].type: Accepted, reason: Conflicted` on the losing policy's affected ancestor(s).
+Solution: consolidate into a single policy per Service, or delete the older one if it should no longer apply (the next-oldest is promoted automatically).
 
 ## Related Documentation
 
 - [Service Reference](./service-ref.md)
 - [Weight Configuration](./weight.md)
 - [Backend TLS](./backend-tls.md)
+- [Circuit Breaker (Outlier Detection)](./circuit-breaker.md)
+- [Load Balancing Algorithms](../lb-algorithms.md)
 - [Timeout Configuration](../resilience/timeouts.md)

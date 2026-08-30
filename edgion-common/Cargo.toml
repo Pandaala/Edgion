@@ -2,6 +2,7 @@
 name = "edgion-common"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]
@@ -10,12 +11,6 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
-
-# TLS backend selection is driven by the workspace: `pingora-core` is unified
-# across the dependency graph (resolver 2), so the binary crates' `boringssl` /
-# `rustls` feature flows into this crate's `pingora-core` automatically — the
-# same arrangement `edgion-resources` relies on. `edgion-common` has no
-# TLS-backend-gated code, so it deliberately exposes no TLS feature of its own.
 
 [features]
 # Exposes cross-crate test helpers (env-var serialization locks, JWKS discovery
@@ -29,60 +24,43 @@ edgion-resources.workspace = true
 
 # Core async runtime and error handling
 tokio.workspace = true
-tokio-util.workspace = true
-tokio-stream.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-thiserror.workspace = true
 
 # Serialization/Deserialization
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 
 # Kubernetes client and types
 kube.workspace = true
 k8s-openapi.workspace = true
-schemars.workspace = true
 
 # gRPC (config sync + fed sync)
 tonic.workspace = true
-tonic-reflection.workspace = true
 prost.workspace = true
 rustls.workspace = true
-tokio-rustls.workspace = true
-rustls-native-certs.workspace = true
+rustls-pemfile.workspace = true
+webpki-roots.workspace = true
 x509-parser.workspace = true
-
-futures.workspace = true
 
 # HTTP server
 axum.workspace = true
 
 # Utilities
-bytes.workspace = true
 base64.workspace = true
 chrono.workspace = true
+httpdate.workspace = true
 parking_lot.workspace = true
-uuid.workspace = true
-arc-swap.workspace = true
-dashmap.workspace = true
 regex.workspace = true
 rand.workspace = true
-smallvec.workspace = true
-indexmap.workspace = true
-sha2.workspace = true
-hex.workspace = true
 
-# Pingora (TLS backend feature flows from the workspace via unification)
-pingora-core.workspace = true
-pingora-http.workspace = true
 etcd-client.workspace = true
 
 # Metrics
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
+dashmap.workspace = true
 
 # CLI / logging
 clap.workspace = true
@@ -91,20 +69,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 http.workspace = true
-percent-encoding.workspace = true
 
 reqwest.workspace = true
 
 rcgen.workspace = true
 time.workspace = true
 
+# Standard-DNS resolver backend (targets an explicit server list; see src/dns/).
+hickory-resolver.workspace = true
+
 [build-dependencies]
 tonic-build.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
-wiremock.workspace = true
-mockall.workspace = true
-proptest.workspace = true
-expect-test.workspace = true
-tower.workspace = true

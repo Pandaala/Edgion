@@ -11,7 +11,7 @@ use crate::plugins::runtime::edgion_config_data::{resolve_ip_list_matchers, reso
 use crate::plugins::stream::stream_plugin_trait::access_decision_to_stream_result;
 use crate::plugins::stream::StreamPluginResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
-use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+use edgion_resources::resources::edgion_plugins::{IpRestrictionConfig, IpSource};
 
 const PLUGIN_NAME: &str = "TlsRouteIpRestriction";
 
@@ -66,9 +66,12 @@ impl TlsRoutePlugin for TlsRouteIpRestriction {
         let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
         let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
         let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
+        let ip = match self.config.ip_source {
+            IpSource::RemoteIp => &ctx.remote_ip,
+            IpSource::DirectPeerIp => &ctx.direct_peer_ip,
+        };
         access_decision_to_stream_result(
-            self.config
-                .check_ip_access_with_refs(&ctx.client_ip, &deny_refs, &allow_refs),
+            self.config.check_ip_access_with_refs(ip, &deny_refs, &allow_refs),
             || {},
         )
     }
@@ -87,8 +90,13 @@ mod tests {
     use std::sync::Arc;
 
     fn ctx(ip: &str) -> TlsRouteContext {
+        ctx_with_ips(ip, ip)
+    }
+
+    fn ctx_with_ips(direct_peer_ip: &str, remote_ip: &str) -> TlsRouteContext {
         TlsRouteContext {
-            client_ip: ip.parse::<IpAddr>().unwrap(),
+            direct_peer_ip: direct_peer_ip.parse::<IpAddr>().unwrap(),
+            remote_ip: remote_ip.parse::<IpAddr>().unwrap(),
             listener_port: 443,
             sni: "test.example.com".to_string(),
             tls_id: Some("t".to_string()),
@@ -99,12 +107,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_selector_distinguishes_direct_peer_and_remote_ip() {
+        let base = IpRestrictionConfig {
+            allow: None,
+            deny: Some(vec![IpGroup {
+                name: "blocked".into(),
+                description: None,
+                cidrs: vec!["10.0.0.7/32".into()],
+            }]),
+            default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
+            ip_source: IpSource::DirectPeerIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let addresses = ctx_with_ips("10.0.0.7", "203.0.113.9");
+        let direct = TlsRouteIpRestriction::new(&base, "default");
+        assert!(matches!(
+            direct.on_tls_route(&addresses).await,
+            StreamPluginResult::Deny(_)
+        ));
+
+        let mut remote_config = base;
+        remote_config.ip_source = IpSource::RemoteIp;
+        let remote = TlsRouteIpRestriction::new(&remote_config, "default");
+        assert!(matches!(
+            remote.on_tls_route(&addresses).await,
+            StreamPluginResult::Allow
+        ));
+    }
+
+    #[tokio::test]
     async fn deny_refs_block_referenced_ip() {
         let ns = "tls-ipr-denyref-unit";
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
             visibility: Default::default(),
+            unknown_fields: Vec::new(),
             data: ConfigEntry::IpList(IpListData {
                 items: vec![IpGroup {
                     name: "blk".into(),
@@ -127,7 +170,7 @@ mod tests {
                 namespace: Some(ns.into()),
                 ..Default::default()
             }]),
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,
@@ -162,7 +205,7 @@ mod tests {
                 }),
             }]),
             deny_refs: None,
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,

@@ -54,12 +54,14 @@ RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
       chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-cli; \
     fi
 
-# Copy default config files (if exist)
-# Note: mkdir ensures the directory exists even if copy fails
-RUN --mount=type=bind,source=config,target=/tmp/config \
-    mkdir -p ./config && \
-    cp -r /tmp/config/*.toml ./config/ 2>/dev/null || true && \
-    chown -R edgion:edgion ./config/
+# Ensure the config directory exists as the mount point. Config is always provided at
+# runtime via a mount -- a Kubernetes ConfigMap at /usr/local/edgion/config (see
+# cicd/deploy/kubernetes/), or a user bind-mount for non-Kubernetes modes. The image
+# deliberately bakes in NO default config: the repo's config/*.yaml are development
+# configs (file_system mode, debug enabled, test conf_dir) and would be misleading in a
+# production image. (This replaces a long-dead `cp config/*.toml` -- the configs are YAML,
+# so that copy always matched nothing.)
+RUN mkdir -p ./config && chown -R edgion:edgion ./config
 
 # Switch to non-root user
 USER edgion

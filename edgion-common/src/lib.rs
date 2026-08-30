@@ -1,4 +1,7 @@
+pub mod cert_util;
 pub mod conf_sync;
+pub mod dns;
+pub mod egress;
 pub mod ext_proc;
 pub mod grpc_tls;
 pub mod link_sys_core;
@@ -6,4 +9,5 @@ pub mod observe;
 pub mod secret;
 pub mod startup;
 pub mod test_mode;
+pub mod time;
 pub mod tls_validation;

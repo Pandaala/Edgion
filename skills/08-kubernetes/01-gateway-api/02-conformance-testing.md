@@ -11,14 +11,21 @@ description: How to run, debug, and incrementally validate Gateway API conforman
 
 ## Authoritative source for feature declarations
 
-**`conformance_test.go` is the single authoritative source for supported features.**
+The canonical list is
+`edgion-resources/src/resources/gateway_class.rs::SUPPORTED_FEATURES`. The
+committed `edgion-tests/conformance/supported_features.txt` mirrors that list;
+a Rust unit test enforces byte-for-byte feature equality, and
+`conformance_test.go` embeds the file to derive the Go suite's declared feature
+set.
 
-`run.sh` does not pass `-supported-features` by default, letting `opts.SupportedFeatures` from `conformance_test.go` take effect.
-It is overridden only when `--core`, `--extended`, or `--supported-features <list>` is explicitly passed.
+`run.sh` does not pass `-supported-features` by default, so the embedded shared
+list takes effect. It is overridden only when `--core`, `--extended`, or
+`--supported-features <list>` is explicitly passed.
 
 When adding feature support:
-1. Add it via `opts.SupportedFeatures.Insert(features.SupportXxx)` in `conformance_test.go`
-2. `run.sh` does not need changes
+1. Add the feature name to `SUPPORTED_FEATURES`, preserving byte-order sorting.
+2. Regenerate `edgion-tests/conformance/supported_features.txt` to match.
+3. Run the `edgion-resources` unit tests; `run.sh` normally needs no change.
 
 ## Timeout configuration
 
@@ -65,7 +72,7 @@ GO_RUN_FILTER="TestConformance/HTTPRoute" bash scripts/run.sh
 
 | Preset | Command | Description |
 |--------|---------|-------------|
-| Default (all declared features) | `bash scripts/run.sh` | Use the full feature set declared in conformance_test.go |
+| Default (all declared features) | `bash scripts/run.sh` | Use the shared feature list derived from `SUPPORTED_FEATURES` |
 | Core only | `--core` | Force only Gateway+HTTPRoute+ReferenceGrant |
 | Extended | `--extended` | Extended feature set (includes redirect, mirror, etc.) |
 | All features | `--all-features` | All features (including unimplemented ones; will FAIL) |
@@ -101,7 +108,7 @@ invocation causes TLSRoute data-plane tests to time out.
 See cookbook 2.3.1 for technical details and affected tests.
 See `reports/README.md` for current results and known failures.
 
-### Specifying features individually (overrides conformance_test.go)
+### Specifying features individually (overrides the shared feature list)
 
 ```bash
 bash scripts/run.sh --supported-features "Gateway,HTTPRoute,ReferenceGrant"
@@ -173,7 +180,8 @@ CTRL_PID=$(kubectl exec -n edgion-system $POD -- sh -c \
   "for p in \$(ls /proc | grep '^[0-9]*$'); do \
     if [ -f /proc/\$p/cmdline ] && grep -q edgion-controller /proc/\$p/cmdline 2>/dev/null && [ \$p != 1 ]; then echo \$p; fi; \
   done" | head -1)
-kubectl exec -n edgion-system $POD -- sh -c "kill -9 $CTRL_PID"
+test -n "$CTRL_PID"
+kubectl exec -n edgion-system "$POD" -- kill -TERM "$CTRL_PID"
 ```
 
 ## Status condition debugging
@@ -214,7 +222,7 @@ The Gateway API spec defines `Conflicted` as **exactly identical** socket-addres
 
 Mistakenly treating "intersection" as "conflict" causes multiple test failures (e.g. `GatewayHTTPListenerIsolation`).
 
-## Latest conformance results (feature-04-06, 2026-04-07)
+## Committed conformance results
 
 **ALL PASS** (in-cluster mode, split-profile run)
 
@@ -241,9 +249,14 @@ The script handles uniformly:
 ```bash
 cd edgion-tests/conformance
 
-# Full run: compile + deploy/reuse runner + execute
-./scripts/in-cluster-runner.sh \
-  --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS" \
+# HTTP + gRPC run: compile + deploy/reuse runner + execute
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC" \
+  --timeout 30m
+
+# TLS must run separately because both profiles use port 443
+./scripts/in-cluster-runner.sh --clean-slate \
+  --conformance-profiles "GATEWAY-TLS" \
   --timeout 30m
 
 # Re-run only, do not recompile

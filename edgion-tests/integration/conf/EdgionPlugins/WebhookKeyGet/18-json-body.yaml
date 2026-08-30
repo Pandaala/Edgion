@@ -1,0 +1,126 @@
+# Bonus scenario 18: json-body
+# ---------------------------------------------------------------------------
+# LinkSys webhook `request.body` (type: json). The gateway renders the JSON
+# body template against a header variable, auto-injects
+# Content-Type: application/json, and the backend (test_server) parses the
+# received body and echoes it back under data.echo_body — proving the body
+# reached the webhook backend as valid, correctly-rendered JSON.
+# Backend via Service + EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh18-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh18-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh18-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh18-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh18-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "POST"
+      body:
+        type: json
+        template: '{"userId": "${header:X-User-Id}", "source": "edgion"}'
+    timeoutMs: 5000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh18-ctx-set
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: wh18_body_user
+      from: ctx
+      name: wh18_body_user
+    - key: wh18_ct
+      from: ctx
+      name: wh18_ct
+  requestPlugins:
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh18_body_user
+            webhookRef: "edgion-default/wh18-resolver"
+            extract:
+              # The webhook backend echoes the parsed request body it received
+              # under data.echo_body; reading userId back proves the gateway
+              # rendered the json body template with the header variable.
+              source: body
+              path: "data.echo_body.userId"
+            default: "fallback"
+          - name: wh18_ct
+            webhookRef: "edgion-default/wh18-resolver"
+            extract:
+              # Content-Type observed by the backend must be the auto-injected
+              # application/json.
+              source: body
+              path: "data.echo_headers.content-type"
+            default: "fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh18-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh18.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh18
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh18-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

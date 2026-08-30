@@ -1,5 +1,5 @@
-# HTTPRoute for DynamicExternalUpstream skip mode test
-# Normal backend (test-http:30001) is used as fallback when skip
+# HTTPRoute for DynamicExternalUpstream fallback mode test
+# Normal backend (test-http:30001) is used as fallback when onMissing/onNoMatch is fallback
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

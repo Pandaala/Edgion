@@ -4,7 +4,7 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::Error;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{FailToProxy, ProxyHttp, Session};
+use pingora_proxy::{FailToProxy, ProxyHttp, RequestBodyEvent, ResponseBodySink, Session, UpstreamResponseBodyEvent};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -31,14 +31,20 @@ mod pg_init_downstream_modules;
 mod pg_logging;
 mod pg_new_ctx;
 mod pg_request_body_filter;
+mod pg_request_body_filter_action;
 mod pg_request_filter;
 mod pg_response_filter;
 mod pg_upstream_peer;
 mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
+mod pg_upstream_response_trailer_filter;
+
+#[cfg(test)]
+pub(crate) use pg_upstream_response_body_filter::run_stream_processors;
 
 pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};
+pub(crate) use global_plugins_resolve::select_waf_owner;
 pub use global_plugins_resolve::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub use preflight_handler::PreflightHandler;
@@ -60,6 +66,10 @@ pub struct EdgionHttpProxy {
 
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+
+    /// EGC name used to load the pre-resolved request-body policy for each new
+    /// request. `None` selects the built-in default.
+    pub request_body_config_name: Option<String>,
 
     /// Pre-parsed timeout configurations (always has default values if not configured)
     pub parsed_timeouts: ParsedTimeouts,
@@ -115,17 +125,52 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_early_request_filter::early_request_filter(self, session, ctx).await
     }
 
-    async fn request_body_filter(
+    // `request_body_filter` intentionally keeps its default: overriding
+    // `request_body_filter_action` means the proxy never calls the legacy
+    // hook. The action drives streamed body handlers first, then the mirror
+    // tee (`pg_request_body_filter`), so the mirror sees post-mutation chunks.
+    //
+    // `request_trailer_filter` also stays default: the proxy never forwards
+    // request trailers (transport drops them), so a trailer-bearing request
+    // loses nothing a streamed inspection policy could have seen — every body
+    // byte still flows through the hook.
+    async fn request_body_filter_action(
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
-        end_of_stream: bool,
+        event: RequestBodyEvent,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<()>
+    ) -> pingora_core::Result<pingora_proxy::RequestBodyAction>
     where
         Self::CTX: Send + Sync,
     {
-        pg_request_body_filter::request_body_filter(self, session, body, end_of_stream, ctx).await
+        pg_request_body_filter_action::request_body_filter_action(self, session, body, event, ctx).await
+    }
+
+    fn upstream_request_body_disposition(
+        &self,
+        _session: &Session,
+        ctx: &Self::CTX,
+    ) -> pingora_proxy::UpstreamRequestBodyDisposition {
+        // Streamed once any per-chunk handler was installed: chunk mutation
+        // may change the length, so the upstream must use chunked framing.
+        // The proxy coerces back to Ordinary where Streamed is unsafe
+        // (upgrade/CONNECT, empty-and-done body, H1.0 upstream). Keyed on the
+        // monotonic latch, not the handler vector (see the ctx field docs).
+        if ctx.request_body_stream_active() {
+            pingora_proxy::UpstreamRequestBodyDisposition::Streamed
+        } else {
+            pingora_proxy::UpstreamRequestBodyDisposition::Ordinary
+        }
+    }
+
+    fn request_retry_allowed(&self, _session: &Session, ctx: &Self::CTX) -> bool {
+        // Streamed chunks are forwarded without any replay buffer, so a
+        // request stops being replayable the moment a handler is installed.
+        // The latch is monotonic by construction (set once, never cleared),
+        // as the contract requires — the handler vector is not, because the
+        // hook takes it across await points and the future may be dropped.
+        !ctx.request_body_stream_active()
     }
 
     async fn upstream_request_filter(
@@ -152,6 +197,25 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_upstream_response_filter::upstream_response_filter(self, session, upstream_response, ctx)
     }
 
+    async fn upstream_response_header_filter_event(
+        &self,
+        session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        if !pg_upstream_response_filter::is_interim_informational(upstream_response.status) {
+            ctx.upstream_response_headers_end_stream = Some(end_of_stream);
+        }
+        // The fork follows a terminal Header event with the typed
+        // TerminalWithoutTrailers callback. Keep the header hook focused on
+        // final-header processing so body processors flush before companions.
+        pg_upstream_response_filter::upstream_response_filter(self, session, upstream_response, ctx)
+    }
+
     async fn response_filter(
         &self,
         session: &mut Session,
@@ -165,14 +229,46 @@ impl ProxyHttp for EdgionHttpProxy {
     }
 
     /// Returns `Ok(None)` to continue, `Ok(Some(duration))` to rate-limit for the given duration.
-    fn upstream_response_body_filter(
+    async fn upstream_response_body_filter(
         &self,
         session: &mut Session,
         body: &mut Option<bytes::Bytes>,
         end_of_stream: bool,
+        sink: &mut ResponseBodySink,
         ctx: &mut Self::CTX,
-    ) -> pingora_core::Result<Option<std::time::Duration>> {
-        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, ctx)
+    ) -> pingora_core::Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_response_body_filter::upstream_response_body_filter(self, session, body, end_of_stream, sink, ctx)
+            .await
+    }
+
+    async fn upstream_response_body_filter_event(
+        &self,
+        session: &mut Session,
+        body: &mut Option<bytes::Bytes>,
+        event: UpstreamResponseBodyEvent,
+        sink: &mut ResponseBodySink,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_response_body_filter::upstream_response_body_filter_event(self, session, body, event, sink, ctx)
+            .await
+    }
+
+    async fn upstream_response_trailer_filter(
+        &self,
+        session: &mut Session,
+        trailers: &mut http::HeaderMap,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, Some(trailers)).await
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX)
@@ -213,7 +309,19 @@ impl ProxyHttp for EdgionHttpProxy {
     fn suppress_error_log(&self, _session: &Session, ctx: &Self::CTX, _error: &Error) -> bool {
         // filter-04b: the sentinel abort from a written local reply is not a real
         // error; hide its error-log line (the access log still records the reply).
-        ctx.local_reply_written
+        ctx.local_reply_written()
+    }
+
+    fn request_summary(&self, session: &Session, ctx: &Self::CTX) -> String {
+        // Default summary plus the request's trace id (always present: client
+        // header or generated at entry), so a "Fail to proxy" error-log line
+        // can be joined with its access-log entry instead of a heuristic
+        // timestamp+path match.
+        let summary = session.as_ref().request_summary();
+        match ctx.request_info.x_trace_id.as_deref() {
+            Some(trace_id) => format!("{summary}, x-trace-id: {trace_id}"),
+            None => summary,
+        }
     }
 
     async fn connected_to_upstream(

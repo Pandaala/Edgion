@@ -29,8 +29,11 @@ metadata:
   namespace: default
   annotations:
     edgion.io/edgion-stream-plugins: "default/my-stream-plugins"
-    edgion.io/proxy-protocol: "2"
+    edgion.io/proxy-protocol: "v2"
     edgion.io/max-connect-retries: "3"             # Optional; default 2, max 5
+    edgion.io/tcp-keepalive-time: "300"
+    edgion.io/tcp-keepalive-interval: "30"
+    edgion.io/tcp-keepalive-probes: "5"
 spec:
   parentRefs:
     - name: my-gateway
@@ -77,8 +80,11 @@ spec:
 | Annotation | Type | Default | Description |
 |------------|------|---------|-------------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | — | Bind to an EdgionStreamPlugins resource |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | — | Send Proxy Protocol upstream |
+| `edgion.io/proxy-protocol` | `"v2"` | disabled | Send Proxy Protocol v2 upstream; other values are ignored |
 | `edgion.io/max-connect-retries` | `u32` | `2` | Max upstream connection attempts; values below `1` are normalized to `1`, values above `5` are capped at `5` |
+| `edgion.io/tcp-keepalive-time` | positive integer seconds | disabled | Enable upstream TCP keepalive and set idle time; clamped to 1–7200 |
+| `edgion.io/tcp-keepalive-interval` | integer seconds | `75` | Probe interval when keepalive is enabled; clamped to 1–75 |
+| `edgion.io/tcp-keepalive-probes` | integer | `9` | Failed probes before closing; clamped to 1–20 |
 
 ## Coordination with Gateway TLS
 

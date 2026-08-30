@@ -1,0 +1,29 @@
+# LinkSys Etcd resource that MUST be rejected at connector construction.
+#
+# etcd-client's TLS stack always verifies the server certificate; it exposes no
+# skip-verify API. The outbound-TLS resolver therefore rejects `verify: false`
+# for Etcd unconditionally (provider_can_disable=false) — independent of any
+# environment. The Gateway logs "from_config failed" and never registers the
+# client, so:
+#   - the LinkSys CRD still syncs to the Gateway (controller admission is lenient)
+#   - NO runtime client appears under /api/v1/testing/link-sys/etcd/clients
+#   - a ping against default_etcd-tls-reject returns a "not found" failure
+#
+# The endpoint is intentionally bogus (no TLS etcd is served); the reject
+# happens before any connection attempt, so reachability is irrelevant.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: etcd-tls-reject
+  namespace: default
+spec:
+  type: etcd
+  config:
+    endpoints:
+      - "https://127.0.0.1:12379"
+    tls:
+      enabled: true
+      verify: false
+    timeout:
+      dial: 5000
+      request: 10000

@@ -8,13 +8,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
+use crate::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response, strip_cookie, strip_query_param,
+};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::common::KeyGet;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, KeyMetadata};
-use edgion_resources::uri_utils::url_decode;
 
 fn sha256_of(s: &str) -> [u8; 32] {
     Sha256::digest(s.as_bytes()).into()
@@ -79,22 +80,18 @@ impl KeyAuth {
     /// Extract API key from request using configured key sources (tried in order)
     ///
     /// Returns the first non-empty value found from the configured sources.
-    /// Supports all KeyGet variants including Webhook for remote key resolution.
-    async fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
+    /// Supports header, query, cookie, and ctx KeyGet sources.
+    fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
         for source in &self.config.key_sources {
             match source {
-                KeyGet::Header { .. }
-                | KeyGet::Query { .. }
-                | KeyGet::Cookie { .. }
-                | KeyGet::Ctx { .. }
-                | KeyGet::Webhook { .. } => {
-                    if let Some(value) = session.key_get(source).await {
+                KeyGet::Header { .. } | KeyGet::Query { .. } | KeyGet::Cookie { .. } | KeyGet::Ctx { .. } => {
+                    if let Some(value) = session.key_get(source) {
                         if !value.is_empty() {
                             return Some((value, source));
                         }
                     }
                 }
-                // Ignore unsupported sources (ClientIp, Path, Method, etc.)
+                // Ignore unsupported sources (RemoteIp, Path, Method, RequestPath, etc.)
                 _ => {}
             }
         }
@@ -129,82 +126,12 @@ impl KeyAuth {
                 let _ = session.remove_ctx_var(name);
             }
             KeyGet::Query { name } => {
-                Self::strip_query_param(session, name);
+                strip_query_param(session, name);
             }
             KeyGet::Cookie { name } => {
-                Self::strip_cookie(session, name);
+                strip_cookie(session, name);
             }
-            // Webhook keys are resolved server-side and never travel in the
-            // forwarded request, so there is nothing to strip.
             _ => {}
-        }
-    }
-
-    /// Remove a single named parameter from the forwarded request query string.
-    ///
-    /// Keeps the surviving query pairs verbatim (preserving each pair's original
-    /// percent-encoding) and writes only the query back via `set_request_query`,
-    /// leaving the path and the raw-vs-normalized path-forwarding decision to the
-    /// upstream-peer stage. The parameter name is compared against the
-    /// percent-decoded key so the match mirrors how `KeyGet::Query`
-    /// (`get_query_param`) extracted it.
-    fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
-        let Some(query) = session.get_query() else {
-            return;
-        };
-        let remaining: Vec<&str> = query
-            .split('&')
-            .filter(|pair| {
-                if pair.is_empty() {
-                    return false;
-                }
-                let raw_key = pair.split('=').next().unwrap_or("");
-                url_decode(raw_key) != name
-            })
-            .collect();
-
-        // An empty join (all pairs removed) clears the query entirely.
-        let new_query = remaining.join("&");
-        let _ = session.set_request_query(&new_query);
-    }
-
-    /// Remove a single named cookie from the forwarded `Cookie` header.
-    ///
-    /// Collects every `Cookie` header line (HTTP/2 may split cookies across
-    /// multiple fields), drops every pair whose key matches `name`, and writes
-    /// the survivors back as a single `Cookie` line — or removes the header
-    /// entirely if none survive. Re-serializing all lines into one avoids the
-    /// data loss that a single-line read + replace-all write would cause when
-    /// the request carries multiple `Cookie` fields. Cookie-name matching
-    /// mirrors `get_cookie` (raw key comparison on the trimmed `name=value`
-    /// pair, split on the first `=`).
-    fn strip_cookie(session: &mut dyn PluginSession, name: &str) {
-        let mut survivors: Vec<String> = Vec::new();
-        let mut saw_cookie = false;
-        for (header_name, value) in session.request_headers() {
-            if !header_name.eq_ignore_ascii_case("cookie") {
-                continue;
-            }
-            saw_cookie = true;
-            for pair in value.split(';') {
-                let trimmed = pair.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let key = trimmed.split('=').next().unwrap_or("");
-                if key != name {
-                    survivors.push(trimmed.to_string());
-                }
-            }
-        }
-
-        if !saw_cookie {
-            return;
-        }
-        if survivors.is_empty() {
-            let _ = session.remove_request_header("Cookie");
-        } else {
-            let _ = session.set_request_header("Cookie", &survivors.join("; "));
         }
     }
 
@@ -224,7 +151,7 @@ impl RequestFilter for KeyAuth {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // 1. Extract key from request using configured sources
-        let (key, used_source) = match self.extract_key(session).await {
+        let (key, used_source) = match self.extract_key(session) {
             Some((k, s)) => (k, s.clone()),
             None => {
                 // No key provided - check anonymous access
@@ -267,7 +194,6 @@ impl RequestFilter for KeyAuth {
             KeyGet::Query { .. } => "key query",
             KeyGet::Cookie { .. } => "key cookie",
             KeyGet::Ctx { .. } => "key ctx",
-            KeyGet::Webhook { .. } => "key webhook",
             _ => "key other",
         };
         plugin_log.push(key_source_label);
@@ -352,14 +278,14 @@ mod tests {
         auth
     }
 
-    #[tokio::test]
-    async fn test_extract_key_none() {
+    #[test]
+    fn test_extract_key_none() {
         let auth = create_key_auth_with_keys();
         let mut mock_session = MockPluginSession::new();
 
         mock_session.expect_key_get().returning(|_| None);
 
-        let result = auth.extract_key(&mock_session).await;
+        let result = auth.extract_key(&mock_session);
         assert!(result.is_none());
     }
 
@@ -435,88 +361,5 @@ mod tests {
             "expected exact 'OK group=internal', got: {:?}",
             entries
         );
-    }
-
-    // ===== hideCredentials: query / cookie stripping (fr-auth2-02) =====
-
-    #[test]
-    fn strip_query_param_removes_named_keeps_others() {
-        let mut session = MockPluginSession::new();
-        session
-            .expect_get_query()
-            .return_const(Some("api_key=secret&foo=bar".to_string()));
-        session
-            .expect_set_request_query()
-            .withf(|q| q == "foo=bar")
-            .times(1)
-            .returning(|_| Ok(()));
-
-        KeyAuth::strip_query_param(&mut session, "api_key");
-    }
-
-    #[test]
-    fn strip_query_param_only_param_clears_query() {
-        let mut session = MockPluginSession::new();
-        session
-            .expect_get_query()
-            .return_const(Some("api_key=secret".to_string()));
-        session
-            .expect_set_request_query()
-            .withf(|q| q.is_empty())
-            .times(1)
-            .returning(|_| Ok(()));
-
-        KeyAuth::strip_query_param(&mut session, "api_key");
-    }
-
-    #[test]
-    fn strip_cookie_removes_named_keeps_others() {
-        let mut session = MockPluginSession::new();
-        session
-            .expect_request_headers()
-            .returning(|| vec![("Cookie".to_string(), "api_key=secret; other=1".to_string())]);
-        session
-            .expect_set_request_header()
-            .withf(|n, v| n == "Cookie" && v == "other=1")
-            .times(1)
-            .returning(|_, _| Ok(()));
-
-        KeyAuth::strip_cookie(&mut session, "api_key");
-    }
-
-    #[test]
-    fn strip_cookie_only_cookie_removes_header() {
-        let mut session = MockPluginSession::new();
-        session
-            .expect_request_headers()
-            .returning(|| vec![("Cookie".to_string(), "api_key=secret".to_string())]);
-        session
-            .expect_remove_request_header()
-            .withf(|n| n == "Cookie")
-            .times(1)
-            .returning(|_| Ok(()));
-
-        KeyAuth::strip_cookie(&mut session, "api_key");
-    }
-
-    #[test]
-    fn strip_cookie_merges_multiple_cookie_lines() {
-        // HTTP/2 may split cookies across multiple Cookie header fields. The auth
-        // cookie must be stripped while every other cookie (including ones on
-        // other lines) is preserved, re-serialized into a single Cookie line.
-        let mut session = MockPluginSession::new();
-        session.expect_request_headers().returning(|| {
-            vec![
-                ("Cookie".to_string(), "api_key=secret; a=1".to_string()),
-                ("cookie".to_string(), "b=2".to_string()),
-            ]
-        });
-        session
-            .expect_set_request_header()
-            .withf(|n, v| n == "Cookie" && v == "a=1; b=2")
-            .times(1)
-            .returning(|_, _| Ok(()));
-
-        KeyAuth::strip_cookie(&mut session, "api_key");
     }
 }

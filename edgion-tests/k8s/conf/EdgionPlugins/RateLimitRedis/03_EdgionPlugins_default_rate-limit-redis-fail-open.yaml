@@ -16,7 +16,7 @@ spec:
         key:
           - type: header
             name: "X-Rate-Key"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         onRedisFailure: Allow
         rejectStatus: 429
         rejectMessage: "Redis unavailable (allow)"

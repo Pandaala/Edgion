@@ -1,0 +1,28 @@
+# A resolved true entry-level skip must not bypass a sealed RequestRestriction runtime.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-missing-ipref-deny-entry-skip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      conditions:
+        skip:
+          allOf:
+            - type: keyExist
+              key:
+                type: header
+                name: X-Bypass-Restriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ipRefs:
+                    - name: rr-missing-ip-list-entry-skip
+                  negate: true
+        status: 403
+        message: "This configured response must not mask a sealed runtime"

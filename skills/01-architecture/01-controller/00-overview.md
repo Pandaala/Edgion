@@ -1,11 +1,11 @@
 ---
 name: controller-overview
-description: edgion-controller overall architecture — ConfMgr facade, dual backends, Workqueue + ResourceProcessor pipeline, module layout.
+description: edgion-controller overall architecture — ConfMgr facade, three ConfigCenter backends, ControllerRuntime ownership, Workqueue + ResourceProcessor pipeline, module layout.
 ---
 
 # Controller Overall Architecture
 
-edgion-controller is the control-plane process of Edgion, running on the Tokio multi-threaded runtime. It receives resource changes from configuration sources (file system or Kubernetes API), validates and processes them, and pushes the final configuration to the Gateway data plane via gRPC.
+edgion-controller is the control-plane process of Edgion, running on the Tokio multi-threaded runtime. It receives resource changes from the file system, Kubernetes API, or Etcd, validates and processes them, and pushes the final configuration to the Gateway data plane via gRPC.
 
 ## ConfMgr Facade Pattern
 
@@ -31,10 +31,11 @@ The `ConfMgr::create(config)` factory selects the backend based on the `ConfCent
 |----------------|-----------------|-------------|
 | `ConfCenterConfig::FileSystem(fs_config)` | `FileSystemCenter` | Reads/writes YAML files from a local directory |
 | `ConfCenterConfig::Kubernetes(k8s_config)` | `KubernetesCenter` | Watches CRDs and native resources via the K8s API |
+| `ConfCenterConfig::Etcd(etcd_config)` | `EtcdCenter` | Stores resources/status in Etcd and consumes watch events |
 
 After creation, `ConfMgr` also registers `CrossNsRevalidationListener` to ensure that ReferenceGrant changes can trigger re-validation of affected routes.
 
-## Dual Backend Implementations
+## Backend Implementations
 
 ### FileSystemCenter
 
@@ -48,6 +49,13 @@ After creation, `ConfMgr` also registers `CrossNsRevalidationListener` to ensure
 - Watches Edgion CRDs (HTTPRoute, Gateway, etc.) as well as native resources (Secret, Service, EndpointSlice, etc.)
 - Supports Leader Election in HA mode
 - Change events are pushed into the Workqueue of the corresponding resource via Informer/Watcher
+
+### EtcdCenter
+
+- Stores resource bodies and status under separate prefixes in Etcd
+- Uses transactional create/update operations and revisioned watches
+- Shares the non-Kubernetes controller spawn list and lifecycle helpers with FileSystemCenter
+- Runs without Kubernetes leader election
 
 ## Workqueue + ResourceProcessor Architecture
 
@@ -85,13 +93,21 @@ enum WorkItemResult<K> {
 
 Each resource has a corresponding Handler implementation, e.g. `HttpRouteHandler`, `GatewayHandler`, `SecretHandler`, all registered into `ProcessorRegistry`.
 
-## ProcessorRegistry Global Singleton
+## ControllerRuntime Ownership
 
-`PROCESSOR_REGISTRY` is a `LazyLock<ProcessorRegistry>` global singleton that provides centralized handler management:
+Each ConfCenter owns an `Arc<ControllerRuntime>`. It aggregates the processor registry, Secret store, reference managers, route indexes, and other process-scoped controller state:
 
 ```rust
-pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new);
+pub struct ControllerRuntime {
+    pub processor_registry: ProcessorRegistry,
+    pub secret_store: SecretStore,
+    // reference managers, indexes, and stores
+}
 ```
+
+Handlers obtain these dependencies through `HandlerContext::runtime()`. Reload and
+leadership cleanup call `ControllerRuntime::reset()`; this is a selective reset,
+not an indiscriminate clearing of process globals.
 
 Core capabilities:
 
@@ -106,7 +122,7 @@ Core capabilities:
 | `requeue(kind, key)` | Immediate cross-resource re-enqueue |
 | `requeue_with_chain(kind, key, chain)` | Delayed re-enqueue with TriggerChain (coalescing + cycle detection) |
 | `requeue_all()` | Full re-enqueue on Leader switchover, triggering status reconciliation |
-| `clear_registry()` | Clear all processors and global state (ServiceRefManager, ReferenceGrantStore, etc.) |
+| `ControllerRuntime::reset()` | Clear reload-scoped processors/stores while preserving explicitly process-scoped components |
 
 ## Module Layout
 
@@ -122,12 +138,14 @@ edgion-controller/src/
 ├── cli/                        # Startup entry, CLI parsing, initialization flow
 ├── conf_mgr/                   # Configuration manager core
 │   ├── manager.rs              # ConfMgr facade
-│   ├── processor_registry.rs   # ProcessorRegistry global singleton
+│   ├── processor_registry.rs   # ProcessorRegistry type (owned by ControllerRuntime)
 │   ├── schema_validator.rs     # JSON Schema validation
 │   ├── conf_center/            # Configuration storage backends
 │   │   ├── traits.rs           # ConfCenter / CenterApi / CenterLifeCycle traits
 │   │   ├── file_system/        # FileSystemCenter implementation
-│   │   └── kubernetes/         # KubernetesCenter implementation
+│   │   ├── kubernetes/         # KubernetesCenter implementation
+│   │   └── etcd/               # EtcdCenter implementation
+│   ├── runtime.rs              # ControllerRuntime state owner
 │   └── sync_runtime/           # Shared sync runtime
 │       ├── workqueue.rs        # Workqueue (dedup, delayed requeue, TriggerChain)
 │       ├── shutdown.rs         # ShutdownHandle for graceful shutdown
@@ -138,7 +156,7 @@ edgion-controller/src/
 │           ├── context.rs      # HandlerContext
 │           ├── handlers/       # Per-resource Handler implementations
 │           ├── ref_grant/      # Cross-namespace reference validation (ReferenceGrant)
-│           ├── secret_utils/   # Global Secret store and reference management
+│           ├── secret_utils/   # Runtime-owned Secret store and reference management
 │           ├── service_ref.rs  # Service reference tracking
 │           ├── attached_route_tracker.rs # Route attachment tracking
 │           ├── gateway_route_index.rs    # Gateway↔Route index
@@ -159,7 +177,7 @@ The complete data flow from event source to Gateway sync:
 ```mermaid
 flowchart TD
     A["K8s Informer / Watcher"] --> C["Event (Add/Update/Delete)"]
-    B["FileSystem Watcher"] --> C
+    B["FileSystem / Etcd Watcher"] --> C
     C --> D["Workqueue\nIndependent queue per kind\nDedup + delayed requeue, supports cross-resource requeue"]
     D --> E["ResourceProcessor‹T›\non_init — initial load\non_apply — add/update handling\non_delete — delete handling"]
     E --> F["ServerCache\nIn-memory cache (processed resources)"]
@@ -169,9 +187,9 @@ flowchart TD
 
 Key flow details:
 
-1. **Event source**: in K8s mode, events are produced by the Informer/Watcher; in file-system mode, they are triggered by file changes
+1. **Event source**: K8s uses Informer/Watcher events, file-system mode polls recursive YAML paths, and Etcd uses revisioned watch events
 2. **Workqueue**: receives resource keys, dequeues them in order after dedup; cross-resource requeue is coalesced via delayed enqueue (no exponential backoff — status-write failures self-heal on watcher relist)
 3. **ResourceProcessor**: pulls a key from the queue, dispatches to the matching `ProcessorHandler`; the result is written into `ServerCache`
 4. **ServerCache**: stores processed resource objects; changes are notified to the ConfigSyncServer via `CacheEventDispatch`
 5. **ConfigSyncServer**: maintains a Watch stream for each Gateway client; detects `server_id` changes to trigger a full re-list, otherwise pushes incremental changes
-6. **Cross-resource interactions**: handlers trigger reprocessing of other kinds via `HandlerContext::requeue` or `ProcessorRegistry::requeue_with_chain`; TriggerChain prevents infinite loops
+6. **Cross-resource interactions**: handlers trigger reprocessing through the runtime-owned registry; TriggerChain bounds cyclic dependency propagation

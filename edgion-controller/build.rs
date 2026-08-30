@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // separate EdgionCenter repository.
     let fed_proto_dir = "src/fed_sync/proto";
     tonic_build::configure()
+        .bytes([".fed_sync.FedWatchListResponse.data"])
         .file_descriptor_set_path(out_dir.join("fed_sync_descriptor.bin"))
         .compile_protos(&[format!("{}/fed_sync.proto", fed_proto_dir)], &[fed_proto_dir])?;
 

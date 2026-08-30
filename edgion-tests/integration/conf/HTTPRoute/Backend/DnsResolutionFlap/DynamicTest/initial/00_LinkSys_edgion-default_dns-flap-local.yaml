@@ -1,0 +1,17 @@
+# Live httpdns resolver that returns 127.0.0.1 (the local test backend). The
+# scenario switches the Service's resolver-ref to this LinkSys at runtime to
+# prove the hot-reload takes effect (failing -> working).
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-flap-local
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:30001/dns/resolve?host={domain}&ip=127.0.0.1"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system

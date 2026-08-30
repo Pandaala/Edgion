@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::common::KeyGet;
 use crate::resources::edgion_plugins::PluginValidation;
 
+use super::upstream_fallback::{default_upstream_fallback, default_upstream_reject, UpstreamFallback};
+
 /// DynamicInternalUpstream plugin configuration
 ///
 /// Routes the request to a specific BackendRef selected by request metadata,
@@ -48,31 +50,24 @@ pub struct DynamicInternalUpstreamConfig {
     ///
     /// - `fallback` (default): proceed with normal weighted backend selection
     /// - `reject`: return 400 Bad Request
-    #[serde(default)]
-    pub on_missing: DynUpstreamOnMissing,
+    #[serde(default = "default_upstream_fallback")]
+    pub on_missing: UpstreamFallback,
 
     /// Behavior when no rule matches the routing key (rules mode only).
     /// In direct mode, this is not applicable (see on_invalid instead).
     ///
     /// - `fallback` (default): proceed with normal weighted backend selection
     /// - `reject`: return 400 Bad Request
-    #[serde(default)]
-    pub on_no_match: DynUpstreamOnNoMatch,
+    #[serde(default = "default_upstream_fallback")]
+    pub on_no_match: UpstreamFallback,
 
     /// Behavior when the resolved backend_ref name is not found
     /// in the route's backend_refs list.
     ///
     /// - `reject` (default): return 403 Forbidden (potential misconfiguration)
     /// - `fallback`: proceed with normal weighted backend selection
-    #[serde(default)]
-    pub on_invalid: DynUpstreamOnInvalid,
-
-    /// Whether to set `X-Dynamic-Internal-Upstream` request header (sent to upstream)
-    /// indicating which backend was targeted. Useful for end-to-end debugging.
-    ///
-    /// Default: false
-    #[serde(default)]
-    pub debug_header: bool,
+    #[serde(default = "default_upstream_reject")]
+    pub on_invalid: UpstreamFallback,
 
     // === Compiled regex cache ===
     #[serde(skip)]
@@ -118,39 +113,6 @@ pub struct DynUpstreamExtract {
     pub group: usize,
 }
 
-/// Behavior when routing key value is missing
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum DynUpstreamOnMissing {
-    /// Proceed with normal weighted backend selection (default)
-    #[default]
-    Fallback,
-    /// Return 400 Bad Request
-    Reject,
-}
-
-/// Behavior when no rule matches the routing key
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum DynUpstreamOnNoMatch {
-    /// Proceed with normal weighted backend selection (default)
-    #[default]
-    Fallback,
-    /// Return 400 Bad Request
-    Reject,
-}
-
-/// Behavior when resolved backend_ref is invalid
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum DynUpstreamOnInvalid {
-    /// Return 403 Forbidden (default — indicates misconfiguration)
-    #[default]
-    Reject,
-    /// Proceed with normal weighted backend selection
-    Fallback,
-}
-
 fn default_group() -> usize {
     1
 }
@@ -163,10 +125,9 @@ impl Default for DynamicInternalUpstreamConfig {
             },
             extract: None,
             rules: None,
-            on_missing: DynUpstreamOnMissing::default(),
-            on_no_match: DynUpstreamOnNoMatch::default(),
-            on_invalid: DynUpstreamOnInvalid::default(),
-            debug_header: false,
+            on_missing: default_upstream_fallback(),
+            on_no_match: default_upstream_fallback(),
+            on_invalid: default_upstream_reject(),
             compiled_regex: None,
         }
     }
@@ -212,11 +173,6 @@ impl DynamicInternalUpstreamConfig {
         }
 
         None
-    }
-
-    /// Check if this config uses direct mode (no rules)
-    pub fn is_direct_mode(&self) -> bool {
-        self.rules.is_none()
     }
 
     /// Resolve routing key to target backend_ref name and optional namespace.

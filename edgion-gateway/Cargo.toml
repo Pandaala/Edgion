@@ -2,6 +2,7 @@
 name = "edgion-gateway"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]
@@ -36,6 +37,11 @@ rustls = [
     "pingora-proxy/rustls",
 ]
 
+# BoringSSL FIPS-mode build. Opt-in image build only (NOT a default). The
+# canonical script builds Boring v5's bundled module source on amd64; its arm64
+# source build currently fails the upstream integrity self-test.
+fips = ["boringssl", "boring/fips"]
+
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
 
@@ -47,8 +53,15 @@ mimalloc = { workspace = true, optional = true }
 # Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
 edgion-resources.workspace = true
 
+# Runtime-independent native WAF engine.
+edgion-waf.workspace = true
+
 # Shared common crate (config loader, observe, secret store, link core, etc.)
 edgion-common.workspace = true
+
+# EdgionDSL language core (parser/compiler/bytecode/validator); the gateway
+# keeps the VM and builtin dispatch and re-exports the core paths.
+edgion-dsl.workspace = true
 
 # Core async runtime and error handling
 tokio.workspace = true
@@ -62,7 +75,8 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-jsonschema.workspace = true
+json-patch.workspace = true
+mime.workspace = true
 
 # Kubernetes conf_client and types
 kube.workspace = true
@@ -73,15 +87,13 @@ schemars.workspace = true
 tonic.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
-# System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
-rustls-native-certs.workspace = true
+# Built-in webpki roots for building custom rustls ClientConfig (ext_proc connector)
+webpki-roots.workspace = true
+# Custom hyper connector for the ext_proc tonic channel (TLS toggle / custom CA / mTLS)
+hyper-util.workspace = true
 x509-parser.workspace = true
-tonic-reflection.workspace = true
 prost.workspace = true
 
-# File system monitoring
-notify.workspace = true
-walkdir.workspace = true
 futures.workspace = true
 
 # HTTP server
@@ -91,30 +103,37 @@ axum-server.workspace = true
 # Utilities
 bytes.workspace = true
 base64.workspace = true
+filetime.workspace = true
+flate2.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
 arc-swap.workspace = true
+notify.workspace = true
 dashmap.workspace = true
 regex.workspace = true
+regex-automata.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
-nom.workspace = true
 sha2.workspace = true
 subtle.workspace = true
+sync_wrapper.workspace = true
+tar.workspace = true
 crc32fast.workspace = true
 hmac.workspace = true
 aes-gcm.workspace = true
 hex.workspace = true
 jsonwebtoken.workspace = true
 
-# Pingora
+# Pingora — always the complete Edgion fork family (workspace-pinned).
 pingora-core.workspace = true
 pingora-http.workspace = true
 pingora-limits.workspace = true
 pingora-load-balancing.workspace = true
 pingora-proxy.workspace = true
+pingora-ketama.workspace = true
+tinyufo.workspace = true
 etcd-client.workspace = true
 fred.workspace = true
 
@@ -129,8 +148,6 @@ metrics-util.workspace = true
 
 # CLI
 clap.workspace = true
-rpassword.workspace = true
-zeroize.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
@@ -143,9 +160,10 @@ percent-encoding.workspace = true
 # HTTP client for link_sys providers (webhook / elasticsearch) and the
 # request_mirror plugin — a runtime dependency, not test-only.
 reqwest.workspace = true
-
-# CLI table formatting
-tabled.workspace = true
+# Retry-After header parsing (delta-seconds / HTTP-date) in the outbound retry loop.
+httpdate.workspace = true
+# Form-body percent-encoding for outbound request bodies (BodySpec::Form).
+url = { workspace = true }
 
 rusqlite.workspace = true
 md-5.workspace = true
@@ -156,9 +174,16 @@ time.workspace = true
 sha1.workspace = true
 ldap3.workspace = true
 rskafka.workspace = true
-pingora-ketama.workspace = true
 tower.workspace = true
+# Runtime body storage (request-body disk spill).
+tempfile.workspace = true
+# Wasm runtime for the proxy-wasm host plugin
+wasmtime.workspace = true
+edgion-wasm.workspace = true
 
+# MaxMind GeoIP2/GeoLite2 MMDB reader for the GeoIP country/city restriction plugin.
+maxminddb.workspace = true
+memmap2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # Disk-usage probe for LocalFile log sink health (statvfs).
@@ -167,6 +192,7 @@ rustix = { version = "1.1", features = ["fs"] }
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
+wat.workspace = true
 h2.workspace = true
 tokio-tungstenite.workspace = true
 mockall.workspace = true
@@ -174,6 +200,5 @@ colored.workspace = true
 console.workspace = true
 expect-test.workspace = true
 proxy-header.workspace = true
-hyper-util.workspace = true
 wiremock.workspace = true
 proptest.workspace = true

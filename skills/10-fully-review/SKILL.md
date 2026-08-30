@@ -1,6 +1,6 @@
 ---
 name: fully-review
-description: Use when running or preparing a global codebase review pass that produces tasks/review-N-<slug>/ findings; defines the 6-subagent batch workflow and the per-finding output format.
+description: Use when running or preparing a global codebase review pass that produces tasks/review-<batch-or-slug>/ findings; defines capacity-aware review waves, a coverage ledger, and the per-finding output format.
 ---
 
 # 10 Fully Review — Global-Codebase Review Workflow
@@ -18,29 +18,43 @@ description: Use when running or preparing a global codebase review pass that pr
 ## Workflow
 
 ```
-1. Define scope: split src/ into 6 non-overlapping subtrees (e.g., by crate / module cluster).
-2. For each subtree, spawn a subagent with these pre-loads:
+1. Build a coverage ledger from the current workspace members and the non-Rust
+   surfaces in scope. At minimum inspect `Cargo.toml` membership; do not assume a
+   root `src/` exists.
+2. Split the ledger into non-overlapping review units. Schedule units in waves
+   that leave one concurrency slot for the main agent; never assume a fixed
+   number of child-agent slots.
+3. For each unit, spawn a subagent with these pre-loads:
      - skills/04-review/SKILL.md  (routing index + closed-findings pointer)
      - skills/04-review/CLOSED-FINDINGS.md  (skip known false positives)
      - skills/04-review/security/iron-rules.md  (timing / password / cache-key rules)
      - skills/03-coding/01-log-safety.md  (data-plane tracing prohibition)
      - Relevant topic dirs from 04-review/ matching the subtree content.
-3. Each subagent verifies findings by reading cited file:line + grep-checking call sites;
+4. Each subagent verifies findings by reading cited file:line + searching call sites;
    drops speculative, stylistic, or closed items before reporting.
-4. Each finding is emitted as a standalone file using the template:
-     Severity / Location / Summary / Details / Impact / Suggested fix / Notes
-5. Collect all finding files into tasks/review-N-<slug>/ and generate INDEX.md
+5. Each finding is emitted as a standalone file with: ID, Disposition
+   (`confirmed` or `confirmed-downgraded`), Severity, Location, Summary,
+   Details, Impact, Suggested fix, and Notes. Name it `<area>-NN-<slug>.md`.
+6. Collect finding files into `tasks/review-<batch-or-slug>/` and generate `INDEX.md`
    (columns: ID, Severity, Dimension, Title).
-6. Cross-check every finding against already-closed findings (recorded one-file-per-finding
-   under `skills/04-review/<topic>/`; use `grep`/`ls` to find them); findings that match a
-   closed entry are dropped or annotated "already closed".
+   `INDEX.md` is batch metadata, never a finding.
+7. Cross-check every finding against `skills/04-review/CLOSED-FINDINGS.md`
+   and the linked per-finding decision file. Matches are dropped or annotated
+   "already closed".
+8. Before finishing, mark every ledger unit complete, skipped with a reason, or
+   uncovered. A global review is not complete while any in-scope unit is merely
+   absent from the ledger.
 ```
 
-### Scope-split example (review-2 pattern)
+### Coverage-ledger example
 
-Six subtrees: `edgion-controller/src/`, `edgion-gateway/src/runtime/`,
-`edgion-gateway/src/plugins/`, `edgion-gateway/src/routes/`, `edgion-common/src/`,
-and `edgion-resources/src/`.
+Typical units include all seven workspace members (`edgion-dsl`,
+`edgion-resources`, `edgion-common`, `edgion-gateway`, `edgion-controller`,
+`edgion-cli`, and `edgion-tests`). Split large members such as
+`edgion-gateway` by module, but keep a parent ledger row so `backends`, `tls`,
+`link_sys`, `conf_sync`, `observe`, `config`, `services`, and other siblings are
+not silently omitted. Add manifests, build scripts, CI, deployment, CRDs, and
+docs when they are part of the requested review scope.
 
 ---
 
@@ -58,6 +72,8 @@ and `edgion-resources/src/`.
 
 ## Closed findings
 
-Closed findings are recorded one-file-per-finding, scattered by topic across the
-`skills/04-review/` subdirectories; use `grep`/`ls` to find them. After each global pass,
-record newly closed items as a finding file under the relevant topic directory.
+`skills/04-review/CLOSED-FINDINGS.md` is the searchable coverage index. Its
+linked topic file is the canonical detailed rationale when one exists; legacy
+rows without a linked file retain their compact rationale in the index. A
+global review produces open findings under `tasks/`; it does not create closed
+decision records until a finding is actually resolved.

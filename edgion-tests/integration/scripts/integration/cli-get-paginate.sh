@@ -15,6 +15,8 @@ command -v kubectl >/dev/null || { echo "SKIP: kubectl required"; exit 0; }
 command -v python3 >/dev/null || { echo "SKIP: python3 required"; exit 0; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../utils/shell_compat.sh
+source "${SCRIPT_DIR}/../utils/shell_compat.sh"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:12101}"
@@ -62,7 +64,9 @@ sleep 5
 
 OUT=$("$CLI" --server "$ADMIN_URL" get httproute -n "$NAMESPACE" --limit 10 --all 2>&1)
 NAMES=$(echo "$OUT" | grep -oE 'r-[0-9]+' | sort -u)
-COUNT=$(echo "$NAMES" | grep -c .)
+# Keep the zero count as assertion input instead of letting grep's status 1
+# terminate the script before it can print the diagnostic below.
+COUNT=$(echo "$NAMES" | edgion_count_nonempty_lines)
 
 if [[ "$COUNT" -ne 25 ]]; then
     echo "FAIL: expected 25 unique names, got $COUNT"

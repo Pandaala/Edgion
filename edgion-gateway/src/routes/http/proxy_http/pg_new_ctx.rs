@@ -13,6 +13,9 @@ pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {
         .as_ref()
         .map(|security| security.allow_loopback_upstream)
         .unwrap_or(false);
+    ctx.request_body_config =
+        crate::config::get_resolved_request_body_config(edgion_http.request_body_config_name.as_deref());
+    ctx.remote_ip_header = crate::config::get_remote_ip_header(edgion_http.request_body_config_name.as_deref());
     global_metrics().ctx_created();
     ctx
 }

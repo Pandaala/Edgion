@@ -10,13 +10,21 @@ This file only answers three things:
 
 | Family | YAML directory | Rust entry | `--gateway` | Notes |
 |------|-----------|-----------|-------------|------|
+| `EdgionBackend/SingleProvider` | `edgion-tests/integration/conf/EdgionBackend/SingleProvider/` | `SingleProviderTestSuite` | Yes | OpenAI-compatible proxying, H1/H2 streaming and downstream cancellation, credentials, usage/quota logs, and optional token metrics |
+| `EdgionBackend/AnthropicProvider` | `edgion-tests/integration/conf/EdgionBackend/AnthropicProvider/` | `AnthropicProviderTestSuite` | Yes | Anthropic Messages request translation plus JSON and incremental SSE response translation |
+| `EdgionBackend/Resilience` | `edgion-tests/integration/conf/EdgionBackend/Resilience/` | `ResilienceTestSuite` | Yes | Provider 429 Priority fallback, committed-SSE no-failover, half-open single-probe recovery |
+| `EdgionBackend/CredentialExhaustion` | `edgion-tests/integration/conf/EdgionBackend/CredentialExhaustion/` | `CredentialExhaustionTestSuite` | Yes | Credential-first rotation then next service; RPM exhaust and TPM reconcile to local 503; needs Redis |
+| `EdgionBackend/PolicyIntegration` | `edgion-tests/integration/conf/EdgionBackend/PolicyIntegration/DynamicTest/` | `AiBackendPolicyIntegration` dynamic scenario | Yes | AI backend custom CA, SNI/SAN, mTLS, Secret rotation, policy status, multi-target traffic policy publication, stable in-flight capture, hot reload, and stream termination boundaries; the Kubernetes runner supplies an isolated Gateway listener and in-cluster provider endpoints |
 | `HTTPRoute/Basic` | `edgion-tests/integration/conf/HTTPRoute/Basic/` | `edgion-tests/src/client/suites/http_route/` | No | Direct HTTP basic capability |
+| `HTTPRoute/SseStreaming` | `edgion-tests/integration/conf/HTTPRoute/SseStreaming/` | `SseStreamingTestSuite` | Yes | Paced SSE passthrough remains uncompressed while ordinary JSON is gzip-compressed |
+| `HTTPRoute/Delegation` | `edgion-tests/integration/conf/HTTPRoute/Delegation/` | `DelegationTestSuite` | Yes | Parent→child delegation flatten: inherited filter, out-of-prefix drop, plain sibling |
 | `HTTPRoute/Match` | `edgion-tests/integration/conf/HTTPRoute/Match/` | `HttpMatchTestSuite` | Yes | Relies on gateway route matching |
 | `HTTPRoute/Backend/*` | `edgion-tests/integration/conf/HTTPRoute/Backend/` | `LBRoundRobinTestSuite`, `LBConsistentHashTestSuite`, `WeightedBackendTestSuite`, `TimeoutTestSuite`, `HealthCheckTestSuite`, `GrpcHealthCheckTestSuite`, `HealthCheckTransitionTestSuite`, `PartiallyInvalidTestSuite`, `RetryOnStatusTestSuite`, `CircuitBreakerTestSuite`, `SessionPersistenceTestSuite` | Yes | Load balancing, timeout, health check, partially invalid rules, retry, circuit breaking, session persistence |
 | `HTTPRoute/Filters/*` | `edgion-tests/integration/conf/HTTPRoute/Filters/` | `HttpRedirectTestSuite`, `HttpSecurityTestSuite`, `HeaderModifierTestSuite`, `FilterConflictTestSuite` | Yes | Redirect, security, header modifier, filter conflict |
 | `HTTPRoute/Protocol/WebSocket` | `edgion-tests/integration/conf/HTTPRoute/Protocol/WebSocket/` | `WebSocketTestSuite` | No | WebSocket backend validation |
 | `GRPCRoute/Basic` | `edgion-tests/integration/conf/GRPCRoute/Basic/` | `GrpcTestSuite` | No | gRPC direct basics |
 | `GRPCRoute/Match` | `edgion-tests/integration/conf/GRPCRoute/Match/` | `GrpcMatchTestSuite` | Yes | gRPC route matching (Exact + RegularExpression) |
+| `GRPCRoute/Backend/SessionPersistence` | `edgion-tests/integration/conf/GRPCRoute/Backend/SessionPersistence/` | `GrpcSessionPersistenceTestSuite` | Yes | Cookie/Header session persistence, stale-token fallback, on Service backed by per-port EndpointSlices |
 | `TCPRoute/Basic` | `edgion-tests/integration/conf/TCPRoute/Basic/` | `TcpTestSuite` | No | TCP echo |
 | `TCPRoute/StreamPlugins` | `edgion-tests/integration/conf/TCPRoute/StreamPlugins/` | `TcpStreamPluginsTestSuite` | Yes | Stream plugin wiring on TCP |
 | `TLSRoute/Basic` | `edgion-tests/integration/conf/TLSRoute/Basic/` | `TlsRouteTestSuite` | Yes | SNI/TLS route basics |

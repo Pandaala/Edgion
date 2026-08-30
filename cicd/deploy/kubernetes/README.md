@@ -4,7 +4,7 @@ Deploy Edgion API Gateway to a Kubernetes cluster using Gateway API.
 
 ## Prerequisites
 
-- Kubernetes 1.26+
+- Kubernetes 1.31+ (required by the Gateway API v1.5 TLSRoute CRD validation)
 - `kubectl` configured with cluster access
 - Cluster admin permissions (for CRD and RBAC installation)
 
@@ -26,9 +26,20 @@ only): it creates `edgion-conf-sync-ca` (the CA, controller-only) and the
   chain consistency); expect a brief one-time conf_sync reconnect (control-plane
   only, no data-plane impact).
 - **Cert rotation** is added in a follow-up (Phase 2); v0 issues 1-year leaves.
-- For non-production plaintext, set `conf_sync_security.auto_ca: false` and omit the
-  cert config — the Controller and Gateway then log an ERROR and raise
-  `edgion_system_error_state{reason="plaintext_default"}`.
+- **Plaintext is fail-close (since 2026-07-14):** omitting `conf_sync_security`
+  entirely makes both the Controller and the Gateway **refuse to start** — this
+  channel carries resolved Secrets (TLS private keys, backend credentials), so
+  plaintext must be explicit. For non-production plaintext, set `auto_ca: false`
+  **and** opt in explicitly:
+
+  ```yaml
+  conf_sync_security:
+    tls:
+      skip_tls: true   # INSECURE: plaintext conf_sync
+  ```
+
+  Both processes then log an ERROR and raise
+  `edgion_system_error_state{reason="skip_tls"}`.
 
 ## Quick Start
 
@@ -173,7 +184,7 @@ Edit `controller/configmap.yaml` to customize:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `conf_center.watch_namespaces` | `[]` (all) | Limit namespaces to watch |
-| `conf_center.ha_mode` | `leader-only` | HA mode: `leader-only` or `all-serve` |
+| `conf_center.ha_mode` | `leader-only` | HA mode: `leader-only` or `all-serve`. In both modes only the leader replica runs the federation client (EdgionCenter), so an `all-serve` follower keeps serving gRPC reads but does not federate |
 | `conf_center.leader_election.*` | — | Lease timing parameters |
 | `logging.log_level` | `info` | Controller log level |
 

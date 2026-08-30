@@ -7,6 +7,7 @@ HTTPRoute 定义 HTTP/HTTPS 流量的路由规则，包括匹配条件、过滤�
 | 文档 | 说明 |
 |------|------|
 | [overview.md](overview.md) | HTTPRoute 总览与核心概念 |
+| [delegation.md](delegation.md) | 多租户路由委派（父 → 子 HTTPRoute） |
 | [lb-algorithms.md](lb-algorithms.md) | 负载均衡算法配置 |
 | [matches/](matches/README.md) | 匹配规则（路径、请求头、查询参数、HTTP 方法） |
 | [filters/](filters/README.md) | 过滤器与 Edgion 插件 |

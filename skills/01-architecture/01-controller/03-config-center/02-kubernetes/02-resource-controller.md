@@ -14,7 +14,7 @@ KubernetesController.run()
 ├── spawn::<HTTPRoute, _>(handler)      → ResourceController<HTTPRoute>
 ├── spawn::<Gateway, _>(handler)        → ResourceController<Gateway>
 ├── spawn::<Service, _>(handler)        → ResourceController<Service>
-└── ... (~20 resource types, all independent)
+└── ... (all resource kinds selected by KubernetesController)
 ```
 
 Internal structure of a ResourceController:
@@ -34,7 +34,7 @@ ResourceController<K>
 
 Startup steps:
 1. Create `ResourceProcessor<K>` (containing `ServerCache<K>` + `Workqueue`)
-2. Register it into `PROCESSOR_REGISTRY`
+2. Register it into `runtime.processor_registry`
 3. Call `run_namespaced()` or `run_cluster_scoped()` → `run_with_api(api)`
 4. Enter the Init phase → Runtime phase
 
@@ -93,8 +93,8 @@ The Runtime phase uses a Go-operator-style workqueue: every event (Apply/Delete)
 then the worker uniformly dequeues and processes it. The worker fetches the latest object state from the reflector store,
 so even if multiple events arrive in a short window, only the latest state is processed once.
 
-> **KubeRawStore note**: `KubeRawStore` wraps the reflector's `Store<K>` (internally an `Arc<DashMap>`),
-> sharing the same underlying data with `writer`. Cloning only copies the Arc pointer — no extra memory cost.
+> **KubeRawStore note**: `KubeRawStore` wraps the reflector's cloneable `Store<K>` and shares the
+> reflector's current object view rather than copying all objects.
 > It contains every K8s object, unaffected by handler filters such as `gatewayClassName`,
 > and is used by cross-resource lookups like `lookup_gateway` / `lookup_service_cluster_ip`.
 
@@ -112,14 +112,14 @@ process_resource(obj):
 ├── Step 6.  Parse                       — Resolve references, update caches (Secret/Service ref registration)
 ├── Step 7.  Extract old status          — Extract the old status from the current object (for change comparison)
 ├── Step 8.  Update status               — Compute the new status (Gateway API conditions)
-├── Step 9.  Check if status changed     — Compare serialized JSON strings
+├── Step 9.  Check if status changed     — Apply kind-aware semantic status comparison
 ├── Step 10. on_change                   — Notify dependent resources (cross-resource requeue)
 └── Step 11. Save to ServerCache         — Save into the gRPC sync cache
 ```
 
 Steps 4-6 are the responsibility of the concrete `ProcessorHandler<K>` implementation; each resource type has its own Handler.
 Steps 7-9 use unified status extraction and comparison logic.
-Cross-resource requeue in Step 10 is implemented via `PROCESSOR_REGISTRY.requeue()`.
+Cross-resource requeue in Step 10 is implemented via `ctx.runtime().processor_registry.requeue()`.
 After Step 11 writes to `ServerCache`, the gRPC Watch stream automatically pushes the change to the Gateway.
 
 ## persist_k8s_status — Status Writeback
@@ -159,11 +159,11 @@ The same logic is applied at three checkpoints:
 | Init edge case | `Event::Apply` arriving before init_done | Status writeback under race conditions |
 | Runtime worker | Work-item processing in `spawn_worker` | Regular runtime status writeback |
 
-When `leader_handle` is `None` (FileSystem mode), `is_none_or` returns `true` and writes are always allowed.
+The Kubernetes center supplies a `LeaderHandle`; non-Kubernetes centers do not use `persist_k8s_status()`.
 
 ### Status Change Detection
 
-Status changes are determined by comparing the serialized JSON strings:
+Status is extracted as JSON and then compared semantically:
 
 ```rust
 enum StatusExtractResult {
@@ -173,8 +173,9 @@ enum StatusExtractResult {
 }
 ```
 
-Only an actual status change triggers a K8s API call, avoiding unnecessary patch requests.
-The comparison uses JSON strings rather than struct PartialEq, because different resource types have different status structures, and a unified JSON-string comparison is the most general approach.
+Only an actual semantic change triggers a K8s API call. The kind-aware comparison ignores known
+non-semantic churn such as condition ordering and `lastTransitionTime`, while falling back safely for
+unknown shapes or serialization failures. See `sync_runtime/resource_processor/status_diff.rs`.
 
 ## Workqueue Mechanism
 
@@ -203,7 +204,7 @@ Event::Init => {
 
 After sending the `RelinkReason::WatcherReconnected` signal, the upper-level `KubernetesController` receives a `ControllerExit(Relink)` event,
 triggering a full Controller rebuild:
-clear `PROCESSOR_REGISTRY` → recreate every `ResourceController` → re-LIST + WATCH.
+`ControllerRuntime::reset()` → recreate every `ResourceController` → re-LIST + WATCH.
 
 This is a conservative but safe strategy: any single resource's watcher reconnect triggers a full rebuild,
 avoiding the risk of partial cache being out of sync with the K8s API.
@@ -214,5 +215,5 @@ avoiding the risk of partial cache being out of sync with the K8s API.
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`, `ProcessorObj` trait
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler<K>` trait
 - `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
-- `edgion-controller/src/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`
+- `edgion-controller/src/conf_mgr/processor_registry.rs` — per-runtime `ProcessorRegistry`
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `persist_k8s_status` (inlined; `status.rs` was removed)

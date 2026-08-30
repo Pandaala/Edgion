@@ -1,0 +1,15 @@
+# Contends with ebtp-anc-z-loser over ebtp-anc-svc-b-only. The FS conf center
+# yields no creationTimestamp, so oldest-wins falls back to the lexicographic
+# resource name (precedence_key): "ebtp-anc-b-win-bonly" < "ebtp-anc-z-loser",
+# so this policy wins and reports a single ancestor (gw-b), Accepted=True.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ebtp-anc-b-win-bonly
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ebtp-anc-svc-b-only
+  loadBalancer:
+    type: LeastConn

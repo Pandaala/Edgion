@@ -14,14 +14,18 @@ pub fn count_gateway_classes() -> usize {
     GATEWAY_CLASS_STORE.read().len()
 }
 
-/// Query GatewayClass by name (cluster-scoped: key == name)
-#[allow(dead_code)]
+/// Query GatewayClass by name (cluster-scoped: key == name).
+/// Test-only: production reads go through `ConfigClient::get_gateway_class`
+/// against the conf_sync ClientCache, not this store.
+#[cfg(test)]
 pub fn get_gateway_class_by_name(name: &str) -> Option<GatewayClass> {
     GATEWAY_CLASS_STORE.read().get(name).cloned()
 }
 
-/// List all GatewayClass resources
-#[allow(dead_code)]
+/// List all GatewayClass resources.
+/// Test-only: production reads go through `ConfigClient::list_gateway_classes`
+/// against the conf_sync ClientCache, not this store.
+#[cfg(test)]
 pub fn list_gateway_classes() -> Vec<GatewayClass> {
     let mut items: Vec<GatewayClass> = GATEWAY_CLASS_STORE.read().values().cloned().collect();
     items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));

@@ -96,7 +96,11 @@ pub async fn create_account_secret(
         ..Default::default()
     };
 
-    let pp = PatchParams::apply("edgion-acme-controller");
+    // `force`: SSA only overwrites fields the same field manager already owns, so an
+    // account Secret that was pre-created or ever `kubectl edit`ed belongs to another
+    // manager and would 409 here on every attempt, permanently. The controller is the
+    // sole authority for this Secret's content. (Guard: cicd/checks/check_ssa_force.py)
+    let pp = PatchParams::apply("edgion-acme-controller").force();
     secret_api
         .patch(secret_name, &pp, &Patch::Apply(account_secret))
         .await
@@ -112,6 +116,10 @@ pub async fn patch_account_key_into_existing_secret(
 ) -> Result<()> {
     let b64 = base64::engine::general_purpose::STANDARD.encode(creds_json.as_bytes());
     let patch = serde_json::json!({ "data": { ACME_ACCOUNT_KEY: b64 } });
+    // No `.force()` here, deliberately: this is a Patch::Merge, and `force` is honored
+    // only for Patch::Apply — a merge patch raises no field-ownership conflict at all.
+    // `PatchParams::apply(...)` is used solely to set the field manager (kube exposes no
+    // other setter). Allowlisted in cicd/checks/check_ssa_force.py with this reason.
     let pp = PatchParams::apply("edgion-acme-controller");
     secret_api
         .patch(secret_name, &pp, &Patch::Merge(patch))

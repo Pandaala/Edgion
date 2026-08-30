@@ -23,9 +23,3 @@ spec:
       backendRefs:
         - name: lb-lc-service
           port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyLeastConn
-                name: default

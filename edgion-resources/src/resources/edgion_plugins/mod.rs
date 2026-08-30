@@ -8,10 +8,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // Submodules
+pub mod body_requirement;
 pub mod conditions;
 pub mod custom_plugins;
+pub mod dye;
 pub mod edgion_plugin;
 pub mod entry;
+pub mod hmac_match;
+pub mod mtls_field;
 
 pub mod access_decision;
 pub mod plugin_configs;
@@ -23,40 +27,53 @@ mod tests;
 
 // Re-exports
 pub use access_decision::AccessDecision;
-pub use edgion_plugin::EdgionPlugin;
+pub use body_requirement::{BodyReadFailureMode, BodyRequirement};
+pub use dye::{sanitize_field_value, DyeOutcome, DyeRule, DyeSuite, DENIED_DYE_HEADER_NAMES};
+pub use edgion_plugin::{BodyStage, EdgionPlugin};
 pub use entry::{
-    PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
-    UpstreamResponseFilterEntry,
+    duplicate_alias_error, dye_set_clobber_error, PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry,
+    UpstreamResponseEntry, UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup, CaseType, CertHeaderFormat,
-    CertSourceMode, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule,
-    DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
-    DirectEndpointOnMissing, DomainTarget, DslConfig, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
-    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtProcConfig,
-    ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry,
-    FaultInjectionConfig, ForwardAuthConfig, ForwardAuthDecision, HashAlgorithm, HashCalcConfig, HeaderActions,
-    HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup,
-    HmacCredential, HttpMethod, IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig,
-    JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, LdapAuthConfig,
-    LimitHeaderNames, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
-    RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig, ReplaceConfig,
-    RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential, ResolvedJwtCredential,
-    ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode,
-    RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType, TemplateSegment, TemplateVarType,
-    TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
+    bounded_structured_body_validation_errors, parse_json_instance, profile_json_value, CompiledJsonSchema,
+    ParsedJsonInstance,
+};
+pub use plugin_configs::{
+    compile_guard_pattern, validate_tiny_ufo_effective_limits, AccessLogExternField, AiBackendSelection,
+    AiBackendSelectionConfig, AiBackendSlotSelector, AiGuardAction, AiGuardConfig, AiGuardEvaluator, AiGuardMatcher,
+    AiGuardPiiDetector, AiGuardRejectionMode, AiGuardRole, AiGuardRule, AiModelHeaderMatch, AiModelPattern,
+    AiModelRoute, AiModelRouteAction, AiModelRouteCandidate, AiModelRouteMatch, AiProxyConfig, AiTokenQuotaConfig,
+    AiTokenQuotaLimit, AiTokenQuotaOnExceeded, AiTokenQuotaScope, AllEndpointStatusConfig, AllOfGroup, AnyOfClause,
+    BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup, CaseType, CertHeaderFormat, CertSourceMode,
+    CompiledJsonBodyRewrite, CompiledJsonPatchOperation, CompiledJsonPatchValue, CompiledTemplate, ConditionSet,
+    ConditionValidationProfile, ConsumerBy, CorsConfig, CredentialInjectionTarget, CredentialInjectorConfig,
+    CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig,
+    DomainTarget, DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod,
+    EndpointExtract, ExtProcConfig, ExtUpstreamExtract, ExtractConfig, FaultHeaderEntry, FaultInjectionConfig,
+    FormJsonDirection, FormJsonTransformConfig, ForwardAuthConfig, ForwardAuthDecision, GuardrailConfig, HashAlgorithm,
+    HashCalcConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig,
+    HmacAuthSecretGroup, HmacCredential, HmacMatchConfig, HttpMethod, InstanceValidationError, IpRestrictionConfig,
+    IpSource, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, JsonSchemaValidationConfig, JsonValueProfile,
+    JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup,
+    KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig,
+    MockConfig, OnKeyMiss, OnRedisFailure, OnUnknownModel, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm,
+    RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig,
+    ReplaceConfig, RequestBodyBufferConfig, RequestRestrictionConfig, ResolvedBasicAuthUser,
+    ResolvedCredentialInjector, ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
+    ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode, RouteRule, SanType,
+    SchemaComplexityProfile, StrictJsonError, TemplateSegment, TemplateVarType, TinyUfoTtlCacheConfig, TransformConfig,
+    TransformType, UnauthAction, UpstreamFallback, UpstreamHeaderConfig, VerificationMode, WafConfig, WafMode,
+    WebhookKeyGetConfig, WebhookVar, ABSOLUTE_INSTANCE_MAX_BYTES, CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN,
+    CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
+    MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES,
+    MAX_JSON_POINTER_TOKENS, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS, MAX_TINY_UFO_CACHE_ENTRIES,
+    MAX_TINY_UFO_LOGICAL_BYTES, TINY_UFO_WEIGHT_UNIT_BYTES,
 };
 pub use plugin_validation::PluginValidation;
-
-/// API group for EdgionPlugins
-pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionPlugins
-pub const EDGION_PLUGINS_KIND: &str = "EdgionPlugins";
+pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};
 
 /// EdgionPlugins defines reusable plugin configurations
-#[derive(CustomResource, Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Debug, Default, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -68,6 +85,10 @@ pub const EDGION_PLUGINS_KIND: &str = "EdgionPlugins";
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionPluginsSpec {
+    /// One native WAF instance spanning all supported transaction phases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waf: Option<WafConfig>,
+
     /// Request stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_plugins: Option<Vec<RequestFilterEntry>>,
@@ -84,6 +105,94 @@ pub struct EdgionPluginsSpec {
     /// Upstream response stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_response_plugins: Option<Vec<UpstreamResponseEntry>>,
+
+    /// Access log extension declarations.
+    ///
+    /// **Not an execution stage.** These entries never run as filters; they are
+    /// read when the access log entry is serialized. Modeling them as a
+    /// request-stage filter would lose them on every short-circuit path (404,
+    /// 403 from an earlier Deny, CORS preflight, ACME, redirect) — exactly the
+    /// entries an auditor needs — and would race `CtxSet` for `from: ctx`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log_extern: Option<Vec<AccessLogExternField>>,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// the Kubernetes watcher ingest path (see `schema_check::strict_ingest_enabled`);
+    /// never serialized, never in the CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`EdgionPluginsSpec`], carrying every field
+/// except `unknown_fields` (which is derived by the walk, never present in
+/// the wire document). See
+/// `skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
+/// for why this shadow exists: it lets `EdgionPluginsSpec` keep a derived
+/// `Serialize`/`JsonSchema` while `Deserialize` is hand-written to run the
+/// schema walk before the input is consumed.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgionPluginsSpecShadow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    waf: Option<WafConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_plugins: Option<Vec<RequestFilterEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upstream_response_filter_plugins: Option<Vec<UpstreamResponseFilterEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upstream_response_body_filter_plugins: Option<Vec<UpstreamResponseBodyFilterEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upstream_response_plugins: Option<Vec<UpstreamResponseEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    access_log_extern: Option<Vec<AccessLogExternField>>,
+}
+
+impl From<EdgionPluginsSpecShadow> for EdgionPluginsSpec {
+    fn from(shadow: EdgionPluginsSpecShadow) -> Self {
+        EdgionPluginsSpec {
+            waf: shadow.waf,
+            request_plugins: shadow.request_plugins,
+            upstream_response_filter_plugins: shadow.upstream_response_filter_plugins,
+            upstream_response_body_filter_plugins: shadow.upstream_response_body_filter_plugins,
+            upstream_response_plugins: shadow.upstream_response_plugins,
+            access_log_extern: shadow.access_log_extern,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Schema used by the unknown-key walk, built once (`schema_for!` is not
+/// cheap and this runs on every Kubernetes-mode ingest).
+///
+/// `pub` (not module-private): the FileSystem/etcd loader seam
+/// (`edgion-controller/src/conf_mgr/conf_center/common.rs`) and the Admin API
+/// write handlers (`edgion-controller/src/api/common.rs`) run the same walk
+/// against this schema outside the Kubernetes-only `strict_ingest_enabled`
+/// gate. The ingress matrix is documented in
+/// `skills/01-architecture/01-controller/02-admin-api.md`.
+pub fn edgion_plugins_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(EdgionPluginsSpec))
+}
+
+impl<'de> Deserialize<'de> for EdgionPluginsSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Fast path: non-Kubernetes ingest (FileSystem/etcd loaders, the
+        // gateway's conf_sync consumer, tests) pays neither the `Value`
+        // round-trip nor the walk. See `schema_check::strict_ingest_enabled`
+        // for why this is gated to Kubernetes specifically.
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(EdgionPluginsSpecShadow::deserialize(d)?.into());
+        }
+        let value = serde_json::Value::deserialize(d)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, edgion_plugins_spec_schema());
+        let mut spec: EdgionPluginsSpec = EdgionPluginsSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// Status of EdgionPlugins
@@ -106,7 +215,8 @@ impl EdgionPlugins {
 
     /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
-        self.spec.request_plugins.as_ref().is_some_and(|p| !p.is_empty())
+        self.spec.waf.is_some()
+            || self.spec.request_plugins.as_ref().is_some_and(|p| !p.is_empty())
             || self
                 .spec
                 .upstream_response_filter_plugins
@@ -126,6 +236,7 @@ impl EdgionPlugins {
 
     /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
+        let waf_count = usize::from(self.spec.waf.is_some());
         let request_count = self.spec.request_plugins.as_ref().map_or(0, |p| p.len());
         let filter_count = self
             .spec
@@ -138,7 +249,12 @@ impl EdgionPlugins {
             .as_ref()
             .map_or(0, |p| p.len());
         let response_count = self.spec.upstream_response_plugins.as_ref().map_or(0, |p| p.len());
-        request_count + filter_count + body_filter_count + response_count
+        waf_count + request_count + filter_count + body_filter_count + response_count
+    }
+
+    /// Get the logical native WAF configuration.
+    pub fn waf(&self) -> Option<&WafConfig> {
+        self.spec.waf.as_ref()
     }
 
     /// Get request filter entries as a slice
@@ -162,5 +278,10 @@ impl EdgionPlugins {
     /// Get upstream response entries as a slice
     pub fn upstream_response_entries(&self) -> &[UpstreamResponseEntry] {
         self.spec.upstream_response_plugins.as_deref().unwrap_or(&[])
+    }
+
+    /// Get the access log extension declarations as a slice.
+    pub fn access_log_extern_fields(&self) -> &[AccessLogExternField] {
+        self.spec.access_log_extern.as_deref().unwrap_or(&[])
     }
 }

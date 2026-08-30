@@ -46,13 +46,18 @@ already does this, on ingest, without an ACK/NACK round trip.
 
 **2. The residual gateway-only gap is narrow and fails closed**
 
-The one documented gap versus the gateway `compile_plugins` path is the DSL deep
-checks (Rhai compile / VM init), which require the gateway-only DSL VM and so
-cannot run in the controller (the controller has no `edgion-gateway` dependency —
-see CLAUDE.md crate DAG). For that narrow class the data plane **fails closed at
-runtime** rather than serving a half-applied resource. So the set of failures
-that reach a Gateway un-pre-validated AND silently degrade traffic is small;
-closing it with a full ACK/NACK protocol is disproportionate.
+DSL compile / static validation (parser, validator, compiler — the custom
+nom-parser/bytecode-VM engine, not Rhai) now runs controller-side too, via the
+shared `edgion-dsl` crate that both `EdgionPlugins::validate_plugins` and the
+gateway `compile_plugins` call through `DslConfig::compile_and_validate`. The
+one remaining gap versus the gateway `compile_plugins` path is DSL VM init
+(`Vm::new`, e.g. per-pattern regex DFA precompilation), which requires
+constructing the gateway-only DSL VM and so cannot run in the controller (the
+controller has no `edgion-gateway` dependency — see CLAUDE.md crate DAG). For
+that narrow class the data plane **fails closed at runtime** rather than
+serving a half-applied resource. So the set of failures that reach a Gateway
+un-pre-validated AND silently degrade traffic is smaller still; closing it with
+a full ACK/NACK protocol is disproportionate.
 
 **3. A feedback RPC is a large cross-layer feature, not a narrow fix**
 
@@ -102,7 +107,7 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 
 - `tasks/review-envoy/sync-01-no-ack-nack.md` (closed 2026-06-14, ⚠️ accepted-tradeoff)
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs:76-87` (`preparse` → `validate_plugins`, errors → K8s `.status`)
-- `edgion-resources/src/resources/edgion_plugins/validate.rs:124` (`validate_plugins`, mirrors gateway `compile_plugins` preparse errors minus DSL deep checks)
+- `edgion-resources/src/resources/edgion_plugins/validate.rs:124` (`validate_plugins`, mirrors gateway `compile_plugins` preparse errors minus DSL VM init)
 - `edgion-common/src/conf_sync/proto/config_sync.proto:36-51` (`WatchRequest` / `WatchResponse` — one-way schema)
 - `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:270-388` (watch apply loop; parse-error skip at line 306)
 - `skills/04-review/architecture/gateway-no-local-config-snapshot.md` (sibling Envoy-comparison config-sync tradeoff, sync-05)

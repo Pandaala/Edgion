@@ -9,28 +9,26 @@ use serde::{Deserialize, Serialize};
 
 // Submodules
 pub mod common;
+pub mod credential_source;
 pub mod elasticsearch;
 pub mod etcd;
+pub mod httpdns;
 pub mod kafka;
 pub mod redis;
 pub mod webhook;
 
 // Re-export common types for convenient access
 pub use common::SecretObjectReference;
+pub use credential_source::{CredentialSourceConfig, CredentialSourceProvider};
 pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
+pub use httpdns::HttpDnsResolverConfig;
 pub use kafka::KafkaClientConfig;
 pub use redis::RedisClientConfig;
 pub use webhook::WebhookServiceConfig;
 
-/// API group for LinkSys
-pub const LINK_SYS_GROUP: &str = "edgion.io";
-
-/// Kind for LinkSys
-pub const LINK_SYS_KIND: &str = "LinkSys";
-
 /// LinkSys defines connections to external systems
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(CustomResource, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -44,6 +42,52 @@ pub struct LinkSysSpec {
     /// System configuration
     #[serde(flatten)]
     pub config: SystemConfig,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// operator-authored ingest paths; never serialized and never exposed in the
+    /// CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`LinkSysSpec`]. `unknown_fields` is derived
+/// from the submitted document and therefore is intentionally absent.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkSysSpecShadow {
+    #[serde(flatten)]
+    config: SystemConfig,
+}
+
+impl From<LinkSysSpecShadow> for LinkSysSpec {
+    fn from(shadow: LinkSysSpecShadow) -> Self {
+        Self {
+            config: shadow.config,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Cached production schema used by all LinkSys unknown-key checks.
+pub fn link_sys_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(LinkSysSpec))
+}
+
+impl<'de> Deserialize<'de> for LinkSysSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(LinkSysSpecShadow::deserialize(deserializer)?.into());
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, link_sys_spec_schema());
+        let mut spec: Self = LinkSysSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// System configuration enum
@@ -60,6 +104,11 @@ pub enum SystemConfig {
     Kafka(KafkaClientConfig),
     /// HTTP webhook service configuration
     Webhook(WebhookServiceConfig),
+    /// HTTP DNS resolver configuration
+    HttpDns(HttpDnsResolverConfig),
+    /// Controller-managed credential acquisition and rotation.
+    #[serde(rename = "credentialSource")]
+    CredentialSource(CredentialSourceConfig),
 }
 
 impl SystemConfig {
@@ -71,22 +120,8 @@ impl SystemConfig {
             SystemConfig::Elasticsearch(_) => SystemType::Elasticsearch,
             SystemConfig::Kafka(_) => SystemType::Kafka,
             SystemConfig::Webhook(_) => SystemType::Webhook,
-        }
-    }
-
-    /// Get Webhook configuration if this is a Webhook system
-    pub fn as_webhook(&self) -> Option<&WebhookServiceConfig> {
-        match self {
-            SystemConfig::Webhook(config) => Some(config),
-            _ => None,
-        }
-    }
-
-    /// Get Redis configuration if this is a Redis system
-    pub fn as_redis(&self) -> Option<&RedisClientConfig> {
-        match self {
-            SystemConfig::Redis(config) => Some(config),
-            _ => None,
+            SystemConfig::HttpDns(_) => SystemType::HttpDns,
+            SystemConfig::CredentialSource(_) => SystemType::CredentialSource,
         }
     }
 
@@ -98,18 +133,10 @@ impl SystemConfig {
         }
     }
 
-    /// Get Elasticsearch configuration if this is an Elasticsearch system
-    pub fn as_elasticsearch(&self) -> Option<&ElasticsearchClientConfig> {
+    /// Get HTTP DNS configuration if this is an HttpDns system
+    pub fn as_http_dns(&self) -> Option<&HttpDnsResolverConfig> {
         match self {
-            SystemConfig::Elasticsearch(config) => Some(config),
-            _ => None,
-        }
-    }
-
-    /// Get Kafka configuration if this is a Kafka system
-    pub fn as_kafka(&self) -> Option<&KafkaClientConfig> {
-        match self {
-            SystemConfig::Kafka(config) => Some(config),
+            SystemConfig::HttpDns(config) => Some(config),
             _ => None,
         }
     }
@@ -124,6 +151,9 @@ pub enum SystemType {
     Elasticsearch,
     Kafka,
     Webhook,
+    HttpDns,
+    #[serde(rename = "credentialSource")]
+    CredentialSource,
 }
 
 impl LinkSys {
@@ -177,6 +207,14 @@ impl LinkSys {
                     errors.push("Kafka configuration has no brokers".to_string());
                 }
             }
+            SystemConfig::HttpDns(http_dns) => {
+                for err in http_dns.validate() {
+                    errors.push(format!("HTTP DNS configuration error: {}", err));
+                }
+            }
+            SystemConfig::CredentialSource(config) => {
+                errors.extend(config.validation_errors());
+            }
         }
         errors
     }
@@ -203,4 +241,81 @@ pub struct LinkSysStatus {
     /// Standard conditions: Accepted, ResolvedRefs (Gateway API).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_state: Option<CredentialSourceState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_successful_refresh_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_refresh_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desired_consumer_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_consumer_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflicted_consumer_count: Option<u32>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq)]
+pub enum CredentialSourceState {
+    Idle,
+    Valid,
+    Expired,
+    Unavailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_link_sys(name: &str, spec: LinkSysSpec) -> LinkSys {
+        LinkSys {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn http_dns_variant_roundtrips_and_validates() {
+        let yaml = r#"
+type: httpdns
+config:
+  urlTemplate: "https://203.0.113.10/d?host={domain}"
+  response:
+    kind: json
+    ipPath: ips
+  fallback:
+    type: system
+"#;
+        let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse httpdns LinkSys");
+        assert_eq!(spec.config.system_type(), SystemType::HttpDns);
+        assert!(spec.config.as_http_dns().is_some());
+
+        let ls = make_link_sys("h", spec);
+        assert!(
+            ls.validate_config().is_empty(),
+            "valid httpdns must pass validate_config"
+        );
+    }
+
+    #[test]
+    fn http_dns_missing_url_template_is_invalid() {
+        let yaml = "type: httpdns\nconfig:\n  fallback:\n    type: none\n";
+        let spec: LinkSysSpec = serde_yaml::from_str(yaml).unwrap();
+        let ls = make_link_sys("h", spec);
+        assert!(!ls.validate_config().is_empty());
+    }
 }

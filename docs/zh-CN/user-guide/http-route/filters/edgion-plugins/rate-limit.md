@@ -45,7 +45,7 @@ spec:
         rate: 100
         interval: "60s"
         key:
-          - type: clientIp
+          - type: remoteIp
 ```
 
 > **Schema 说明**：RateLimit 在 `requestPlugins` 阶段运行，使用 `type` / `config` 插件条目格式。字段为 `rate`（每个时间窗口的最大请求数）和 `interval`（时间窗口）——没有 `limit` / `window` 字段。完整参数表请见[独立插件页](../../../edgion-plugins/rate-limit.md)。

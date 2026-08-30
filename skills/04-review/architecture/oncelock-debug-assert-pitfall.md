@@ -31,10 +31,10 @@ Consequences in release:
 
 - `REQUEST_DURATION_CONFIG.get().expect(...)` panics on the first request.
 - `BACKEND_REQUESTS_CONFIG`, `PATH_NORMALIZATION_CONFIG`, `ACCESS_LOG_OPTIONS`,
-  `LRU_CACHE_GLOBAL_CONFIG` all silently fall back to their `Default::default()`
+  `MEMORY_CACHE_GLOBAL_CONFIG` all silently fall back to their `Default::default()`
   via `get_or_init` / `unwrap_or`. Operator-provided `[metrics.backend_requests]`,
   `[path_normalization]` (including the security-relevant `reject_escaped_slashes`),
-  `[access_log_options]`, and `[lru_cache]` settings are silently ignored.
+  `[access_log_options]`, and `[tiny_ufo_ttl_cache]` settings are silently ignored.
 
 ## Correct fix — evaluate `.set()` unconditionally, assert on the result
 

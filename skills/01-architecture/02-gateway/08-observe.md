@@ -16,7 +16,7 @@ The only allowed observability channels on the data plane are:
 1. AccessLog (per-request JSON log for HTTP/gRPC, zero-copy).
 2. Protocol logs (`ssl_log` / `tcp_log` / `tls_log` / `udp_log`).
 3. Prometheus metrics (`metrics::counter!` / `histogram!` / `gauge!`).
-4. Error code accumulation (`EdgionStatus`, written into `EdgionHttpContext.errors` and ultimately landing in the AccessLog `errors` field).
+4. Ordered request diagnostics (`EdgionInfoCode` / `EdgionErrorCode`, stored in `EdgionHttpContext.diagnostics` and emitted in the access-log `diagnostics` field).
 
 Control-plane and startup logs use `tracing` and are not subject to this rule. See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3 for details.
 
@@ -31,16 +31,17 @@ pub struct AccessLogEntry<'a> {
     pub timestamp: i64,
     pub request_info: &'a RequestInfo,
     pub match_info: Option<RouteMatchInfo<'a>>,  // HTTP or gRPC route match info
-    pub errors: &'a [EdgionStatus],
+    pub diagnostics: &'a [RequestDiagnostic],
+    pub diagnostics_full: bool,
     pub backend_context: Option<&'a BackendContext>,
     pub stage_logs: &'a [StageLogs],             // plugin execution logs
     pub conn_est: Option<bool>,                   // whether the upstream connection is established
-    pub ctx: AllowlistedCtx<'a>,                  // ctx_map projection (deny-by-default opt-in)
+    pub ext: LogExt,                              // AccessLogExtern-declared fields
 }
 ```
 
 - `RouteMatchInfo` is an `untagged` enum supporting both HTTP (`MatchInfo`) and gRPC (`GrpcMatchInfo`) match info.
-- `ctx` projects plugin context variables (`ctx_map`) into the log **deny-by-default**: only keys allow-listed on the matched route (`edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx`) are emitted, and known-sensitive keys stay hard-blocked. See `skills/03-coding/observability/00-access-log.md`.
+- `ext` is populated at serialization time (inside `logging()`) by resolving up to three tiers of `AccessLogExtern` declarations (`EdgionGatewayConfig.spec.globalPluginsRef` → Gateway `edgion.io/edgion-plugins` → route `ExtensionRef`) against the live plugin store — **not** by anything that ran earlier in the request. `AccessLogExtern` is a declaration, never an executed filter; this is why it survives 404 / 421 / the 400 family, which return before any plugin runs. Omitted when nothing was collected. See `skills/03-coding/observability/00-access-log.md`.
 - Built from EdgionHttpContext via `AccessLogEntry::from_context(ctx)`.
 - JSON serialization uses serde's `skip_serializing_if` to reduce output size.
 
@@ -84,13 +85,17 @@ Logging infrastructure:
 
 ### Exposed port
 
-Metrics are exposed on port `:12090` via Axum routes:
+Metrics use `metrics.listen` (default `0.0.0.0:12090`) and expose Axum routes:
 - `GET /metrics` — Prometheus-format metrics.
 - `GET /health` — health-check endpoint.
 
 ### Metric registry
 
-`GatewayMetrics` is a global singleton that registers the following metrics using the `metrics` crate:
+The authoritative gateway metric-name registry is
+`edgion-gateway/src/observe/metrics/registry.rs`. Do not copy Controller metrics into this list;
+Controller schema/status/connected-gateway metrics are owned by the control plane.
+
+Gateway metric families include:
 
 | Metric name | Type | Description |
 |-------------|------|-------------|
@@ -101,9 +106,6 @@ Metrics are exposed on port `:12090` via Axum routes:
 | `edgion_tcp_log_dropped_total` | Counter | Number of dropped TCP logs |
 | `edgion_tls_log_dropped_total` | Counter | Number of dropped TLS logs |
 | `edgion_udp_log_dropped_total` | Counter | Number of dropped UDP logs |
-| `edgion_status_update_total` | Counter | Total K8s status updates |
-| `edgion_status_update_failed_total` | Counter | Failed K8s status updates |
-| `edgion_status_update_skipped_total` | Counter | Skipped K8s status updates |
 | `edgion_config_reload_signals_total` | Counter | Configuration reload signals |
 | `edgion_config_relist_total` | Counter | Configuration relist count |
 | `edgion_config_event_parse_errors_total` | Counter | Watch-event JSON parse failures (label: `kind`); fires when `ClientCache::start_watch` cannot deserialize a `WatchResponse.data` batch or a per-event `T` payload — primary symptom of controller↔gateway schema drift |
@@ -111,8 +113,11 @@ Metrics are exposed on port `:12090` via Axum routes:
 | `edgion_gateway_request_bytes_total` | Counter | Gateway request bytes |
 | `edgion_gateway_response_bytes_total` | Counter | Gateway response bytes |
 | `edgion_mirror_requests_total` | Counter | Mirror requests (the `status` label distinguishes `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`; mirror is fire-and-forget; for per-request latency look up the `et` field in the mirror access log — no longer exposed as a histogram) |
-| `edgion_controller_connected_gateways` | Gauge | Number of connected gateway instances |
-| `edgion_controller_schema_validation_errors_total` | Counter | Schema validation error count |
+
+The registry also covers FIPS host/module/policy state, Wasm runtime behavior, outbound/egress
+blocking and TLS, LinkSys health, circuit breakers, retries, and access-log backfill. Consult the
+registry and the specific emission site when adding alerts; this page intentionally does not freeze
+an exhaustive copy that will drift.
 
 Global label: `service=edgion-gateway`.
 
@@ -168,7 +173,7 @@ edgion-gateway/src/observe/
 │   ├── logger_factory.rs     # logger factory
 │   └── mod.rs
 └── metrics/                  # Prometheus metrics
-    ├── api.rs                # Axum HTTP endpoint (:12090)
+    ├── api.rs                # Axum HTTP endpoint (metrics.listen)
     ├── registry.rs           # GatewayMetrics definition
     ├── test_metrics.rs       # test-only metric injection
     └── mod.rs

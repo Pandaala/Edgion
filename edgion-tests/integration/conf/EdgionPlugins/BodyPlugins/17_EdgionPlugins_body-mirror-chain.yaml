@@ -1,0 +1,57 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mirror-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: committed
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mirror-chain-longer
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /version
+              value: committed-body-created-by-a-longer-proxy-rewrite-mutation
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100

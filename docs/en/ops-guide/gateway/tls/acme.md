@@ -106,10 +106,10 @@ The Controller publishes the token in `status.activeChallenges`; the Gateway rea
 |-----------|------|---------|-------------|
 | `provider` | String | **Required** | DNS provider. Allowed values: `cloudflare` \| `alidns` |
 | `credentialRef` | Object | **Required** | Secret holding the provider's API credentials |
-| `propagationTimeout` | Integer | `120` | Max seconds to wait for the TXT record to propagate |
-| `propagationCheckInterval` | Integer | `5` | Seconds between propagation checks |
+| `propagationTimeout` | Duration | `120s` | Upper bound on the DNS propagation wait (GEP-2257 duration). The Controller polls the zone's authoritative nameservers and requests validation as soon as all TXT records are visible; if the deadline expires with a record still confirmed missing, the flow fails into the `failBackoff` retry path |
+| `propagationCheckInterval` | Duration | `5s` | Poll cadence for the propagation check (GEP-2257 duration) |
 
-The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, waits for propagation, asks ACME to validate, then deletes the record. Provider credential Secret keys:
+The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, polls the zone's authoritative nameservers until the record is visible (recursive resolution is used only to discover the authoritative servers, avoiding negative-cache false negatives), asks ACME to validate, then deletes the record. If the authoritative nameservers cannot be reached at all (e.g. outbound DNS is firewalled), the Controller waits out the full `propagationTimeout`, logs a warning, and proceeds optimistically — equivalent to the previous fixed-wait behavior. The deadline is evaluated between poll rounds, so a round of hanging DNS queries may run slightly past it. Provider credential Secret keys:
 
 - **Cloudflare** — `api-token` (with Zone.DNS:Edit permission)
 - **Alibaba Cloud DNS (`alidns`)** — `access-key-id` and `access-key-secret`
@@ -118,9 +118,9 @@ The Controller creates a `_acme-challenge.<domain>` TXT record via the provider 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `renewal.renewBeforeDays` | Integer | `30` | Renew this many days before expiry |
-| `renewal.checkInterval` | Integer | `86400` | Seconds between renewal checks (default 24h) |
-| `renewal.failBackoff` | Integer | `300` | Base seconds for the retry delay after a failure. Each consecutive failure multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 300, 1200, 4800, 19200, 76800). After 5 consecutive failures the resource stays `Failed` and stops retrying until you edit the CRD or [manually trigger](#manual-trigger) it (which resets the counter); a success also resets it |
+| `renewal.renewBefore` | Duration | `720h` | Renew this far before expiry (720h = 30 days) |
+| `renewal.checkInterval` | Duration | `24h` | Interval between renewal checks |
+| `renewal.failBackoff` | Duration | `5m` | Base retry delay after a failure. Each consecutive failure multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 5m, 20m, 80m, ~5.3h, ~21.3h). After 5 consecutive failures the resource stays `Failed` and stops retrying until you edit the CRD or [manually trigger](#manual-trigger) it (which resets the counter); a success also resets it |
 
 ### External Account Binding
 
@@ -190,10 +190,10 @@ spec:
     credentialRef:
       name: cloudflare-api-token
       namespace: production
-    propagationTimeout: 180
+    propagationTimeout: 180s
   renewal:
-    renewBeforeDays: 14
-    checkInterval: 43200
+    renewBefore: 336h
+    checkInterval: 12h
   storage:
     secretName: wildcard-example-com-tls
   autoEdgionTls:
@@ -340,7 +340,7 @@ If the ACME service is not running on the contacted replica (for example one tha
 ### Common issues
 
 1. **HTTP-01 fails** — confirm the domain resolves to the Gateway and its HTTP port (typically 80) is reachable from the internet. The Gateway must receive the published token via List-Watch and answer `/.well-known/acme-challenge/<token>`.
-2. **DNS-01 times out** — increase `propagationTimeout`; verify the `credentialRef` Secret keys are correct and the provider API is reachable.
+2. **DNS-01 times out** — increase `propagationTimeout` (a generous value is cheap: the poll loop exits as soon as the records are visible); verify the `credentialRef` Secret keys are correct and the provider API is reachable. A "propagation not confirmed" failure means the zone's authoritative nameservers still did not serve the TXT record at the deadline.
 3. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.
 4. **Wildcard request rejected** — wildcards require `challenge.type: dns-01`; HTTP-01 cannot validate them.
 5. **Rate-limited by the ACME server** — switch to the staging directory while testing; production Let's Encrypt enforces strict per-domain limits.

@@ -11,7 +11,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::stream::get_global_stream_plugin_store;
-use crate::plugins::{StreamContext, StreamPluginResult};
+use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::routes::tcp::TcpPortRouteManager;
@@ -21,8 +21,10 @@ use edgion_resources::ListenerKey;
 /// TCP connection context
 pub struct TcpContext {
     pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
+    pub direct_peer_ip: String,
+    pub direct_peer_port: u16,
+    pub remote_ip: String,
+    pub remote_port: u16,
     pub upstream_addr: Option<String>,
     pub start_time: Instant,
     pub bytes_sent: u64,
@@ -94,16 +96,19 @@ impl ServerApp for EdgionTcpProxy {
             return None;
         }
 
-        let (client_addr, client_port) = downstream
-            .get_socket_digest()
-            .and_then(|d| d.peer_addr().cloned())
-            .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
-            .unwrap_or_else(|| ("unknown".to_string(), 0));
+        let digest = downstream.get_socket_digest();
+        let addrs = crate::util::resolve_transport_client_addrs(
+            digest.as_deref().and_then(|d| d.peer_addr()),
+            digest.as_deref().and_then(|d| d.raw_peer_addr()),
+            "unknown",
+        );
 
         let mut ctx = TcpContext {
             listener_port: self.listener_port,
-            client_addr,
-            client_port,
+            direct_peer_ip: addrs.direct_peer_ip,
+            direct_peer_port: addrs.direct_peer_port,
+            remote_ip: addrs.remote_ip,
+            remote_port: addrs.remote_port,
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,
@@ -145,7 +150,7 @@ impl EdgionTcpProxy {
         // 3. Execute stream plugins (dynamic lookup from StreamPluginStore)
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
             unit.stream_plugin_store_key.as_deref(),
-            &ctx.client_addr,
+            &ctx.direct_peer_ip,
             self.listener_port,
         )
         .await
@@ -195,7 +200,10 @@ impl EdgionTcpProxy {
 
         // 7. Connect to upstream
         let mut peer = BasicPeer::new(&upstream_addr_str);
-        peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+        peer.options.tcp_keepalive = unit
+            .tcp_keepalive
+            .as_ref()
+            .map(crate::routes::common::to_pingora_tcp_keepalive);
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP
         // retransmit timeout; mirrors the HTTP path's connection_timeout.
@@ -208,7 +216,7 @@ impl EdgionTcpProxy {
             Err(_) => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 // L4 upstream connect failure — local-origin failure.
-                crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                crate::backends::get_outlier_detection_store().record_failure_by_addr(
                     &service_key,
                     &upstream_addr,
                     crate::backends::FailureClass::LocalOrigin,
@@ -220,7 +228,7 @@ impl EdgionTcpProxy {
         ctx.connection_established = true;
         // A successful connect is the L4 "backend reachable" success signal; it
         // resets the endpoint's outlier-detection failure counters.
-        crate::backends::get_circuit_breaker_store().record_success_by_addr(&service_key, &upstream_addr);
+        crate::backends::get_outlier_detection_store().record_success_by_addr(&service_key, &upstream_addr);
 
         // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;
@@ -308,7 +316,7 @@ pub(crate) enum StreamPluginCheck {
 ///   with no rules to act as a no-op).
 pub(crate) async fn check_stream_plugins(
     store_key: Option<&str>,
-    client_addr: &str,
+    direct_peer_ip: &str,
     listener_port: u16,
 ) -> StreamPluginCheck {
     let Some(store_key) = store_key else {
@@ -318,8 +326,8 @@ pub(crate) async fn check_stream_plugins(
     // Fail-close: data plane must not emit tracing on the per-connection hot
     // path. The bounded reason flows into the TCP access log via the caller,
     // mirroring the TLS path's `ctx.err_log` (routes/tls/mod.rs).
-    let Ok(client_ip) = client_addr.parse() else {
-        return StreamPluginCheck::Deny("client address unparseable");
+    let Ok(direct_peer_ip) = direct_peer_ip.parse() else {
+        return StreamPluginCheck::Deny("direct peer IP unparseable");
     };
 
     let store = get_global_stream_plugin_store();
@@ -333,7 +341,7 @@ pub(crate) async fn check_stream_plugins(
         return StreamPluginCheck::Allow;
     }
 
-    let stream_ctx = StreamContext::new(client_ip, listener_port);
+    let stream_ctx = StreamContext::new(direct_peer_ip, listener_port, StreamLayer::Tcp);
     match runtime.run(&stream_ctx).await {
         StreamPluginResult::Allow => StreamPluginCheck::Allow,
         StreamPluginResult::Deny(_) => StreamPluginCheck::Deny("stream plugin policy denied"),
@@ -361,13 +369,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fail_close_when_tcp_client_addr_unparseable() {
-        // Rule references an ESP but client_addr is not a valid IP literal
+    async fn fail_close_when_tcp_direct_peer_ip_unparseable() {
+        // Rule references an ESP but DirectPeerIp is not a valid IP literal
         // (e.g. peer addr extraction returned "unknown"). Must reject.
         let result = check_stream_plugins(Some("default/something"), "unknown", 9000).await;
         assert_eq!(
             result,
-            StreamPluginCheck::Deny("client address unparseable"),
+            StreamPluginCheck::Deny("direct peer IP unparseable"),
             "unparseable client addr must fail-close"
         );
     }

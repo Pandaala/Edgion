@@ -1,13 +1,17 @@
 ---
 name: resource-secret
-description: Secret resource — storage, not synced to Gateway, GLOBAL_SECRET_STORE, cascading requeue; plus the Controller/Gateway-shared Secret → Material resolution layer.
+description: Secret resource — runtime-owned Controller storage, default no-sync behavior, cascading requeue, and shared Secret-to-Material resolution.
 ---
 
 # Secret resource
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-Secret is a Kubernetes core resource. In Edgion it stores TLS certificates, authentication credentials, ACME accounts, and other sensitive information. Secret belongs to **no_sync_kind** and is not synced to the Gateway via gRPC; it is processed only on the Controller side. On one hand, GLOBAL_SECRET_STORE provides Secret data to other Handlers; on the other, `SecretRefManager` cascades requeue to dependent resources. Sensitive data that the Gateway needs is **embedded** by the Controller during the parse stage into the spec of the resource that references it (e.g., `Gateway.tls.secrets`, `EdgionTls.spec.secret`, `LinkSys.spec.config.<auth>.secret` / `tls.certs.secret`) and travels along with conf_sync. EdgionAcme is the exception: account / DNS credentials are used by Controller-side `AcmeService`, are not embedded in the spec; during issuance, `AcmeService` fetches the Secret directly via the K8s API.
+Secret is a Kubernetes core resource and a default **no_sync_kind**. It is not sent as an
+independent Gateway cache. Each ConfCenter's `ControllerRuntime.secret_store` provides Secret data
+to handlers, and its `SecretRefManager` cascades requeues to dependents. Sensitive data needed by
+the Gateway is embedded into the resolved resource and sent through conf_sync. EdgionAcme account
+and DNS credentials are instead consumed by the Kubernetes-only Controller AcmeService.
 
 ## Source code locations
 
@@ -20,19 +24,23 @@ Secret is a Kubernetes core resource. In Edgion it stores TLS certificates, auth
 
 ### parse
 
-1. **Update GLOBAL_SECRET_STORE**: write into the global store (`update_secrets`); other Handlers' parse stage reads via `get_secret()`.
-2. **Initialization-stage accumulation**: during the init LIST stage, Secrets first enter `init_accumulator`; on init_done, `replace_all_secrets()` performs a one-shot full replacement, cleaning up leftovers from the previous session.
+1. **Update the runtime store** through `ctx.runtime().secret_store.update(...)`; other handlers
+   read the same runtime instance.
+2. **Initialization-stage accumulation**: collect Secrets during the initial List; on init_done,
+   `secret_store.replace_all(...)` performs the authoritative replacement.
 3. **OIDC Secret check**: if referenced by EdgionPlugins, check whether it contains an OIDC-compatible key (`clientSecret` / `client_secret` / `sessionSecret` / `session_secret` / `secret`); warn if missing.
 
 ### on_init_done / on_change / on_delete
 
-- `on_init_done`: perform `replace_all_secrets()` for an authoritative replacement.
+- `on_init_done`: perform `secret_store.replace_all(...)` for an authoritative replacement.
 - `on_change`: via `SecretRefManager`, find all resources referencing this Secret and requeue them one by one.
-- `on_delete`: remove from GLOBAL_SECRET_STORE + cascading requeue.
+- `on_delete`: remove from `runtime.secret_store` + cascading requeue.
 
-## GLOBAL_SECRET_STORE mechanism
+## Runtime-owned SecretStore
 
-A process-level global cache: `SecretHandler.parse` writes; other Handlers (Gateway / EdgionTls / EdgionPlugins, etc.) read during their parse stage via `get_secret(ns, name)`. The lifecycle follows the Controller process; on init_done, a full replacement guarantees a clean state.
+`ControllerRuntime` owns one SecretStore per ConfCenter lifecycle. Handlers access it through
+`HandlerContext::runtime()`. `ControllerRuntime::reset()` clears reload-scoped Secret state,
+preventing data from leaking between center generations.
 
 ## Secret → Material resolution layer
 
@@ -142,7 +150,7 @@ The following plaintext copies are **not** zeroized: `SecretStore` cache, `serde
 
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| Secret → Gateway | Gateway | SecretRefManager | `certificateRefs` (TLS certificates) |
+| Secret → Gateway | Gateway | SecretRefManager | Listener `certificateRefs` and Gateway-level backend `clientCertificateRef` |
 | Secret → EdgionTls | EdgionTls | SecretRefManager | `secret_ref` / `ca_secret_ref` |
 | Secret → EdgionPlugins | EdgionPlugins | SecretRefManager | JWT / BasicAuth / HMAC / KeyAuth / OIDC, etc. |
 | Secret → EdgionAcme | EdgionAcme | SecretRefManager | `privateKeySecretRef` (account private key, `AcmeAccountResolver`) + `dns01.credentialRef` (DNS Provider API) |

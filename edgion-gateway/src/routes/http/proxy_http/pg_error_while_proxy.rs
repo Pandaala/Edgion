@@ -1,9 +1,56 @@
+use super::pg_upstream_response_filter::has_final_response_written;
 use super::EdgionHttpProxy;
 use crate::{EdgionHttpContext, PeerTimeoutSource};
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorSource, ErrorType};
 use pingora_proxy::Session;
+
+#[inline]
+fn should_record_local_origin_failure(retry_on_status: bool, error_type: &ErrorType) -> bool {
+    !retry_on_status && !matches!(error_type, ErrorType::HTTPStatus(_))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AiProxyFailureClass {
+    BackendRequestTimeout,
+    AmbiguousUpstream,
+}
+
+fn ai_failure_wants_retry(
+    class: AiProxyFailureClass,
+    retry_configured: bool,
+    retry_allow_non_idempotent: bool,
+) -> bool {
+    match class {
+        AiProxyFailureClass::BackendRequestTimeout => retry_configured,
+        AiProxyFailureClass::AmbiguousUpstream => retry_allow_non_idempotent,
+    }
+}
+
+fn classify_ai_proxy_failure(
+    error_type: &ErrorType,
+    error_source: &ErrorSource,
+    timeout_source: Option<PeerTimeoutSource>,
+) -> Option<AiProxyFailureClass> {
+    if !matches!(error_source, ErrorSource::Upstream) {
+        return None;
+    }
+    match error_type {
+        ErrorType::ReadTimedout | ErrorType::WriteTimedout => (timeout_source
+            == Some(PeerTimeoutSource::BackendRequest))
+        .then_some(AiProxyFailureClass::BackendRequestTimeout),
+        ErrorType::InvalidHTTPHeader
+        | ErrorType::H1Error
+        | ErrorType::H2Error
+        | ErrorType::H2Downgrade
+        | ErrorType::InvalidH2
+        | ErrorType::ReadError
+        | ErrorType::WriteError
+        | ErrorType::ConnectionClosed => Some(AiProxyFailureClass::AmbiguousUpstream),
+        _ => None,
+    }
+}
 
 #[inline]
 pub fn error_while_proxy(
@@ -15,9 +62,9 @@ pub fn error_while_proxy(
     client_reused: bool,
 ) -> Box<Error> {
     // filter-04b: the sentinel error from a written local reply is intentional,
-    // not an upstream failure. Skip body-size accounting and circuit-breaker
+    // not an upstream failure. Skip body-size accounting and outlier-detection
     // failure recording, and leave the error non-retryable.
-    if ctx.local_reply_written {
+    if ctx.local_reply_written() {
         return e.more_context(format!("Peer: {}", peer));
     }
 
@@ -26,12 +73,15 @@ pub fn error_while_proxy(
     }
     let mut e = e.more_context(format!("Peer: {}", peer));
 
-    // Record circuit breaker failure (for non-status-retry errors only)
-    if !ctx.retry_on_status {
+    // Record only transport/proxy failures as local-origin. HTTPStatus errors
+    // are control flow for an already-observed upstream response (status retry
+    // or retry-budget denial), or a locally generated response status; the
+    // response filter has already classified any real upstream status.
+    if should_record_local_origin_failure(ctx.retry_on_status, e.etype()) {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
                 // Mid-proxy read/write error or transport reset — local-origin failure.
-                crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                crate::backends::get_outlier_detection_store().record_failure_by_addr(
                     service_key,
                     addr,
                     crate::backends::FailureClass::LocalOrigin,
@@ -40,7 +90,79 @@ pub fn error_while_proxy(
         }
     }
 
-    let buffer_ok = !session.as_ref().retry_buffer_truncated();
+    // With streamed body handlers installed no retry buffer was ever
+    // allocated, so `retry_buffer_truncated()` reports a misleading `false`
+    // ("nothing truncated") — consult the monotonic latch directly (contract
+    // §4.6). The proxy also suppresses such retries on its side; this keeps
+    // the local decision (and its logging) consistent.
+    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active();
+
+    if ctx.has_ai_attempt_plan() {
+        // A status retry was decided and transitioned exactly once in the
+        // response-header hook. This callback only asks Pingora to re-enter
+        // upstream_peer; it must not touch scheduler or budget state again.
+        if ctx.retry_on_status && buffer_ok {
+            ctx.retry_on_status = false;
+            e.set_retry(true);
+            return e;
+        }
+
+        let failure_class = classify_ai_proxy_failure(e.etype(), e.esource(), ctx.peer_timeout_source);
+        let retry_allow_non_idempotent = ctx.retry_allow_non_idempotent();
+        let common_retry_gates = buffer_ok
+            && !ctx.request_timeout_exceeded()
+            && !ctx.grpc_deadline_exceeded()
+            && !ctx.response_write_started()
+            && !has_final_response_written(session);
+        let Some(failure_class) = failure_class else {
+            return e;
+        };
+        let wants_retry = ai_failure_wants_retry(failure_class, ctx.retry_configured(), retry_allow_non_idempotent);
+        let gates_allow_retry = common_retry_gates
+            && (failure_class == AiProxyFailureClass::BackendRequestTimeout || retry_allow_non_idempotent);
+        let decision = crate::ai::dispatch::handle_ai_transport_failure(
+            ctx,
+            wants_retry,
+            gates_allow_retry,
+            failure_class == AiProxyFailureClass::AmbiguousUpstream,
+        );
+        if let Some(state) = ctx.ai_state_mut() {
+            state.attempt_runtime.finish_failure(match failure_class {
+                AiProxyFailureClass::BackendRequestTimeout => {
+                    crate::ai::attempt_runtime::AiAttemptFailure::BackendRequestTimeout
+                }
+                AiProxyFailureClass::AmbiguousUpstream => {
+                    crate::ai::attempt_runtime::AiAttemptFailure::Ambiguous(crate::backends::FailureClass::LocalOrigin)
+                }
+            });
+        }
+        match decision {
+            Ok(crate::ai::dispatch::AiRetryDecision::Retry) => {
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    match failure_class {
+                        AiProxyFailureClass::BackendRequestTimeout => {
+                            upstream.status = Some(504);
+                            upstream.err.push("AiBackendRequestTimeoutRetry".to_string());
+                        }
+                        AiProxyFailureClass::AmbiguousUpstream => {
+                            upstream.err.push("AiAmbiguousUpstreamRetry".to_string());
+                        }
+                    }
+                }
+                if failure_class == AiProxyFailureClass::BackendRequestTimeout {
+                    ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
+                }
+                e.set_retry(true);
+            }
+            Ok(crate::ai::dispatch::AiRetryDecision::BudgetDenied) => {
+                crate::observe::metrics::record_retry_budget_denied();
+                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
+                return Error::explain(ErrorType::HTTPStatus(503), "AI retry budget exhausted");
+            }
+            Ok(crate::ai::dispatch::AiRetryDecision::Final) | Err(_) => {}
+        }
+        return e;
+    }
 
     // Case 1: status code triggered retry (set by upstream_response_filter)
     // Retry budget and timeout already checked in upstream_response_filter
@@ -73,7 +195,7 @@ pub fn error_while_proxy(
             // Stamp the canceled attempt's per-upstream log entry so it is
             // self-describing (mirrors pg_fail_to_connect): without this the
             // entry shows neither status nor error and operators must infer
-            // the cancellation from the request-level error chain.
+            // the cancellation from the request-level diagnostics.
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
                 upstream.err.push(e.etype().as_str().to_string());
@@ -83,7 +205,22 @@ pub fn error_while_proxy(
                         .as_millis() as u64,
                 );
             }
-            ctx.add_error(EdgionStatus::BackendRequestTimeoutRetry);
+            // Retry budget (retryConstraint): composes AFTER the maxRetries/
+            // deadline/buffer checks of this Case 1.5 (D3) — both gates must pass.
+            // On refusal the retry flag is NOT set; instead the client gets a
+            // deterministic 503 by swapping the error's ErrorType (pg_fail_to_proxy
+            // renders the status from the error). The per-upstream entry keeps its
+            // real observed 504 timeout status (stamped just above); the 503 is a
+            // request-level outcome carried by the error, and BackendRequestTimeoutRetry
+            // is intentionally NOT added because no retry actually occurs.
+            if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+                if !budget.try_retry() {
+                    crate::observe::metrics::record_retry_budget_denied();
+                    ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
+                    return Error::explain(ErrorType::HTTPStatus(503), "retry budget exhausted");
+                }
+            }
+            ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
             e.set_retry(true);
             return e;
         }
@@ -127,4 +264,76 @@ pub fn error_while_proxy(
     }
 
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ai_failure_wants_retry, classify_ai_proxy_failure, should_record_local_origin_failure, AiProxyFailureClass,
+    };
+    use crate::PeerTimeoutSource;
+    use pingora_core::{ErrorSource, ErrorType};
+
+    #[test]
+    fn local_origin_recording_excludes_status_control_flow() {
+        assert!(!should_record_local_origin_failure(false, &ErrorType::HTTPStatus(503)));
+        assert!(!should_record_local_origin_failure(true, &ErrorType::ReadError));
+        assert!(should_record_local_origin_failure(false, &ErrorType::ReadError));
+    }
+
+    #[test]
+    fn ai_failure_classification_excludes_control_flow_and_non_upstream_errors() {
+        assert_eq!(
+            classify_ai_proxy_failure(
+                &ErrorType::HTTPStatus(503),
+                &ErrorSource::Upstream,
+                Some(PeerTimeoutSource::BackendRequest),
+            ),
+            None
+        );
+        assert_eq!(
+            classify_ai_proxy_failure(&ErrorType::ReadError, &ErrorSource::Downstream, None),
+            None
+        );
+        assert_eq!(
+            classify_ai_proxy_failure(&ErrorType::ReadError, &ErrorSource::Upstream, None),
+            Some(AiProxyFailureClass::AmbiguousUpstream)
+        );
+        assert_eq!(
+            classify_ai_proxy_failure(&ErrorType::InternalError, &ErrorSource::Upstream, None),
+            None
+        );
+        assert_eq!(
+            classify_ai_proxy_failure(
+                &ErrorType::ReadTimedout,
+                &ErrorSource::Upstream,
+                Some(PeerTimeoutSource::BackendRequest),
+            ),
+            Some(AiProxyFailureClass::BackendRequestTimeout)
+        );
+    }
+
+    #[test]
+    fn ambiguous_upstream_requires_explicit_replay_opt_in() {
+        assert!(!ai_failure_wants_retry(
+            AiProxyFailureClass::AmbiguousUpstream,
+            true,
+            false
+        ));
+        assert!(ai_failure_wants_retry(
+            AiProxyFailureClass::AmbiguousUpstream,
+            true,
+            true
+        ));
+        assert!(ai_failure_wants_retry(
+            AiProxyFailureClass::BackendRequestTimeout,
+            true,
+            false
+        ));
+        assert!(!ai_failure_wants_retry(
+            AiProxyFailureClass::BackendRequestTimeout,
+            false,
+            true
+        ));
+    }
 }

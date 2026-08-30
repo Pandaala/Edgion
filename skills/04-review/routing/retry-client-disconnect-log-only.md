@@ -1,6 +1,6 @@
 ---
 name: retry-client-disconnect-log-only
-description: The retry loop intentionally does NOT add a downstream-liveness abort for the backoff sleep / connect window; the accepted mitigation is observability-only — EdgionStatus::ClientClosed (499_01) in the access-log errors chain marks delivery failure to a gone client. Pingora h1 already aborts in-flight attempts on downstream EOF within milliseconds (empirically verified), so the blind window is small. Reject re-reports demanding a real-time abort unless they bring new evidence.
+description: The retry loop intentionally does NOT add a downstream-liveness abort for the backoff sleep / connect window; the accepted mitigation is observability-only — the ClientClosed error code in the ordered access-log diagnostics marks delivery failure to a gone client. Pingora h1 already aborts in-flight attempts on downstream EOF within milliseconds (empirically verified), so the blind window is small. Reject re-reports demanding a real-time abort unless they bring new evidence.
 ---
 
 # route-03 — client-disconnect abort in the retry loop: log-only by decision
@@ -14,12 +14,13 @@ The TODO at `pg_upstream_peer.rs` (abort the backoff sleep on client
 disconnect) stays unimplemented by decision. Empirical probe (2026-06-11,
 HTTP/1.1): Pingora's bidirectional pump detects a client disconnect while an
 upstream attempt is in flight and aborts within ~60ms — the request ends 499
-with `errors: ["ClientClosed"]` and a single canceled attempt. The original
+with `diagnostics: [{"kind":"error","code":"ClientClosed"}]` and a single
+canceled attempt. The original
 review's "client pays for attempts × backendRequest (240s) of abandoned
 upstream work" therefore over-states the exposure: the only window where
 retries continue after a disconnect is the backoff sleep + connect phase.
 
-`pg_fail_to_proxy.rs` records `EdgionStatus::ClientClosed` (499_01) when the
+`pg_fail_to_proxy.rs` calls `record_error(EdgionErrorCode::ClientClosed)` when the
 proxy-ending error is a downstream failure (code 499, excluding a literal
 upstream `HTTPStatus(499)`) or when writing the final error response fails.
 Analysis recipe: records with `ClientClosed` and `upstreams.length > 1` are

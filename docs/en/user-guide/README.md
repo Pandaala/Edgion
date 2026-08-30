@@ -2,7 +2,15 @@
 
 This section is intended for application developers and covers how to configure routing rules using the Gateway API.
 
+For LLM / GenAI traffic, start with the dedicated [AI Gateway](../ai-gateway/) section instead of searching plugins alone.
+
 ## Table of Contents
+
+### AI Gateway
+
+- [AI Gateway Overview](../ai-gateway/README.md)
+- [Quick Start](../ai-gateway/quick-start.md)
+- [Resilience and Failover](../ai-gateway/resilience.md)
 
 ### HTTPRoute
 - [HTTPRoute Overview](./http-route/overview.md)

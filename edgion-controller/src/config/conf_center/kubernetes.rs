@@ -5,6 +5,7 @@
 //! - `LeaderElectionConfig`: Configuration for leader election in HA deployments
 //! - `MetadataFilterConfig`: Configuration for filtering K8s resource metadata
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// HA mode for controller replicas
@@ -94,6 +95,17 @@ pub struct KubernetesConfig {
     /// Example: `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`
     #[serde(default)]
     pub no_watch_kinds: Vec<String>,
+
+    /// Deadline (seconds) for a started watcher set to reach CachesReady.
+    /// Covers the readiness poll (internally budgeted at 30 s) plus the
+    /// post-ready tail (WatchObj registration, cross-namespace revalidations,
+    /// leader-job start). Restart-bound: a reload re-arms the deadline but
+    /// always with the boot-time value. Raise this when a single resource
+    /// kind's count approaches the per-kind workqueue capacity (5000) —
+    /// a too-small value is a permanent restart loop, which is why values
+    /// at or below the 30 s poll budget are rejected at startup.
+    #[serde(default = "default_cache_ready_deadline_secs")]
+    pub cache_ready_deadline_secs: u64,
 }
 
 impl KubernetesConfig {
@@ -109,36 +121,35 @@ impl KubernetesConfig {
             gateway_address: None,
             ha_mode: HaMode::default(),
             no_watch_kinds: Vec::new(),
+            cache_ready_deadline_secs: default_cache_ready_deadline_secs(),
         }
     }
 
-    /// Set watch namespaces
+    /// Set watch namespaces. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_watch_namespaces(mut self, namespaces: Vec<String>) -> Self {
         self.watch_namespaces = namespaces;
         self
     }
 
-    /// Set label selector
+    /// Set label selector. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_label_selector(mut self, selector: impl Into<String>) -> Self {
         self.label_selector = Some(selector.into());
         self
     }
 
-    /// Set controller name used in Gateway API status reporting
+    /// Set controller name used in Gateway API status reporting. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_controller_name(mut self, controller_name: impl Into<String>) -> Self {
         self.controller_name = controller_name.into();
         self
     }
 
-    /// Set metadata filter
+    /// Set metadata filter. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_metadata_filter(mut self, filter: MetadataFilterConfig) -> Self {
         self.metadata_filter = filter;
-        self
-    }
-
-    /// Set leader election config
-    pub fn with_leader_election(mut self, config: LeaderElectionConfig) -> Self {
-        self.leader_election = config;
         self
     }
 
@@ -147,7 +158,8 @@ impl KubernetesConfig {
         &self.watch_namespaces
     }
 
-    /// Get label selector
+    /// Get label selector. Test-only: production reads the field directly.
+    #[cfg(test)]
     pub fn label_selector(&self) -> Option<&str> {
         self.label_selector.as_deref()
     }
@@ -160,11 +172,6 @@ impl KubernetesConfig {
     /// Get controller name
     pub fn controller_name(&self) -> &str {
         &self.controller_name
-    }
-
-    /// Get static gateway address (for status.addresses fallback)
-    pub fn gateway_address(&self) -> Option<&str> {
-        self.gateway_address.as_deref()
     }
 
     /// Get metadata filter
@@ -182,9 +189,22 @@ impl KubernetesConfig {
         self.ha_mode
     }
 
-    /// Get no_watch_kinds
-    pub fn no_watch_kinds(&self) -> &[String] {
-        &self.no_watch_kinds
+    /// Fail-fast validation of K8s-flow timing knobs (same fail-fast policy
+    /// as the leader-election timing validation in leader_election.rs: a bad
+    /// value here risks a permanent restart loop at runtime, which is worse
+    /// than a startup error).
+    pub fn validate(&self) -> Result<()> {
+        const READINESS_POLL_BUDGET_SECS: u64 = 30;
+        if self.cache_ready_deadline_secs <= READINESS_POLL_BUDGET_SECS {
+            anyhow::bail!(
+                "kubernetes conf_center misconfig: cache_ready_deadline_secs ({}) must be > {} \
+                 (the internal cache-readiness poll budget); a deadline that cannot even cover \
+                 the poll is a designed-in restart loop",
+                self.cache_ready_deadline_secs,
+                READINESS_POLL_BUDGET_SECS
+            );
+        }
+        Ok(())
     }
 }
 
@@ -259,6 +279,10 @@ fn default_renew_deadline_secs() -> u64 {
 
 fn default_retry_period_secs() -> u64 {
     2
+}
+
+fn default_cache_ready_deadline_secs() -> u64 {
+    90
 }
 
 /// Metadata filter configuration for reducing K8s resource size in memory
@@ -444,5 +468,35 @@ gateway_class: edgion
     fn test_ha_mode_display() {
         assert_eq!(format!("{}", HaMode::LeaderOnly), "leader-only");
         assert_eq!(format!("{}", HaMode::AllServe), "all-serve");
+    }
+}
+
+#[cfg(test)]
+mod cache_ready_deadline_tests {
+    use super::*;
+
+    #[test]
+    fn default_deadline_is_90_and_valid() {
+        let cfg = KubernetesConfig::new("edgion");
+        assert_eq!(cfg.cache_ready_deadline_secs, 90);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn deadline_at_or_below_poll_budget_rejected() {
+        let mut cfg = KubernetesConfig::new("edgion");
+        cfg.cache_ready_deadline_secs = 0;
+        assert!(cfg.validate().is_err());
+        cfg.cache_ready_deadline_secs = 30;
+        assert!(cfg.validate().is_err());
+        cfg.cache_ready_deadline_secs = 31;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn deadline_deserializes_with_default() {
+        let yaml = "gateway_class: edgion\n";
+        let cfg: KubernetesConfig = serde_yaml::from_str(yaml).expect("parse");
+        assert_eq!(cfg.cache_ready_deadline_secs, 90);
     }
 }

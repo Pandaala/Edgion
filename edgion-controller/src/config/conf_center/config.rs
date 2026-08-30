@@ -69,12 +69,9 @@ impl ConfCenterConfig {
         matches!(self, Self::Kubernetes(_))
     }
 
-    /// Check if running in Etcd mode
-    pub fn is_etcd_mode(&self) -> bool {
-        matches!(self, Self::Etcd(_))
-    }
-
-    /// Get FileSystem config (if in FileSystem mode)
+    /// Get FileSystem config (if in FileSystem mode). Test-only: production
+    /// matches the enum directly.
+    #[cfg(test)]
     pub fn as_file_system(&self) -> Option<&FileSystemConfig> {
         match self {
             Self::FileSystem(config) => Some(config),
@@ -82,7 +79,9 @@ impl ConfCenterConfig {
         }
     }
 
-    /// Get Kubernetes config (if in Kubernetes mode)
+    /// Get Kubernetes config (if in Kubernetes mode). Test-only: production
+    /// matches the enum directly.
+    #[cfg(test)]
     pub fn as_kubernetes(&self) -> Option<&KubernetesConfig> {
         match self {
             Self::Kubernetes(config) => Some(config),
@@ -90,15 +89,8 @@ impl ConfCenterConfig {
         }
     }
 
-    /// Get Etcd config (if in Etcd mode)
-    pub fn as_etcd(&self) -> Option<&EtcdConfig> {
-        match self {
-            Self::Etcd(config) => Some(config),
-            _ => None,
-        }
-    }
-
-    /// Get the configuration directory (FileSystem mode only)
+    /// Get the configuration directory (FileSystem mode only). Test-only.
+    #[cfg(test)]
     pub fn conf_dir(&self) -> Option<&PathBuf> {
         self.as_file_system().map(|c| c.conf_dir())
     }

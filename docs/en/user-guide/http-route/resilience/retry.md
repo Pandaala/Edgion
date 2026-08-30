@@ -118,8 +118,8 @@ Notes:
   gateway fails the request with the binding deadline's timeout instead of
   issuing a sub-minimum immediate retry. Size `timeouts.request` to leave room
   for at least one full `backoff` interval if you want the final attempt to run.
-- Each canceled-and-retried attempt records `BackendRequestTimeoutRetry`
-  (504_03) in the access-log error chain, and its per-upstream entry is
+- Each canceled-and-retried attempt records the error diagnostic
+  `BackendRequestTimeoutRetry`, and its per-upstream entry is
   stamped with status 504 and the timeout error type.
 - Every retry decision made by Edgion is labeled in the attempt's
   `upstreams[].err` access-log field: connect failures carry the error type
@@ -131,9 +131,9 @@ Notes:
   alone; there is deliberately no per-retry Prometheus counter (see the
   metrics design rules).
 - If the client disconnects before the response can be delivered, the
-  request-level `errors` array records `ClientClosed` (status 499 in the
+  request-level `diagnostics` array records the error code `ClientClosed` (status 499 in the
   common case; delivery-failure records keep their original error status —
-  filter on `errors`, not status). In-flight
+  filter on that diagnostic, not status). In-flight
   attempts are aborted within milliseconds on HTTP/1.1; a `ClientClosed`
   record with multiple `upstreams` entries quantifies retry work spent on a
   caller that had already left.

@@ -14,7 +14,6 @@ spec:
         caSecretRefs:
           - name: header-cert-ca
             namespace: edgion-default
-        verifyDepth: 2
         skipConsumerLookup: false
         consumerBy: sanOrCn
         hideCredentials: true

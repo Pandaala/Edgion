@@ -33,9 +33,14 @@ CERTS_DIR="$PROJECT_ROOT/edgion-tests/certs/backend"
 SECRET_OUTPUT_ROOT="${EDGION_GENERATED_SECRET_DIR:-$PROJECT_ROOT/tmp/integration_testing/generated_secrets_manual}"
 SECRET_OUTPUT_DIR="$SECRET_OUTPUT_ROOT/HTTPRoute/Backend/BackendTLS"
 SECRET_OUTPUT_FILE="$SECRET_OUTPUT_DIR/Secret_backend-ca.yaml"
+# Same CA, but in edgion-default — used by the ExtProc-over-TLS plugin
+# (grpcService.caSecretRef resolves in the EdgionPlugins' own namespace).
+EXTPROC_SECRET_OUTPUT_DIR="$SECRET_OUTPUT_ROOT/EdgionPlugins/ExtProc"
+EXTPROC_SECRET_OUTPUT_FILE="$EXTPROC_SECRET_OUTPUT_DIR/Secret_edgion-default_backend-ca.yaml"
 
 mkdir -p "$CERTS_DIR"
 mkdir -p "$SECRET_OUTPUT_DIR"
+mkdir -p "$EXTPROC_SECRET_OUTPUT_DIR"
 
 create_backend_ca_secret() {
     local ca_b64
@@ -46,6 +51,16 @@ kind: Secret
 metadata:
   name: backend-ca
   namespace: edgion-test
+type: Opaque
+data:
+  ca.crt: $ca_b64
+EOF
+    cat > "$EXTPROC_SECRET_OUTPUT_FILE" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-ca
+  namespace: edgion-default
 type: Opaque
 data:
   ca.crt: $ca_b64
@@ -164,6 +179,42 @@ EOF
 
     cp "$TEMP_DIR/server-b.crt" "$CERTS_DIR/server-b.crt"
     cp "$TEMP_DIR/server-b.key" "$CERTS_DIR/server-b.key"
+
+    # server-wildcard: SAN = *.sandbox.internal, for the
+    # EdgionBackendTrafficPolicy/UpstreamAuthority integration scenario
+    # (Task 8 of the dynamic-upstream-authority feature). A single wildcard
+    # cert covers every tenant subdomain the scenario dispatches to; unlike
+    # server-a/server-b it is not restricted to one fixed hostname.
+    openssl genrsa -out "$TEMP_DIR/server-wildcard.key" 2048 2>/dev/null
+
+    openssl req -new \
+      -key "$TEMP_DIR/server-wildcard.key" \
+      -out "$TEMP_DIR/server-wildcard.csr" \
+      -subj "/CN=*.sandbox.internal/O=Edgion Backend" \
+      2>/dev/null
+
+    cat > "$TEMP_DIR/server-wildcard.ext" <<EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = *.sandbox.internal
+EOF
+
+    openssl x509 -req \
+      -in "$TEMP_DIR/server-wildcard.csr" \
+      -CA "$TEMP_DIR/ca.crt" \
+      -CAkey "$TEMP_DIR/ca.key" \
+      -CAcreateserial \
+      -out "$TEMP_DIR/server-wildcard.crt" \
+      -days 365 \
+      -extfile "$TEMP_DIR/server-wildcard.ext" \
+      2>/dev/null
+
+    cp "$TEMP_DIR/server-wildcard.crt" "$CERTS_DIR/server-wildcard.crt"
+    cp "$TEMP_DIR/server-wildcard.key" "$CERTS_DIR/server-wildcard.key"
 }
 
 echo_info "Backend cert dir: $CERTS_DIR"
@@ -171,8 +222,9 @@ echo_info "Runtime Secret output: $SECRET_OUTPUT_FILE"
 
 if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ] && [ -f "$CERTS_DIR/ca.crt" ] \
    && [ -f "$CERTS_DIR/server-a.crt" ] && [ -f "$CERTS_DIR/server-a.key" ] \
-   && [ -f "$CERTS_DIR/server-b.crt" ] && [ -f "$CERTS_DIR/server-b.key" ]; then
-    echo_info "Found existing backend cert files (including server-a/b), reusing them."
+   && [ -f "$CERTS_DIR/server-b.crt" ] && [ -f "$CERTS_DIR/server-b.key" ] \
+   && [ -f "$CERTS_DIR/server-wildcard.crt" ] && [ -f "$CERTS_DIR/server-wildcard.key" ]; then
+    echo_info "Found existing backend cert files (including server-a/b/wildcard), reusing them."
 else
     generate_backend_certs
 fi
@@ -198,4 +250,6 @@ echo_info "  - $CERTS_DIR/server-a.crt  (SAN: hostname-a.example.com)"
 echo_info "  - $CERTS_DIR/server-a.key"
 echo_info "  - $CERTS_DIR/server-b.crt  (SAN: hostname-b.example.com)"
 echo_info "  - $CERTS_DIR/server-b.key"
+echo_info "  - $CERTS_DIR/server-wildcard.crt  (SAN: *.sandbox.internal)"
+echo_info "  - $CERTS_DIR/server-wildcard.key"
 echo_warning "Note: Secret YAML is runtime-generated and should not be committed."

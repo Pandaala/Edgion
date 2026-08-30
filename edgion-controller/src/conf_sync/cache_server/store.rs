@@ -16,14 +16,28 @@ pub struct EventStore<T> {
     sync_version: u64,
     expire_sync_version: u64,
     data: HashMap<String, T>, // Key: namespace/name or name (for cluster-scoped resources)
+    /// Last applied sync_version per resource key, for the staleness guard in `apply_event`.
+    ///
+    /// Deliberately keyed per resource, NOT per kind: `sync_version` above is a kind-wide
+    /// high-water mark, and comparing one resource's event against it discards legitimate
+    /// events for unrelated resources.
+    ///
+    /// Entries are kept after Delete on purpose. Dropping the entry would let a stale
+    /// post-delete Update resurrect the resource, which is the failure this guard exists to
+    /// prevent.
+    ///
+    /// Growth: bounded by the distinct keys seen since **process start**, not since the last
+    /// relink. `clear()` does reset this map, but its only non-test caller is the non-K8s
+    /// config-center reload path (`conf_center/non_kube_common.rs`) -- in Kubernetes mode it
+    /// never runs, and a gateway relink does not clear the server-side store. Steady-state
+    /// clusters reuse resource names, so in practice this tracks live resource count. The
+    /// exposure is generated names: `EndpointSlice` keys are `<svc>-<random>`, so churn from
+    /// ephemeral namespaces accumulates entries (~100 B each) that are never reclaimed.
+    /// Not urgent at realistic churn rates, but it is a real leak, not a self-limiting cache.
+    last_version_by_key: HashMap<String, u64>,
 }
 
 impl<T> EventStore<T> {
-    /// Set current sync version
-    pub fn set_current_sync_version(&mut self, version: u64) {
-        self.sync_version = version;
-    }
-
     // init add do not apply any events
     pub fn init_add(&mut self, sync_version: u64, resource: T)
     where
@@ -34,10 +48,6 @@ impl<T> EventStore<T> {
         if sync_version > self.sync_version {
             self.sync_version = sync_version;
         }
-    }
-
-    pub fn get_last_sync_version(&self) -> u64 {
-        self.sync_version
     }
 
     /// Clear all data and reset to initial state
@@ -52,28 +62,57 @@ impl<T> EventStore<T> {
         self.sync_version = 0;
         self.expire_sync_version = 0;
         self.data.clear();
+        self.last_version_by_key.clear();
     }
 
     pub fn apply_event(&mut self, event_type: EventType, resource: T, sync_version: u64)
     where
         T: Clone + Resource,
     {
-        // Stale event guard: if the incoming sync_version is older than the current store
-        // version, drop the event to prevent out-of-order writes from overwriting newer state.
+        let key = Self::resource_key(&resource);
+
+        // Staleness guard, scoped PER KEY. Only a newer event for the SAME resource may
+        // suppress this one. Scoping it per kind -- comparing against `self.sync_version`,
+        // a kind-wide high-water mark -- discards legitimate events for unrelated resources:
+        // a Gateway delete was thrown away because a different Gateway's delete had already
+        // landed with a higher number, leaving the object in the data plane's cache forever.
+        if let Some(&last) = self.last_version_by_key.get(&key) {
+            if sync_version < last {
+                tracing::warn!(
+                    kind = std::any::type_name::<T>(),
+                    event_type = ?event_type,
+                    resource_name = %resource.name_any(),
+                    resource_namespace = ?resource.namespace(),
+                    incoming_sync_version = sync_version,
+                    last_sync_version_for_key = last,
+                    "Stale event dropped: a newer event for this key was already applied"
+                );
+                return;
+            }
+        }
+
+        // Queue-monotonicity check. Versions are drawn under this store's write lock
+        // (ServerCache::push_event), so apply order == allocation order and this is
+        // unreachable. A hit means a caller passed an explicit `sv` allocated outside the
+        // lock, and the circular queue's ordering invariant is now broken --
+        // get_events_from_sync_version's backward scan stops at the first event whose
+        // version is <= from_version, so a watcher would silently miss events.
+        //
+        // Warn; do NOT drop. The store cannot repair ordering its caller broke, but it must
+        // not destroy data over it: silently dropping a legitimate event is the bug this
+        // guard was rescoped to fix. An ordering violation deserves a scream, not a discard.
         if sync_version < self.sync_version {
             tracing::warn!(
                 kind = std::any::type_name::<T>(),
                 event_type = ?event_type,
                 resource_name = %resource.name_any(),
-                resource_namespace = ?resource.namespace(),
                 incoming_sync_version = sync_version,
                 current_sync_version = self.sync_version,
-                "Stale event dropped: incoming sync_version is older than current store version"
+                "Out-of-order event admitted: queue monotonicity violated, watch resumption may truncate"
             );
-            return;
         }
 
-        let key = Self::resource_key(&resource);
+        self.last_version_by_key.insert(key.clone(), sync_version);
         match event_type {
             EventType::Add | EventType::Update => {
                 // Use namespace/name as key to ensure uniqueness
@@ -142,6 +181,11 @@ impl<T> EventStore<T> {
         self.data.len()
     }
 
+    /// Current sync version (O(1) field read).
+    pub fn sync_version(&self) -> u64 {
+        self.sync_version
+    }
+
     /// Get a single resource by key
     /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
     pub fn get_by_key(&self, key: &str) -> Option<T>
@@ -168,6 +212,7 @@ impl<T: Clone> EventStore<T> {
             sync_version: 0,
             expire_sync_version: 0,
             data: HashMap::new(),
+            last_version_by_key: HashMap::new(),
         }
     }
 
@@ -458,6 +503,73 @@ mod tests {
         assert_eq!(snapshot[0].name, "test-route");
     }
 
+    /// An out-of-order explicit `sv` must be ADMITTED (with a warning), never dropped.
+    ///
+    /// The store cannot repair ordering its caller broke -- the circular queue is in
+    /// insertion order -- but it must not destroy data over it. Silently dropping a
+    /// legitimate event is exactly the cache-residue incident this guard was rescoped to
+    /// fix. The correct response to a broken invariant is a loud warning plus the data.
+    #[test]
+    fn out_of_order_explicit_version_is_admitted_not_dropped() {
+        let mut store = make_store();
+
+        store.apply_event(EventType::Add, TestResource::new("alpha", Some("default")), 100);
+        store.apply_event(EventType::Add, TestResource::new("beta", Some("default")), 200);
+
+        // A LOWER version for a DIFFERENT key: the caller broke queue monotonicity.
+        // `alpha`'s own last version is 100, so the per-key guard correctly allows this.
+        store.apply_event(EventType::Delete, TestResource::new("alpha", Some("default")), 150);
+
+        let (snapshot, _) = store.snapshot_owned();
+        let names: Vec<&str> = snapshot.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["beta"],
+            "alpha's delete carried a lower version than an unrelated resource's event, but it \
+             is not stale for alpha -- it must be applied, not dropped"
+        );
+    }
+
+    /// Regression: the stale-event guard must be scoped PER RESOURCE, not per kind.
+    ///
+    /// Reproduces the 2026-07-17 integration failure (cache residue after wipe-all).
+    /// Real trace from the controller log:
+    ///
+    ///   .129972  process_delete Gateway/invalid-ca-cert-gw  sv=4589  (slow: clearing 2 secret refs)
+    ///   .130127  process_delete Gateway/security-gateway    sv=4591  -> applied, store version = 4591
+    ///   .130811  process_delete Gateway/invalid-ca-cert-gw  sv=4589  -> DROPPED as "stale"
+    ///
+    /// Two unrelated Gateways. The second delete was dropped because a *different*
+    /// resource of the same kind had already pushed the store's single high-water
+    /// mark past it, so the Gateway never learned about the deletion and kept the
+    /// object in its cache forever.
+    #[test]
+    fn stale_guard_must_not_drop_events_for_a_different_resource() {
+        let mut store = make_store();
+
+        let slow = TestResource::new("invalid-ca-cert-gw", Some("edgion-test"));
+        let fast = TestResource::new("security-gateway", Some("edgion-test"));
+
+        store.apply_event(EventType::Add, slow.clone(), 4589);
+        store.apply_event(EventType::Add, fast.clone(), 4590);
+
+        // `fast` is deleted first and carries the higher version.
+        store.apply_event(EventType::Delete, fast, 4591);
+
+        // `slow`'s delete was allocated an EARLIER version but arrives LATER.
+        // It concerns a different key, so it must still be applied.
+        store.apply_event(EventType::Delete, slow, 4589);
+
+        let (snapshot, _) = store.snapshot_owned();
+        assert_eq!(
+            snapshot.len(),
+            0,
+            "both resources were deleted; a delete for one key must not be \
+             suppressed by a newer event for a different key. Residual: {:?}",
+            snapshot.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+    }
+
     /// A stale event (lower sync_version) must not overwrite state written by a newer event.
     #[test]
     fn stale_event_does_not_overwrite_newer_state() {
@@ -524,5 +636,18 @@ mod tests {
         let events = events_opt.expect("expected events");
         let versions: Vec<u64> = events.iter().map(|e| e.sync_version).collect();
         assert_eq!(versions, vec![1, 3], "only in-order events should be in the queue");
+    }
+
+    #[test]
+    fn sync_version_getter_tracks_applied_events() {
+        let mut store = make_store();
+        assert_eq!(store.sync_version(), 0);
+
+        let resource = TestResource::new("alpha", Some("default"));
+        store.apply_event(EventType::Add, resource, 7);
+        assert_eq!(store.sync_version(), 7);
+
+        store.clear();
+        assert_eq!(store.sync_version(), 0);
     }
 }

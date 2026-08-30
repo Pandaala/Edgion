@@ -28,7 +28,7 @@ Why it matters:
 
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs` (FileSystem + Etcd)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `TlsRouteHandler` demonstrates:
@@ -82,7 +82,7 @@ What to copy:
 
 - Add the type and register it in `kind.rs`, `defs.rs`, `meta/impls.rs`
 - Add `ProcessorHandler<T>`
-- Spawn the processor in both FileSystem and Kubernetes centers
+- Spawn the processor in the shared FileSystem/Etcd list and in the Kubernetes controller
 - Add K8s writer mapping and controller Admin API support if CRUD is expected
 - Add `ClientCache<T>` wiring in Gateway if the resource syncs
 - Add `ConfHandler<T>` if Gateway runtime needs derived state

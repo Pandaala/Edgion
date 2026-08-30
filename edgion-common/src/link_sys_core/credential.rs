@@ -87,27 +87,6 @@ impl<M> CredentialState<M> {
         matches!(self, Self::NotRequired | Self::Resolved(_))
     }
 
-    /// Borrow the material if the state is [`Resolved`](Self::Resolved).
-    #[inline]
-    pub fn resolved(&self) -> Option<&M> {
-        match self {
-            Self::Resolved(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    /// Extract the material by value if the state is [`Resolved`](Self::Resolved).
-    ///
-    /// Useful for call sites that want to hold the owned material (e.g. Etcd's
-    /// reconnect path keeps `Option<BasicAuthMaterial>` internally).
-    #[inline]
-    pub fn into_resolved(self) -> Option<M> {
-        match self {
-            Self::Resolved(m) => Some(m),
-            _ => None,
-        }
-    }
-
     /// Stable short identifier for logs / metrics — never includes material.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -309,28 +288,46 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
     let Some(tls) = tls else {
         return true;
     };
-    let Some(certs) = tls.certs.as_ref() else {
-        return true;
-    };
-    match certs.secret_ref {
-        Some(_) => certs.secret.is_some(),
-        None => true,
+    // Not ready if CA certificate refs are declared but the Controller has not yet
+    // injected the resolved secrets.
+    let has_ca_refs = tls
+        .outbound
+        .validation
+        .as_ref()
+        .is_some_and(|v| v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()));
+    if has_ca_refs && tls.resolved_ca_certificates.is_none() {
+        return false;
     }
+    // Not ready if a client-identity secret ref is declared but not yet resolved.
+    if tls.outbound.client_certificate_ref.is_some() && tls.resolved_client_certificate.is_none() {
+        return false;
+    }
+    true
 }
 
 /// TLS readiness check (structural only).
 ///
-/// Returns `false` when the CRD declares a `certs.secretRef` but the
+/// Returns `false` when the CRD declares a `clientCertificateRef` but the
 /// Controller has not yet injected the `Secret`. TLS parse failures are
-/// caught inside the provider by
-/// [`tls::build_material`](crate::link_sys_core::tls::build_material).
+/// caught inside the provider via the outbound TLS resolver.
 pub fn tls_ready(ls: &LinkSys) -> bool {
+    // Exhaustive on purpose: a `_ => None` fallback would make any webhook-shaped
+    // provider (Webhook / HttpDns) that declares CA/client-cert refs report
+    // `tls_ready == true` before the Controller injected the secrets — a
+    // fail-open readiness bug (DR-4). List every variant so a future one forces
+    // an explicit decision here.
     let tls = match &ls.spec.config {
         SystemConfig::Redis(r) => r.tls.as_ref(),
         SystemConfig::Etcd(e) => e.tls.as_ref(),
         SystemConfig::Elasticsearch(es) => es.tls.as_ref(),
         SystemConfig::Kafka(k) => k.tls.as_ref(),
-        _ => None,
+        SystemConfig::Webhook(w) => w.conn.tls.as_ref(),
+        SystemConfig::HttpDns(h) => h.connection.as_ref().and_then(|c| c.tls.as_ref()),
+        SystemConfig::CredentialSource(source) => match &source.provider {
+            edgion_resources::resources::link_sys::credential_source::CredentialSourceProvider::OAuth2ClientCredentials(
+                oauth2,
+            ) => oauth2.tls.as_ref(),
+        },
     };
     tls_ready_inner(tls)
 }
@@ -348,7 +345,9 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::common::{SecretObjectReference, TlsCerts, TlsConfig as CommonTlsConfig};
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, TlsConfig as CommonTlsConfig};
     use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
     use edgion_resources::resources::link_sys::LinkSysSpec;
     use k8s_openapi::ByteString;
@@ -374,6 +373,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://localhost:6379".into()],
                     auth,
@@ -517,6 +517,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                     auth,
                     ..Default::default()
@@ -597,9 +598,8 @@ mod tests {
     // ------------------------------------------------------------
 
     fn mk_webhook_linksys(auth: Option<serde_json::Value>) -> LinkSys {
-        use edgion_resources::resources::http_route::BackendObjectReference;
         use edgion_resources::resources::link_sys::webhook::{
-            ExternalHttpConnection, WebhookServiceConfig, WebhookTarget,
+            ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
         };
         LinkSys {
             metadata: ObjectMeta {
@@ -608,16 +608,18 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {
                         target: WebhookTarget {
-                            backend_ref: BackendObjectReference {
-                                group: String::new(),
+                            service: WebhookServiceRef {
                                 kind: None,
-                                name: "webhook-svc".into(),
+                                name: Some("webhook-svc".into()),
                                 namespace: Some("default".into()),
                                 port: Some(8080),
+                                ..Default::default()
                             },
+                            ..Default::default()
                         },
                         ..Default::default()
                     },
@@ -633,6 +635,68 @@ mod tests {
     fn resolved_state_webhook_no_auth_is_not_required() {
         let ls = mk_webhook_linksys(None);
         assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
+    }
+
+    // ------------------------------------------------------------
+    // DR-4: tls_ready must NOT fail open for the webhook-shaped
+    // providers (Webhook / HttpDns) whose `connection.tls` declares
+    // an unresolved client-certificate ref. Before the explicit arms
+    // these fell through `_ => None` and reported ready == true.
+    // ------------------------------------------------------------
+
+    fn tls_with_unresolved_client_cert() -> edgion_resources::resources::common::TlsConfig {
+        serde_json::from_str(r#"{"enabled":true,"clientCertificateRef":{"name":"id"}}"#).unwrap()
+    }
+
+    fn mk_httpdns_linksys(
+        connection: Option<edgion_resources::resources::link_sys::httpdns::HttpDnsConnection>,
+    ) -> LinkSys {
+        use edgion_resources::resources::link_sys::httpdns::{
+            HttpDnsFallback, HttpDnsPreset, HttpDnsResolverConfig, HttpDnsResponseFormat,
+        };
+        LinkSys {
+            metadata: ObjectMeta {
+                name: Some("dns".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
+                config: SystemConfig::HttpDns(HttpDnsResolverConfig {
+                    preset: Some(HttpDnsPreset::Aliyun),
+                    url_template: None,
+                    response: HttpDnsResponseFormat::default(),
+                    fallback: HttpDnsFallback::System,
+                    connection,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn tls_ready_httpdns_false_when_client_cert_unresolved() {
+        use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
+        let ls = mk_httpdns_linksys(Some(HttpDnsConnection {
+            tls: Some(tls_with_unresolved_client_cert()),
+            timeout_ms: None,
+        }));
+        assert!(!tls_ready(&ls), "httpdns connection.tls readiness must not fail open");
+    }
+
+    #[test]
+    fn tls_ready_httpdns_true_when_no_tls() {
+        let ls = mk_httpdns_linksys(None);
+        assert!(tls_ready(&ls), "no connection.tls means nothing to wait for");
+    }
+
+    #[test]
+    fn tls_ready_webhook_false_when_client_cert_unresolved() {
+        let mut ls = mk_webhook_linksys(None);
+        if let SystemConfig::Webhook(w) = &mut ls.spec.config {
+            w.conn.tls = Some(tls_with_unresolved_client_cert());
+        }
+        assert!(!tls_ready(&ls), "webhook conn.tls readiness must not fail open");
     }
 
     #[test]
@@ -762,6 +826,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["rediss://localhost:6379".into()],
                     auth: None,
@@ -772,18 +837,21 @@ mod tests {
                     topology: None,
                     tls: Some(CommonTlsConfig {
                         enabled: true,
-                        certs: Some(TlsCerts {
-                            ca_cert: None,
-                            client_cert: None,
-                            secret_ref: Some(SecretObjectReference {
-                                group: None,
-                                kind: None,
-                                name: "tls".into(),
-                                namespace: None,
+                        // CA certificate refs declared but not yet resolved
+                        outbound: OutboundTlsLocal {
+                            validation: Some(OutboundTlsValidation {
+                                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                    group: String::new(),
+                                    kind: "Secret".into(),
+                                    name: "tls".into(),
+                                    namespace: None,
+                                }]),
+                                ..Default::default()
                             }),
-                            secret: None,
-                        }),
-                        insecure_skip_verify: None,
+                            ..Default::default()
+                        },
+                        resolved_ca_certificates: None,
+                        resolved_client_certificate: None,
                     }),
                     observability: None,
                 }),
@@ -806,6 +874,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::link_sys::LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Kafka(KafkaClientConfig {
                     brokers: vec!["broker1:9092".to_string()],
                     sasl,

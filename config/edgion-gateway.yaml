@@ -6,7 +6,7 @@
 #   1. :
 #      ./edgion-gateway --config-file /usr/local/edgion/config/edgion-gateway.yaml
 #
-#   2.  server_addr:
+#   2.  server_addrs:
 #      ./edgion-gateway --server-addr http://127.0.0.1:12151
 #
 #   3. :
@@ -40,10 +40,10 @@
 work_dir: "."
 
 gateway:
-  # Operator gRPC server address
-  # Gateway
-  # : http://host:port  https://host:port
-  server_addr: "http://127.0.0.1:12151"
+  # Controller conf_sync gRPC address.
+  # Scheme: https:// when conf_sync_security carries certs (the default, see the
+  # bottom of this file); http:// only under an explicit `skip_tls: true`.
+  server_addrs: ["https://127.0.0.1:12151"]
 
   # Admin HTTP server listen address (optional).
   # The Gateway Admin API listens on this address; default is 127.0.0.1:12001
@@ -148,6 +148,21 @@ access_log:
       #   brokers: [localhost:9092]
       #   topic: edgion-access
 
+# This repo-local config file deliberately runs with masking OFF: it is the
+# local-dev and integration-harness config (`docs/en/ops-guide/configuration/
+# gateway-config.md` names this file as the default path, and the zh-CN
+# getting-started guide points new operators at it), and the integration
+# suites assert on `path` and on plugin-log values written through
+# `sensitive(...)` — those assertions need real, unmasked values.
+#
+# This is NOT the production default. When `access_log_sensitive` is absent
+# from a config file, the shipped/production default is `replace`. The
+# release image bakes no config (cicd/docker/Dockerfile.runtime), so a
+# Kubernetes deployment is unaffected by this file and gets the `replace`
+# default unless it supplies its own `access_log_sensitive` section.
+access_log_sensitive:
+  mode: off
+
 # ================================================================================
 # SSL/TLS Callback Log Configuration
 # ================================================================================
@@ -230,26 +245,34 @@ udp_log:
 # ============================================================================
 # conf_sync Channel Security (mTLS)
 # ============================================================================
-# PRODUCTION: enable mTLS. This channel carries resolved Secrets (TLS private
-# keys, backend credentials) from Controller to Gateway. Following the Istio
-# principle that certificate/secret distribution is never served over plaintext,
-# the shipped Kubernetes manifests (cicd/deploy/kubernetes/) default to mTLS.
+# This channel carries resolved Secrets (TLS private keys, backend credentials)
+# from Controller to Gateway. Following the Istio principle that certificate /
+# secret distribution is never served over plaintext, mTLS is the DEFAULT in every
+# environment — this file included. The shipped Kubernetes manifests
+# (cicd/deploy/kubernetes/) use the Controller's internal CA (auto_ca: true).
 #
-# Omitting this section keeps plaintext gRPC (LOCAL DEV / NON-PRODUCTION only).
-# When omitted, Gateway logs an ERROR and raises the metric
-# edgion_system_error_state{reason="plaintext_default"} so the degraded state
-# is visible in monitoring.
-# Must match Controller's mTLS config — mismatched configs cause handshake failure.
+# REQUIRED: this section must be present. Omitting it entirely makes the Gateway
+# REFUSE TO START (fail-close, since 2026-07-14) — plaintext must be an explicit,
+# audited choice, never the consequence of a forgotten config block.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode), or skip_tls (plaintext).
+# Must match Controller's config — mismatched configs cause handshake failure.
 #
-# --- Option A: Legacy single-cert format (backward compatible) ---
-# conf_sync_security:
-#   tls:
-#     cert: certs/grpc/client.crt   # Gateway client certificate
-#     key: certs/grpc/client.key    # Gateway client private key
-#     ca: certs/grpc/ca.crt         # CA certificate (verifies Controller server cert)
-#     skip_tls: false               # Emergency bypass: true = skip TLS (INSECURE)
+# Cert paths are resolved relative to work_dir. To run this file as-is with a bare
+# `cargo run` (work_dir = repo root), bootstrap the cert set explicitly first:
+#   cargo run --bin edgion-cli -- gen-certs --output file --output-dir certs/grpc --cert-name primary
+# No test script populates the repo root implicitly; integration runs generate
+# their certs inside their own per-run work directory.
 #
-# --- Option B: Multi-cert format (supports cert rotation / CA migration) ---
+# `skip_tls: true` (plaintext) still exists as an emergency escape hatch, but it is
+# never a default: the Gateway logs an ERROR and raises the metric
+# edgion_system_error_state{reason="skip_tls"} so the degraded state stays visible.
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/client.crt   # Gateway client certificate
+    key: certs/grpc/primary/client.key    # Gateway client private key
+    ca: certs/grpc/primary/ca.crt         # CA certificate (verifies Controller server cert)
+#
+# --- Multi-cert format (supports cert rotation / CA migration) ---
 # conf_sync_security:
 #   active: primary               # Name of the active cert set
 #   certs:
@@ -261,3 +284,13 @@ udp_log:
 #       cert: certs/grpc/new-ca/client.crt
 #       key: certs/grpc/new-ca/client.key
 #       ca: certs/grpc/new-ca/ca.crt
+
+# --- GeoIP (process-global, restart-only; see edgion-gateway/src/geoip/) ---
+# `geoip` is a field of `GatewayConfig` (no `#[serde(flatten)]`), so it MUST
+# nest under the `gateway:` key above, like `server_addrs`/`admin_listen` do
+# — a top-level `geoip:` key is silently ignored (`#[serde(default)]` on the
+# `gateway` field just defaults the whole nested struct).
+# gateway:
+#   geoip:
+#     db_path: /var/lib/edgion/GeoLite2-City.mmdb   # absolute, or resolved against work_dir
+#     update_url: https://example.com/GeoLite2-City.mmdb   # optional periodic hot-swap source

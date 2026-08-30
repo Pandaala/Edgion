@@ -14,7 +14,7 @@ data:
 
     gateway:
       # Controller gRPC server address (use K8s service DNS)
-      server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:12151
+      server_addrs: [https://edgion-controller-leader.edgion-system.svc.cluster.local:12151]
       # Test-only admin API access for suites that run inside test-client pods.
       # Production defaults remain loopback-only unless explicitly configured.
       admin_listen: "0.0.0.0:12001"
@@ -45,6 +45,17 @@ data:
             max_files: 7
             check_interval_secs: 60
 
+    # Integration tests assert on `path` and on plugin-log values written through
+    # `sensitive(...)`. The shipped default is `replace`; the harness opts out so
+    # those assertions keep reading real values.
+    access_log_sensitive:
+      mode: off
+
+    metrics:
+      backend_requests:
+        labels:
+          backend: true
+
     ssl_log:
       enabled: true
       output:
@@ -67,3 +78,20 @@ data:
       output:
         localFile:
           path: logs/udp.log
+
+    # conf_sync channel security. REQUIRED: omitting this section entirely makes the
+    # process refuse to start (fail-close).
+    #
+    # Mirrors PRODUCTION (cicd/deploy/kubernetes/): auto_ca means the Controller's internal
+    # CA provisions the gateway client leaf Secret (edgion-conf-sync-certs) in-cluster. The
+    # Gateway side is ASYMMETRIC -- unlike the Controller, auto_ca alone makes it refuse to
+    # start; it also needs these cert paths, which resolve to the mounted Secret. The
+    # edgion-conf-sync-certs volume is mounted at /etc/edgion/conf-sync-certs by the gateway
+    # Deployment with optional: true, since the pod starts before the Controller has minted
+    # the Secret and the conf_sync client connects lazily and retries until it appears.
+    conf_sync_security:
+      auto_ca: true
+      tls:
+        cert: /etc/edgion/conf-sync-certs/client.crt
+        key: /etc/edgion/conf-sync-certs/client.key
+        ca: /etc/edgion/conf-sync-certs/ca.crt

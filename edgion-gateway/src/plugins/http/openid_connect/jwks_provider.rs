@@ -2,8 +2,15 @@
 //!
 //! A single instance maintains both the discovery document and the JWKS cache,
 //! **with unified stale-while-revalidate semantics**: when the JWKS endpoint is
-//! unreachable and a cached set exists locally, the cached set is returned (with
-//! a warn log) instead of propagating the fetch error.
+//! unreachable and a cached set exists locally, the cached set is returned
+//! (flagged `served_stale`) instead of propagating the fetch error.
+//!
+//! Both entry points are reachable from the request path, so this file is
+//! `tracing`-free (Iron rule 3). Failures surface through
+//! `edgion_gateway_outbound_tls_san_mismatch_total`, the caller's `PluginLog` /
+//! `EdgionErrorCode`, and the `served_stale` dye outcome recorded by
+//! `discovery_jwks.rs`. The one genuinely cold signal — "discovery document
+//! loaded" — is emitted by the background prewarm task in `plugin.rs`.
 //! `JwksProviderConfig` parameterizes TTL / min refresh interval / response byte
 //! limit / timeout / component label. The discovery document shape is determined
 //! by the generic `D: DiscoveryDoc` -- the OIDC gateway plugin uses an extended
@@ -18,7 +25,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::observe::metrics::registry::record_outbound_tls_san_mismatch;
 use crate::plugins::http::common::http_util::fetch_json_limited;
+use crate::tls::validation::outbound_san_mismatch_reason;
 
 /// Trait every discovery-doc shape must implement so the provider can read
 /// the two universally-required fields. Extended fields (e.g. `token_endpoint`)
@@ -38,6 +47,36 @@ pub fn no_op_validator<D: DiscoveryDoc>() -> DiscoveryValidator<D> {
     Arc::new(|_| Ok(()))
 }
 
+/// Error type for the discovery / JWKS fetch paths.
+///
+/// `TlsSanMismatch` is produced **only** by the discovery fetch. The JWKS fetch
+/// returns `Other` because `get_jwks` serves a stale cache on error, so the
+/// variant would be discarded on exactly the paths that could act on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JwksProviderError {
+    TlsSanMismatch { reason: String },
+    Other(String),
+}
+
+impl std::fmt::Display for JwksProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JwksProviderError::TlsSanMismatch { reason } => {
+                write!(f, "outbound TLS SAN mismatch: {}", reason)
+            }
+            JwksProviderError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for JwksProviderError {}
+
+impl From<String> for JwksProviderError {
+    fn from(msg: String) -> Self {
+        JwksProviderError::Other(msg)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct JwksProviderConfig {
     pub discovery_url: String,
@@ -46,8 +85,9 @@ pub struct JwksProviderConfig {
     pub discovery_max_response_bytes: usize,
     pub jwks_max_response_bytes: usize,
     pub request_timeout: Duration,
-    /// Stable, low-cardinality component label for tracing (`"admin_auth"`,
-    /// `"openid_connect"`). Avoid per-instance dynamic strings.
+    /// Stable, low-cardinality component label used as the `plugin` label of
+    /// `edgion_gateway_outbound_tls_san_mismatch_total`. Avoid per-instance
+    /// dynamic strings.
     pub component_label: &'static str,
 }
 
@@ -74,6 +114,22 @@ struct JwksState {
     set: Option<JwkSet>,
     expires_at: Option<Instant>,
     last_refresh_at: Option<Instant>,
+}
+
+/// Result of a JWKS lookup, carrying a staleness signal alongside the set.
+///
+/// `get_jwks` transparently serves a cached set when the upstream fetch fails
+/// (stale-while-revalidate). Without this flag the caller cannot distinguish
+/// that degraded serve from a normal fresh/cached hit, so it cannot record a
+/// `fail-open` dye outcome for it.
+#[derive(Debug, Clone)]
+pub struct JwksLookup {
+    pub set: JwkSet,
+    /// True only when the most recent fetch attempt failed and a previously
+    /// cached set was served in its place. False for every other return path
+    /// (TTL fast-path hit, min-refresh-blocked fast-path hit, or a fresh
+    /// successful fetch) — those are normal cache behavior, not degradation.
+    pub served_stale: bool,
 }
 
 pub struct JwksProvider<D: DiscoveryDoc> {
@@ -109,7 +165,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
     /// Get cached discovery, fetch if absent. Validator runs **before** caching;
     /// a failed validator does NOT poison the cache (next call retries).
-    pub async fn get_or_fetch_discovery(&self) -> Result<D, String> {
+    pub async fn get_or_fetch_discovery(&self) -> Result<D, JwksProviderError> {
         if let Some(doc) = self.discovery_doc.read().await.as_ref() {
             return Ok(doc.clone());
         }
@@ -124,39 +180,47 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             .timeout(self.config.request_timeout)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch discovery document: {}", e))?;
+            .map_err(|e| match outbound_san_mismatch_reason(&e) {
+                Some(reason) => {
+                    record_outbound_tls_san_mismatch(self.config.component_label);
+                    JwksProviderError::TlsSanMismatch { reason }
+                }
+                None => JwksProviderError::Other(format!("Failed to fetch discovery document: {}", e)),
+            })?;
         if !resp.status().is_success() {
-            return Err(format!("Discovery endpoint returned status {}", resp.status()));
+            return Err(JwksProviderError::Other(format!(
+                "Discovery endpoint returned status {}",
+                resp.status()
+            )));
         }
-        let doc: D = fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery").await?;
+        let doc: D = fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery")
+            .await
+            .map_err(JwksProviderError::Other)?;
 
         if doc.issuer().is_empty() {
-            return Err("Discovery document missing issuer".to_string());
+            return Err(JwksProviderError::Other(
+                "Discovery document missing issuer".to_string(),
+            ));
         }
         if doc.jwks_uri().is_empty() {
-            return Err("Discovery document missing jwks_uri".to_string());
+            return Err(JwksProviderError::Other(
+                "Discovery document missing jwks_uri".to_string(),
+            ));
         }
         // Caller-supplied config-aware validation runs before caching.
-        (self.validator)(&doc)?;
-
-        tracing::info!(
-            component = self.config.component_label,
-            issuer = doc.issuer(),
-            jwks_uri = doc.jwks_uri(),
-            "OIDC discovery document loaded"
-        );
+        (self.validator)(&doc).map_err(JwksProviderError::Other)?;
 
         *self.discovery_doc.write().await = Some(doc.clone());
         Ok(doc)
     }
 
     /// Get JWKS. Stale-while-revalidate: if the upstream fetch fails and we
-    /// have a cached set, return the cached set with a warn log. Only when
-    /// **no** cached set exists does the error propagate.
+    /// have a cached set, return the cached set flagged `served_stale`. Only
+    /// when **no** cached set exists does the error propagate.
     ///
     /// `force_refresh=true` skips the TTL fast-path (used on JWT `kid` miss);
     /// `jwks_min_refresh_interval` still gates back-to-back refreshes.
-    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwkSet, String> {
+    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwksLookup, JwksProviderError> {
         let now = Instant::now();
         let min_refresh = self.config.jwks_min_refresh_interval;
         let ttl = self.config.jwks_cache_ttl;
@@ -166,10 +230,16 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             let state = self.jwks_state.read().await;
             if let Some(ref set) = state.set {
                 if !force_refresh && state.expires_at.is_some_and(|exp| now < exp) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
                 if force_refresh && !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
             }
         }
@@ -182,14 +252,22 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             let state = self.jwks_state.read().await;
             if let Some(ref set) = state.set {
                 if !force_refresh && state.expires_at.is_some_and(|exp| now < exp) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
                 if force_refresh && !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
             } else if !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
                 // No cached set AND blocked by min_refresh: caller should retry later.
-                return Err("JWKS refresh blocked by minimum refresh interval".to_string());
+                return Err(JwksProviderError::Other(
+                    "JWKS refresh blocked by minimum refresh interval".to_string(),
+                ));
             }
         }
 
@@ -201,7 +279,12 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                 .timeout(self.config.request_timeout)
                 .send()
                 .await
-                .map_err(|e| format!("JWKS request failed: {}", e))?;
+                .map_err(|e| {
+                    if outbound_san_mismatch_reason(&e).is_some() {
+                        record_outbound_tls_san_mismatch(self.config.component_label);
+                    }
+                    format!("JWKS request failed: {}", e)
+                })?;
             if !resp.status().is_success() {
                 return Err(format!("JWKS request failed with status {}", resp.status()));
             }
@@ -218,30 +301,28 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
         match fetch_result {
             Ok(jwks) => {
-                tracing::info!(
-                    component = self.config.component_label,
-                    num_keys = jwks.keys.len(),
-                    "JWKS refreshed successfully"
-                );
                 state.set = Some(jwks.clone());
                 state.expires_at = Some(now + ttl);
-                Ok(jwks)
+                Ok(JwksLookup {
+                    set: jwks,
+                    served_stale: false,
+                })
             }
             Err(err) => match state.set.clone() {
                 Some(cached) => {
-                    // Stale-while-revalidate: log and serve stale.
+                    // Stale-while-revalidate: serve stale and let the caller record the
+                    // degradation (`discovery_jwks.rs` maps `served_stale` to a fail-open
+                    // dye outcome in the access log).
                     // Bump expires_at by min_refresh_interval so subsequent calls within the
                     // backoff window hit the fast path instead of re-fetching every request
                     // during a prolonged IdP outage.
                     state.expires_at = Some(now + min_refresh);
-                    tracing::warn!(
-                        component = self.config.component_label,
-                        error = %err,
-                        "JWKS fetch failed, serving stale cache"
-                    );
-                    Ok(cached)
+                    Ok(JwksLookup {
+                        set: cached,
+                        served_stale: true,
+                    })
                 }
-                None => Err(err),
+                None => Err(JwksProviderError::Other(err)),
             },
         }
     }
@@ -264,6 +345,18 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_error_display_renders_inner_message() {
+        assert_eq!(JwksProviderError::Other("boom".to_string()).to_string(), "boom");
+        assert_eq!(
+            JwksProviderError::TlsSanMismatch {
+                reason: "no match".to_string()
+            }
+            .to_string(),
+            "outbound TLS SAN mismatch: no match"
+        );
+    }
 
     #[test]
     fn test_lean_discovery_document_deserialize() {
@@ -384,18 +477,29 @@ mod tests {
         let p = test_provider(test_config(&idp.addr, 60_000, 100));
         let a = p.get_jwks(false).await.unwrap();
         let b = p.get_jwks(false).await.unwrap();
-        assert_eq!(a.keys.len(), b.keys.len());
+        assert_eq!(a.set.keys.len(), b.set.keys.len());
+        assert!(!a.served_stale, "TTL fast-path hit must not be flagged stale");
+        assert!(!b.served_stale, "TTL fast-path hit must not be flagged stale");
     }
 
+    /// Task 11: `get_jwks` must surface a staleness signal distinguishing a
+    /// transparent stale-cache serve (fetch failed, cached set returned)
+    /// from a normal fresh/cached hit — the caller uses this to record the
+    /// `fail-open:jwks-stale-cache` dye outcome.
     #[tokio::test]
     async fn stale_fallback_returns_cached_on_fetch_error() {
         let idp = spawn_mock_idp().await;
         let p = test_provider(test_config(&idp.addr, 50, 0));
-        let _ = p.get_jwks(false).await.unwrap();
+        let fresh = p.get_jwks(false).await.unwrap();
+        assert!(!fresh.served_stale, "initial fresh fetch must not be flagged stale");
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(80)).await;
         let stale = p.get_jwks(false).await.expect("stale fallback should succeed");
-        assert_eq!(stale.keys.len(), 1);
+        assert_eq!(stale.set.keys.len(), 1);
+        assert!(
+            stale.served_stale,
+            "cache served after a failed fetch must be flagged served_stale"
+        );
     }
 
     #[tokio::test]
@@ -403,7 +507,11 @@ mod tests {
         let idp = spawn_mock_idp().await;
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
         let p = test_provider(test_config(&idp.addr, 60_000, 0));
-        let err = p.get_jwks(false).await.expect_err("must error with empty cache");
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("must error with empty cache")
+            .to_string();
         assert!(err.contains("503") || err.contains("status"), "got: {}", err);
     }
 
@@ -414,7 +522,11 @@ mod tests {
         let _ = p.get_jwks(false).await.unwrap();
         idp.jwks_keys_count.store(5, Ordering::SeqCst);
         let still_old = p.get_jwks(true).await.unwrap();
-        assert_eq!(still_old.keys.len(), 1);
+        assert_eq!(still_old.set.keys.len(), 1);
+        assert!(
+            !still_old.served_stale,
+            "min-refresh-blocked fast path is not a fetch failure, must not be flagged stale"
+        );
     }
 
     #[tokio::test]
@@ -469,7 +581,11 @@ mod tests {
         let validator: DiscoveryValidator<LeanDiscoveryDocument> =
             Arc::new(|_| Err("synthetic validation failure".into()));
         let p = JwksProvider::new(cfg, client, validator);
-        let err = p.get_or_fetch_discovery().await.expect_err("validator should reject");
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("validator should reject")
+            .to_string();
         assert!(err.contains("synthetic"), "got: {}", err);
         assert!(
             p.cached_discovery().await.is_none(),
@@ -536,7 +652,8 @@ mod tests {
         let err = p
             .get_jwks(false)
             .await
-            .expect_err("timeout must error with empty cache");
+            .expect_err("timeout must error with empty cache")
+            .to_string();
         let lc = err.to_lowercase();
         assert!(
             lc.contains("timeout") || lc.contains("timed out") || lc.contains("jwks request failed"),
@@ -555,7 +672,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_jwks(false).await.expect_err("5xx without cache must error");
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("5xx without cache must error")
+            .to_string();
         assert!(
             err.contains("500") || err.contains("status"),
             "expected status error, got: {err}"
@@ -585,10 +706,15 @@ mod tests {
         // ttl very short so the 2nd call triggers a refetch.
         let p = build_provider(wm_config(&server.uri(), 30, 0, 2_000));
         let first = p.get_jwks(false).await.expect("initial fetch ok");
-        assert_eq!(first.keys.len(), 1);
+        assert_eq!(first.set.keys.len(), 1);
+        assert!(!first.served_stale);
         tokio::time::sleep(Duration::from_millis(50)).await;
         let second = p.get_jwks(false).await.expect("stale fallback must serve cache on 5xx");
-        assert_eq!(second.keys.len(), 1, "should serve cached set after 5xx");
+        assert_eq!(second.set.keys.len(), 1, "should serve cached set after 5xx");
+        assert!(
+            second.served_stale,
+            "5xx fallback to cache must be flagged served_stale"
+        );
     }
 
     #[tokio::test]
@@ -601,7 +727,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_jwks(false).await.expect_err("malformed JSON must error");
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("malformed JSON must error")
+            .to_string();
         let lc = err.to_lowercase();
         assert!(
             lc.contains("parse") || lc.contains("jwks"),
@@ -620,7 +750,7 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_jwks(false).await.expect_err("empty keys must error");
+        let err = p.get_jwks(false).await.expect_err("empty keys must error").to_string();
         assert!(err.contains("empty keys"), "expected 'empty keys' message, got: {err}");
     }
 
@@ -633,7 +763,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_or_fetch_discovery().await.expect_err("discovery 5xx must error");
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("discovery 5xx must error")
+            .to_string();
         assert!(
             err.contains("503") || err.contains("status"),
             "expected discovery status error, got: {err}"
@@ -656,7 +790,8 @@ mod tests {
         let err = p
             .get_or_fetch_discovery()
             .await
-            .expect_err("discovery malformed JSON must error");
+            .expect_err("discovery malformed JSON must error")
+            .to_string();
         let lc = err.to_lowercase();
         assert!(
             lc.contains("parse") || lc.contains("oidc discovery"),
@@ -681,7 +816,8 @@ mod tests {
         let err = p
             .get_or_fetch_discovery()
             .await
-            .expect_err("missing jwks_uri must error");
+            .expect_err("missing jwks_uri must error")
+            .to_string();
         assert!(
             err.contains("jwks_uri"),
             "expected 'jwks_uri' in error message, got: {err}"
@@ -701,7 +837,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_or_fetch_discovery().await.expect_err("missing issuer must error");
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("missing issuer must error")
+            .to_string();
         assert!(err.contains("issuer"), "expected 'issuer' in error message, got: {err}");
     }
 
@@ -721,7 +861,8 @@ mod tests {
         let err = p
             .get_or_fetch_discovery()
             .await
-            .expect_err("unreachable discovery must error");
+            .expect_err("unreachable discovery must error")
+            .to_string();
         assert!(
             err.contains("Failed to fetch discovery document"),
             "expected fetch failure, got: {err}"
@@ -754,17 +895,21 @@ mod tests {
         // min_refresh=0 so force_refresh is not throttled.
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
         let first = p.get_jwks(false).await.expect("initial fetch ok");
-        assert_eq!(first.keys.len(), 1);
-        let kid_first = first.keys[0].common.key_id.as_deref();
+        assert_eq!(first.set.keys.len(), 1);
+        let kid_first = first.set.keys[0].common.key_id.as_deref();
         assert_eq!(kid_first, Some("k_old"));
 
         let rotated = p.get_jwks(true).await.expect("force refresh fetch ok");
-        assert_eq!(rotated.keys.len(), 1);
-        let kid_rot = rotated.keys[0].common.key_id.as_deref();
+        assert_eq!(rotated.set.keys.len(), 1);
+        let kid_rot = rotated.set.keys[0].common.key_id.as_deref();
         assert_eq!(kid_rot, Some("k_new"), "force_refresh should pick up rotated kid");
         // Old kid no longer present in the returned set.
         assert!(
-            !rotated.keys.iter().any(|k| k.common.key_id.as_deref() == Some("k_old")),
+            !rotated
+                .set
+                .keys
+                .iter()
+                .any(|k| k.common.key_id.as_deref() == Some("k_old")),
             "old kid must be gone after rotation"
         );
     }

@@ -34,7 +34,8 @@ change `TransportConnector::new(None)`. This mirrors the HTTP path
 
 `resolve_tcp_connect_timeout(spec.tcpTimeout)` returns `Some(10s)` even when no
 `tcpTimeout` section is configured (`DEFAULT_TCP_CONNECT`, mirrors the idle
-sibling's `DEFAULT_TCP_IDLE`). Only an explicit `connectTimeout: "0"` opts out
+sibling's `DEFAULT_TCP_IDLE`). Only an explicit `connectTimeout: "0s"` (any
+zero-valued GEP-2257 duration; a bare `"0"` is rejected at admission) opts out
 (falls back to the OS TCP retransmit timeout, ~2m). The 10s default matches the
 Istio L4 `connectTimeout` baseline.
 
@@ -74,7 +75,8 @@ assignment. The TLS doc string of `tcpTimeout` covers all three relay types.
   connect-timeout logic. Do not re-file the connect-timeout finding for this reason.
 - **Outlier detection**: bounding the connect means a slow-to-accept backend now books a
   `FailureClass::Gateway` failure at the timeout instead of eventually connecting. This
-  only matters when `edgion.io/outlier-detection` is explicitly enabled (otherwise
+  only matters when outlier detection is explicitly enabled for the Service (via an
+  `EdgionBackendTrafficPolicy`'s `spec.outlierDetection` section; otherwise
   `record_failure_by_addr` is a no-op); attribution and per-attempt recording are
   pre-existing and consistent with the HTTP connect-failure path.
 

@@ -4,31 +4,37 @@
 
 ```
 docs/
-├── README.md              # Project-level README (language entry point)
+├── index.md               # VitePress landing page and language entry point
 ├── .vitepress/            # VitePress site config, nav, and sidebars
 ├── en/                    # English documentation
 ├── zh-CN/                 # Chinese documentation
-│                          # (ja/ Japanese is reserved but not yet created — see 03-i18n-rules.md)
-├── refactoring/           # Internal refactoring design docs (not user-facing)
-├── review/                # Code review records (not user-facing)
-└── superpowers/           # Design proposals and plans (not user-facing)
+└── superpowers/           # Internal design proposals and plans (not user-facing)
 ```
 
-The internal structure of `en/` and `zh-CN/` must be fully symmetric.
+Under each language directory, `ai-gateway/` is a first-class product column
+(alongside `getting-started/`, `user-guide/`, `ops-guide/`, and `dev-guide/`).
+VitePress top nav and the landing-page features card must stay in sync when the
+column changes.
+
+The intended steady state is matching relative paths under `en/` and `zh-CN/`.
+Track and close any temporary translation gap explicitly.
 
 ## Four-layer system
 
-Each language directory has four audience layers, plus two auxiliary directories
-(`migrations/`, `promotion/`):
+Each language directory has four audience layers, plus the product-feature
+`ai-gateway/` column and three auxiliary directories (`migrations/`,
+`promotion/`, and `release-notes/`):
 
 | Layer | Directory | Audience | Positioning |
 |-------|-----------|----------|-------------|
 | 1 | `getting-started/` | New users | From zero to first successful run; runnable in 5 minutes |
+| feature | `ai-gateway/` | AI / LLM operators and app developers | Dedicated AI Gateway column (Envoy AI Gateway–style): routing, credentials, resilience, providers, quotas, observability |
 | 2 | `user-guide/` | Daily users | Usage guide organized by feature; Route types, plugins, match rules, backend configuration |
 | 3 | `ops-guide/` | Operators | Gateway operations: Gateway configuration, TLS, listeners, observability, infrastructure |
 | 4 | `dev-guide/` | Developers / contributors | Architecture overview, plugin development, resource registration, logging, CI/CD |
 | aux | `migrations/` | Upgraders | Version-to-version migration guides (breaking changes, config/API renames) |
 | aux | `promotion/` | Evaluators | Promotional material (white papers, intro pieces); exists in both `en/` and `zh-CN/` |
+| aux | `release-notes/` | Upgraders | Version-specific change summaries and links to detailed guides |
 
 ### Layer boundaries
 
@@ -44,13 +50,15 @@ Each language directory has four audience layers, plus two auxiliary directories
 | kebab-case | `http-route/`, `backend-tls.md` | `httpRoute/`, `backend_tls.md` |
 | Directory names are plural nouns or feature names | `filters/`, `backends/`, `matches/` | `filter/` |
 | File names are feature names without numeric prefixes | `cors.md`, `session-persistence.md` | `01-cors.md` |
-| README.md serves as the directory index | `filters/README.md` | `filters/index.md` |
+| Use README.md when a directory needs a local index | `filters/README.md` | `filters/index.md` |
 
 **Exception**: getting-started may need to imply reading order, but still uses feature names rather than numeric prefixes.
 
 ## README.md conventions
 
-The README.md of each subdirectory acts as a navigation page for that directory:
+When a directory has a `README.md`, it acts as that directory's local navigation
+page. Not every current leaf directory has one; do not claim an index exists
+without checking the tree.
 
 ```markdown
 # <Directory topic>
@@ -72,9 +80,9 @@ Requirements:
 
 ## Navigation sync rules
 
-Directory-level `README.md` files are the local navigation source for each
-documentation directory. `docs/.vitepress/config.ts` is the site navigation
-source for VitePress nav bars and sidebars.
+Directory-level `README.md` files are local indexes where present.
+`docs/.vitepress/config.ts` is the authoritative source for the rendered site
+navigation bars and sidebars.
 
 **Triggers an update**:
 - Adding a documentation file
@@ -86,8 +94,9 @@ source for VitePress nav bars and sidebars.
 - Modifying only file content (paths unchanged)
 
 **How to update**: PRs that change documentation structure must update the
-containing directory's `README.md` and, when the page is user-facing navigation,
-the matching VitePress sidebar/nav entry.
+containing directory's `README.md` when that index exists and, when the page is
+user-facing navigation, the matching VitePress sidebar/nav entry. Create a new
+README only when the directory needs a browsable local index.
 
 ## Placement decision tree for new documents
 
@@ -96,6 +105,11 @@ The document you're writing is about…
 
 ├── First-time user contact, quick onboarding?
 │   └── getting-started/
+│
+├── AI / LLM gateway features (EdgionBackend, AiProxy, AI resilience, GenAI usage)?
+│   └── ai-gateway/
+│   ├── Keep the EdgionPlugins `ai-proxy.md` page as a short pointer into this column
+│   └── Do not grow AI product docs under filters/edgion-plugins alone
 │
 ├── How to use a particular route type (HTTP/gRPC/TCP/UDP)?
 │   └── user-guide/<route-type>/
@@ -122,8 +136,11 @@ The document you're writing is about…
 ├── Version migration / upgrade guide (breaking changes, config/API renames)?
 │   └── migrations/
 │
-└── Promotional material (white papers, intro pieces)?
+├── Promotional material (white papers, intro pieces)?
     └── promotion/ (en + zh-CN)
+
+└── Version-specific change summary?
+    └── release-notes/ (en + zh-CN)
 ```
 
 ## Relationship with skills/

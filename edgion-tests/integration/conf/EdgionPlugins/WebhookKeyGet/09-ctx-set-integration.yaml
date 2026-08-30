@@ -59,8 +59,8 @@ spec:
           - name: X-Resolved-User
             template: "${ctx:user_id}"
     timeoutMs: 5000
-    successStatusCodes: [200]
-    allowDegradation: false
+    success:
+      statusCodes: [200]
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1
@@ -69,7 +69,12 @@ metadata:
   name: wh9-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh9_result
+      from: ctx
+      name: wh9_result
   requestPlugins:
+    # CtxSet MUST run first: webhook templates read ${ctx:action} / ${ctx:user_id}.
     - enable: true
       type: CtxSet
       config:
@@ -83,19 +88,22 @@ spec:
               type: header
               name: X-User-Id
             default: "anon"
+    # WebhookKeyGet AFTER CtxSet — otherwise ${ctx:...} templates are empty.
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
           # 3. Webhook call whose templates interpolate the two ctx vars above.
           - name: wh9_result
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh9-resolver"
-              extract:
-                # X-Resolved-User is a custom template header "${ctx:user_id}".
-                # Reading it back proves the ${ctx:...} template was substituted into
-                # the outbound header. A non-default value also implies the path
-                # template "/webhook/${ctx:action}" resolved to "/webhook/resolve"
-                # (otherwise the request would not have reached the echo handler).
-                source: body
-                path: "data.echo_headers.x-resolved-user"
+            webhookRef: "edgion-default/wh9-resolver"
+            extract:
+              # X-Resolved-User is a custom template header "${ctx:user_id}".
+              # Reading it back proves the ${ctx:...} template was substituted into
+              # the outbound header. A non-default value also implies the path
+              # template "/webhook/${ctx:action}" resolved to "/webhook/resolve"
+              # (otherwise the request would not have reached the echo handler).
+              source: body
+              path: "data.echo_headers.x-resolved-user"
             default: "fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -103,8 +111,6 @@ kind: HTTPRoute
 metadata:
   name: wh9-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh9_result"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

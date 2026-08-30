@@ -1,54 +1,12 @@
 //! Webhook runtime state types.
 //!
-//! Contains WebhookRuntime (per-webhook state), SlidingWindowCounter (rate limiter),
-//! and time utilities.
+//! Contains SlidingWindowCounter (rate limiter) and time utilities.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
-use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
-use reqwest::Client;
-
 // Re-export from the shared outbound engine.
-pub use crate::plugins::http::common::outbound::target::{rr_pick, ResolvedTarget as WebhookResolvedTarget};
-
-// ============================================================
-// WebhookRuntime — per-webhook runtime state
-// ============================================================
-
-/// Runtime state for a single webhook service
-pub struct WebhookRuntime {
-    /// Configuration from LinkSys resource
-    pub config: WebhookServiceConfig,
-
-    /// HTTP client for this webhook. When TLS config is present, this is a custom client.
-    pub http_client: Arc<Client>,
-
-    /// Resolved target for outbound requests (derived from `config.target` at upsert time).
-    pub resolved_target: WebhookResolvedTarget,
-
-    /// Pre-compiled outbound request spec (compiled from `config.request` at upsert time).
-    ///
-    /// Templates are parsed and secrets resolved once at load time; the hot
-    /// call path (`build_request`) only evaluates already-segmented data.
-    pub compiled_request: CompiledOutboundRequest,
-
-    // ---- Health state ----
-    /// Current health status (true = healthy). Lock-free reads via AtomicBool.
-    pub healthy: AtomicBool,
-    /// Consecutive passive failure counter (reset on success)
-    pub passive_failures: AtomicU32,
-    /// Timestamp of last backoff half-open attempt (for passive-only recovery)
-    pub last_halfopen: AtomicU64,
-    /// Current backoff interval in seconds (for passive-only recovery)
-    pub backoff_sec: AtomicU64,
-
-    // ---- Rate limit state ----
-    /// Sliding window counter for outbound call rate limiting
-    pub rate_counter: Option<SlidingWindowCounter>,
-}
+pub use crate::plugins::http::common::outbound::target::rr_pick;
 
 // ============================================================
 // SlidingWindowCounter — simple rate limiter for webhook outbound calls
@@ -148,6 +106,7 @@ mod tests {
     use super::*;
     use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
 
     #[test]
     fn test_sliding_window_counter_allows_within_limit() {
@@ -221,13 +180,14 @@ mod tests {
         assert_eq!(super::rr_pick(&empty, &cursor, "http"), None);
     }
 
-    /// Test A: `WebhookResolvedTarget::Service` resolves from the global EpSliceStore.
+    /// `ResolvedTarget::Service` resolves from the global EpSliceStore.
     ///
     /// Verifies that `pick_url()` returns `None` when the store has no entry for the
     /// service key, and `Some(url)` after an endpoint slice is seeded via the
     /// incremental `update_data_only` path (unique slice key — no cross-test pollution).
     #[test]
     fn pick_url_service_resolves_from_global_store() {
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
         use edgion_resources::constants::labels::k8s::SERVICE_NAME;
         use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
         use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -236,7 +196,7 @@ mod tests {
         let svc_key = "wh-pickurl-test/svc";
         let slice_key = "wh-pickurl-test/svc-slice";
 
-        let target = WebhookResolvedTarget::Service {
+        let target = ResolvedTarget::Service {
             service_key: svc_key.to_string(),
             port: Some(8080),
             scheme: "http",
@@ -281,141 +241,5 @@ mod tests {
         // Cleanup: remove so we do not leave stale entries in the global store.
         let remove = HashSet::from([slice_key.to_string()]);
         get_roundrobin_store().update_data_only(HashMap::new(), HashMap::new(), &remove);
-    }
-
-    /// Test B: health state on `WebhookRuntime` is preserved across endpoint churn.
-    ///
-    /// Regression test: pod turnover (slice add/remove/re-add) must not rebuild the
-    /// `WebhookRuntime` or reset its atomic health fields.  The `Service` variant of
-    /// `WebhookResolvedTarget` reads the global store fresh on every `pick_url()` call,
-    /// so endpoint churn never requires replacing the runtime itself.
-    #[tokio::test]
-    async fn pick_url_health_state_preserved_across_churn() {
-        use edgion_resources::constants::labels::k8s::SERVICE_NAME;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
-        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
-        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-        use std::collections::{BTreeMap, HashMap, HashSet};
-
-        let svc_key = "wh-health-test/svc";
-        let slice_key_1 = "wh-health-test/svc-slice-1";
-        let slice_key_2 = "wh-health-test/svc-slice-2";
-
-        // Construct a WebhookRuntime with deliberate unhealthy state.
-        use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookOutboundRequest;
-        let runtime = Arc::new(WebhookRuntime {
-            config: WebhookServiceConfig {
-                conn: ExternalHttpConnection {
-                    target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
-                            kind: None,
-                            name: "wh-svc".to_string(),
-                            namespace: Some("default".to_string()),
-                            port: Some(8080),
-                        },
-                    },
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            http_client: Arc::new(Client::new()),
-            resolved_target: WebhookResolvedTarget::Service {
-                service_key: svc_key.to_string(),
-                port: Some(8080),
-                scheme: "http",
-                cursor: AtomicUsize::new(0),
-            },
-            compiled_request: CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default()).unwrap(),
-            healthy: AtomicBool::new(false),
-            passive_failures: AtomicU32::new(5),
-            last_halfopen: AtomicU64::new(0),
-            backoff_sec: AtomicU64::new(0),
-            rate_counter: None,
-        });
-
-        // Capture Arc identity before any churn.
-        let ptr_before = Arc::as_ptr(&runtime);
-
-        let store = get_roundrobin_store();
-
-        // Build a ready EndpointSlice for "wh-health-test/svc".
-        let make_slice = |slice_name: &str, ip: &str| {
-            let mut labels = BTreeMap::new();
-            labels.insert(SERVICE_NAME.to_string(), "svc".to_string());
-            EndpointSlice {
-                metadata: ObjectMeta {
-                    name: Some(slice_name.to_string()),
-                    namespace: Some("wh-health-test".to_string()),
-                    labels: Some(labels),
-                    ..Default::default()
-                },
-                address_type: "IPv4".to_string(),
-                endpoints: vec![Endpoint {
-                    addresses: vec![ip.to_string()],
-                    conditions: Some(EndpointConditions {
-                        ready: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }],
-                ports: Some(vec![EndpointPort {
-                    port: Some(8080),
-                    ..Default::default()
-                }]),
-            }
-        };
-
-        // Seed: add initial slice with IP 10.0.1.1.
-        store.update_data_only(
-            HashMap::from([(slice_key_1.to_string(), make_slice("svc-slice-1", "10.0.1.1"))]),
-            HashMap::new(),
-            &HashSet::new(),
-        );
-        assert_eq!(
-            runtime.resolved_target.pick_url(),
-            Some("http://10.0.1.1:8080".to_string())
-        );
-
-        // Churn: remove slice-1 (momentary gap — no ready endpoints).
-        store.update_data_only(
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::from([slice_key_1.to_string()]),
-        );
-        assert_eq!(runtime.resolved_target.pick_url(), None);
-
-        // Add slice-2 with replacement IP 10.0.1.2 (simulates pod turnover).
-        store.update_data_only(
-            HashMap::from([(slice_key_2.to_string(), make_slice("svc-slice-2", "10.0.1.2"))]),
-            HashMap::new(),
-            &HashSet::new(),
-        );
-        assert_eq!(
-            runtime.resolved_target.pick_url(),
-            Some("http://10.0.1.2:8080".to_string())
-        );
-
-        // Arc identity, health flag, and failure counter are all unchanged by endpoint churn.
-        assert_eq!(
-            Arc::as_ptr(&runtime),
-            ptr_before,
-            "Arc identity must not change across churn"
-        );
-        assert!(!runtime.healthy.load(Ordering::Relaxed), "healthy must remain false");
-        assert_eq!(
-            runtime.passive_failures.load(Ordering::Relaxed),
-            5,
-            "passive_failures must remain 5"
-        );
-
-        // Cleanup: remove so we do not leave stale entries in the global store.
-        store.update_data_only(
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::from([slice_key_2.to_string()]),
-        );
     }
 }

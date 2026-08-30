@@ -15,3 +15,10 @@ spec:
       backendRefs:
         - name: test-backend-gw-cert
           port: 30052
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /backend-gw-cert-plaintext/
+      backendRefs:
+        - name: test-backend-gw-cert-plaintext
+          port: 30001

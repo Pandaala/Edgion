@@ -2,6 +2,7 @@
 name = "edgion-resources"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]
@@ -12,11 +13,17 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+# EdgionDSL language core (compile/validate path shared with the gateway)
+edgion-dsl.workspace = true
+edgion-waf.workspace = true
+
 # Serialization / schema
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 schemars.workspace = true
+jsonschema.workspace = true
+jsonptr.workspace = true
 
 # Kubernetes resource model
 kube.workspace = true
@@ -26,19 +33,19 @@ k8s-openapi.workspace = true
 regex.workspace = true
 smallvec.workspace = true
 parking_lot.workspace = true
+url.workspace = true
+http.workspace = true
 
 # Errors
 thiserror.workspace = true
 anyhow.workspace = true
 
-# Pingora (err.rs `Error`, `TcpKeepaliveConfig::to_pingora`); TLS backend feature
-# is supplied by the workspace via feature unification with the binary crates.
-pingora-core.workspace = true
-
 # Auth / crypto config helpers
 jsonwebtoken.workspace = true
 zeroize.workspace = true
 base64.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 # Misc
 clap.workspace = true
@@ -48,4 +55,3 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-http.workspace = true

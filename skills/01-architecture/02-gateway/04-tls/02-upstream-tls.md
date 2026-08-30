@@ -13,8 +13,8 @@ Upstream TLS handles the TLS connection from the Gateway to backend services. Wh
 
 ```
 edgion-gateway/src/tls/runtime/backend/
-├── mod.rs               # module entry, conditional compilation (#[cfg(any(feature = "boringssl", feature = "openssl"))])
-├── backend_api.rs       # unified backend API (BoringSSL/OpenSSL dispatch)
+├── mod.rs               # BoringSSL-gated module entry
+├── backend_api.rs       # BoringSSL backend API
 └── cert_extractor.rs    # client certificate info extraction utility
 ```
 
@@ -39,7 +39,7 @@ When BackendTLSPolicy requires mTLS, the Gateway must:
 
 ### Verify callback setup
 
-`backend_api.rs` provides a unified `set_mtls_verify_callback` function that dispatches to a specific backend at compile time:
+`backend_api.rs` provides the BoringSSL `set_mtls_verify_callback` used by the custom TLS runtime:
 
 ```rust
 pub fn set_mtls_verify_callback(
@@ -49,8 +49,9 @@ pub fn set_mtls_verify_callback(
 ) -> Result<(), String>
 ```
 
-- **BoringSSL**: calls `boringssl::mtls_verify_callback::set_verify_callback_with_whitelist`, supports full SAN/CN allowlist verification.
-- **OpenSSL**: not implemented; returns an error.
+It calls `boringssl::mtls_verify_callback::set_verify_callback_with_whitelist` and supports SAN/CN
+allowlist verification. The gateway has no OpenSSL backend branch; the custom callback runtime is
+not implemented for the rustls build.
 
 ## Certificate info extraction
 
@@ -84,7 +85,14 @@ The function is mainly used in downstream mTLS scenarios (the `handshake_complet
 
 `BackendTLSPolicy.validation.subjectAltNames` configures backend certificate SAN verification, supporting Hostname and URI (SPIFFE) types.
 
-### Verification flow
+### TLS backend boundary
+
+Additional `subjectAltNames` enforcement is implemented by the supported
+BoringSSL Gateway backend. The dormant rustls feature has no BackendTLSPolicy
+behavior contract; do not use it for Gateway deployments or interpret its
+current mechanics as supported enforcement.
+
+### BoringSSL verification flow
 
 1. When `create_tls_peer()` detects non-empty `subjectAltNames`, it sets Pingora's `upstream_tls_handshake_complete_hook`.
 2. After the TLS handshake, the hook extracts backend certificate SANs via `extract_sans_from_ssl()`.
@@ -94,7 +102,7 @@ The function is mainly used in downstream mTLS scenarios (the `handshake_complet
 
 ### Connection-pool isolation
 
-Peers with different `subjectAltNames` configurations use different `group_key`s (based on a hash of the SAN content) to prevent Pingora from reusing connections across different SAN policies.
+Under BoringSSL, peers with different `subjectAltNames` configurations use different `group_key`s (based on a hash of the SAN content) to prevent Pingora from reusing connections across different SAN policies. Any future rustls support must provide equivalent policy isolation through the umbrella design task.
 
 ### Match rules
 

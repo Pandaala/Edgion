@@ -9,15 +9,15 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Whitelist
-        ruleGroups:
-          - rules:
-              - name: "readonly-api"
-                source: Method
-                values:
-                  - "GET"
-                  - "HEAD"
-                  - "OPTIONS"
+        mode: Allow
+        conditions:
+          allOf:
+            - type: keyMatch
+              key:
+                type: method
+              values:
+                - "GET"
+                - "HEAD"
+                - "OPTIONS"
         status: 405
         message: "Method not allowed"
-

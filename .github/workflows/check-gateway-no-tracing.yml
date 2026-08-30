@@ -8,5 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test checker
+        working-directory: cicd/checks
+        run: python3 test_check_gateway_no_tracing.py
       - name: Run check
         run: python3 cicd/checks/check_gateway_no_tracing.py

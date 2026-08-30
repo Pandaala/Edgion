@@ -11,7 +11,10 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
+use super::common::{
+    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, unknown_field_warnings,
+    validate_resource,
+};
 use super::types::*;
 
 /// Pagination query parameters for list endpoints.
@@ -128,6 +131,11 @@ pub async fn create_namespaced(
     // Parse, validate, and persist using create_one (fails if exists)
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
+    //
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData/LinkSys arms below
+    // (`unknown_field_warnings`); every other kind leaves this empty, so
+    // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
+    let mut warnings: Vec<String> = Vec::new();
     match kind {
         edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
@@ -204,6 +212,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -213,6 +233,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::EdgionConfigData => {
             let metadata: EdgionConfigData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -222,6 +254,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -276,6 +320,18 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::EdgionStreamPlugins => {
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -286,6 +342,24 @@ pub async fn create_namespaced(
             let acme: EdgionAcme = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
             let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
+        edgion_resources::ResourceKind::EdgionBackendTrafficPolicy => {
+            let policy: EdgionBackendTrafficPolicy = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
+            let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
+        edgion_resources::ResourceKind::EdgionBackend => {
+            let backend: EdgionBackend = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &backend, is_k8s)?;
+            let json_content = serde_json::to_string(&backend).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await
@@ -313,7 +387,10 @@ pub async fn create_namespaced(
     Ok((
         StatusCode::CREATED,
         headers,
-        Json(ApiResponse::ok_body(format!("{} created", kind_str))),
+        Json(ApiResponse::ok_body_with_warnings(
+            format!("{} created", kind_str),
+            warnings,
+        )),
     ))
 }
 
@@ -321,6 +398,7 @@ pub async fn create_namespaced(
 pub async fn update_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -329,6 +407,9 @@ pub async fn update_namespaced(
     let writer = state.conf_center();
 
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    // Capture the client's precondition before non-Kubernetes parsing assigns
+    // the new resourceVersion that will be persisted by this update.
+    let expected_resource_version = expected_resource_version(&headers, &content)?;
 
     // The URL name/namespace are the authoritative storage keys, but the body
     // content is what gets persisted. Reject a body whose metadata identity
@@ -349,13 +430,24 @@ pub async fn update_namespaced(
     // Parse, validate, and persist using update_one (fails if not exists)
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
+    //
+    // Populated only by the EdgionPlugins/EdgionStreamPlugins/EdgionConfigData/LinkSys arms below
+    // (`unknown_field_warnings`); every other kind leaves this empty, so
+    // `ApiResponse::warnings` stays absent from the response (see `types.rs`).
+    let mut warnings: Vec<String> = Vec::new();
     match kind {
         edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -364,7 +456,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -373,7 +471,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -382,7 +486,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -391,7 +501,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -400,7 +516,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &service, is_k8s)?;
             let json_content = serde_json::to_string(&service).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -409,7 +531,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &ep, is_k8s)?;
             let json_content = serde_json::to_string(&ep).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -418,22 +546,58 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &tls, is_k8s)?;
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
         edgion_resources::ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
         edgion_resources::ResourceKind::EdgionConfigData => {
             let metadata: EdgionConfigData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             // Serialize this whole-resource replace against the failover
             // read-modify-write on the same EdgionConfigData, which would otherwise
@@ -442,16 +606,40 @@ pub async fn update_namespaced(
             // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
             let _resource_guard = super::resource_locks::lock_resource(kind.as_str(), &ns, &name).await;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
         edgion_resources::ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the typed schema"
+                );
+            }
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -460,7 +648,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -469,7 +663,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &cm, is_k8s)?;
             let json_content = serde_json::to_string(&cm).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -478,7 +678,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &gateway, is_k8s)?;
             let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -487,7 +693,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &rg, is_k8s)?;
             let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -496,16 +708,40 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
         edgion_resources::ResourceKind::EdgionStreamPlugins => {
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
+            warnings = unknown_field_warnings(kind, &content);
+            if !warnings.is_empty() {
+                tracing::warn!(
+                    component = "unified_api",
+                    event = "unknown_config_fields",
+                    kind = %kind_str,
+                    namespace = %ns,
+                    name = %name,
+                    paths = ?warnings,
+                    "Resource contains keys not recognized by the schema"
+                );
+            }
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -514,7 +750,43 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
             let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
+                .await
+                .map_err(map_writer_error)?;
+        }
+        edgion_resources::ResourceKind::EdgionBackendTrafficPolicy => {
+            let policy: EdgionBackendTrafficPolicy = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
+            let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
+                .await
+                .map_err(map_writer_error)?;
+        }
+        edgion_resources::ResourceKind::EdgionBackend => {
+            let backend: EdgionBackend = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &backend, is_k8s)?;
+            let json_content = serde_json::to_string(&backend).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -531,13 +803,17 @@ pub async fn update_namespaced(
         "Resource updated successfully"
     );
 
-    Ok(Json(ApiResponse::ok_body(format!("{} updated", kind_str))))
+    Ok(Json(ApiResponse::ok_body_with_warnings(
+        format!("{} updated", kind_str),
+        warnings,
+    )))
 }
 
 /// Delete a namespace-scoped resource.
 pub async fn delete_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -545,8 +821,9 @@ pub async fn delete_namespaced(
     let writer = state.conf_center();
 
     // delete_one returns NotFound if the resource does not exist.
+    let expected_resource_version = expected_resource_version(&headers, "{}")?;
     writer
-        .delete_one(kind.as_str(), Some(&ns), &name)
+        .delete_one_if_version(kind.as_str(), Some(&ns), &name, expected_resource_version.as_deref())
         .await
         .map_err(map_writer_error)?;
 
@@ -595,7 +872,7 @@ mod update_identity_tests {
     /// Build a minimal FileSystem-backed AdminState (non-K8s mode, the mode in
     /// which the URL-vs-body name desync is observable). The returned TempDir
     /// must be kept alive for the storage path to stay valid.
-    async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
+    pub(super) async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
         let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
         let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
         let conf_mgr = Arc::new(
@@ -629,6 +906,7 @@ mod update_identity_tests {
         let result = update_namespaced(
             State(state),
             Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            HeaderMap::new(),
             http_route_body("route-b", "default"),
         )
         .await;
@@ -641,6 +919,7 @@ mod update_identity_tests {
         let result = update_namespaced(
             State(state),
             Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            HeaderMap::new(),
             http_route_body("route-a", "other-ns"),
         )
         .await;
@@ -656,10 +935,66 @@ mod update_identity_tests {
         let result = update_namespaced(
             State(state),
             Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            HeaderMap::new(),
             http_route_body("route-a", "default"),
         )
         .await;
         assert_eq!(result.err(), Some(StatusCode::NOT_FOUND));
+    }
+
+    #[tokio::test]
+    async fn stale_if_match_returns_conflict_and_keeps_current_resource() {
+        let (state, _tmp) = make_fs_state().await;
+        let current = r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"route-a","namespace":"default","resourceVersion":"42"},"spec":{}}"#;
+        state
+            .conf_center()
+            .create_one("HTTPRoute", Some("default"), "route-a", current.to_string())
+            .await
+            .expect("seed resource must be created");
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, r#""41""#.parse().unwrap());
+
+        let result = update_namespaced(
+            State(Arc::clone(&state)),
+            Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            headers,
+            http_route_body("route-a", "default"),
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::CONFLICT));
+        let stored = state
+            .conf_center()
+            .get_one("HTTPRoute", Some("default"), "route-a")
+            .await
+            .expect("current resource must remain readable");
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+        assert_eq!(stored["metadata"]["resourceVersion"], "42");
+    }
+
+    #[tokio::test]
+    async fn stale_delete_if_match_returns_conflict_and_keeps_current_resource() {
+        let (state, _tmp) = make_fs_state().await;
+        let current = r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"route-a","namespace":"default","resourceVersion":"42"},"spec":{}}"#;
+        state
+            .conf_center()
+            .create_one("HTTPRoute", Some("default"), "route-a", current.to_string())
+            .await
+            .expect("seed resource must be created");
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, r#""41""#.parse().unwrap());
+
+        let result = delete_namespaced(
+            State(Arc::clone(&state)),
+            Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            headers,
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::CONFLICT));
+        assert!(state
+            .conf_center()
+            .get_one("HTTPRoute", Some("default"), "route-a")
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -691,5 +1026,190 @@ mod update_identity_tests {
         .await;
         let (status, _headers, _body) = result.expect("create should succeed on matching identity");
         assert_eq!(status, StatusCode::CREATED);
+    }
+}
+
+/// The Admin API write path warns (never rejects) on an unrecognized config
+/// key and surfaces the finding through `ApiResponse::warnings`.
+#[cfg(test)]
+mod unknown_field_warning_tests {
+    use super::update_identity_tests::make_fs_state;
+    use super::*;
+
+    /// `config.denys` is a typo for `config.deny` on `IpRestrictionConfig`.
+    fn plugins_body_with_typo(name: &str, namespace: &str) -> Bytes {
+        Bytes::from(format!(
+            r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","denys":[]}}}}]}}}}"#
+        ))
+    }
+
+    fn plugins_body_clean(name: &str, namespace: &str) -> Bytes {
+        Bytes::from(format!(
+            r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","deny":[]}}}}]}}}}"#
+        ))
+    }
+
+    fn config_data_body(name: &str, typo: bool) -> Bytes {
+        let typo_field = if typo { r#","cidrz":[]"# } else { "" };
+        Bytes::from(format!(
+            r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{{"name":"{name}","namespace":"default"}},"spec":{{"data":{{"type":"IpList","config":{{"items":[{{"name":"office","cidrs":[]{typo_field}}}]}}}}}}}}"#
+        ))
+    }
+
+    fn link_sys_body(name: &str, typo: bool) -> Bytes {
+        let typo_field = if typo { r#", "conect": 20"# } else { "" };
+        Bytes::from(
+            r#"{"apiVersion":"edgion.io/v1","kind":"LinkSys","metadata":{"name":"NAME","namespace":"default"},"spec":{"type":"redis","config":{"endpoints":["redis://127.0.0.1:6379"],"timeout":{"connect":10TYPO}}}}"#
+                .replace("NAME", name)
+                .replace("TYPO", typo_field),
+        )
+    }
+
+    #[tokio::test]
+    async fn create_with_typo_is_not_rejected_and_carries_warning() {
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(state),
+            Path(("EdgionPlugins".to_string(), "default".to_string())),
+            plugins_body_with_typo("auth-chain", "default"),
+        )
+        .await;
+
+        let (status, _headers, body) = result.expect("a typo'd key must warn, never reject the write");
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "warn-not-reject: the write must still succeed"
+        );
+        assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
+
+        let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
+        assert_eq!(
+            serialized["warnings"][0], "requestPlugins[0].config.denys",
+            "the finding must also be visible in the serialized payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_clean_document_has_no_warnings_key_in_serialized_payload() {
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(state),
+            Path(("EdgionPlugins".to_string(), "default".to_string())),
+            plugins_body_clean("clean-chain", "default"),
+        )
+        .await;
+
+        let (status, _headers, body) = result.expect("a clean document must create successfully");
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(body.0.warnings.is_empty());
+
+        let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
+        assert!(
+            serialized.get("warnings").is_none(),
+            "empty warnings must be entirely absent from the JSON payload, not an empty array"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_with_typo_is_not_rejected_and_carries_warning() {
+        let (state, _tmp) = make_fs_state().await;
+        let _ = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("EdgionPlugins".to_string(), "default".to_string())),
+            plugins_body_clean("auth-chain", "default"),
+        )
+        .await
+        .expect("seed create must succeed");
+
+        let result = update_namespaced(
+            State(state),
+            Path((
+                "EdgionPlugins".to_string(),
+                "default".to_string(),
+                "auth-chain".to_string(),
+            )),
+            HeaderMap::new(),
+            plugins_body_with_typo("auth-chain", "default"),
+        )
+        .await;
+
+        let body = result.expect("a typo'd key must warn, never reject the update");
+        assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn config_data_create_and_update_carry_typed_unknown_field_warning() {
+        let (state, _tmp) = make_fs_state().await;
+        let created = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("EdgionConfigData".to_string(), "default".to_string())),
+            config_data_body("cidrs", true),
+        )
+        .await
+        .expect("advisory finding must not reject create");
+        assert_eq!(created.2 .0.warnings, ["data.config.items[0].cidrz"]);
+
+        let updated = update_namespaced(
+            State(state),
+            Path((
+                "EdgionConfigData".to_string(),
+                "default".to_string(),
+                "cidrs".to_string(),
+            )),
+            HeaderMap::new(),
+            config_data_body("cidrs", true),
+        )
+        .await
+        .expect("advisory finding must not reject update");
+        assert_eq!(updated.0.warnings, ["data.config.items[0].cidrz"]);
+    }
+
+    #[tokio::test]
+    async fn config_data_clean_typed_and_open_misc_writes_have_no_warnings() {
+        let (state, _tmp) = make_fs_state().await;
+        let clean = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("EdgionConfigData".to_string(), "default".to_string())),
+            config_data_body("clean-cidrs", false),
+        )
+        .await
+        .expect("clean typed ConfigData must be accepted");
+        assert!(clean.2 .0.warnings.is_empty());
+
+        let misc = Bytes::from(
+            r#"{"apiVersion":"edgion.io/v1","kind":"EdgionConfigData","metadata":{"name":"vendor-data","namespace":"default"},"spec":{"data":{"type":"Misc","config":{"vendor":{"arbitrary":[1,2,3]}}}}}"#,
+        );
+        let misc = create_namespaced(
+            State(state),
+            Path(("EdgionConfigData".to_string(), "default".to_string())),
+            misc,
+        )
+        .await
+        .expect("open Misc ConfigData must be accepted");
+        assert!(misc.2 .0.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn link_sys_create_and_update_warn_without_rejecting() {
+        let (state, _tmp) = make_fs_state().await;
+        let created = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("LinkSys".to_string(), "default".to_string())),
+            link_sys_body("redis", true),
+        )
+        .await
+        .expect("LinkSys advisory must not reject create");
+        assert_eq!(created.2 .0.warnings, ["config.timeout.conect"]);
+
+        let updated = update_namespaced(
+            State(state),
+            Path(("LinkSys".to_string(), "default".to_string(), "redis".to_string())),
+            HeaderMap::new(),
+            link_sys_body("redis", true),
+        )
+        .await
+        .expect("LinkSys advisory must not reject update");
+        assert_eq!(updated.0.warnings, ["config.timeout.conect"]);
     }
 }

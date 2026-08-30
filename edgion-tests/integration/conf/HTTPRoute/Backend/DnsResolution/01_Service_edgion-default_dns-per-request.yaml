@@ -1,0 +1,17 @@
+# per-request mode: the gateway re-resolves on every request (no cache), via the
+# system resolver (no dns-resolver annotation). externalName=localhost resolves
+# to 127.0.0.1 → the local test backend on port 30001.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-per-request
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: per-request
+spec:
+  type: ExternalName
+  externalName: localhost
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

@@ -52,8 +52,8 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `allowOrigins` | String | `""` (空) | 允许的来源，多个用逗号分隔。支持 `*`、`**` 和 `*.domain`。示例：`"https://app.example.com,https://admin.example.com"` |
-| `allowMethods` | String | `GET,HEAD,OPTIONS` | 允许的 HTTP 方法，多个用逗号分隔。支持 `*` / `**` |
-| `allowHeaders` | String | `Accept,Accept-Language,Content-Language,Content-Type,Range` | 允许的请求头，多个用逗号分隔。支持 `*` / `**` |
+| `allowMethods` | String | `GET,HEAD,OPTIONS` | 允许的 HTTP 方法，多个用逗号分隔。支持 `*` / `**`。仅在预检响应中作为 `Access-Control-Allow-Methods` 下发 |
+| `allowHeaders` | String | `Accept,Accept-Language,Content-Language,Content-Type,Range` | 允许的请求头，多个用逗号分隔。支持 `*` / `**`。仅在预检响应中作为 `Access-Control-Allow-Headers` 下发 |
 | `exposeHeaders` | String | `""` (空) | 向浏览器暴露的响应头，多个用逗号分隔 |
 | `allowCredentials` | Boolean | `false` | 是否允许携带凭据（Cookie、Authorization 头） |
 | `maxAge` | Integer | 无 | 预检请求缓存时长（秒）。未设置时不发送 `Access-Control-Max-Age` 头 |

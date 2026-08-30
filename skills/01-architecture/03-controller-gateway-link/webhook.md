@@ -1,15 +1,17 @@
 ---
 name: webhook-request-templating
-description: Webhook LinkSys provider after the target-unification + request-templating redesign — backendRef-only target, allow-list request block, controller-side template compilation + secret resolution, conf_sync to gateway, consumer path_override API.
+description: Webhook LinkSys provider after the target-unification + request-templating redesign — Service-or-URL target, allow-list request block, controller-side template compilation + secret resolution, conf_sync to gateway, consumer path_override API.
 ---
 
 # Webhook provider — target unification + request templating
 
-> The webhook LinkSys provider lets gateway plugins (ctx-set, key-auth, DSL, ...)
-> call an external HTTP service to resolve a value (a key, an identity, an
-> enrichment field). This document describes the provider **after the
+> The webhook LinkSys provider lets the `WebhookKeyGet` plugin (and other
+> gateway callers) call an external HTTP service to resolve a value (a key, an
+> identity, an enrichment field). This document describes the provider **after the
 > target-unification + request-templating redesign**. For the field-by-field
 > CRD schema see [02-features/03-resources/18-link-sys.md § `type: webhook`](../../02-features/03-resources/18-link-sys.md).
+> Operator-facing consumption is the `WebhookKeyGet` plugin; downstream plugins
+> read the written ctx var.
 
 ## What changed (redesign summary)
 
@@ -18,9 +20,10 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 - The outbound request was constructed across **two layers**: the webhook resource defined a base `uri` + `requestMethod` + `defaultHeaders` + a tagged-enum `auth` block, and the *consuming* plugin supplied the rest (`pathSuffix` appended to the URI, `forwardHeaders` selecting which inbound headers to pass through). What actually went on the wire could not be audited from the webhook resource alone, and any consumer could forward any header by default.
 
 **New model (current):**
-- **`target` is `backendRef`-only** — a single `BackendObjectReference` (`{group, kind, name, namespace, port}`), the same shape HTTPRoute/TCPRoute use. No `Uri` variant, no `type: service` wrapper tag. `port` is required. Supported `kind`: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty/unset (→ Service). `ExternalName`/`ServiceImport` are rejected at admission.
-- The webhook resource carries a required **`request` block** that is the *single source of truth* for the outbound request shape: `path`, `method`, and **allow-listed** `args` / `headers` / `cookies`. Nothing is forwarded unless the resource names it.
+- **`target` is a flat struct with two mutually-exclusive forms** (no tagged-enum wrapper): a Kubernetes Service reference — `{group, kind, name, namespace, port}` directly under `target`, no `backendRef:` nesting, the same fields HTTPRoute/TCPRoute use — **or** an origin-only external `url` (+ optional `blockPrivate`). `WebhookTarget::kind()` is the single source of truth for which form is set and enforces the exclusion (setting `url` together with any Service field is an admission error; setting neither is also an error). For the Service form, `port` is required; supported `kind`: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty/unset (→ Service); `ExternalName`/`ServiceImport` are rejected at admission. The `url` form was reintroduced by the url-webhook-target feature: it must be origin-only (`scheme://host[:port]`, no path/query/fragment/credentials — the path comes from `request.path.template`), rejects `http://` combined with `tls.enabled: true`, and is SSRF-guarded (loopback/link-local/unspecified always blocked; `blockPrivate: true` also blocks RFC1918 + unique-local) with its own dedicated connection pool + DNS resolver.
+- The webhook resource carries a required **`request` block** that is the *single source of truth* for the outbound request shape: `path`, `method`, **allow-listed** `args` / `headers` / `cookies`, and an optional `body`. Nothing is forwarded unless the resource names it.
 - Each `args`/`headers`/`cookies` block splits into **`origin`** (copy the same-named value from the frozen incoming request, with a `presence` policy) and **`custom`** (operator-constructed: a literal `value`, or a `template`; secrets are expressed as `${secretRef:ns/name:key}` inside a template string, controller-resolved and carried inline).
+- `request.body` (`BodySpec`, tagged on `type`) has three variants: `json` and `raw` carry a single `template` (`${type:name}` interpolation); `form` carries structured `fields` (same `CustomField` `value`/`template` source as headers/cookies), percent-encoded by the gateway. `json`/`form` auto-inject `Content-Type`; `raw` does not. See [02-features/03-resources/18-link-sys.md § `request.body`](../../02-features/03-resources/18-link-sys.md) for the full field-by-field contract, including the config-time JSON canary lint and the no-size-cap risk note.
 - Templates reuse the existing **ctx-set template engine** (`${header:X}`, `${ctx:Y}`, ...), pre-compiled at resource ingest.
 
 **Why:** unified target resolution (matches routes; ExternalName via a proxy Service), an allow-list so a misbehaving upstream plugin cannot leak headers, full auditability of the outbound request from the resource alone, and first-class `presence` semantics (required / warn / skip) for missing fields.
@@ -33,7 +36,8 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 │ 1. Read WebhookServiceConfig      │            │ 5. ConfHandler<LinkSys> upserts   │
 │    from K8s (CR ingest)           │            │    WebhookManager runtime         │
 │ 2. validate_config():             │            │ 6. CompiledOutboundRequest::      │
-│    - target.backendRef (port/kind)│  conf_sync │    from_spec(request)             │
+│    - target (Service port/kind    │  conf_sync │    from_spec(request)             │
+│      OR origin-only url)          │            │                                    │
 │    - request template syntax,     │  (full     │    parses templates (already      │
 │      origin/custom name conflicts │  struct,   │    parsed controller-side here too)│
 │ 3. Scan ${secretRef:...} vars;    │  serde)    │ 7. webhook_call(session,          │
@@ -48,10 +52,11 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 ### Controller side (LinkSys handler)
 
 - Reads `WebhookServiceConfig` from the K8s CR. The LinkSys CRD is `x-kubernetes-preserve-unknown-fields: true`, so structural validation does **not** happen at the API server — the controller's `validate_config()` is the only admission gate, surfaced as the `Accepted` status condition.
-- **Validation** (`edgion-resources/src/resources/link_sys/webhook.rs`): `backend_ref.port.is_some()`, `kind` in the supported set, and `request` field consistency (`validate_request_fields`): no template parse errors, no field name appearing in both `origin` and `custom`, no duplicate names within a block, no `headers.origin: [{name: Cookie}]` colliding with a non-empty `cookies` block. Any violation → `Accepted=False` with a descriptive message; the resource is **not** loaded into the gateway runtime.
+- **Validation** (`edgion-resources/src/resources/link_sys/webhook.rs`): `backend_ref.port.is_some()`, `kind` in the supported set, and `request` field consistency (`validate_request_fields`, which delegates to the shared `OutboundRequestSpec::validation_error()` in `edgion-resources/src/resources/common/outbound_request.rs`): no template parse errors, no field name appearing in both `origin` and `custom`, no duplicate names within a block, no `headers.origin: [{name: Cookie}]` colliding with a non-empty `cookies` block, no explicit `Content-Type` header combined with `request.body` type `json`/`form`, and — for `request.body` type `json` — a config-time canary lint (every template variable substituted with a placeholder, then the result parsed as JSON) that rejects a template whose skeleton is not valid JSON, including an unquoted placeholder like `"count": ${ctx:n}`. Any violation → `Accepted=False` with a descriptive message; the resource is **not** loaded into the gateway runtime.
 - **Template/secret errors propagate**: a resource that fails compilation is not registered; a consumer calling it hits the "webhook not found" path (same as `statusOnError`).
 
-> **Secret resolution in custom templates.** Secret values in `request.*.custom` fields are
+> **Secret resolution in custom templates.** Secret values in `request.*.custom` fields
+> (including `request.body` — `json`/`raw` templates and `form` field templates) are
 > expressed as `${secretRef:ns/name:key}` inside a `template` string (e.g.,
 > `template: "Bearer ${secretRef:prod/webhook-token:token}"`). The controller
 > (`SystemConfig::Webhook` arm) scans `collect_secret_ref_names`, registers each ref in
@@ -70,23 +75,25 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 ### Gateway side (WebhookRuntime)
 
 - `WebhookManager.upsert()` (`providers/webhook/manager.rs`) builds a `WebhookRuntime` carrying a `compiled_request: CompiledOutboundRequest` field.
-- `CompiledOutboundRequest::from_spec(spec)` (`providers/webhook/compiled_request.rs`) compiles every `path`/`method`/`custom.template` into a `CompiledTemplate`. `${secretRef:ns/name:key}` vars in templates are NOT resolved here; they are stored as-is and substituted at call time from the `resolved_secrets` map carried in the spec.
+- `CompiledRequest::from_spec(spec)` (`edgion-gateway/src/plugins/http/common/outbound/request.rs`) compiles every `path`/`method`/`args`/`headers`/`cookies` `custom.template`, and the optional `request.body` (`json`/`raw` template, or `form` field templates), into a `CompiledTemplate`. `${secretRef:ns/name:key}` vars in templates are NOT resolved here; they are stored as-is and substituted at call time from the `resolved_secrets` map carried in the spec.
 - At call time, `webhook_call(runtime, session, path_override, resolved, global_max_bytes)` (`providers/webhook/call.rs`) calls `compiled_request.build_request(session, path_override, base_url, resolved)`, substituting `${secretRef:...}` vars from the passed `resolved` map, then handles retry / health / rate-limit / response-size cap. The outbound `reqwest::Request` is built once and cloned per retry.
 
 ## Consumer API change
 
-The consumer-facing entry is `resolve_webhook_key()` (`providers/webhook/resolver.rs`), dispatched from `session_adapter` on a `KeyGet::Webhook` key.
+The consumer-facing entry is `resolve_webhook_key()` (`providers/webhook/resolver.rs`), called by the `WebhookKeyGet` plugin.
 
 **Old:** consumer passed `forward_headers` + `path_suffix` (appended to the webhook's base URI), plus method/headers/body.
 
 **New:** consumer passes only `session` (a `SessionSnapshot` for origin lookups and `${...}` template evaluation) and an optional `path_override`.
 
 ```rust
-// edgion-resources/src/common/key_accessor.rs — KeyGet::Webhook variant
-KeyGet::Webhook {
+// edgion-resources/.../plugin_configs/webhook_key_get.rs — WebhookVar
+WebhookVar {
+    name: String,
     webhook_ref: String,
     path_override: Option<String>,   // replaces forward_headers + path_suffix
     extract: WebhookExtract,         // response-side extractor — unchanged
+    default: Option<String>,
 }
 
 // edgion-gateway/.../webhook/resolver.rs — consumer entry
@@ -102,7 +109,7 @@ pub async fn resolve_webhook_key(
 - `forward_headers` / `path_suffix` are **removed** from consumer config. Headers to forward must be declared on the webhook resource's `request.headers.origin` allow-list; per-call paths use `path_override`.
 - `path_override` is **only honored** when the webhook resource declares `request.path.allowOverride: true`. Otherwise it is silently ignored (not an error).
 - `extract` (response-side header/cookie/body extractor) is **kept** — it parses the response, unrelated to outbound construction.
-- Consumers that need dynamic per-call values set them into the gateway context first (via ctx-set `vars`), then reference them from the webhook templates with `${ctx:NAME}`. No new "invoker arg" concept was added.
+- Consumers that need dynamic per-call values set them into the gateway context first (via a preceding CtxSet entry), then WebhookKeyGet runs and the webhook templates read `${ctx:NAME}`. CtxSet local vars and WebhookKeyGet vars must not share one plugin entry. No new "invoker arg" concept was added.
 
 ## Template engine reference
 
@@ -117,7 +124,7 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 | `${path}` / `${uri}` | current (possibly rewritten) path / URI |
 | `${requestPath}` / `${requestUri}` | frozen entry-time path / URI |
 | `${method}` | current HTTP method |
-| `${clientIp}` | real client IP |
+| `${remoteIp}` | resolved client IP |
 | `${secretRef:ns/name:key}` | Secret value resolved by the controller at config-apply time; shipped inline in `resolved_secrets`; substituted at call time. Admin `/configclient` renders as `"[redacted]"`. Both `ns` and `key` are required. |
 
 **`origin` vs `template` for the same field:** `origin: [{name: X}]` copies `X` from the **frozen entry-time snapshot** (immune to earlier-plugin rewrites). `custom: [{name: X, template: "${header:X}"}]` reads the **current view**. Use `origin` for the unmodified client value; use a `${header:X}` template for the post-transformation value.
@@ -130,9 +137,9 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 |-------|--------------------------------------------------------------------|
 | `skipIfMissing` (**default**) | field omitted from the outbound request, no log |
 | `warnIfMissing` | field omitted, a PluginLog alert is written, request continues |
-| `required` | the webhook call is treated as **failed** (`statusOnError` / `allowDegradation` apply exactly as for any other webhook error) |
+| `required` | the webhook call is treated as **failed**, and WebhookKeyGet writes `default` or leaves the target variable unset |
 
-`presence` and `allowDegradation` are **orthogonal**: `presence: required` decides *whether a missing field counts as a failure*; `allowDegradation` then decides whether that failure aborts the plugin chain (`false`, default → `statusOnError` to client) or silently skips the webhook and continues (`true` → degraded mode, not 5xx).
+Note: webhook connector has no fail-open mode. When a webhook call fails for any reason, `resolve_webhook_key` returns `None`, and WebhookKeyGet writes `default` or leaves the var unset — there is no `statusOnError` or automatic bypass.
 
 ## Health state semantics
 
@@ -145,12 +152,19 @@ Tests: `manager.rs::upsert_resets_health_on_request_change` (reset path) and the
 
 ## Migration (operator-facing)
 
-The redesign carries a one-release **shim**: removed fields `auth` / `defaultHeaders` / `requestMethod` are accepted as ignored `Option<serde_json::Value>` no-ops so an old-controller → new-gateway rolling upgrade deserializes cleanly; the controller logs a WARN naming them. They are removed next release (controller-first ordering required from then on). Migration map:
+The current contract uses only the replacement fields below. The code still
+contains ignored `auth` / `defaultHeaders` / `requestMethod` placeholders from
+an earlier migration; those placeholders violate the project's pre-release
+no-compatibility policy. Treat them as removal debt, not supported input: do not
+document, extend, or copy the pattern into new schemas. A future code change
+should remove the fields and their warning/tests atomically.
+
+Migration map:
 
 | Old | New |
 |-----|-----|
-| `target: { type: uri, uri: "https://ext..." }` | create a proxy `Service` for the external endpoint, then `target: { backendRef: { kind: Service, name: ..., port: ... } }` |
-| `target: { type: service, backendRef, kind }` | `target: { backendRef: { kind, name, port, ... } }` |
+| `target: { type: uri, uri: "https://ext..." }` | `target: { url: "https://ext...", blockPrivate: true }` — the URL form was reintroduced (origin-only, SSRF-guarded); no proxy `Service` needed |
+| `target: { type: service, backendRef, kind }` | `target: { kind, name, port, ... }` (flat — no `backendRef:` nesting) |
 | `requestMethod: POST` | `request.method.template: "POST"` |
 | `defaultHeaders: { X-Source: edgion }` | `request.headers.custom: [{ name: X-Source, value: edgion }]` |
 | `auth.bearer: { secretRef: { name: N, namespace: NS }, key: token }` | `request.headers.custom: [{ name: Authorization, template: "Bearer ${secretRef:NS/N:token}" }]` |
@@ -165,7 +179,8 @@ edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, Web
                                                       #   ListFields, OriginField, PresencePolicy,
                                                       #   CustomField, CustomSource, ResolvedSecrets,
                                                       #   validate_config / validate_request_fields
-edgion-resources/src/common/key_accessor.rs          # KeyGet::Webhook { webhook_ref, path_override, extract }
+edgion-resources/src/resources/edgion_plugins/
+    plugin_configs/webhook_key_get.rs                # WebhookKeyGetConfig / WebhookVar / WebhookExtract
 edgion-gateway/src/link_sys/providers/webhook/
 ├── manager.rs          # WebhookManager.upsert() — builds runtime, resolves secrets, resets health
 ├── compiled_request.rs # CompiledOutboundRequest::{from_spec, build_request}
@@ -184,9 +199,10 @@ Integration suite: `edgion-tests/src/client/suites/edgion_plugins/webhook_key_ge
 - **Target resolution** — `kind: Service`/`ServiceEndpointSlice` (call-time EndpointSlice path) and `kind: ServiceClusterIp` (ClusterIP DNS path).
 - **Origin allow-list** — only named `origin` fields forwarded; unnamed inbound headers/args/cookies are dropped.
 - **Custom fields** — `value` (literal), `template` (`${ctx:...}` / `${header:...}`), `secret` (resolved + `prefix`).
-- **Presence policies** — `skipIfMissing` (silent), `warnIfMissing` (alert + continue), `required` (5xx on missing), plus `required` + `allowDegradation: true` (degrade, not 5xx; PluginLog records cause).
+- **Presence policies** — `skipIfMissing` (silent), `warnIfMissing` (alert + continue), `required` (webhook failure; consuming plugin handles fallback).
 - **Path override** — honored only with `path.allowOverride: true`; ignored otherwise.
-- **ctx-set integration** — consumer sets `ctx` vars, webhook template reads `${ctx:...}`.
+- **ctx-set integration** — CtxSet writes local vars first; WebhookKeyGet runs after; webhook templates read `${ctx:...}`.
+- **WebhookKeyGet then KeyAuth** — WebhookKeyGet writes a ctx key; KeyAuth reads `{ type: ctx, name: … }`. Reverse order is a silent auth bypass.
 - **Template substitution** — literal, single-var, multi-var, frozen-path/method reuse when `path`/`method` omitted.
 - **Health semantics** — `request.*` edit resets health; EndpointSlice churn preserves it.
 

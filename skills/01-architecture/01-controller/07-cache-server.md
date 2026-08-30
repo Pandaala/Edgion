@@ -15,10 +15,12 @@ A generic in-memory cache, one instance per resource type, created and held by t
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     ready: RwLock<bool>,                          // initialization-complete flag
     store: Arc<RwLock<EventStore<T>>>,             // event store
-    watchers: RwLock<Vec<WatchClient<T>>>,          // pending watch requests
     notify: Arc<Notify>,                            // broadcast notification (wakes all watcher tasks)
 }
 ```
+
+Watcher state is owned by each spawned watch task and its channel; ServerCache
+does not retain a central watcher list.
 
 ### Lifecycle
 
@@ -107,6 +109,10 @@ An object-safe list/watch interface implemented by `ServerCache<T>`, allowing `C
 pub trait WatchObj: Send + Sync {
     fn kind_name(&self) -> &'static str;
     fn list_json(&self) -> Result<(String, u64), String>;
+    // O(1) version of the same store `list_json` serializes; the list
+    // serialization cache uses `current_version() == cached.sync_version`
+    // as its hit criterion.
+    fn current_version(&self) -> u64;
     fn watch_json(&self, client_id: String, client_name: String, from_version: u64)
         -> mpsc::Receiver<WatchResponseSimple>;
     fn is_ready(&self) -> bool;
@@ -127,40 +133,49 @@ pub struct ConfigSyncServer {
     server_id: RwLock<String>,                              // server instance ID (millisecond timestamp)
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // WatchObjs registered by kind
     client_registry: Arc<ClientRegistry>,                    // registry of connected Gateway instances
+    list_cache: RwLock<HashMap<String, Arc<KindListCache>>>, // per-kind versioned cache of serialized list responses, used only by list_sync_cached
 }
 ```
 
 ### server_id
 
-A millisecond-timestamp string generated at startup, used by clients to detect server restarts. When the Gateway sees a `server_id` different from the previous one, it triggers a full re-list. On relink, `regenerate_server_id()` produces a new ID.
+A millisecond-timestamp string generated when a ConfigSyncServer instance is
+created and attached to list/watch responses. Rebuild/reload creates a new server
+instance and therefore a new ID; there is no production `regenerate_server_id()` API.
 
 ### WatchObj Registration
 
-The ResourceProcessor registers itself during initialization via `register_watch_obj(kind, Arc<ServerCache<T>>)`. Once all registrations complete and they are ready (`is_all_ready()` returns true), the gRPC service starts serving data.
+After the expected processors finish initialization, the center obtains the
+runtime registry's complete WatchObj set and calls `ConfigSyncServer::register_all`.
+The single-object `register_watch_obj` helper is test-only. Readiness is checked
+before batch publication so clients never observe a partially registered kind set.
 
 ### list/watch Operations
 
 | Operation | Flow |
 |---|---|
-| `list(kind)` | Look up the WatchObj → call `list_json()` → return `ListDataSimple { data, sync_version, server_id }` |
+| `list(kind)` | Look up the WatchObj → call `list_json()` → return `ListDataSimple { data, sync_version, server_id }`. Uncached; used only by the Admin `/configserver` path. |
+| `list_sync_cached(kind)` | Look up the WatchObj → per-(kind, sync_version) serialized-bytes cache with single-flight fill (a `tokio::sync::Mutex` per kind) → `list_json()` runs only on a version miss → return `ListDataSimple`. Oversize (>64MB) results are negative-cached per version with a warn-once log instead of once per request. Used by the gRPC `List` RPC and the federation client, both real-secret transports. |
 | `watch(kind, client_id, ...)` | Look up the WatchObj → call `watch_json()` → start a transformation task that attaches `server_id` → return `mpsc::Receiver<EventDataSimple>` |
 
 The watch operation spawns a tokio task that converts `WatchResponseSimple` to `EventDataSimple` (attaching `server_id`) so clients can detect server restarts.
+
+`list_sync_cached` forks on `edgion_resources::redact::redact_active()`: a redacting caller (the Admin path) is routed to the uncached `list()` instead, so real cached bytes can never leak through admin redaction and redacted bytes can never poison the cache. `clear_all()` drops all `list_cache` entries alongside the WatchObj data.
 
 ### State Management
 
 | Method | Description |
 |---|---|
-| `is_all_ready()` | All WatchObjs are ready |
 | `not_ready_kinds()` | Return the list of kinds that are not yet ready |
-| `set_all_not_ready()` | Mark all caches as not-ready on relink |
 | `clear_all()` | Clear data in all caches |
-| `reset_for_relink()` | Full reset: set_all_not_ready + clear_all + regenerate_server_id |
+
+Lifecycle reset belongs to the ConfCenter and `ControllerRuntime`, not to a
+`ConfigSyncServer::reset_for_relink` method.
 
 ## Full Data Flow
 
 ```
-K8s API / FileSystem
+K8s API / FileSystem / Etcd
         │
         ▼
   ConfCenter (watcher)

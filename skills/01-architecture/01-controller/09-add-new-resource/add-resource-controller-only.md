@@ -31,7 +31,7 @@ Important note:
 What this pattern shows:
 
 - `ReferenceGrant` is included in `DEFAULT_NO_SYNC_KINDS`
-- `PROCESSOR_REGISTRY.all_watch_objs()` filters no-sync kinds before exposing watch objects to `ConfigSyncServer`
+- `runtime.processor_registry.all_watch_objs()` filters no-sync kinds before batch publication to `ConfigSyncServer`
 - cache readiness logic treats no-sync kinds as optional for Gateway startup
 
 If a new resource should remain controller-only by default, this is the key pattern to follow.
@@ -40,7 +40,7 @@ If a new resource should remain controller-only by default, this is the key patt
 
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/`
-- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs` (FileSystem + Etcd)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `ReferenceGrantHandler` demonstrates:
@@ -93,7 +93,7 @@ What to test:
 
 - Add the type and register it in `kind.rs`, `defs.rs`, `meta/impls.rs`
 - Add `ProcessorHandler<T>`
-- Spawn the processor in both controller centers
+- Spawn the processor in the shared FileSystem/Etcd list and in the Kubernetes controller
 - Keep controller CRUD and K8s dynamic storage support if operators need it
 - Add the kind to no-sync behavior if it should stay off Gateway by default
 - Make Gateway skip the kind explicitly instead of leaving behavior ambiguous

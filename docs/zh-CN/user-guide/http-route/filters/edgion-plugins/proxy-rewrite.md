@@ -45,6 +45,8 @@ spec:
 | `headers.add` | Array | 否 | 添加请求头（追加到已有值） |
 | `headers.set` | Array | 否 | 设置请求头（覆盖已有值） |
 | `headers.remove` | Array | 否 | 删除请求头 |
+| `jsonBody` | Object | 否 | 结构化重写已缓冲的 JSON 请求 Body |
+| `jsonBody.operations` | Array | 是（配置 `jsonBody` 时） | 按顺序执行的 RFC 6902 操作：`add`、`remove`、`replace`、`move`、`copy`、`test` |
 
 ### 变量说明
 
@@ -256,14 +258,84 @@ config:
 
 当同时配置多个重写操作时，执行顺序为：
 
-1. **URI 重写**（`uri` 或 `regexUri`）
-2. **Host 重写**
-3. **Method 重写**
-4. **Headers 修改**（add → set → remove）
+1. **JSON Body 操作**（严格按列表顺序）
+2. **URI 重写**（`uri` 或 `regexUri`）
+3. **Host 重写**
+4. **Method 重写**
+5. **Headers 修改**（add → set → remove）
 
 ---
 
 ## 注意事项
+
+### JSON Body 重写
+
+`jsonBody` 会启用请求 Body 缓冲，并以一个原子事务按顺序执行 RFC 6902
+JSON Patch。`path` 和 `from` 使用 RFC 6901 JSON Pointer；空字符串 `""`
+表示文档根。只有全部操作成功后，新 Body 才会发布，后续操作失败不会暴露前面
+已经执行的局部修改。
+操作配置采用严格模式：未知字段会在配置校验时被拒绝，而不是像通用 JSON Patch
+文档那样被忽略。
+
+```yaml
+config:
+  jsonBody:
+    operations:
+      - op: test
+        path: /version
+        value: 1
+      - op: remove
+        path: /credentials/password
+      - op: replace
+        path: /profile/tier
+        value: premium
+      - op: add
+        path: /enabled
+        value: true
+      - op: copy
+        from: /profile
+        path: /profileSnapshot
+      - op: move
+        from: /legacyName
+        path: /name
+```
+
+`add`、`replace` 和 `test` 必须且只能配置以下一个字段：
+
+- `value`：JSON 字面量，显式 `null` 也受支持。
+- `valueTemplate`：共享 `${type:name}` 模板。渲染结果始终作为一个 JSON
+  字符串写入，不会被解析成 JSON 片段，也不会再次展开模板。模板来源缺失时请求
+  返回 `400`。
+
+数值型 `value` 遵循 Kubernetes/serde_json 解码后的数值模型。如果业务合同要求
+保留原始十进制写法，或需要超出该模型的精度，请将它编码为 JSON 字符串。
+
+```yaml
+jsonBody:
+  operations:
+    - op: add
+      path: /tenant
+      valueTemplate: "${header:X-Tenant}"
+```
+
+操作数量最多 64 个，序列化后的操作计划最多 64 KiB；单个 Pointer 最多
+4 KiB、64 个 token。输入和输出 Body 默认限制为 64 KiB，可通过条目级
+`body.maxBodySize` 同时提高，但固定上限为 1 MiB。JSON 深度、节点数量和修改
+工作量也都有硬限制；单个 JSON 数字的文本表示最多为 4 KiB。
+
+配置 `jsonBody` 时，条目级 `body` 策略必须具备确定性：
+不支持 `body.conditions`，`body.onReadFailure` 必须省略或设为
+`failClose`。配置校验会拒绝 `failOpen`，因为结构化重写失败后继续转发原始
+Body 会使已配置的修改变成可选行为。
+
+只接受唯一的 `application/json` 或具体的 `application/*+json`
+Content-Type；charset 如存在必须为 UTF-8，Content-Encoding 必须缺省或为
+`identity`。非法 JSON、重复对象键、操作失败、`test` 失败或模板值缺失返回
+`400`；不支持的媒体类型返回 `415`；输入或输出超限返回 `413`。
+
+重写保证解析后的 JSON 语义，不保留原始空白、对象键顺序或数字原始文本表示。
+数字采用标准 `serde_json` 模型，`test` 会将 `1` 和 `1.0` 等常见的解析后等价值
+视为相等。模板读取 URI、Host、Method 和 Header 重写之前的请求状态。
 
 ### 1. URI 与 regexUri 优先级
 

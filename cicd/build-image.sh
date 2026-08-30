@@ -28,10 +28,10 @@ set -eo pipefail
 # Fallback version used when HEAD has no git tag.
 # Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
 # or pass --from-tag / --version explicitly.
-DEFAULT_VERSION="0.3.5"
+DEFAULT_VERSION="0.3.6"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-RUST_VERSION="${RUST_VERSION:-1.92}"
+RUST_VERSION="${RUST_VERSION:-1.96.1}"
 FEATURES="${FEATURES:-default}"
 BINARIES="gateway controller"
 # Test harness binaries. These are [[bin]] targets of the edgion-tests crate
@@ -47,9 +47,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Script lives in cicd/; the build context / project root is one level up.
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 BUILDER_IMAGE="edgion-builder"
+BUILDER_IMAGES_READY=""
+BORINGSSL_FIPS_BASE_REV="e2a57cfb4d915b4ba820585aef9fdee7bca13fe5"
+BORINGSSL_FIPS_ARM64_FIX_REV="4d6b2f971e456962b70e4e91768caffdb36fe016"
+BORINGSSL_FIPS_ARM64_FIX_SHA256="f590a84b210b9e5c32d5d24a4d3f76e618875ee6f3a2bcc31e0a54371670f81f"
+BORINGSSL_FIPS_SOURCE_PATH="/opt/boringssl-fips-${BORINGSSL_FIPS_BASE_REV}-${BORINGSSL_FIPS_ARM64_FIX_REV}-${BORINGSSL_FIPS_ARM64_FIX_SHA256}"
 
 # Docker image name for the standalone controller-gateway bundle.
 CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
+GATEWAY_BINARY="edgion-gateway"
+GATEWAY_FEATURES="default"
+GATEWAY_NO_DEFAULT_FEATURES=false
+
+configure_gateway_features() {
+    GATEWAY_BINARY="edgion-gateway"
+    BINARIES="gateway controller"
+    CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
+    if [[ "${FEATURES}" == "default" ]]; then
+        GATEWAY_FEATURES="default"
+        GATEWAY_NO_DEFAULT_FEATURES=false
+    else
+        GATEWAY_FEATURES="${FEATURES}"
+        GATEWAY_NO_DEFAULT_FEATURES=true
+    fi
+}
+
+gateway_features_include() {
+    local feature=$1
+    local feature_list=${GATEWAY_FEATURES//,/ }
+    local feature_tokens=()
+    local token
+
+    read -r -a feature_tokens <<< "${feature_list}"
+    for token in "${feature_tokens[@]}"; do
+        if [[ "${token}" == "${feature}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 # Ensure Docker Buildx builder exists and is selected
 ensure_buildx() {
@@ -137,7 +173,8 @@ Options:
     --test-images                Build ONLY the test harness images
                                  (test_server + test_client); skips standard images
     --controller-gateway         Build standalone bundle image: controller + gateway
-                                 Image: edgion-controller-gateway (skips standard images)
+                                 Image: edgion-controller-gateway
+                                 (skips standard images)
     -h, --help                   Show this help message
 
 Test-Images Notes:
@@ -157,8 +194,8 @@ Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
     VERSION             Image version (overrides git tag; default: ${DEFAULT_VERSION})
-    RUST_VERSION        Rust version for builder (default: 1.92)
-    FEATURES            Cargo features (default: default)
+    RUST_VERSION        Rust version for builder (default: 1.96.1)
+    FEATURES            Gateway Cargo features (default: default)
 
 Examples:
     # Build for current architecture only
@@ -264,24 +301,71 @@ detect_host_arch() {
 # Stage 1: Ensure builder image exists
 # =============================================================================
 
-ensure_builder_image() {
+builder_image_tag() {
     local platform=$1
+    local include_fips_source=${2:-false}
     local tag="${BUILDER_IMAGE}:${platform//\//-}"
 
-    if docker image inspect "${tag}" &> /dev/null; then
-        log_info "Builder image ${tag} already exists"
-        return 0
+    if [[ "${include_fips_source}" == "true" ]]; then
+        tag="${tag}-fips"
     fi
+    echo "${tag}"
+}
 
-    log_info "Building builder image for ${platform}..."
+ensure_builder_image() {
+    local platform=$1
+    local include_fips_source=${2:-false}
+    local tag
+    tag=$(builder_image_tag "${platform}" "${include_fips_source}")
+
+    case " ${BUILDER_IMAGES_READY} " in
+        *" ${tag} "*) return 0 ;;
+    esac
+
+    # Always ask Docker to build once per architecture in this invocation. Its
+    # layer cache makes an unchanged builder cheap, while Dockerfile dependency
+    # changes (such as the clang/runtime tools required by FIPS verification)
+    # cannot be hidden behind a stale local tag.
+    log_info "Ensuring builder image for ${platform}..."
     docker build \
         --platform "${platform}" \
         --build-arg "RUST_VERSION=${RUST_VERSION}" \
+        --build-arg "INCLUDE_BORINGSSL_FIPS_SOURCE=${include_fips_source}" \
+        --build-arg "BORINGSSL_FIPS_BASE_REV=${BORINGSSL_FIPS_BASE_REV}" \
+        --build-arg "BORINGSSL_FIPS_ARM64_FIX_REV=${BORINGSSL_FIPS_ARM64_FIX_REV}" \
+        --build-arg "BORINGSSL_FIPS_ARM64_FIX_SHA256=${BORINGSSL_FIPS_ARM64_FIX_SHA256}" \
         -t "${tag}" \
         -f "${PROJECT_DIR}/cicd/docker/Dockerfile.builder" \
         "${PROJECT_DIR}"
 
-    log_success "Builder image ${tag} created"
+    BUILDER_IMAGES_READY="${BUILDER_IMAGES_READY} ${tag}"
+    log_success "Builder image ${tag} ready"
+}
+
+verify_fips_binary() {
+    local arch=$1
+    local arch_info
+    arch_info=$(get_arch_info "${arch}")
+    IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}" true)
+
+    log_info "Verifying BoringSSL FIPS mode and the approved TLS profile for ${arch}..."
+    docker run --rm \
+        --platform "${platform}" \
+        -v "${PROJECT_DIR}":/project \
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+        -v "edgion-rustup-${suffix}":/usr/local/rustup \
+        -w /project \
+        -e "EDGION_GATEWAY_BIN=/project/target/${target}/release/edgion-gateway" \
+        -e "EDGION_CONTROLLER_BIN=/project/target/${target}/release/edgion-controller" \
+        -e "EDGION_CLI_BIN=/project/target/${target}/release/edgion-cli" \
+        -e EDGION_EXPECT_FIPS_MODULE=1 \
+        "${builder_tag}" \
+        bash edgion-tests/integration/scripts/integration/test_fips_policy.sh
+
+    log_success "BoringSSL FIPS mode and TLS profile verified for ${arch}"
 }
 
 # =============================================================================
@@ -295,20 +379,48 @@ compile_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local include_fips_source=false
+    if gateway_features_include "fips"; then
+        include_fips_source=true
+    fi
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}" "${include_fips_source}")
 
     log_info "Compiling binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
     # Ensure builder image exists
-    ensure_builder_image "${platform}"
+    ensure_builder_image "${platform}" "${include_fips_source}"
 
-    local build_cmd="cargo build --release \
+    local gateway_feature_args=""
+    if [[ "${GATEWAY_NO_DEFAULT_FEATURES}" == "true" ]]; then
+        gateway_feature_args="--no-default-features --features \"${GATEWAY_FEATURES}\""
+    fi
+
+    local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
-            --bin edgion-gateway \
+            -p edgion-controller \
             --bin edgion-controller \
-            --bin edgion-cli \
-            --features \"${FEATURES}\""
+            -p edgion-cli \
+            --bin edgion-cli && \
+        cargo build --locked --release \
+            --target \"${target}\" \
+            -p edgion-gateway \
+            --bin \"${GATEWAY_BINARY}\" \
+            ${gateway_feature_args}"
+
+    local docker_args=(
+        run --rm
+        --platform "${platform}"
+        -v "${PROJECT_DIR}":/project
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git
+        -v "edgion-rustup-${suffix}":/usr/local/rustup
+        -w /project
+    )
+    if [[ "${include_fips_source}" == "true" ]]; then
+        docker_args+=(-e "BORING_BSSL_FIPS_SOURCE_PATH=${BORINGSSL_FIPS_SOURCE_PATH}")
+    fi
 
     if [[ "${force_rebuild}" == "true" ]]; then
         log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
@@ -317,22 +429,19 @@ compile_binaries() {
 
     # Run compilation in Docker
     # Use named volume for rustup to persist toolchain downloads across runs
-    docker run --rm \
-        --platform "${platform}" \
-        -v "${PROJECT_DIR}":/project \
-        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
-        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
-        -v "edgion-rustup-${suffix}":/usr/local/rustup \
-        -w /project \
-        "${builder_tag}" \
-        bash -c "${build_cmd}"
+    docker_args+=("${builder_tag}" bash -c "${build_cmd}")
+    docker "${docker_args[@]}"
 
-        if [[ $? -ne 0 ]]; then
+    if [[ $? -ne 0 ]]; then
         log_error "Compilation failed for ${arch}"
-            exit 1
-        fi
+        exit 1
+    fi
 
     log_success "Compiled binaries for ${arch}"
+
+    if gateway_features_include "fips"; then
+        verify_fips_binary "${arch}"
+    fi
 }
 
 # =============================================================================
@@ -346,7 +455,8 @@ compile_test_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}")
 
     log_info "Compiling test binaries for ${arch} (${target})..."
 
@@ -361,7 +471,7 @@ compile_test_binaries() {
         testbin_args+=" --bin ${testbin}"
     done
 
-    local build_cmd="cargo build --release \
+    local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
             -p edgion-tests${testbin_args}"
 
@@ -651,35 +761,55 @@ compile_controller_gateway_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
-    local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
-
-    # Bundle binaries: controller + gateway + cli
-    local bins="--bin edgion-cli --bin edgion-gateway --bin edgion-controller"
+    local include_fips_source=false
+    if gateway_features_include "fips"; then
+        include_fips_source=true
+    fi
+    local builder_tag
+    builder_tag=$(builder_image_tag "${platform}" "${include_fips_source}")
 
     log_info "Compiling controller-gateway binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
-    ensure_builder_image "${platform}"
+    ensure_builder_image "${platform}" "${include_fips_source}"
 
-    local build_cmd="cargo build --release \
+    local gateway_feature_args=""
+    if [[ "${GATEWAY_NO_DEFAULT_FEATURES}" == "true" ]]; then
+        gateway_feature_args="--no-default-features --features \"${GATEWAY_FEATURES}\""
+    fi
+
+    local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
-            ${bins} \
-            --features \"${FEATURES}\""
+            -p edgion-controller \
+            --bin edgion-controller \
+            -p edgion-cli \
+            --bin edgion-cli && \
+        cargo build --locked --release \
+            --target \"${target}\" \
+            -p edgion-gateway \
+            --bin \"${GATEWAY_BINARY}\" \
+            ${gateway_feature_args}"
+
+    local docker_args=(
+        run --rm
+        --platform "${platform}"
+        -v "${PROJECT_DIR}":/project
+        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry
+        -v "${HOME}/.cargo/git":/usr/local/cargo/git
+        -v "edgion-rustup-${suffix}":/usr/local/rustup
+        -w /project
+    )
+    if [[ "${include_fips_source}" == "true" ]]; then
+        docker_args+=(-e "BORING_BSSL_FIPS_SOURCE_PATH=${BORINGSSL_FIPS_SOURCE_PATH}")
+    fi
 
     if [[ "${force_rebuild}" == "true" ]]; then
         log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
         build_cmd="cargo clean --target \"${target}\" && ${build_cmd}"
     fi
 
-    docker run --rm \
-        --platform "${platform}" \
-        -v "${PROJECT_DIR}":/project \
-        -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
-        -v "${HOME}/.cargo/git":/usr/local/cargo/git \
-        -v "edgion-rustup-${suffix}":/usr/local/rustup \
-        -w /project \
-        "${builder_tag}" \
-        bash -c "${build_cmd}"
+    docker_args+=("${builder_tag}" bash -c "${build_cmd}")
+    docker "${docker_args[@]}"
 
     if [[ $? -ne 0 ]]; then
         log_error "Controller-gateway compilation failed for ${arch}"
@@ -687,6 +817,10 @@ compile_controller_gateway_binaries() {
     fi
 
     log_success "Compiled controller-gateway binaries for ${arch}"
+
+    if gateway_features_include "fips"; then
+        verify_fips_binary "${arch}"
+    fi
 }
 
 # =============================================================================
@@ -716,6 +850,7 @@ build_controller_gateway_image() {
         docker buildx build
         --file "${PROJECT_DIR}/cicd/docker/Dockerfile.controller-gateway"
         --build-arg "BINARY_PATH=${bin_path}"
+        --build-arg "GATEWAY_BINARY=${GATEWAY_BINARY}"
         --platform "${platform}"
         --tag "${image_tag}"
     )
@@ -892,6 +1027,10 @@ main() {
         exit 1
     fi
 
+    if [[ "${test_images}" != "true" ]]; then
+        configure_gateway_features
+    fi
+
     # --from-tag: resolve version from current git tag
     if [[ "${from_tag}" == "true" ]]; then
         if ! git rev-parse --git-dir > /dev/null 2>&1; then
@@ -959,13 +1098,17 @@ main() {
     log_info "Push: ${push}"
     if [[ "${controller_gateway}" == "true" ]]; then
         log_info "Mode: Controller-Gateway (standalone bundle image)"
-        log_info "  → edgion-controller-gateway (controller + gateway)"
+        log_info "Gateway binary: ${GATEWAY_BINARY}"
+        log_info "Gateway features: ${GATEWAY_FEATURES}"
+        log_info "  → ${CONTROLLER_GATEWAY_IMAGE} (controller + gateway)"
     elif [[ "${test_images}" == "true" ]]; then
         log_info "Mode: Test images (test harness only)"
         log_info "  → edgion-test-server, edgion-test-client"
     else
         log_info "Mode: Standard"
-        log_info "  → edgion-gateway, edgion-controller"
+        log_info "Gateway binary: ${GATEWAY_BINARY}"
+        log_info "Gateway features: ${GATEWAY_FEATURES}"
+        log_info "  → edgion-${BINARIES// /, edgion-}"
     fi
     echo ""
 
@@ -1159,4 +1302,6 @@ main() {
     echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

@@ -52,4 +52,4 @@ produce identical output for the same message string.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → V2` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a2.md → V2` (CONFIRM)

@@ -1,40 +1,29 @@
 //! OpenID Connect plugin configuration
 
-use super::lru_cache_config::LruCacheConfig;
+use super::{lru_cache_config::LruCacheConfig, tiny_ufo_ttl_cache_config::TinyUfoTtlCacheConfig};
+use crate::resources::common::OutboundTlsLocal;
 use crate::resources::gateway::SecretObjectReference;
 use jsonwebtoken::Algorithm;
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-/// A sub-section that holds LRU cache configuration.
-///
-/// Used inside `OpenidConnectConfig` so that both the introspection and
-/// access-token caches share the same `lruCache` key name:
-///
-/// ```yaml
-/// introspection:
-///   lruCache:
-///     capacity: 4096
-///     shards: 4
-/// accessToken:
-///   lruCache:
-///     capacity: 2048
-/// ```
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+/// Positive introspection-result cache settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
-pub struct OidcCacheSection {
+pub struct OidcIntrospectionCacheSection {
     #[serde(default)]
-    pub lru_cache: LruCacheConfig,
+    pub tiny_ufo_ttl_cache: TinyUfoTtlCacheConfig,
 }
 
-impl Default for OidcCacheSection {
-    fn default() -> Self {
-        Self {
-            lru_cache: LruCacheConfig::default(),
-        }
-    }
+/// Access-token cache settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OidcAccessTokenCacheSection {
+    #[serde(default)]
+    pub lru_cache: LruCacheConfig,
 }
 
 /// Behavior when request is unauthenticated.
@@ -137,8 +126,11 @@ pub struct OpenidConnectConfig {
     pub allowed_signing_algs: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub use_jwks: bool,
-    #[serde(default = "default_true")]
-    pub ssl_verify: bool,
+    /// Outbound TLS settings (verify, validation, clientCertificateRef) for IdP connections
+    /// (discovery, JWKS, introspection). All fields are optional; absent fields inherit from
+    /// the global outboundTls default.
+    #[serde(default)]
+    pub tls: OutboundTlsLocal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,11 +149,11 @@ pub struct OpenidConnectConfig {
     pub introspection_cache_ttl: u64,
     /// Introspection result cache settings.
     #[serde(default)]
-    pub introspection: OidcCacheSection,
+    pub introspection: OidcIntrospectionCacheSection,
 
     /// Access token cache settings.
     #[serde(default)]
-    pub access_token: OidcCacheSection,
+    pub access_token: OidcAccessTokenCacheSection,
 
     #[serde(default)]
     pub token_endpoint_auth_method: EndpointAuthMethod,
@@ -202,18 +194,37 @@ pub struct OpenidConnectConfig {
     pub userinfo_max_response_bytes: usize,
 
     // Runtime fields (controller-populated)
+    /// Resolved OIDC OAuth2 client secret value (from `clientSecretRef`).
     #[serde(
+        default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_client_secret: Option<String>,
+    pub resolved_oidc_client_secret: Option<String>,
     #[serde(
+        default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
     pub resolved_session_secret: Option<String>,
+    /// Resolved CA Secrets (from `tls.validation.caCertificateRefs`, filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
+    /// Resolved mTLS client-identity Secret (from `tls.clientCertificateRef`, filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_client_certificate: Option<Secret>,
 
     // Security extras
     /// Remove Authorization header from the upstream request after successful bearer-token auth.
@@ -329,7 +340,7 @@ impl Default for OpenidConnectConfig {
             token_signing_alg: None,
             allowed_signing_algs: None,
             use_jwks: default_true(),
-            ssl_verify: default_true(),
+            tls: OutboundTlsLocal::default(),
             issuers: None,
             audiences: None,
             clock_skew_seconds: default_clock_skew_seconds(),
@@ -338,8 +349,8 @@ impl Default for OpenidConnectConfig {
             introspection_endpoint: None,
             introspection_endpoint_auth_method: EndpointAuthMethod::default(),
             introspection_cache_ttl: 0,
-            introspection: OidcCacheSection::default(),
-            access_token: OidcCacheSection::default(),
+            introspection: OidcIntrospectionCacheSection::default(),
+            access_token: OidcAccessTokenCacheSection::default(),
             token_endpoint_auth_method: EndpointAuthMethod::default(),
             set_access_token_header: false,
             set_id_token_header: false,
@@ -350,8 +361,10 @@ impl Default for OpenidConnectConfig {
             max_header_value_bytes: default_max_header_value_bytes(),
             max_total_header_bytes: default_max_total_header_bytes(),
             timeout: default_timeout_seconds(),
-            resolved_client_secret: None,
+            resolved_oidc_client_secret: None,
             resolved_session_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
             hide_credentials: false,
             auth_failure_delay_ms: 0,
             discovery_max_response_bytes: default_discovery_max_response_bytes(),
@@ -403,6 +416,12 @@ impl OpenidConnectConfig {
         }
         if self.timeout == 0 {
             return Some("timeout must be greater than 0");
+        }
+        if let Some(error) = self.introspection.tiny_ufo_ttl_cache.validation_error() {
+            return Some(error);
+        }
+        if let Some(error) = self.access_token.lru_cache.validation_error() {
+            return Some(error);
         }
         if self.session_cookie_name.trim().is_empty() {
             return Some("sessionCookieName cannot be empty");
@@ -502,7 +521,7 @@ impl OpenidConnectConfig {
             || self.verification_mode == VerificationMode::IntrospectionOnly
             || (!self.use_jwks && self.verification_mode == VerificationMode::Auto)
             || self.revoke_tokens_on_logout;
-        if needs_client_secret && self.client_secret_ref.is_none() && self.resolved_client_secret.is_none() {
+        if needs_client_secret && self.client_secret_ref.is_none() && self.resolved_oidc_client_secret.is_none() {
             return Some("clientSecretRef is required for non-bearer-only/introspection flows");
         }
         let needs_session_secret = !self.bearer_only && self.unauth_action == UnauthAction::Auth;
@@ -524,14 +543,104 @@ impl PluginValidation for OpenidConnectConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenidConnectConfig, UnauthAction, VerificationMode};
+    use super::{OpenidConnectConfig, TinyUfoTtlCacheConfig, UnauthAction, VerificationMode};
+    use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
-    fn test_oidc_cache_capacity_defaults_zero() {
+    fn oidc_cache_defaults_inherit_gateway_limits() {
         let cfg = OpenidConnectConfig::default();
-        assert_eq!(cfg.introspection.lru_cache.capacity, 0);
+        assert_eq!(cfg.introspection.tiny_ufo_ttl_cache.max_entries, 0);
         assert_eq!(cfg.access_token.lru_cache.capacity, 0);
+        assert_eq!(cfg.introspection.tiny_ufo_ttl_cache.max_logical_bytes, None);
+        assert_eq!(cfg.access_token.lru_cache.shards, 0);
+    }
+
+    #[test]
+    fn oidc_cache_schema_recognizes_algorithm_specific_paths() {
+        let schema = schemars::schema_for!(OpenidConnectConfig);
+        let value = json!({
+            "discovery": "https://idp.example.com/.well-known/openid-configuration",
+            "clientId": "client",
+            "introspection": {
+                "tinyUfoTtlCache": {
+                    "maxEntries": 1024,
+                    "maxLogicalBytes": "4MiB"
+                }
+            },
+            "accessToken": {
+                "lruCache": {
+                    "capacity": 2048,
+                    "shards": 8
+                }
+            }
+        });
+        assert!(crate::schema_check::unknown_key_paths(&value, &schema).is_empty());
+    }
+
+    #[test]
+    fn oidc_cache_schema_rejects_wrong_cache_kinds() {
+        let schema = schemars::schema_for!(OpenidConnectConfig);
+        let value = json!({
+            "discovery": "https://idp.example.com/.well-known/openid-configuration",
+            "clientId": "client",
+            "introspection": {
+                "lruCache": {"capacity": 1024, "shards": 2},
+                "memoryCache": {"maxEntries": 1024}
+            },
+            "accessToken": {
+                "memoryCache": {"maxEntries": 2048},
+                "tinyUfoTtlCache": {"maxEntries": 2048}
+            }
+        });
+        assert_eq!(
+            crate::schema_check::unknown_key_paths(&value, &schema),
+            vec![
+                "accessToken.memoryCache".to_string(),
+                "accessToken.tinyUfoTtlCache".to_string(),
+                "introspection.lruCache".to_string(),
+                "introspection.memoryCache".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn oidc_rejects_invalid_logical_record_budget_during_validation() {
+        let cfg = OpenidConnectConfig {
+            discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+            client_id: "client".to_string(),
+            bearer_only: true,
+            verification_mode: VerificationMode::JwksOnly,
+            introspection: super::OidcIntrospectionCacheSection {
+                tiny_ufo_ttl_cache: TinyUfoTtlCacheConfig {
+                    max_logical_bytes: Some("invalid".to_string()),
+                    ..Default::default()
+                },
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.get_validation_error(),
+            Some("maxLogicalBytes must be a valid byte size")
+        );
+    }
+
+    #[test]
+    fn oidc_rejects_unsafe_access_token_lru_limits() {
+        let cfg = OpenidConnectConfig {
+            discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+            client_id: "client".to_string(),
+            bearer_only: true,
+            verification_mode: VerificationMode::JwksOnly,
+            access_token: super::OidcAccessTokenCacheSection {
+                lru_cache: super::LruCacheConfig { capacity: 4, shards: 5 },
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.get_validation_error(),
+            Some("lruCache.shards must not exceed capacity")
+        );
     }
 
     #[test]
@@ -619,7 +728,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             ..Default::default()
         };
         assert_eq!(
@@ -648,7 +757,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             resolved_session_secret: Some("session-secret".to_string()),
             max_session_cookie_bytes: 0,
             ..Default::default()
@@ -666,7 +775,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             resolved_session_secret: Some("session-secret".to_string()),
             session_cookie_same_site: "Invalid".to_string(),
             ..Default::default()
@@ -684,7 +793,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             resolved_session_secret: Some("session-secret".to_string()),
             session_cookie_same_site: "None".to_string(),
             session_cookie_secure: false,
@@ -726,5 +835,15 @@ mod tests {
             cfg.get_validation_error(),
             Some("clientSecretRef is required for non-bearer-only/introspection flows")
         );
+    }
+
+    #[test]
+    fn openid_drops_ssl_verify_accepts_verify() {
+        let c: OpenidConnectConfig = serde_json::from_value(serde_json::json!({
+            "clientId":"x","clientSecret":"y","discovery":"https://i/.well-known/openid-configuration",
+            "tls": { "verify": false }
+        }))
+        .unwrap();
+        assert_eq!(c.tls.verify, Some(false));
     }
 }

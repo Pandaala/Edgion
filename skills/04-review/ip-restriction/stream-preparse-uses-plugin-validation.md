@@ -25,7 +25,13 @@ Fix suggestions of the form "ConnectionIpRestrictionRules should implement Plugi
 
 **3. Status-condition contract intact**
 
-The preparse wrapper string stayed identical: `"plugins[{idx}] (IpRestriction): {e}"`. `LEGACY_SCHEMA_MARKER` detection (for `LegacySchemaDeprecated` reason mapping) is unaffected because legacy errors take the early-`continue` path before structural validation runs. Existing tests covering both the structural-error → `Invalid` reason mapping and the legacy → `LegacySchemaDeprecated` mapping continue to hold.
+The preparse wrapper string stayed identical:
+`"plugins[{idx}] (IpRestriction): {e}"`. Current code still detects
+`LEGACY_SCHEMA_MARKER` before structural validation and maps it to
+`LegacySchemaDeprecated`. That compatibility detector is now pre-release
+removal debt, not part of this decision: do not add more marker branches, and
+remove its branch/tests together when code changes are in scope. This rule's
+reusable conclusion concerns delegation to shared current-schema validation.
 
 **4. Stage 2 (TlsRoute / HTTP-layer `IpRestrictionConfig`) deliberately unchanged**
 

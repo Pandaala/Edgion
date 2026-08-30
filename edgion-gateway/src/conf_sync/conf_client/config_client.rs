@@ -5,14 +5,13 @@ use anyhow::Result;
 use edgion_common::conf_sync::types::ListData;
 use edgion_resources::prelude_resources::*;
 use edgion_resources::resource_defs::get_resource_info;
-use edgion_resources::{all_resource_type_names, GatewayBaseConf, ResourceKind};
+use edgion_resources::{all_resource_type_names, ResourceKind};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 
 pub struct ConfigClient {
-    pub base_conf: RwLock<Option<GatewayBaseConf>>,
     /// Current server_id from Controller (updated on each list/watch response)
     current_server_id: RwLock<String>,
     gateway_classes: ClientCache<GatewayClass>,
@@ -31,7 +30,9 @@ pub struct ConfigClient {
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
     edgion_config_data: ClientCache<EdgionConfigData>,
+    edgion_backends: ClientCache<EdgionBackend>,
     edgion_acme: ClientCache<EdgionAcme>,
+    edgion_backend_traffic_policy: ClientCache<EdgionBackendTrafficPolicy>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
     /// Optional cache-field whitelist used for readiness checks.
     /// When set, `is_ready()` only waits for these caches.
@@ -105,8 +106,11 @@ impl ConfigClient {
         let acme_handler = crate::services::acme::create_acme_handler();
         edgion_acme_cache.set_conf_processor(acme_handler);
 
+        let edgion_backend_traffic_policy_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let backend_traffic_policy_handler = crate::backends::policy::create_backend_traffic_policy_handler();
+        edgion_backend_traffic_policy_cache.set_conf_processor(backend_traffic_policy_handler);
+
         Self {
-            base_conf: RwLock::new(None),
             current_server_id: RwLock::new(String::new()),
             gateway_classes: gateway_classes_cache,
             gateways: gateways_cache,
@@ -134,7 +138,13 @@ impl ConfigClient {
                 ed_cache.set_conf_processor(ed_handler);
                 ed_cache
             },
+            edgion_backends: {
+                let cache = ClientCache::new(client_id.clone(), client_name.clone());
+                cache.set_conf_processor(crate::ai::create_edgion_backend_handler());
+                cache
+            },
             edgion_acme: edgion_acme_cache,
+            edgion_backend_traffic_policy: edgion_backend_traffic_policy_cache,
             required_cache_names: RwLock::new(None),
         }
     }
@@ -211,8 +221,15 @@ impl ConfigClient {
     }
 
     /// Typed accessor for the `EdgionTls` cache, retained for typed test access.
+    #[cfg(test)]
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
+    }
+
+    /// Typed accessor retained for Admin redaction tests.
+    #[cfg(test)]
+    pub fn edgion_backends(&self) -> &ClientCache<EdgionBackend> {
+        &self.edgion_backends
     }
 
     /// Get the DynClientCache for a given ResourceKind.
@@ -221,8 +238,8 @@ impl ConfigClient {
     /// When a new ResourceKind variant is added, the compiler will force you to
     /// handle it here — eliminating the "UnknownKind" dead-wait bug.
     ///
-    /// Returns None only for kinds that are intentionally not cached on Gateway
-    /// (Secret, ReferenceGrant, Unspecified).
+    /// Returns None for kinds that are intentionally not cached on Gateway
+    /// (Secret, ConfigMap, ReferenceGrant, Unspecified).
     pub fn get_dyn_cache(&self, kind: ResourceKind) -> Option<&dyn DynClientCache> {
         match kind {
             ResourceKind::GatewayClass => Some(&self.gateway_classes),
@@ -242,11 +259,13 @@ impl ConfigClient {
             ResourceKind::EdgionStreamPlugins => Some(&self.edgion_stream_plugins),
             ResourceKind::BackendTLSPolicy => Some(&self.backend_tls_policies),
             ResourceKind::EdgionConfigData => Some(&self.edgion_config_data),
+            ResourceKind::EdgionBackend => Some(&self.edgion_backends),
             // These are intentionally not cached on Gateway side
             ResourceKind::Secret => None,
             ResourceKind::ConfigMap => None,
             ResourceKind::ReferenceGrant => None,
             ResourceKind::Unspecified => None,
+            ResourceKind::EdgionBackendTrafficPolicy => Some(&self.edgion_backend_traffic_policy),
         }
     }
 
@@ -307,36 +326,6 @@ impl ConfigClient {
         self.tls_routes.list_owned()
     }
 
-    /// List LinkSys
-    pub fn list_link_sys(&self) -> ListData<LinkSys> {
-        self.link_sys.list_owned()
-    }
-
-    /// List services
-    pub fn list_services(&self) -> ListData<Service> {
-        self.services.list_owned()
-    }
-
-    /// List endpoint slices
-    pub fn list_endpoint_slices(&self) -> ListData<EndpointSlice> {
-        self.endpoint_slices.list_owned()
-    }
-
-    /// List Edgion TLS
-    pub fn list_edgion_tls(&self) -> ListData<EdgionTls> {
-        self.edgion_tls.list_owned()
-    }
-
-    /// List Edgion Plugins
-    pub fn list_edgion_plugins(&self) -> ListData<EdgionPlugins> {
-        self.edgion_plugins.list_owned()
-    }
-
-    /// List EdgionConfigData entries
-    pub fn list_edgion_config_data(&self) -> ListData<EdgionConfigData> {
-        self.edgion_config_data.list_owned()
-    }
-
     /// List GatewayClasses
     pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
         self.gateway_classes.list_owned()
@@ -352,12 +341,6 @@ impl ConfigClient {
         self.edgion_gateway_configs.list_owned()
     }
 
-    /// Get a Gateway by namespace and name
-    pub fn get_gateway(&self, namespace: &str, name: &str) -> Option<Gateway> {
-        let key = format!("{}/{}", namespace, name);
-        self.gateways.get(&key)
-    }
-
     /// Get a GatewayClass by name
     pub fn get_gateway_class(&self, name: &str) -> Option<GatewayClass> {
         // GatewayClass is cluster-scoped (no namespace)
@@ -368,11 +351,6 @@ impl ConfigClient {
     pub fn get_edgion_gateway_config(&self, name: &str) -> Option<EdgionGatewayConfig> {
         // EdgionGatewayConfig is cluster-scoped (no namespace)
         self.edgion_gateway_configs.get(name)
-    }
-
-    /// Trigger update event for an endpoint slice by key
-    pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
-        self.endpoint_slices.trigger_update_event_by_key(key);
     }
 
     /// Per-kind entry counts for every ClientCache held on the Gateway side.
@@ -395,13 +373,15 @@ impl ConfigClient {
         out
     }
 
-    /// Per-kind sample keys (capped at `max`). Used by leak detection diagnostic report.
+    /// Per-kind sample keys (capped at `max`).
     ///
     /// Looks up the cache via `get_dyn_cache()` (exhaustive `ResourceKind` match) and
     /// matches `kind` against `kind_name_dyn()` — so it stays in lockstep with
     /// `client_cache_stats`. Returns an empty Vec for any unknown kind or for kinds
     /// not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
-    #[allow(dead_code)] // Consumed by the validator binary.
+    /// Test-only: exercised by the stats/keys lockstep cross-check below; no
+    /// production caller today.
+    #[cfg(test)]
     pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
         use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 
@@ -458,8 +438,8 @@ mod tests {
         let _enter = rt.enter();
         let client = ConfigClient::new("cid".to_string(), "cname".to_string());
         let stats = client.client_cache_stats();
-        // 17: Secret, ConfigMap, and ReferenceGrant have no ClientCache on the gateway side.
-        assert_eq!(stats.len(), 17, "expected 17 gateway-side ClientCache kinds");
+        // 19: Secret, ConfigMap, ReferenceGrant, and Unspecified have no ClientCache on the gateway side.
+        assert_eq!(stats.len(), 19, "expected 19 gateway-side ClientCache kinds");
         for (kind, count) in &stats {
             assert_eq!(*count, 0, "kind {kind} should start empty");
         }

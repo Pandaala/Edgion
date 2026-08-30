@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ldap-auth-tls-san-match-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: LdapAuth
+      config:
+        ldapHost: "127.0.0.1"
+        ldapPort: 33636
+        ldaps: true
+        baseDn: "ou=people,dc=example,dc=org"
+        attribute: "uid"
+        headerType: "ldap"
+        realm: "LDAP TLS SAN Match Test"
+        timeout: 5000
+        tls:
+          validation:
+            caCertificateRefs:
+              - kind: Secret
+                name: ldap-ca-bundle
+            subjectAltNames:
+              - type: Hostname
+                hostname: "127.0.0.1"

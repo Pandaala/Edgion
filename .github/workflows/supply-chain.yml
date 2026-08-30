@@ -1,0 +1,30 @@
+name: supply-chain
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Daily advisory sweep: RustSec advisories land asynchronously (no code
+    # change involved), so a cron catches them without waiting for the next
+    # PR. A red run here means: triage (usually `cargo update -p <crate>`,
+    # or an `ignore` entry in deny.toml with a written reason).
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Scheduled runs sweep advisories only; PR/push runs enforce the
+          # full policy (advisories + licenses + bans + sources). The
+          # advisories ignore-list in deny.toml keeps already-triaged
+          # findings from blocking unrelated PRs.
+          command: ${{ github.event_name == 'schedule' && 'check advisories' || 'check' }}
+          # The action's default arguments pass --all-features, which is
+          # invalid for this workspace (boringssl/rustls and the allocator
+          # features are mutually exclusive). Empty matches the local
+          # `cargo deny check` invocation.
+          arguments: ""

@@ -1,0 +1,31 @@
+# Tier 1 (GatewayClass-global) AccessLogExtern declarations, referenced by
+# 00_EdgionGatewayConfig_als-egc.yaml's globalPluginsRef.
+#
+# Declaration-only: no requestPlugins/filters here, so this resource never
+# runs anything on the request path — it only supplies fields to the
+# logging()-time collector. Each field backs a distinct case:
+#   global_tenant -> ext_present_on_404 (global tier survives a 404, where
+#                    ctx.route_unit/ctx.gateway_info are never populated)
+#   tenant        -> global_ctx_reads_route_stage_ctxset (global tier reads a
+#                    ctx var written by a ROUTE-stage CtxSet plugin — proves
+#                    collection reads final per-request ctx state, not a
+#                    tier-ordered execution snapshot)
+#   collide       -> three_tier_collision_route_wins (same `key` as the
+#                    gateway- and route-tier declarations; the route tier
+#                    must win since it applies last in collect()'s tier loop)
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-global
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: global_tenant
+      from: header
+      name: x-tenant
+    - key: tenant
+      from: ctx
+      name: tenant_id
+    - key: collide
+      from: header
+      name: x-global-val

@@ -6,7 +6,7 @@ description: Full Gateway resource schema: Listener, protocol, TLS, AllowedRoute
 # Gateway Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core resource
+> Gateway API v1.5.0 Core resource
 
 Gateway is Edgion's core entry resource, defining a gateway instance's Listeners (listening ports, protocols, hostnames, TLS configuration). It is the attachment point for all route resources.
 
@@ -23,7 +23,7 @@ metadata:
     edgion.io/enable-http2: "true"              # Listener-side HTTP/2 (default true)
     edgion.io/http-to-https-redirect: "true"    # Automatic HTTP→HTTPS redirect
     edgion.io/https-redirect-port: "443"        # HTTPS redirect port
-    edgion.io/edgion-stream-plugins: "ns/name"  # Gateway-level StreamPlugins binding
+    edgion.io/edgion-stream-plugins: "policy-name" # Same-namespace StreamPlugins binding
 spec:
   gatewayClassName: edgion                       # Required: name of the associated GatewayClass
 

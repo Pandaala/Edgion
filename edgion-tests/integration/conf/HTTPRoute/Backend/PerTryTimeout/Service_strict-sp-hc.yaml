@@ -5,17 +5,6 @@ kind: Service
 metadata:
   name: strict-sp-hc
   namespace: edgion-test
-  annotations:
-    edgion.io/health-check: |
-      active:
-        type: http
-        path: /test
-        interval: 1s
-        timeout: 500ms
-        healthyThreshold: 1
-        unhealthyThreshold: 1
-        expectedStatuses:
-          - 200
 spec:
   ports:
     - port: 30001

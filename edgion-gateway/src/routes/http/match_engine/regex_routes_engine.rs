@@ -72,11 +72,6 @@ impl RegexRoutesEngine {
         Self { regex_set, routes }
     }
 
-    /// Get the number of routes in this engine
-    pub fn route_count(&self) -> usize {
-        self.routes.len()
-    }
-
     /// Match a route against the request path.
     /// Returns the first matching `RouteMatchResult`, or `None` if no route matches.
     /// Routes are checked in order of pattern length (longest first).
@@ -158,6 +153,8 @@ mod tests {
 
         let rule = Arc::new(HTTPRouteRule {
             name: None,
+            resolved_terminal_route_uid: None,
+            resolved_terminal_rule_identity: None,
             matches: Some(vec![match_item.clone()]),
             filters: None,
             backend_refs: None,
@@ -168,6 +165,7 @@ mod tests {
             parsed_retry: None,
             parsed_forward_raw_path: None,
             parsed_allow_non_idempotent_retry: None,
+            parsed_mirror_tuning: None,
         });
 
         let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));
@@ -183,7 +181,7 @@ mod tests {
             backends,
             backend_finder,
             resource_key: format!("{}/{}", namespace, name),
-            matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item, 0, None),
+            matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item, 0),
             rule,
             route: None,
             path_regex: Some(regex),
@@ -208,7 +206,7 @@ mod tests {
     fn test_empty_routes() {
         let engine = RegexRoutesEngine::build(Vec::new());
 
-        assert_eq!(engine.route_count(), 0);
+        assert_eq!(engine.routes.len(), 0);
         assert!(engine.regex_set.is_none());
         assert!(engine.routes.is_empty());
     }
@@ -218,7 +216,7 @@ mod tests {
         let route = create_test_route_unit("default", "route1", r"^/api/v1/.*$", 0);
         let engine = RegexRoutesEngine::build(vec![route.clone()]);
 
-        assert_eq!(engine.route_count(), 1);
+        assert_eq!(engine.routes.len(), 1);
         assert!(engine.regex_set.is_some());
 
         // Verify the route is stored
@@ -238,7 +236,7 @@ mod tests {
         let routes = vec![route2.clone(), route1.clone(), route3.clone()];
         let engine = RegexRoutesEngine::build(routes);
 
-        assert_eq!(engine.route_count(), 3);
+        assert_eq!(engine.routes.len(), 3);
 
         // Verify sorted by pattern length (longest first)
         assert_eq!(engine.routes[0].matched_info.rsc.name, "long"); // longest pattern
@@ -530,7 +528,7 @@ mod tests {
 
         let engine = RegexRoutesEngine::build(routes);
 
-        assert_eq!(engine.route_count(), 100);
+        assert_eq!(engine.routes.len(), 100);
         assert!(engine.regex_set.is_some());
 
         // Verify some matches

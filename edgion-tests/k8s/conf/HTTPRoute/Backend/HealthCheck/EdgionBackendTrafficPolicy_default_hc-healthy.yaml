@@ -1,0 +1,20 @@
+# Active HTTP health check that keeps hc-healthy in rotation.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: hc-healthy-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: hc-healthy
+  healthCheck:
+    active:
+      type: http
+      path: /health
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses:
+        - 200

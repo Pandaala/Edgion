@@ -65,12 +65,6 @@ pub fn count_edgion_config_data() -> usize {
     GLOBAL_EDGION_CONFIG_DATA_STORE.count()
 }
 
-/// List all keys ("namespace/name") in the global EdgionConfigData store.
-#[allow(dead_code)] // Consumed by validator/sample-diagnostics; allow until then.
-pub fn edgion_config_data_keys() -> Vec<String> {
-    GLOBAL_EDGION_CONFIG_DATA_STORE.keys()
-}
-
 /// Raw EdgionConfigData map. Key: "namespace/name" (e.g. "edgion-default/region-override").
 type RawMap = HashMap<String, Arc<EdgionConfigData>>;
 
@@ -200,6 +194,10 @@ impl EdgionConfigDataStore {
                         ip_list.insert(key.clone(), Arc::new(matcher));
                     }
                 }
+                ConfigEntry::RequestAccessUrlAllowList(_) => {
+                    // RequestAccessPolicy URL data is expanded by the Controller.
+                    // No Gateway request-time index is built for this variant.
+                }
                 ConfigEntry::Selector(_) => {
                     // Active-profile selector. Not indexed — the GlobalConnectionIpRestriction
                     // plugin reads it via `get_raw_by_key` and type-guards inline.
@@ -311,6 +309,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "default".into(),
@@ -328,6 +327,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::KeyList(KeyListData {
                     match_mode: KeyMatchMode::default(),
                     items: vec![KeyGroup {
@@ -364,6 +364,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
@@ -394,6 +395,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "office".into(),
@@ -424,6 +426,7 @@ mod stats_tests {
                 enable: false,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -451,6 +454,7 @@ mod stats_tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData { items: vec![] }),
             };
             let mut ed = EdgionConfigData::new("ip-empty", spec);

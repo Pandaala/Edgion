@@ -9,15 +9,18 @@
 //!  - Write (create / update / delete) on EdgionConfigData only
 //!    (region-route and ip-restriction handlers drive this).
 //!  - List and failover on RegionRoute (synthetic classifier label, not a
-//!    ResourceKind): list allows the aggregate read endpoints
-//!    (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes,
-//!    GET /api/v1/region-routes/effective), and failover covers the POST
+//!    ResourceKind): list allows the effective read endpoint
+//!    (GET /api/v1/region-routes/effective), and failover covers the POST
 //!    failover endpoint.
 //!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
 //!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
 //!    it is safe to read by default; Center uses it to verify reload propagation.
+//!  - reload on the NonResource route (POST /api/v1/reload). The Center's
+//!    reload button arrives as a proxied request classified on the same
+//!    synthetic NonResource label; the Command channel that used to carry it
+//!    is gone.
 //!
-//! Nothing else is allowed: no reload, diagnostics, wipe-all.
+//! Nothing else is allowed: no diagnostics, wipe-all.
 //!
 //! When `center.rbac` is `Some(...)` the operator's config is used verbatim;
 //! the built-in default is NOT applied.
@@ -68,6 +71,8 @@ const fn is_default_readable(kind: ResourceKind) -> bool {
         ResourceKind::BackendTLSPolicy => true,
         ResourceKind::EdgionAcme => true,
         ResourceKind::ConfigMap => true,
+        ResourceKind::EdgionBackendTrafficPolicy => true,
+        ResourceKind::EdgionBackend => true,
     }
 }
 
@@ -104,6 +109,8 @@ const DEFAULT_READ_KINDS: &[&str] = &[
     ResourceKind::BackendTLSPolicy.as_str(),
     ResourceKind::EdgionAcme.as_str(),
     ResourceKind::ConfigMap.as_str(),
+    ResourceKind::EdgionBackendTrafficPolicy.as_str(),
+    ResourceKind::EdgionBackend.as_str(),
 ];
 
 /// Build the built-in default Center policy.
@@ -112,9 +119,8 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///   1. read (get, list, watch, list-keys) on all ResourceKinds except Secret.
 ///   2. write (create, update, delete) on EdgionConfigData.
 ///   3. list, failover on RegionRoute (synthetic label -- not a ResourceKind).
-///      `list` covers the aggregate read endpoints
-///      (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes,
-///      GET /api/v1/region-routes/effective), all of which classify as
+///      `list` covers the effective read endpoint
+///      (GET /api/v1/region-routes/effective), which classifies as
 ///      (list, "RegionRoute"). `failover` covers the POST failover endpoint.
 ///      `get` is intentionally NOT granted: no classifier route currently emits
 ///      (get, "RegionRoute"), so granting it would be a dead permission that
@@ -124,6 +130,10 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///      label only used on the fed-proxy routing layer.
 ///   4. server-info on the NonResource route. Read-only and non-sensitive
 ///      (server_id / ready / mode only); Center reads it to verify reloads.
+///   5. reload on the NonResource route. The Center's reload button arrives
+///      as a proxied POST /api/v1/reload, classified (reload, NonResource) by
+///      the same synthetic label as rule 4; the Command channel that used to
+///      carry it is gone.
 pub(crate) fn default_center_policy() -> CenterPolicy {
     let read_kinds: Vec<String> = DEFAULT_READ_KINDS.iter().map(|s| s.to_string()).collect();
 
@@ -145,7 +155,7 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
                 kinds: vec![ResourceKind::EdgionConfigData.as_str().to_string()],
             },
             // Rule 3: list and failover on RegionRoute (synthetic label).
-            // list covers the aggregate region-route read endpoints;
+            // list covers the effective region-route read endpoint;
             // failover covers the POST failover operation. `get` is omitted
             // because no classifier route emits (get, "RegionRoute").
             FedAllowRule {
@@ -156,6 +166,13 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
             // non-sensitive (server_id / ready / mode); used to verify reloads.
             FedAllowRule {
                 verbs: vec!["server-info".to_string()],
+                kinds: vec![NON_RESOURCE_KIND.to_string()],
+            },
+            // Rule 5: reload on the non-resource route. The Center's reload
+            // button arrives as a proxied POST /api/v1/reload; the Command
+            // channel that used to carry it is gone.
+            FedAllowRule {
+                verbs: vec!["reload".to_string()],
                 kinds: vec![NON_RESOURCE_KIND.to_string()],
             },
         ],
@@ -236,9 +253,8 @@ mod tests {
     // -- RegionRoute: only list and failover are allowed --
     //
     // RegionRoute is a synthetic classifier label (not a ResourceKind variant).
-    // The aggregate read endpoints GET /api/v1/cluster-region-routes,
-    // GET /api/v1/service-region-routes, and GET /api/v1/region-routes/effective
-    // all classify as (list, "RegionRoute"), so the default grants `list`.
+    // The effective read endpoint GET /api/v1/region-routes/effective classifies
+    // as (list, "RegionRoute"), so the default grants `list`.
     // `get` is intentionally NOT granted: no classifier route emits
     // (get, "RegionRoute"), so allowing it would be a dead permission.
 
@@ -272,7 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn default_denies_reload_any() {
+    fn default_allows_reload_on_non_resource() {
+        assert!(allows(&az(), Verb::Reload, NON_RESOURCE_KIND));
+    }
+
+    #[test]
+    fn default_denies_reload_on_resource_kinds() {
         assert!(!allows(&az(), Verb::Reload, "Gateway"));
         assert!(!allows(&az(), Verb::Reload, "*"));
     }
@@ -314,13 +335,13 @@ mod tests {
 
     #[test]
     fn default_policy_read_kinds_count() {
-        // ResourceKind has 21 named variants (including Unspecified and Secret).
+        // ResourceKind has 23 named variants (including Unspecified and Secret).
         // The read set must exclude exactly Unspecified and Secret, so
-        // expected = 21 - 2 = 19.
+        // expected = 23 - 2 = 21.
         //
         // If a new ResourceKind variant is added and DEFAULT_READ_KINDS is not
         // updated, this test will fail with a count mismatch.
-        let total_variants: usize = 21; // update when adding a new ResourceKind variant
+        let total_variants: usize = 23; // update when adding a new ResourceKind variant
         let expected = total_variants - 2; // minus Unspecified and Secret
         assert_eq!(
             DEFAULT_READ_KINDS.len(),
@@ -368,6 +389,8 @@ mod tests {
             ResourceKind::BackendTLSPolicy,
             ResourceKind::EdgionAcme,
             ResourceKind::ConfigMap,
+            ResourceKind::EdgionBackendTrafficPolicy,
+            ResourceKind::EdgionBackend,
         ];
 
         for variant in &all_variants {

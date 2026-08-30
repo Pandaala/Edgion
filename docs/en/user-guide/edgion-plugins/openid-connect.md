@@ -44,11 +44,11 @@
 |-----------|------|---------|-------------|
 | `usePkce` | Boolean | `false` | Whether to enable PKCE (Proof Key for Code Exchange). **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
 | `useNonce` | Boolean | `false` | Whether to include nonce in authorization requests. **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
-| `redirectUri` | String | none | Custom callback URI, must be an absolute path or absolute URL |
+| `redirectUri` | String | none | Custom callback URI, must be an absolute path or absolute URL. A path uses the request `Host` plus the listener's real TLS state; `X-Forwarded-Host` and `X-Forwarded-Proto` are both ignored. Use an absolute URL when the public origin differs, including when TLS is terminated in front of the gateway |
 | `authorizationParams` | Object | none | Extra parameters appended to the authorization request (cannot contain reserved keys like `response_type`, `client_id`, etc.) |
 | `revokeTokensOnLogout` | Boolean | `false` | Whether to call the Token Revocation endpoint on logout |
 | `logoutPath` | String | `"/logout"` | Path that triggers logout, must start with `/` |
-| `postLogoutRedirectUri` | String | none | Redirect URI after logout |
+| `postLogoutRedirectUri` | String | none | Redirect URI after logout. A path uses the request `Host` plus the listener's real TLS state; `X-Forwarded-Host` and `X-Forwarded-Proto` are both ignored. Use an absolute URL when the public origin differs, including when TLS is terminated in front of the gateway |
 
 ### Session Parameters
 
@@ -72,7 +72,7 @@
 | `tokenSigningAlg` | String | none | Specify token signing algorithm (cannot be `none`) |
 | `allowedSigningAlgs` | Array\<String\> | none | Allowed signing algorithms list (cannot contain `none`) |
 | `useJwks` | Boolean | `true` | Whether to use JWKS for local verification |
-| `sslVerify` | Boolean | `true` | Whether to verify the OIDC Provider's TLS certificate |
+| `verify` | Boolean | `true` | Verify the OIDC Provider's TLS certificate. When `false`, the gateway skips peer certificate validation (operator responsibility; a WARN is logged at startup). For private-CA IdPs, pair with `validation.caCertificateRefs` (list of Secret/ConfigMap refs each with a `ca.crt` key) or `validation.wellKnownCACertificates: System`. `validation.subjectAltNames` adds SAN pinning and forces full certificate verification. For mutual TLS to the IdP, pair with `clientCertificateRef` (Secret with `tls.crt`/`tls.key` keys). Unresolved, partial, or malformed declared TLS material rejects OIDC plugin construction and seals the affected route fail-closed; it never falls back to a client that omits the declared policy. Inline CA (`caCert`) is no longer supported. Note: `clientSecretRef` in the Basic Parameters table above is the OAuth2 client secret, separate from TLS configuration. |
 | `issuers` | Array\<String\> | none | Allowed issuer list |
 | `audiences` | Array\<String\> | none | Allowed audience list |
 | `clockSkewSeconds` | Integer | `120` | Clock skew tolerance (seconds) |
@@ -82,6 +82,31 @@
 | `introspectionEndpointAuthMethod` | Enum | `client_secret_basic` | Introspection endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
 | `introspectionCacheTtl` | Integer | `0` | Introspection result cache TTL (seconds), `0` disables |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
+
+### Cache Selection and Limits
+
+Only positive introspection results use TinyUFO/S3-FIFO. Access-token
+indirection retains the LRU cache because logout and refresh require explicit
+invalidation:
+
+```yaml
+introspection:
+  tinyUfoTtlCache:
+    maxEntries: 2048
+    maxLogicalBytes: 8MiB
+accessToken:
+  lruCache:
+    capacity: 2048
+    shards: 8
+```
+
+The two sections inherit `tiny_ufo_ttl_cache` and `lru_cache` Gateway defaults,
+respectively. Set both TinyUFO override fields together, or omit both to inherit
+the process defaults. For an explicit LRU capacity, `shards: 0` selects one
+shard; a shards-only override is invalid. The TinyUFO byte field is the cache
+instance's total logical record-weight budget, not an exact RSS limit. Discovery
+and JWKS retain their dedicated snapshot providers; the refresh singleflight
+registry is also separate from both caches.
 
 ### Header Forwarding Parameters
 
@@ -137,7 +162,7 @@ config:
   useNonce: true             # required
   sessionCookieSecure: true      # already default true, keep
   sessionCookieSameSite: "Lax"   # already default Lax, adjust per cross-site needs
-  sslVerify: true                # already default true, never disable
+  verify: true                   # already default true, never disable
   verificationMode: Auto
 ```
 

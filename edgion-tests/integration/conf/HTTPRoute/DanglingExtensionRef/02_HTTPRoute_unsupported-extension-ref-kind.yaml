@@ -1,7 +1,7 @@
 # HTTPRoute with an ExtensionRef filter targeting an unsupported kind.
 #
-# The rule's filter list contains an `ExtensionRef` whose `kind` is neither
-# `EdgionPlugins` nor a recognized LBPolicy kind. The controller's preparse
+# The rule's filter list contains an `ExtensionRef` whose `kind` is not
+# `EdgionPlugins` (the only supported ExtensionRef kind). The controller's preparse
 # step (extension_ref_unsupported_kind_reason in http_route.rs) flags the rule
 # at build time: its index goes into `invalid_rule_indices` and the HTTPRoute
 # gets a `PartiallyInvalid=True` condition whose message names the bad kind.
@@ -30,6 +30,14 @@ spec:
             group: edgion.io
             kind: NotAPlugin
             name: x
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/supported-kind"
       backendRefs:
         - name: test-http
           namespace: edgion-test

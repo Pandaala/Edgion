@@ -2,112 +2,22 @@
 //! The enclosing route fields that hold these values carry `#[serde(skip)]`,
 //! so they never appear in the conf_sync payload.
 
-use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
+use super::http_route::MirrorTuning;
+use super::HTTPRoute;
 use crate::path_normalization::normalize_config_path;
-use serde::{Deserialize, Serialize};
-
-/// Hash source type for consistent hash LB policy
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConsistentHashOn {
-    /// Hash based on request header
-    Header(String),
-    /// Hash based on cookie
-    Cookie(String),
-    /// Hash based on query argument
-    Arg(String),
-}
-
-/// Parsed LB policy from extensionRef
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ParsedLBPolicy {
-    /// Consistent hash with specified source
-    ConsistentHash(ConsistentHashOn),
-    /// Least connection
-    LeastConn,
-    /// EWMA (Exponentially Weighted Moving Average) based on response time
-    Ewma,
-}
-
-/// Parsed extension info attached to HTTPBackendRef
-/// This is computed at runtime, not from YAML
-#[derive(Debug, Clone, Default)]
-pub struct BackendExtensionInfo {
-    /// Parsed LB policy if extensionRef specifies one
-    pub lb_policy: Option<ParsedLBPolicy>,
-}
-
-impl BackendExtensionInfo {
-    /// Parse from LocalObjectReference
-    pub fn from_extension_ref(ext_ref: &LocalObjectReference) -> Self {
-        let lb_policy = Self::parse_lb_policy(ext_ref);
-        Self { lb_policy }
-    }
-
-    /// Parse LB policy from extensionRef
-    ///
-    /// Supported formats:
-    /// - group: edgion.io, kind: LBPolicyConsistentHash, name: header.x-user-id
-    /// - group: edgion.io, kind: LBPolicyConsistentHash, name: cookie.session-id
-    /// - group: edgion.io, kind: LBPolicyConsistentHash, name: arg.user-id
-    /// - group: edgion.io, kind: LBPolicyLeastConn, name: default
-    /// - group: edgion.io, kind: LBPolicyEwma, name: default
-    fn parse_lb_policy(ext_ref: &LocalObjectReference) -> Option<ParsedLBPolicy> {
-        // Check group (empty string means core API group, otherwise should be edgion.io)
-        if !ext_ref.group.is_empty() && ext_ref.group != "edgion.io" {
-            return None;
-        }
-
-        // `is_lb_policy_kind` is the single source of truth for which kinds are
-        // LBPolicy kinds. Bail out early for any non-LBPolicy kind so the kind
-        // list never needs to be duplicated here.
-        if !is_lb_policy_kind(&ext_ref.kind) {
-            return None;
-        }
-
-        match ext_ref.kind.as_str() {
-            "LBPolicyConsistentHash" => {
-                Self::parse_consistent_hash_name(&ext_ref.name).map(ParsedLBPolicy::ConsistentHash)
-            }
-            "LBPolicyLeastConn" => Some(ParsedLBPolicy::LeastConn),
-            "LBPolicyEwma" => Some(ParsedLBPolicy::Ewma),
-            _ => None,
-        }
-    }
-
-    /// Parse consistent hash source from name
-    /// Format: "header.xxx" / "cookie.xxx" / "arg.xxx"
-    fn parse_consistent_hash_name(name: &str) -> Option<ConsistentHashOn> {
-        let parts: Vec<&str> = name.splitn(2, '.').collect();
-        match parts.as_slice() {
-            ["header", key] => Some(ConsistentHashOn::Header(key.to_string())),
-            ["cookie", key] => Some(ConsistentHashOn::Cookie(key.to_string())),
-            ["arg", key] => Some(ConsistentHashOn::Arg(key.to_string())),
-            _ => None,
-        }
-    }
-}
-
-/// True if `kind` names a load-balancing-policy ExtensionRef (as opposed to a
-/// plugin reference). LBPolicy ExtensionRefs live on `backendRefs[].filters` and
-/// are consumed by `BackendExtensionInfo` / `parse_lb_policy`, not the plugin
-/// runtime — callers that gate "is this a supported ExtensionRef kind" must
-/// treat these as recognized, not unsupported.
-pub fn is_lb_policy_kind(kind: &str) -> bool {
-    matches!(kind, "LBPolicyConsistentHash" | "LBPolicyLeastConn" | "LBPolicyEwma")
-}
 
 /// Pre-parse methods for HTTPRoute.
 impl HTTPRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields.
+    /// Normalize path matcher values and parse per-rule annotations
+    /// (`forward-raw-path`, `retry-non-idempotent`).
     ///
-    /// This method should be called after deserializing HTTPRoute from YAML/JSON
-    /// to populate the runtime-only extension_info fields.
+    /// This method should be called after deserializing HTTPRoute from YAML/JSON.
     ///
     /// # Incomplete by itself
     ///
-    /// `preparse()` only covers plugin runtimes, path-matcher normalization, and
-    /// the `forward-raw-path` annotation. It does **not** parse timeouts or retry
-    /// configurations. A fully pre-processed `HTTPRoute` requires all three calls:
+    /// `preparse()` only covers path-matcher normalization and the annotations
+    /// above. It does **not** parse timeouts or retry configurations. A fully
+    /// pre-processed `HTTPRoute` requires all three calls:
     ///
     /// ```ignore
     /// route.preparse();
@@ -123,10 +33,6 @@ impl HTTPRoute {
         // Normalize path matcher values before any other processing so downstream
         // logic always sees the canonical path representation.
         self.normalize_path_matchers();
-
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
 
         // Parse `edgion.io/forward-raw-path` annotation. Three-state:
         // "true" / "false" / absent. Invalid values logged INFO and treated as None.
@@ -174,31 +80,90 @@ impl HTTPRoute {
                 }
             });
 
-        for rule in rules.iter_mut() {
-            rule.parsed_forward_raw_path = parsed_forward_raw_path;
-            rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
+        // Parse `edgion.io/mirror-*` tuning annotations into a MirrorTuning,
+        // applied to every RequestMirror filter under this route. These knobs
+        // live in annotations because the vendored Gateway API CRD silently
+        // prunes undeclared filter fields in K8s conf-center mode.
+        let parsed_mirror_tuning = self.parse_mirror_tuning_annotations();
 
-            let Some(backend_refs) = rule.backend_refs.as_mut() else {
-                continue;
-            };
-
-            for backend_ref in backend_refs.iter_mut() {
-                // Find ExtensionRef filter in backend_ref.filters
-                let extension_info = backend_ref
-                    .filters
-                    .as_ref()
-                    .and_then(|filters| {
-                        filters
-                            .iter()
-                            .find(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
-                            .and_then(|f| f.extension_ref.as_ref())
-                            .map(BackendExtensionInfo::from_extension_ref)
-                    })
-                    .unwrap_or_default();
-
-                backend_ref.extension_info = extension_info;
+        // Both the operator-authored rules and the controller-flattened
+        // delegation rules (resolved_rules) need the annotation copies; the
+        // gateway compiles whichever is effective (see `effective_rules()`).
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                rule.parsed_forward_raw_path = parsed_forward_raw_path;
+                rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
+                rule.parsed_mirror_tuning = parsed_mirror_tuning.clone();
             }
         }
+    }
+
+    /// Parse the `edgion.io/mirror-*` tuning annotations. Returns `None` when
+    /// no mirror annotation is present (defaults apply). Each invalid value is
+    /// logged at INFO and falls back to that field's default, matching the
+    /// lenient handling of the sibling route annotations.
+    fn parse_mirror_tuning_annotations(&self) -> Option<MirrorTuning> {
+        use crate::constants::annotations::edgion;
+
+        let annotations = self.metadata.annotations.as_ref()?;
+
+        let keys = [
+            edgion::MIRROR_CONNECT_TIMEOUT_MS,
+            edgion::MIRROR_WRITE_TIMEOUT_MS,
+            edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS,
+            edgion::MIRROR_MAX_BUFFERED_CHUNKS,
+            edgion::MIRROR_LOG,
+            edgion::MIRROR_MAX_CONCURRENT,
+        ];
+        if !keys.iter().any(|k| annotations.contains_key(*k)) {
+            return None;
+        }
+
+        let route_namespace = self.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = self.metadata.name.as_deref().unwrap_or("");
+
+        // Parse one annotation value; absent or invalid falls back to `default`.
+        macro_rules! parse_or_default {
+            ($key:expr, $default:expr, $ty:ty) => {
+                match annotations.get($key) {
+                    None => $default,
+                    Some(v) => match v.parse::<$ty>() {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            tracing::info!(
+                                route_namespace = %route_namespace,
+                                route_name = %route_name,
+                                annotation = %$key,
+                                value = %v,
+                                "ignored: invalid value, using default"
+                            );
+                            $default
+                        }
+                    },
+                }
+            };
+        }
+
+        let defaults = MirrorTuning::default();
+        Some(MirrorTuning {
+            connect_timeout_ms: parse_or_default!(edgion::MIRROR_CONNECT_TIMEOUT_MS, defaults.connect_timeout_ms, u64),
+            write_timeout_ms: parse_or_default!(edgion::MIRROR_WRITE_TIMEOUT_MS, defaults.write_timeout_ms, u64),
+            channel_full_timeout_ms: parse_or_default!(
+                edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS,
+                defaults.channel_full_timeout_ms,
+                u64
+            ),
+            max_buffered_chunks: parse_or_default!(
+                edgion::MIRROR_MAX_BUFFERED_CHUNKS,
+                defaults.max_buffered_chunks,
+                usize
+            ),
+            mirror_log: parse_or_default!(edgion::MIRROR_LOG, defaults.mirror_log, bool),
+            max_concurrent: parse_or_default!(edgion::MIRROR_MAX_CONCURRENT, defaults.max_concurrent, usize),
+        })
     }
 
     /// Parse and pre-process timeout configurations for all rules
@@ -206,17 +171,18 @@ impl HTTPRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                // Parse timeouts for each rule
+                if let Some(timeouts) = &rule.timeouts {
+                    rule.parsed_timeouts = crate::resources::http_route::ParsedRouteTimeouts::from_config(timeouts);
 
-        for rule in rules.iter_mut() {
-            // Parse timeouts for each rule
-            if let Some(timeouts) = &rule.timeouts {
-                rule.parsed_timeouts = crate::resources::http_route::ParsedRouteTimeouts::from_config(timeouts);
-
-                if rule.parsed_timeouts.is_some() {
-                    tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
+                    if rule.parsed_timeouts.is_some() {
+                        tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
+                    }
                 }
             }
         }
@@ -231,36 +197,40 @@ impl HTTPRoute {
     /// `RegularExpression` patterns are left unchanged — regex patterns cannot be
     /// machine-normalized; correctness is the operator's responsibility.
     pub fn normalize_path_matchers(&mut self) {
-        let route_ns = self.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = self.metadata.name.as_deref().unwrap_or("");
-
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        let route_key = format!(
+            "{}/{}",
+            self.metadata.namespace.as_deref().unwrap_or("default"),
+            self.metadata.name.as_deref().unwrap_or("")
+        );
 
         let path_cfg = crate::path_normalization::get_path_normalization_config();
-        for rule in rules.iter_mut() {
-            let Some(matches) = rule.matches.as_mut() else {
-                continue;
-            };
-            for m in matches.iter_mut() {
-                let Some(path) = m.path.as_mut() else {
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                let Some(matches) = rule.matches.as_mut() else {
                     continue;
                 };
-                // Only normalize Exact and PathPrefix; skip RegularExpression and unknown types.
-                let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
-                if match_type == "Exact" || match_type == "PathPrefix" {
-                    if let Some(value) = path.value.as_mut() {
-                        let normalized = normalize_config_path(value, path_cfg);
-                        if normalized != *value {
-                            tracing::info!(
-                                route = %format!("{}/{}", route_ns, route_name),
-                                match_type = %match_type,
-                                original = %value,
-                                normalized = %normalized,
-                                "HTTPRoute path matcher value normalized at load time"
-                            );
-                            *value = normalized;
+                for m in matches.iter_mut() {
+                    let Some(path) = m.path.as_mut() else {
+                        continue;
+                    };
+                    // Only normalize Exact and PathPrefix; skip RegularExpression and unknown types.
+                    let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
+                    if match_type == "Exact" || match_type == "PathPrefix" {
+                        if let Some(value) = path.value.as_mut() {
+                            let normalized = normalize_config_path(value, path_cfg);
+                            if normalized != *value {
+                                tracing::info!(
+                                    route = %route_key,
+                                    match_type = %match_type,
+                                    original = %value,
+                                    normalized = %normalized,
+                                    "HTTPRoute path matcher value normalized at load time"
+                                );
+                                *value = normalized;
+                            }
                         }
                     }
                 }
@@ -270,58 +240,63 @@ impl HTTPRoute {
 
     /// Parse and pre-process retry configurations for all rules
     pub fn parse_retry(&mut self) {
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        let route_key = format!(
+            "{}/{}",
+            self.metadata.namespace.as_deref().unwrap_or("default"),
+            self.metadata.name.as_deref().unwrap_or("")
+        );
 
-        for rule in rules.iter_mut() {
-            let Some(retry) = &rule.retry else {
-                continue;
-            };
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                let Some(retry) = &rule.retry else {
+                    continue;
+                };
 
-            let attempts = retry.attempts.map(|a| a.max(0) as u32);
+                let attempts = retry.attempts.map(|a| a.max(0) as u32);
 
-            let backoff = retry.backoff.as_deref().and_then(|s| {
-                crate::duration::parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!(
-                            route = %format!("{}/{}",
-                                self.metadata.namespace.as_deref().unwrap_or("default"),
-                                self.metadata.name.as_deref().unwrap_or("")),
-                            value = %s,
-                            error = %e,
-                            "Invalid retry backoff duration, backoff disabled"
-                        );
-                    })
-                    .ok()
-            });
-
-            let codes = retry.codes.as_ref().map(|codes| {
-                codes
-                    .iter()
-                    .filter_map(|&c| {
-                        // Retry status codes are restricted to 400..=599 to match
-                        // the upstream Gateway API HTTPRouteRetry CRD validation.
-                        // Informational (1xx) and success/redirect (2xx/3xx) codes
-                        // are never a meaningful retry trigger and a 1xx code here
-                        // would otherwise let retry-on-status misfire on an h1
-                        // informational header.
-                        if (400..=599).contains(&c) {
-                            Some(c as u16)
-                        } else {
-                            tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
-                            None
-                        }
-                    })
-                    .collect::<Vec<u16>>()
-            });
-
-            if attempts.is_some() || backoff.is_some() || codes.is_some() {
-                rule.parsed_retry = Some(crate::resources::http_route::ParsedRouteRetry {
-                    attempts,
-                    backoff,
-                    codes,
+                let backoff = retry.backoff.as_deref().and_then(|s| {
+                    crate::duration::parse_duration(s)
+                        .map_err(|e| {
+                            tracing::warn!(
+                                route = %route_key,
+                                value = %s,
+                                error = %e,
+                                "Invalid retry backoff duration, backoff disabled"
+                            );
+                        })
+                        .ok()
                 });
+
+                let codes = retry.codes.as_ref().map(|codes| {
+                    codes
+                        .iter()
+                        .filter_map(|&c| {
+                            // Retry status codes are restricted to 400..=599 to match
+                            // the upstream Gateway API HTTPRouteRetry CRD validation.
+                            // Informational (1xx) and success/redirect (2xx/3xx) codes
+                            // are never a meaningful retry trigger and a 1xx code here
+                            // would otherwise let retry-on-status misfire on an h1
+                            // informational header.
+                            if (400..=599).contains(&c) {
+                                Some(c as u16)
+                            } else {
+                                tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
+                                None
+                            }
+                        })
+                        .collect::<Vec<u16>>()
+                });
+
+                if attempts.is_some() || backoff.is_some() || codes.is_some() {
+                    rule.parsed_retry = Some(crate::resources::http_route::ParsedRouteRetry {
+                        attempts,
+                        backoff,
+                        codes,
+                    });
+                }
             }
         }
     }
@@ -330,111 +305,6 @@ impl HTTPRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_consistent_hash_header() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "header.x-user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-                "x-user-id".to_string()
-            )))
-        );
-    }
-
-    #[test]
-    fn test_parse_consistent_hash_cookie() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "cookie.session-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
-                "session-id".to_string()
-            )))
-        );
-    }
-
-    #[test]
-    fn test_parse_consistent_hash_arg() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "arg.user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
-                "user-id".to_string()
-            )))
-        );
-    }
-
-    #[test]
-    fn test_parse_least_conn() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyLeastConn".to_string(),
-            name: "default".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(info.lb_policy, Some(ParsedLBPolicy::LeastConn));
-    }
-
-    #[test]
-    fn test_parse_unknown_kind() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "UnknownPolicy".to_string(),
-            name: "default".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(info.lb_policy, None);
-    }
-
-    #[test]
-    fn test_parse_wrong_group() {
-        let ext_ref = LocalObjectReference {
-            group: "other.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "header.x-user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(info.lb_policy, None);
-    }
-
-    #[test]
-    fn test_parse_empty_group() {
-        // Empty group (core API group), should still work
-        let ext_ref = LocalObjectReference {
-            group: String::new(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "header.x-user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-                "x-user-id".to_string()
-            )))
-        );
-    }
 
     // =========================================================================
     // Group J: HTTPRoute path matcher normalization tests
@@ -522,6 +392,64 @@ mod tests {
         let mut route = make_route_with_path("PathPrefix", "/api/v1/./foo");
         route.normalize_path_matchers();
         assert_eq!(get_path_value(&route), "/api/v1/foo");
+    }
+
+    // =========================================================================
+    // resolved_rules preparse coverage (delegation)
+    // =========================================================================
+
+    #[test]
+    fn resolved_rules_covered_by_preparse_pipeline() {
+        // A route whose delegation flatten produced resolved_rules must get the
+        // same load-time processing as spec.rules: path normalization,
+        // timeouts, retry, and annotation copies.
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": "parent", "namespace": "infra",
+                "annotations": {"edgion.io/forward-raw-path": "true"}
+            },
+            "spec": {
+                "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]}]
+            }
+        }))
+        .unwrap();
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api//billing/./pay"}}],
+                "timeouts": {"request": "10s"},
+                "retry": {"attempts": 2}
+            }]))
+            .unwrap(),
+        );
+
+        route.preparse();
+        route.parse_timeouts();
+        route.parse_retry();
+
+        let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+        assert_eq!(
+            rule.matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/api/billing/pay"),
+            "resolved_rules paths must be normalized"
+        );
+        assert!(rule.parsed_timeouts.is_some(), "resolved_rules timeouts must be parsed");
+        assert_eq!(
+            rule.parsed_retry.as_ref().and_then(|r| r.attempts),
+            Some(2),
+            "resolved_rules retry must be parsed"
+        );
+        assert_eq!(
+            rule.parsed_forward_raw_path,
+            Some(true),
+            "annotation copies must reach resolved_rules"
+        );
     }
 
     // =========================================================================
@@ -688,6 +616,157 @@ mod tests {
         for rule in route.spec.rules.as_ref().unwrap() {
             assert_eq!(rule.parsed_forward_raw_path, None);
         }
+    }
+
+    // =========================================================================
+    // mirror-* tuning annotation parsing tests
+    // =========================================================================
+
+    #[test]
+    fn parses_mirror_tuning_absent_is_none() {
+        let mut route = make_test_http_route();
+        route.metadata.annotations = None;
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert!(rule.parsed_mirror_tuning.is_none());
+        }
+    }
+
+    #[test]
+    fn parses_mirror_tuning_unrelated_annotations_is_none() {
+        // Annotations present but none of the mirror-* keys → None (defaults).
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert("edgion.io/forward-raw-path".to_string(), "true".to_string());
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert!(rule.parsed_mirror_tuning.is_none());
+        }
+    }
+
+    #[test]
+    fn parses_mirror_tuning_partial_keys_fill_defaults() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_CONNECT_TIMEOUT_MS.to_string(),
+            "500".to_string(),
+        );
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_LOG.to_string(),
+            "false".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            let tuning = rule.parsed_mirror_tuning.as_ref().expect("tuning should be parsed");
+            assert_eq!(tuning.connect_timeout_ms, 500);
+            assert!(!tuning.mirror_log);
+            // Unset keys fall back to defaults.
+            let defaults = MirrorTuning::default();
+            assert_eq!(tuning.write_timeout_ms, defaults.write_timeout_ms);
+            assert_eq!(tuning.max_buffered_chunks, defaults.max_buffered_chunks);
+            assert_eq!(tuning.max_concurrent, defaults.max_concurrent);
+            assert_eq!(tuning.channel_full_timeout_ms, defaults.channel_full_timeout_ms);
+        }
+    }
+
+    #[test]
+    fn parses_mirror_tuning_all_keys() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        let e = |k: &str| k.to_string();
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_CONNECT_TIMEOUT_MS),
+            "200".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_WRITE_TIMEOUT_MS),
+            "300".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS),
+            "150".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_MAX_BUFFERED_CHUNKS),
+            "8".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_LOG),
+            "false".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_MAX_CONCURRENT),
+            "64".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        let tuning = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_mirror_tuning
+            .as_ref()
+            .expect("tuning should be parsed");
+        assert_eq!(tuning.connect_timeout_ms, 200);
+        assert_eq!(tuning.write_timeout_ms, 300);
+        assert_eq!(tuning.channel_full_timeout_ms, 150);
+        assert_eq!(tuning.max_buffered_chunks, 8);
+        assert!(!tuning.mirror_log);
+        assert_eq!(tuning.max_concurrent, 64);
+    }
+
+    #[test]
+    fn parses_mirror_tuning_invalid_value_falls_back_to_default() {
+        // An invalid numeric/bool value is logged and replaced by the field
+        // default; the other valid keys still apply.
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_CONNECT_TIMEOUT_MS.to_string(),
+            "not-a-number".to_string(),
+        );
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_MAX_CONCURRENT.to_string(),
+            "32".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        let tuning = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_mirror_tuning
+            .as_ref()
+            .expect("tuning should be parsed");
+        assert_eq!(tuning.connect_timeout_ms, MirrorTuning::default().connect_timeout_ms);
+        assert_eq!(tuning.max_concurrent, 32);
+    }
+
+    #[test]
+    fn mirror_tuning_reaches_resolved_rules() {
+        // Delegation-flattened rules must receive the same annotation copies.
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": "parent", "namespace": "infra",
+                "annotations": {"edgion.io/mirror-max-concurrent": "16"}
+            },
+            "spec": {
+                "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]}]
+            }
+        }))
+        .unwrap();
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api/child"}}]
+            }]))
+            .unwrap(),
+        );
+        route.preparse();
+        let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+        assert_eq!(
+            rule.parsed_mirror_tuning.as_ref().map(|t| t.max_concurrent),
+            Some(16),
+            "annotation copies must reach resolved_rules"
+        );
     }
 
     // =========================================================================

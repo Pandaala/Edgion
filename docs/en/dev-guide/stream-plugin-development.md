@@ -124,7 +124,7 @@ The current primary key is:
 ```yaml
 metadata:
   annotations:
-    edgion.io/edgion-stream-plugins: "namespace/name"
+    edgion.io/edgion-stream-plugins: "policy-name"
 ```
 
 It is currently used mainly on:
@@ -135,6 +135,12 @@ It is currently used mainly on:
 
 This is not just a documentation convention; it is the key the current implementation reads.
 The repository historically had older forms such as `edgion.io/stream-plugins`. New work should not keep copying that legacy key forward.
+
+On a `Gateway`, the value must be an unqualified name and resolves in the Gateway's own namespace.
+Slash-containing values are rejected by the Controller and fail closed defensively in the Gateway.
+`TCPRoute`, `TLSRoute`, and `UDPRoute` retain their separate `name` or `namespace/name` contract.
+For centralized data with per-namespace plugin ownership, keep a local `EdgionStreamPlugins` wrapper
+and reference shared `EdgionConfigData` through its existing authorization controls.
 
 ## Recommended Development Order
 
@@ -161,7 +167,7 @@ At minimum, cover three layers.
 
 ### 2. Reference Layer
 
-- `Gateway` / `TCPRoute` / `TLSRoute` annotations resolve both `name` and `namespace/name`
+- `Gateway` annotations accept only a same-namespace `name`; `TCPRoute` / `TLSRoute` / `UDPRoute` annotations resolve both `name` and `namespace/name`
 - Gateway stops using stale objects after deletion
 
 ### 3. Runtime Layer

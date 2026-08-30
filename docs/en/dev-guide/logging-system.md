@@ -248,8 +248,9 @@ static TCP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 pub struct TcpLogEntry {
     pub ts: i64,
     pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
+    pub direct_peer_ip: String,
+    pub direct_peer_port: u16,
+    pub remote_ip: String,
     pub upstream_addr: Option<String>,
     pub duration_ms: u64,
     pub bytes_sent: u64,
@@ -293,8 +294,8 @@ static UDP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 pub struct UdpLogEntry {
     pub ts: i64,
     pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
+    pub direct_peer_ip: String,
+    pub direct_peer_port: u16,
     pub upstream_addr: Option<String>,
     pub session_duration_ms: u64,
     pub packets_sent: u64,
@@ -310,8 +311,8 @@ pub struct UdpLogEntry {
 // Log when UDP session times out and is cleaned up
 let log_entry = UdpLogEntry::new(
     listener_port,
-    client_addr,
-    client_port,
+    direct_peer_ip,
+    direct_peer_port,
     upstream_addr,
     session_start,
 ).with_stats(packets_sent, packets_received, bytes_sent, bytes_received);
@@ -479,7 +480,7 @@ All logs are output in JSON format, one record per line. Below are format exampl
       "response_time_ms": 45
     }]
   },
-  "errors": [],
+  "diagnostics": [],
   "plugin_logs": [],
   "conn_est": true
 }
@@ -511,8 +512,9 @@ All logs are output in JSON format, one record per line. Below are format exampl
 {
   "ts": 1704470401000,
   "listener_port": 9000,
-  "client_addr": "192.168.1.100",
-  "client_port": 54321,
+  "direct_peer_ip": "192.168.1.100",
+  "direct_peer_port": 54321,
+  "remote_ip": "192.168.1.100",
   "upstream_addr": "10.0.1.10:8000",
   "duration_ms": 5432,
   "bytes_sent": 1024000,
@@ -527,8 +529,9 @@ All logs are output in JSON format, one record per line. Below are format exampl
 {
   "ts": 1704470402000,
   "listener_port": 9000,
-  "client_addr": "192.168.1.101",
-  "client_port": 54322,
+  "direct_peer_ip": "192.168.1.101",
+  "direct_peer_port": 54322,
+  "remote_ip": "192.168.1.101",
   "upstream_addr": null,
   "duration_ms": 10,
   "bytes_sent": 0,
@@ -544,8 +547,8 @@ All logs are output in JSON format, one record per line. Below are format exampl
 {
   "ts": 1704470403000,
   "listener_port": 53,
-  "client_addr": "192.168.1.200",
-  "client_port": 12345,
+  "direct_peer_ip": "192.168.1.200",
+  "direct_peer_port": 12345,
   "upstream_addr": "8.8.8.8:53",
   "session_duration_ms": 60000,
   "packets_sent": 25,

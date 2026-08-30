@@ -3,7 +3,6 @@
 //! Provides detailed test data collection for metrics verification.
 //! Supports different test types: LB (load balancing), Retry, Latency, etc.
 
-use pingora_core::protocols::l4::socket::SocketAddr;
 use serde::Serialize;
 
 /// Test type enumeration
@@ -105,43 +104,9 @@ impl TestData {
     }
 }
 
-// ==================== Test data setter functions ====================
-
-/// Set LB test data: backend address and optional hash key
-pub fn set_lb_test_data(test_data: &mut TestData, addr: &SocketAddr, hash_key: Option<&str>) {
-    // Extract IP and port from pingora's SocketAddr
-    if let Some(inet_addr) = addr.as_inet() {
-        test_data.ip = Some(inet_addr.ip().to_string());
-        test_data.port = Some(inet_addr.port());
-    }
-    if let Some(hk) = hash_key {
-        test_data.hash_key = Some(hk.to_string());
-    }
-}
-
-/// Set retry test data: try count and optional error message
-pub fn set_retry_test_data(test_data: &mut TestData, try_count: u32, error: Option<&str>) {
-    test_data.try_count = Some(try_count);
-    if let Some(e) = error {
-        test_data.error = Some(e.to_string());
-    }
-}
-
-/// Set latency test data: latency in milliseconds
-pub fn set_latency_test_data(test_data: &mut TestData, latency_ms: u64) {
-    test_data.latency_ms = Some(latency_ms);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr};
-
-    /// Helper: create pingora SocketAddr from std::net::SocketAddr
-    fn make_addr(ip: [u8; 4], port: u16) -> SocketAddr {
-        let std_addr = StdSocketAddr::new(IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])), port);
-        SocketAddr::from(std_addr)
-    }
 
     #[test]
     fn test_type_parsing() {
@@ -169,49 +134,5 @@ mod tests {
         let data = TestData::new();
         assert!(data.is_empty());
         assert_eq!(data.to_json(), "");
-    }
-
-    #[test]
-    fn test_lb_data_without_hash_key() {
-        let addr = make_addr([10, 0, 0, 5], 8080);
-        let mut data = TestData::new();
-        set_lb_test_data(&mut data, &addr, None);
-
-        assert!(!data.is_empty());
-        let json = data.to_json();
-        assert!(json.contains("\"ip\":\"10.0.0.5\""));
-        assert!(json.contains("\"port\":8080"));
-        assert!(!json.contains("hash_key"));
-    }
-
-    #[test]
-    fn test_lb_data_with_hash_key() {
-        let addr = make_addr([10, 0, 0, 5], 8080);
-        let mut data = TestData::new();
-        set_lb_test_data(&mut data, &addr, Some("user-123"));
-
-        let json = data.to_json();
-        assert!(json.contains("\"ip\":\"10.0.0.5\""));
-        assert!(json.contains("\"port\":8080"));
-        assert!(json.contains("\"hash_key\":\"user-123\""));
-    }
-
-    #[test]
-    fn test_retry_data() {
-        let mut data = TestData::new();
-        set_retry_test_data(&mut data, 3, Some("connection_timeout"));
-
-        let json = data.to_json();
-        assert!(json.contains("\"try_count\":3"));
-        assert!(json.contains("\"error\":\"connection_timeout\""));
-    }
-
-    #[test]
-    fn test_latency_data() {
-        let mut data = TestData::new();
-        set_latency_test_data(&mut data, 150);
-
-        let json = data.to_json();
-        assert!(json.contains("\"latency_ms\":150"));
     }
 }

@@ -21,9 +21,12 @@ Suggestions to add a `MatchOutcome::PathMatchedMethodRejected` variant, accumula
 
 ## Code shape today
 
-- `match_unit.rs:351-354` — method-mismatch returns `Ok(None)`; no "rejected by method" signal.
-- `radix_route_match.rs:149` — after all candidates fail, collapses to `Err(RouteNotFound)`.
-- `pg_request_filter.rs:122-125` — maps to `end_response_404`. No `end_response_405` helper, no `EdgionStatus::MethodNotAllowed`.
+- `edgion-gateway/src/routes/http/match_unit.rs::HttpRouteMatchUnit::matches_common`
+  — method mismatch returns `Ok(None)`; no "rejected by method" signal.
+- `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs`
+  — after all candidates fail, collapses to `Err(RouteNotFound)`.
+- `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`
+  — maps `RouteNotFound` to `end_response_404`; there is no 405 path.
 
 ## Why we diverge
 
@@ -39,5 +42,5 @@ Suggestions to add a `MatchOutcome::PathMatchedMethodRejected` variant, accumula
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a1.md → V6` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a1.md → V6` (CONFIRM)
 - Conformance: `skills/08-kubernetes/01-gateway-api/SKILL.md` (ALL PASS, must remain so)

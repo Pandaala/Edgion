@@ -22,6 +22,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [TLS Termination](./gateway/tls/tls-termination.md): Standard TLS termination configuration.
 - [EdgionTls Extension 🔌](./gateway/tls/edgion-tls.md): Extended certificate and TLS capabilities.
 - [ACME Auto-Certificate 🔌](./gateway/tls/acme.md): Automatic issuance and renewal.
+- [FIPS Mode 🔒](./gateway/tls/fips.md): BoringSSL FIPS-mode build and approved-by-default cipher/curve set.
 - [TLS Routing (Passthrough)](../user-guide/tls-route/overview.md): SNI-based routing without decrypting traffic.
 
 ### Infrastructure
@@ -30,17 +31,24 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [Cross-Namespace Reference (ReferenceGrant)](./infrastructure/reference-grant.md): Cross-namespace resource authorization.
 - [mTLS Configuration](./infrastructure/mtls.md): Mutual TLS between gateway and backends.
 - [Connectors (LinkSys) 🔌](./infrastructure/connectors.md): External-system integrations (Redis, Etcd, Elasticsearch, Webhook, Kafka).
+- [Service Discovery Integration](./infrastructure/service-discovery.md): Bring external service registries (Consul, Nacos, Eureka, ZooKeeper) into Edgion.
 
 ### Observability
 
-- [Access Log](./observability/access-log.md): Access log fields and output.
+- [Access Log](./observability/access-log.md): Access log fields and output (including the AI `genai` ledger).
 - [Metrics](./observability/metrics.md): Prometheus metrics collection and alerting recommendations.
+- [Metrics Inventory](./observability/metrics-inventory.md): Authoritative catalog of every `edgion_*` metric (CI-guarded).
 
 ### Configuration Reference
 
 - [Controller Configuration](./configuration/controller-config.md): Controller YAML process configuration parameters.
 - [Gateway Configuration](./configuration/gateway-config.md): Gateway YAML process configuration parameters.
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md): GatewayClass-level runtime configuration (timeouts, real IP, global plugins, etc.).
+
+### Plugin Policy
+
+- [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md): Controller-side plugin allowlist/denylist — restrict which plugin types the Gateway may execute, with block/bypass actions, status reporting, and mandatory upgrade-order warnings.
+- [Unknown Config Field Detection](./plugin-config-unknown-fields.md): Detects unrecognized keys in `EdgionPlugins`, `EdgionStreamPlugins`, typed `EdgionConfigData`, and `LinkSys` config blocks — warns via log, status condition, and diagnostics endpoint, never blocks; the `POST /api/v1/validate/{kind}` endpoint supports building your own blocking gate.
 
 ### Federation
 

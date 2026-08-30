@@ -1,11 +1,11 @@
-use crate::backends::circuit_breaker::get_circuit_breaker_store;
 use crate::backends::discovery::get_roundrobin_store;
 use crate::backends::health;
 use crate::backends::health::get_health_status_store;
+use crate::backends::outlier_detection::get_outlier_detection_store;
 use crate::lb::{compiled_selector, EdgionBackend, PolicyKind};
-use edgion_resources::edgion_status::EdgionStatus;
+use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use edgion_resources::uri_utils;
-use edgion_resources::{ConsistentHashOn, ParsedLBPolicy};
+use edgion_resources::EdgionErrorCode;
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -25,9 +25,9 @@ fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_
     cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))
 }
 
-/// Side-effect-free health predicate: active health check + circuit-breaker
+/// Side-effect-free health predicate: active health check + outlier-detection
 /// ejection, with NO metric recording. Used by the panic-threshold counting
-/// pass so it does not double-count circuit-breaker rejections.
+/// pass so it does not double-count outlier-detection rejections.
 #[inline]
 pub(crate) fn is_backend_healthy_quiet(
     service_key: &str,
@@ -39,11 +39,11 @@ pub(crate) fn is_backend_healthy_quiet(
     {
         return false;
     }
-    !get_circuit_breaker_store().is_ejected(service_key, health::check::backend_hash(backend))
+    !get_outlier_detection_store().is_ejected(service_key, health::check::backend_hash(backend))
 }
 
 /// Health predicate for the selection walk. Same logic as
-/// [`is_backend_healthy_quiet`] but records a circuit-breaker rejection metric
+/// [`is_backend_healthy_quiet`] but records a outlier-detection rejection metric
 /// when a backend is rejected for being ejected (preserves existing behavior).
 #[inline]
 pub(crate) fn is_backend_healthy(
@@ -57,8 +57,8 @@ pub(crate) fn is_backend_healthy(
     {
         return false;
     }
-    // 2. Circuit breaker filter (records the rejection metric)
-    if get_circuit_breaker_store().is_ejected(service_key, health::check::backend_hash(backend)) {
+    // 2. Outlier detection filter (records the rejection metric)
+    if get_outlier_detection_store().is_ejected(service_key, health::check::backend_hash(backend)) {
         crate::observe::metrics::record_cb_rejection(service_key);
         return false;
     }
@@ -67,14 +67,14 @@ pub(crate) fn is_backend_healthy(
 
 /// Decide whether panic mode should engage for this selection. Gated so the
 /// O(n) survivor count only runs for services that actually have health-check
-/// or circuit-breaker state (otherwise every backend passes and panic can never
+/// or outlier-detection state (otherwise every backend passes and panic can never
 /// trigger). Records the `lb_panic_mode` gauge when it evaluates.
 fn panic_engaged(
     service_key: &str,
     selector: &compiled_selector::CompiledSelector,
     health_store: &health::check::HealthStatusStore,
 ) -> bool {
-    let cb_store = get_circuit_breaker_store();
+    let cb_store = get_outlier_detection_store();
     if !health_store.has_service(service_key) && !cb_store.has_service(service_key) {
         return false;
     }
@@ -127,8 +127,8 @@ pub fn select_roundrobin_backend_key(service_key: &str) -> Option<Arc<EdgionBack
 ///
 /// Reads from the per-service `ServiceSelectorCell`, which the control plane
 /// keeps in sync with the EP/EPS data layer. Used by health/CB convenience
-/// APIs and by `pg_upstream_peer::sp_resolve_target` for session-affinity map
-/// construction.
+/// APIs and by `session_persistence::sp_lookup_rule_scoped` for session-affinity
+/// map construction.
 pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBackend>>> {
     let cell = compiled_selector::get_or_create_cell(service_key);
     let _ = hydrate_cell_if_empty(&cell, service_key);
@@ -136,7 +136,10 @@ pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBack
 }
 
 /// Extract hash key from request based on LB policy configuration.
-pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Vec<u8> {
+///
+/// `remote_ip` is the RealIp-normalized client source IP (`ctx.request_info.remote_ip`),
+/// used only by the `SourceIp` mode; the other modes read from the request headers/URI.
+pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>, remote_ip: &str) -> Vec<u8> {
     let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
         return Vec::new();
     };
@@ -184,26 +187,30 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
                 })
             })
             .unwrap_or_default(),
+        // SourceIp hashes on the normalized client IP; an empty IP yields an
+        // empty key, driving the internal RR fallback like the other modes when
+        // their value is missing.
+        ConsistentHashOn::SourceIp => remote_ip.as_bytes().to_vec(),
     }
 }
 
 /// Errors raised when the cell yields no backend, broken out per LB policy
-/// so the caller maps to the historically-correct `EdgionStatus`.
+/// so the caller maps to the historically-correct `EdgionErrorCode`.
 struct NotFoundMap {
     /// Empty backend list (no policy applies).
-    empty: EdgionStatus,
+    empty: EdgionErrorCode,
     /// Round-robin selection found nothing healthy.
-    rr: EdgionStatus,
+    rr: EdgionErrorCode,
     /// Consistent hash selected nothing (non-empty key path).
-    ch: EdgionStatus,
+    ch: EdgionErrorCode,
     /// LeastConn found nothing.
-    lc: EdgionStatus,
+    lc: EdgionErrorCode,
     /// EWMA found nothing.
-    ewma: EdgionStatus,
+    ewma: EdgionErrorCode,
 }
 
 impl NotFoundMap {
-    fn for_kind(&self, kind: PolicyKind, ch_used_hash_key: bool) -> EdgionStatus {
+    fn for_kind(&self, kind: PolicyKind, ch_used_hash_key: bool) -> EdgionErrorCode {
         match kind {
             PolicyKind::RoundRobin => self.rr,
             PolicyKind::ConsistentHash if ch_used_hash_key => self.ch,
@@ -220,8 +227,9 @@ fn pick(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
+    remote_ip: &str,
     not_found: NotFoundMap,
-) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+) -> Result<Arc<EdgionBackend>, EdgionErrorCode> {
     let cell = compiled_selector::get_or_create_cell(service_key);
     if !hydrate_cell_if_empty(&cell, service_key) {
         return Err(not_found.empty);
@@ -233,7 +241,7 @@ fn pick(
     // Build the hash key only for ConsistentHash; an empty key triggers the
     // internal RR fallback inside `CompiledSelector::ConsistentHash::select`.
     let (hash_key, hash_key_used) = if matches!(kind, PolicyKind::ConsistentHash) {
-        let key = extract_hash_key(session, lb_policy);
+        let key = extract_hash_key(session, lb_policy, remote_ip);
         let used = !key.is_empty();
         (Some(key), used)
     } else {
@@ -255,17 +263,19 @@ pub(crate) fn select_from_endpoint_slice(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
-) -> Result<Arc<EdgionBackend>, EdgionStatus> {
+    remote_ip: &str,
+) -> Result<Arc<EdgionBackend>, EdgionErrorCode> {
     pick(
         service_key,
         lb_policy,
         session,
+        remote_ip,
         NotFoundMap {
-            empty: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
-            rr: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
-            ch: EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
-            lc: EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
-            ewma: EdgionStatus::BackendEndpointSliceNotFoundByEwma,
+            empty: EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault,
+            rr: EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobin,
+            ch: EdgionErrorCode::BackendEndpointSliceNotFoundByConsistent,
+            lc: EdgionErrorCode::BackendEndpointSliceNotFoundByLeastConn,
+            ewma: EdgionErrorCode::BackendEndpointSliceNotFoundByEwma,
         },
     )
 }

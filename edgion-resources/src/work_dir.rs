@@ -58,21 +58,6 @@ impl WorkDir {
         &self.base
     }
 
-    /// Get the logs subdirectory
-    pub fn logs(&self) -> &Path {
-        &self.logs
-    }
-
-    /// Get the runtime subdirectory
-    pub fn runtime(&self) -> &Path {
-        &self.runtime
-    }
-
-    /// Get the config subdirectory
-    pub fn config(&self) -> &Path {
-        &self.config
-    }
-
     /// Resolve a path (absolute paths pass through, relative paths join with base)
     ///
     /// # Examples
@@ -189,14 +174,14 @@ mod tests {
 
         // After canonicalization, paths may differ (e.g., /var -> /private/var on macOS)
         // Just check that subdirectories have correct names
-        assert_eq!(wd.logs().file_name().unwrap(), "logs");
-        assert_eq!(wd.runtime().file_name().unwrap(), "runtime");
-        assert_eq!(wd.config().file_name().unwrap(), "config");
+        assert_eq!(wd.logs.file_name().unwrap(), "logs");
+        assert_eq!(wd.runtime.file_name().unwrap(), "runtime");
+        assert_eq!(wd.config.file_name().unwrap(), "config");
 
         // Verify they're under the base directory
-        assert!(wd.logs().starts_with(wd.base()));
-        assert!(wd.runtime().starts_with(wd.base()));
-        assert!(wd.config().starts_with(wd.base()));
+        assert!(wd.logs.starts_with(wd.base()));
+        assert!(wd.runtime.starts_with(wd.base()));
+        assert!(wd.config.starts_with(wd.base()));
     }
 
     #[test]
@@ -227,9 +212,9 @@ mod tests {
         assert!(wd.validate().is_ok());
 
         // Check that subdirectories were created
-        assert!(wd.logs().exists());
-        assert!(wd.runtime().exists());
-        assert!(wd.config().exists());
+        assert!(wd.logs.exists());
+        assert!(wd.runtime.exists());
+        assert!(wd.config.exists());
     }
 
     #[test]

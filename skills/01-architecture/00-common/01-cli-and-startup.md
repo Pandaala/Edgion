@@ -13,7 +13,7 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 |-----|---------|
 | edgion-controller | Install rustls crypto provider → `parse_args()` → `run()` |
 | edgion-gateway | Install rustls crypto provider → `parse_args()` → `run()` (plain `fn main()`, manages its own Tokio runtime) |
-| edgion-cli | `Cli::parse()` → `cli.run().await` (single-threaded Tokio) |
+| edgion-cli | `Cli::parse()` → `cli.run().await` (`#[tokio::main]`) |
 
 ## Command-line arguments
 
@@ -23,10 +23,10 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 |------|:---------:|:-------:|:---:|--------|
 | `--work-dir` / `-w` | ✓ | ✓ | ✗ | `"."` |
 | `--config-file` / `-c` | ✓ | ✓ | ✗ | `config/edgion-{type}.yaml` |
-| `--log-dir` | ✓ | ✓ | ✗ | `logs` |
+| `--log-dir` | ✓ | ✓ | ✗ | Controller: `logs`; Gateway: `/usr/local/edgion/logs` |
 | `--log-level` | ✓ | ✓ | ✗ | `info` |
 | `--json-format` | ✓ | ✓ | ✗ | `false` |
-| `--console` | ✓ | ✓ | ✗ | `true` |
+| `--console` | ✓ | ✗ | ✗ | `true` (Controller only; Gateway console output is config-file-only) |
 | `--test-mode` | ✓ | ✗ | ✗ | `false` |
 
 ### Controller-specific
@@ -42,7 +42,7 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 | Flag | Default | Description |
 |------|--------|------|
 | `--server-addr` | (required) | Controller gRPC address |
-| `--admin-listen` | — | Admin API address |
+| `--admin-listen` | `127.0.0.1:12001` | Admin API address |
 | `--threads` | CPU core count | Pingora worker threads |
 | `--work-stealing` | `true` | Task stealing |
 | `--grace-period` | `30s` | Graceful shutdown period |
@@ -56,7 +56,8 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 |------|--------|------|
 | `--target` / `-t` | `center` | Target API (center/server/client) |
 | `--server` | — | Server address (HTTP) |
-| `--socket` | — | Unix socket path |
+| `--socket` | — | Reserved argument; currently parsed but ignored, so use HTTP `--server` |
+| `--token` | — | Bearer token; overrides `EDGION_TOKEN` and `~/.edgion/token` |
 | `-f, --file` | — | File/directory path (apply/delete) |
 | `-n, --namespace` | — | Namespace filter |
 | `-o, --output` | `table` | Output format (table/json/yaml/wide) |
@@ -93,13 +94,19 @@ conf_center:
 conf_sync:
   default_capacity: 200
   no_sync_kinds: [ReferenceGrant, Secret]
+
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt
+    key: certs/grpc/primary/server.key
+    ca: certs/grpc/primary/ca.crt
 ```
 
 ### Gateway configuration example
 
 ```yaml
 gateway:
-  server_addr: "http://127.0.0.1:12151"
+  server_addrs: ["http://127.0.0.1:12151"]
 
 logging:
   log_dir: logs
@@ -117,7 +124,15 @@ access_log:
   output:
     localFile:
       path: logs/edgion_access.log
+
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/client.crt
+    key: certs/grpc/primary/client.key
+    ca: certs/grpc/primary/ca.crt
 ```
+
+The `conf_sync_security` block is mandatory: both binaries refuse to start when it is omitted. Use the canonical, fully commented examples in `config/edgion-controller.yaml` and `config/edgion-gateway.yaml`; Kubernetes deployments use `auto_ca`, while plaintext requires the explicit audited `tls.skip_tls: true` escape hatch.
 
 ## Working directory
 
@@ -197,15 +212,15 @@ The Gateway has no explicit signal handling and relies on Pingora's built-in gra
 - `grace_period_seconds` (default 30s)
 - `graceful_shutdown_timeout_seconds` (default 10s)
 
-### ctl — not needed
+### CLI — short-lived command process
 
-ctl is a synchronous CLI tool that exits as soon as the command finishes.
+The CLI uses Tokio for asynchronous HTTP and file operations and exits as soon as the command finishes; it does not install the long-running service shutdown flow.
 
 ## Global configuration storage
 
 | Global variable | Location | Purpose |
 |---------|------|------|
 | `CONTROLLER_CONFIG` | `edgion-controller/src/config/mod.rs` | Controller global configuration (`OnceLock`) |
-| `GATEWAY_INSTANCE_COUNT` | same as above | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
-| `GLOBAL_TEST_MODE` | same as above | Test mode flag (enables metrics test features) |
-| `GLOBAL_INTEGRATION_TESTING_MODE` | same as above | Integration testing mode (enables AccessLog storage + metrics test data) |
+| `GATEWAY_INSTANCE_COUNT` | `edgion-resources/src/rate_limit_config.rs` | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
+| `GLOBAL_TEST_MODE` | `edgion-common/src/test_mode.rs` | Test mode flag (enables metrics test features) |
+| `GLOBAL_INTEGRATION_TESTING_MODE` | `edgion-common/src/test_mode.rs` | Integration testing mode (enables AccessLog storage + metrics test data) |

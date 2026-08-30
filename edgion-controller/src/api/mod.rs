@@ -1,6 +1,7 @@
 // pub(crate): also used by the fed_client watch check.
 pub(crate) mod authz_classifier;
 // pub(crate): authz_layer and inject_center_identity are used at the federation spawn site.
+mod access_handlers;
 pub(crate) mod authz_middleware;
 pub(crate) mod cli_token_middleware;
 mod cluster_handlers;
@@ -8,20 +9,20 @@ mod common;
 mod configserver_handlers;
 mod debug_handlers;
 mod diagnostics_handlers;
-mod effective_handlers;
 pub(crate) mod ip_allowlist;
 mod namespaced_handlers;
 mod public_paths;
 mod region_route_handlers;
 mod resource_locks;
 mod types;
+mod validate_handlers;
 mod wipe_handlers;
 
 pub use types::{ApiResponse, ListResponse};
 
 use crate::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
-    extract::{Path, Request, State},
+    extract::{Extension, Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -135,11 +136,103 @@ async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request:
     }
 }
 
+/// Spec §6.2: decide whether a request must be rejected with the not-leader 409.
+///
+/// Pure decision function (unit-testable without axum plumbing):
+/// - `NotApplicable` (Kubernetes / FileSystem) and `Leader` pass everything;
+/// - `Follower` rejects every non-public path with 409 and a body naming the
+///   leader's admin address (`null` while unknown, e.g. mid-election);
+/// - the static public set (`/health`, `/ready`, `/metrics`,
+///   `/api/v1/auth/status`) always passes so probes keep working on a standby.
+fn not_leader_rejection(
+    status: &crate::conf_mgr::conf_center::traits::LeadershipStatus,
+    path: &str,
+) -> Option<(StatusCode, serde_json::Value)> {
+    use crate::conf_mgr::conf_center::traits::LeadershipStatus;
+    match status {
+        LeadershipStatus::NotApplicable | LeadershipStatus::Leader => None,
+        LeadershipStatus::Follower { leader_admin_addr } => {
+            if public_paths::is_static_public(path) {
+                return None;
+            }
+            Some((
+                StatusCode::CONFLICT,
+                serde_json::json!({
+                    "error": "not leader",
+                    "leader": leader_admin_addr,
+                }),
+            ))
+        }
+    }
+}
+
+/// Axum wrapper for [`not_leader_rejection`]. Lives INSIDE `create_admin_router`
+/// so the federation reverse-tunnel router is gated too (spec §6.2) — the
+/// fail-close onion in `serve_admin_api_with_shutdown` deliberately is not.
+async fn leadership_gate_middleware(State(state): State<Arc<AdminState>>, request: Request, next: Next) -> Response {
+    let status = state.conf_mgr.leadership_status();
+    match not_leader_rejection(&status, request.uri().path()) {
+        Some((code, body)) => (code, Json(body)).into_response(),
+        None => next.run(request).await,
+    }
+}
+
+/// Deadman flag: set (sticky) when the control-plane lifecycle task ends for
+/// any reason other than an orderly shutdown — including a lifecycle panic.
+/// `/health` returns 503 while set, so the liveness probe finally has a
+/// failure mode ("a liveness probe that cannot fail is not a liveness probe").
+/// The lifecycle is spawned exactly once per process (cli step 5), so there is
+/// no legitimate reset path outside tests.
+static LIFECYCLE_TERMINATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Mark the control-plane lifecycle as abnormally terminated (see
+/// `LIFECYCLE_TERMINATED`). Called from the lifecycle spawn wrapper in cli.
+pub fn mark_lifecycle_terminated() {
+    LIFECYCLE_TERMINATED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+fn lifecycle_terminated() -> bool {
+    LIFECYCLE_TERMINATED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_lifecycle_terminated_for_test() {
+    LIFECYCLE_TERMINATED.store(false, std::sync::atomic::Ordering::Release);
+}
+
 // ============= Handlers =============
 
-/// Health check endpoint - always returns OK if server is up
-async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse::ok_body("OK".to_string()))
+/// API request body for manual conf_sync rotation (Task 11).
+#[derive(serde::Deserialize)]
+struct RotateBody {
+    #[serde(default = "default_rotate_scope")]
+    scope: ApiRotateScope,
+}
+
+fn default_rotate_scope() -> ApiRotateScope {
+    ApiRotateScope::Leaf
+}
+
+/// Scope discriminator for manual rotation (API representation).
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ApiRotateScope {
+    Leaf,
+    Ca,
+}
+
+/// Health check endpoint. 200 while the process is healthy; 503 once the
+/// control-plane lifecycle has terminated abnormally (deadman — the liveness
+/// probe's failure mode of last resort).
+async fn health_check() -> Response {
+    if lifecycle_terminated() {
+        let body = Json(ApiResponse::<()>::err_body(
+            "control-plane lifecycle terminated".to_string(),
+        ));
+        (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    } else {
+        Json(ApiResponse::ok_body("OK".to_string())).into_response()
+    }
 }
 
 /// Readiness check endpoint - returns OK only when ConfigServer is ready
@@ -277,7 +370,21 @@ fn apply_center_reload(state: &AdminState) {
 ///
 /// Gateway clients will detect the server_id change and re-list all resources.
 ///
-/// Returns `Retry-After: 5` on 503 — a reload already in progress is a transient condition.
+/// Returns `Retry-After: 5` on 503. `request_reload()` refuses for more than one
+/// transient reason — a reload is already queued, or the config center is not
+/// started/ready — so the response body, not the status, is what says which.
+///
+/// **The 200 is an initiation acknowledgement only.** `request_reload()` is
+/// fire-and-forget, so this response can promise nothing about steps 1-4 above;
+/// a reload that starts and then wedges still answers 200 here. There is
+/// deliberately no completion signal on this response and no callback: the new
+/// `server_id` from step 3 *is* the completion signal, and it reaches observers
+/// on their own channels — Gateways via conf_sync re-list, and Center via the
+/// `server_id` on the federation watch stream (which Center compares against
+/// the value it cached before dispatching; see
+/// `EdgionCenter/crates/center-app/src/api/reload_ops.rs`). Callers that need a
+/// terminal state must observe one of those, or poll
+/// `GET /api/v1/server-info`, rather than reading this 200 as "reloaded".
 async fn reload_all_resources(State(state): State<Arc<AdminState>>) -> impl IntoResponse {
     tracing::info!(
         component = "admin_api",
@@ -342,6 +449,65 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> impl I
             key
         )));
         (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    }
+}
+
+/// Manually trigger conf_sync certificate rotation (leaf or root).
+///
+/// POST /api/v1/services/conf-sync-ca/rotate
+///
+/// Request body: `{"scope": "leaf"|"ca"}` (default `leaf`).
+/// - 202 Accepted: enqueued on the leader
+/// - 409 Conflict: not the leader; retry via edgion-controller-leader Service
+/// - 503 Service Unavailable: leader, but rotation service not ready yet
+/// - 400 Bad Request: auto_ca disabled; replace files and hot reload applies them
+async fn trigger_conf_sync_rotate(
+    identity: Option<Extension<crate::api::cli_token_middleware::CliTokenIdentity>>,
+    body: Option<Json<RotateBody>>,
+) -> impl IntoResponse {
+    use crate::services::conf_sync_ca::rotation::{trigger_manual_rotation, RotateScope, TriggerResult};
+
+    let scope = match body.map(|Json(b)| b.scope).unwrap_or(ApiRotateScope::Leaf) {
+        ApiRotateScope::Leaf => RotateScope::Leaf,
+        ApiRotateScope::Ca => RotateScope::Ca,
+    };
+
+    // The cli-token authn middleware (`cli_token_pre_authn`) injects this identity
+    // for both the local admin token and scoped `cli_tokens` entries; trivially
+    // available here via the same `Extension` mechanism `authz_middleware` uses
+    // for its deny-audit log, so include it for this security-relevant trigger too.
+    let requester = identity
+        .as_ref()
+        .map(|Extension(id)| id.name.as_str())
+        .unwrap_or("unknown");
+
+    tracing::info!(
+        component = "admin_api",
+        event = "conf_sync_rotate_trigger",
+        scope = ?scope,
+        requester = %requester,
+        "manual rotation requested"
+    );
+
+    match trigger_manual_rotation(scope).await {
+        TriggerResult::Accepted => (StatusCode::ACCEPTED, Json(serde_json::json!({"status": "accepted"}))),
+        TriggerResult::NotLeader => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "not leader",
+                "hint": "retry via the edgion-controller-leader Service (admin HTTP port)"
+            })),
+        ),
+        TriggerResult::LeaderNotReady => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "rotation service not ready on the leader; retry shortly"})),
+        ),
+        TriggerResult::NotConfigured => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "auto_ca disabled: rotation is externally managed; replace the cert files (hot reload applies them)"
+            })),
+        ),
     }
 }
 
@@ -446,6 +612,7 @@ pub fn create_admin_router(
         )
         .merge(write_routes)
         // Special operations
+        .route("/api/v1/access", get(access_handlers::get_access))
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
         // Effective resolved views for Center dashboard polling.
@@ -453,29 +620,15 @@ pub fn create_admin_router(
             "/api/v1/region-routes/effective",
             get(region_route_handlers::list_region_routes_effective),
         )
-        .route(
-            "/api/v1/cluster-region-routes",
-            get(region_route_handlers::list_cluster_region_edgion_config_data),
-        )
-        .route(
-            "/api/v1/service-region-routes",
-            get(region_route_handlers::list_service_region_edgion_config_data),
-        )
-        .route(
-            "/api/v1/global-ip-restrictions/effective",
-            get(effective_handlers::global_ip_restrictions_effective),
-        )
-        // New-URL aliases for RegionRoute failover
+        // RegionRoute failover
         .route(
             "/api/v1/cluster-region-routes/failover",
             post(region_route_handlers::cluster_edgion_config_data_failover),
         )
-        .route(
-            "/api/v1/service-region-routes/failover",
-            post(region_route_handlers::service_edgion_config_data_failover),
-        )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
+        // Services: conf_sync rotation manual trigger
+        .route("/api/v1/services/conf-sync-ca/rotate", post(trigger_conf_sync_rotate))
         // Diagnostics: roadmap data conditions (e.g. ExtensionRef → Envoy alignment)
         .route(
             "/api/v1/diagnostics/nested_ext_ref_usage",
@@ -485,6 +638,14 @@ pub fn create_admin_router(
             "/api/v1/diagnostics/conf-conflicts",
             get(diagnostics_handlers::conf_conflicts),
         )
+        .route(
+            "/api/v1/diagnostics/unknown-fields",
+            get(diagnostics_handlers::unknown_fields),
+        )
+        // Read-only validation verdict on a submitted (not-yet-applied) document:
+        // the building block for an operator's own blocking gate, since the
+        // controller itself only ever warns.
+        .route("/api/v1/validate/{kind}", post(validate_handlers::validate_kind))
         // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))
@@ -498,37 +659,17 @@ pub fn create_admin_router(
             )
             .route(
                 "/api/v1/admin/wipe-all",
-                post(wipe_handlers::wipe_all).with_state(admin_state),
+                post(wipe_handlers::wipe_all).with_state(admin_state.clone()),
             );
     }
-    router
-}
-
-/// Serve the admin API on the specified address.
-///
-/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown
-/// future. Kept as a separate public entry point for callers that don't need
-/// graceful shutdown plumbing.
-pub async fn serve(
-    conf_mgr: Arc<ConfMgr>,
-    schema_validator: Arc<SchemaValidator>,
-    addr: std::net::SocketAddr,
-    config_file: Option<String>,
-    authorizer: Arc<crate::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
-    allow_admin_ips: Vec<String>,
-) -> anyhow::Result<()> {
-    serve_with_shutdown(
-        conf_mgr,
-        schema_validator,
-        addr,
-        config_file,
-        authorizer,
-        center_reload_tx,
-        allow_admin_ips,
-        std::future::pending::<()>(),
-    )
-    .await
+    // Spec §6.2: the not-leader 409 gate wraps the WHOLE router (business +
+    // test-mode routes) and lives here — not in `serve_admin_api_with_shutdown`
+    // — so the federation reverse-tunnel router built from this same function is
+    // gated too. `NotApplicable` (K8s / FileSystem) makes it a pass-through.
+    router.layer(axum::middleware::from_fn_with_state(
+        admin_state,
+        leadership_gate_middleware,
+    ))
 }
 
 /// Serve the admin API with graceful shutdown support.
@@ -1096,5 +1237,138 @@ mod admin_exposure_tests {
     #[test]
     fn ipv4_mapped_nonloopback_empty_allowlist_is_insecure() {
         assert!(admin_exposure_is_insecure(&addr("[::ffff:10.1.2.3]:12101"), &[]));
+    }
+}
+
+#[cfg(test)]
+mod deadman_tests {
+    use super::*;
+
+    // NOTE: LIFECYCLE_TERMINATED is process-global and sticky by design; these
+    // tests reset it and must not run concurrently with each other. Keeping
+    // them in one #[tokio::test] serializes them.
+    #[tokio::test]
+    async fn health_check_reflects_lifecycle_flag() {
+        reset_lifecycle_terminated_for_test();
+        let resp = health_check().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        mark_lifecycle_terminated();
+        let resp = health_check().await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        reset_lifecycle_terminated_for_test();
+        let resp = health_check().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+}
+
+#[cfg(test)]
+mod rotate_scope_tests {
+    use super::{ApiRotateScope, RotateBody};
+
+    #[test]
+    fn rotate_scope_parses_with_leaf_default() {
+        let s: RotateBody = serde_json::from_str("{}").unwrap();
+        assert!(matches!(s.scope, ApiRotateScope::Leaf));
+        let s: RotateBody = serde_json::from_str(r#"{"scope":"ca"}"#).unwrap();
+        assert!(matches!(s.scope, ApiRotateScope::Ca));
+        assert!(serde_json::from_str::<RotateBody>(r#"{"scope":"root"}"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod leadership_gate_tests {
+    use super::*;
+    use crate::conf_mgr::conf_center::traits::LeadershipStatus;
+    use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
+    use tower::ServiceExt;
+
+    #[test]
+    fn follower_rejects_business_paths_with_leader_addr() {
+        let status = LeadershipStatus::Follower {
+            leader_admin_addr: Some("10.0.0.11:8080".to_string()),
+        };
+        for path in [
+            "/api/v1/cluster/EdgionTls",
+            "/api/v1/namespaced/HTTPRoute/default",
+            "/api/v1/reload",
+            "/configserver/HTTPRoute/list",
+        ] {
+            let (code, body) = not_leader_rejection(&status, path).expect("business path must be rejected");
+            assert_eq!(code, StatusCode::CONFLICT, "{path}");
+            assert_eq!(body["error"], "not leader");
+            assert_eq!(body["leader"], "10.0.0.11:8080");
+        }
+    }
+
+    #[test]
+    fn follower_without_known_leader_rejects_with_null_leader() {
+        let status = LeadershipStatus::Follower {
+            leader_admin_addr: None,
+        };
+        let (code, body) = not_leader_rejection(&status, "/api/v1/reload").expect("rejected");
+        assert_eq!(code, StatusCode::CONFLICT);
+        assert!(body["leader"].is_null(), "unknown leader must serialize as null");
+    }
+
+    #[test]
+    fn follower_keeps_public_paths_open() {
+        let status = LeadershipStatus::Follower {
+            leader_admin_addr: Some("10.0.0.11:8080".to_string()),
+        };
+        for path in ["/health", "/ready", "/metrics", "/api/v1/auth/status"] {
+            assert!(
+                not_leader_rejection(&status, path).is_none(),
+                "{path} must stay open on a standby"
+            );
+        }
+    }
+
+    #[test]
+    fn leader_and_not_applicable_pass_everything() {
+        for status in [LeadershipStatus::Leader, LeadershipStatus::NotApplicable] {
+            assert!(not_leader_rejection(&status, "/api/v1/reload").is_none());
+            assert!(not_leader_rejection(&status, "/api/v1/cluster/EdgionTls").is_none());
+        }
+    }
+
+    /// S3/S4 zero-impact guard: a FileSystem-backed ConfMgr (leadership
+    /// `NotApplicable`) must never see a 409 from the gate on the full router.
+    #[tokio::test]
+    async fn gate_is_passthrough_when_not_applicable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp.path().to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create"),
+        );
+        assert_eq!(conf_mgr.leadership_status(), LeadershipStatus::NotApplicable);
+
+        let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
+        let router = create_admin_router(
+            conf_mgr,
+            Arc::new(SchemaValidator::empty()),
+            None,
+            Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all())),
+            tx,
+        );
+
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/server-info")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "NotApplicable must disable the not-leader gate"
+        );
     }
 }

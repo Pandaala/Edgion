@@ -1,0 +1,29 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: invalid-update-must-not-activate
+    - enable: true
+      type: Dsl
+      config:
+        name: body-dynamic-json-select
+        maxBodyScanPasses: 1
+        source: |
+          let dynamicPlan = {"version": "$.version"}
+          let values = req.body.json_select(dynamicPlan)
+          if values["version"] != "invalid-update-must-not-activate" {
+            return deny(422, "invalid update activated")
+          }
+        errorPolicy: deny

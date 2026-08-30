@@ -113,7 +113,7 @@ impl ProfileRules {
         let has_deny =
             self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
         if !has_allow && !has_deny {
-            return Err("at least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
+            return Err("at least one of 'allow'/'deny'/'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
 
         // Intentionally stricter than HTTP/L4 IpRestriction: a present-but-empty

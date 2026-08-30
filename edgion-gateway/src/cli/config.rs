@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use edgion_resources::rate_limit_config::RateLimitGlobalConfig;
+use edgion_resources::resources::common::parse_byte_size;
+use edgion_resources::resources::edgion_plugins::{
+    validate_tiny_ufo_effective_limits, LruCacheConfig, TinyUfoTtlCacheConfig, MAX_LRU_CACHE_CAPACITY,
+    MAX_LRU_CACHE_SHARDS,
+};
 use edgion_resources::LogConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -60,7 +65,8 @@ pub struct EdgionGatewayConfig {
     #[serde(default = "default_access_log_config")]
     pub access_log: LogConfig,
 
-    /// Sensitive data masking for access logs. Disabled by default.
+    /// Sensitive data masking for access logs. Defaults to `replace`
+    /// (privacy-by-default); set `mode: off` to opt out.
     ///
     /// YAML example (replace mode):
     ///   access_log_sensitive:
@@ -115,10 +121,15 @@ pub struct EdgionGatewayConfig {
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
 
-    /// Global LRU cache configuration for plugins
+    /// Global configuration for the retained LRU implementation
     #[arg(skip)]
     #[serde(default, alias = "auth_cache")]
     pub lru_cache: LruCacheGlobalConfig,
+
+    /// Global bounded TinyUFO TTL-cache configuration
+    #[arg(skip)]
+    #[serde(default)]
+    pub tiny_ufo_ttl_cache: TinyUfoTtlCacheGlobalConfig,
 
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
@@ -135,7 +146,13 @@ pub struct EdgionGatewayConfig {
     pub integration_testing_mode: bool,
 
     /// conf_sync gRPC channel security (mTLS).
-    /// Omit this section to keep plaintext gRPC (backward compatible).
+    ///
+    /// REQUIRED: this section carries the transport choice for a channel that delivers
+    /// resolved Secrets to this data plane, so it must be made explicitly. Omitting it
+    /// makes the Gateway REFUSE TO START (see
+    /// `ConfSyncSecurityConfig::ensure_transport_configured`). Configure exactly one of:
+    /// `auto_ca: true` (Kubernetes), `certs`/legacy `tls` cert paths (file-mode mTLS), or
+    /// `tls.skip_tls: true` — the explicit opt-in for plaintext. Must match the Controller.
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: edgion_common::conf_sync::config::ConfSyncSecurityConfig,
@@ -155,12 +172,22 @@ pub struct EdgionGatewayConfig {
 }
 
 /// Gateway configuration
-#[derive(Clone, Serialize, Deserialize, Args, Default)]
+///
+/// `Debug` is derived: `admin_token` is a `RedactedString` (see
+/// `crate::util::redacted`), whose own `Debug` always prints `[redacted]`, so
+/// every other field stays visible by default and a future field needs no
+/// opt-in to show up in diagnostics — see the hazard note on
+/// `crate::geoip::GeoIpConfig`, whose hand-written `Debug` impl was the
+/// original instance of the pattern this inverts.
+#[derive(Debug, Clone, Serialize, Deserialize, Args)]
 pub struct GatewayConfig {
-    /// Operator gRPC address (e.g., http://127.0.0.1:12151)
+    /// Controller conf_sync gRPC addresses (repeatable). One address is exactly
+    /// the previous single-address behavior; multiple addresses enable etcd-mode
+    /// HA failover — the gateway rotates through the list to find the leader
+    /// (spec §7.1). E.g. `--server-addr 10.0.0.11:12151 --server-addr 10.0.0.12:12151`.
     #[arg(long = "server-addr", value_name = "ADDR")]
     #[serde(default)]
-    pub server_addr: Option<String>,
+    pub server_addrs: Vec<String>,
 
     /// Gateway admin HTTP listen address
     #[arg(long = "admin-listen", value_name = "ADDR")]
@@ -176,20 +203,140 @@ pub struct GatewayConfig {
     /// flag, so it never lands in process args / `ps`). In Kubernetes, prefer
     /// the `EDGION_GATEWAY_ADMIN_TOKEN` env var injected from a Secret; this
     /// field is the fallback for a Secret-mounted config file. Never serialized
-    /// out, and redacted in `Debug` (see the manual impl below).
+    /// out, and redacted in `Debug` (`RedactedString` — see the struct doc).
     #[arg(skip)]
     #[serde(default, skip_serializing)]
-    pub admin_token: Option<String>,
+    pub admin_token: Option<crate::util::RedactedString>,
+
+    /// Require BoringSSL FIPS mode at startup. Default false.
+    /// When true and the module is absent (a non-FIPS build), the gateway logs
+    /// a clear error and exits non-zero. Also settable via `EDGION_REQUIRE_FIPS`
+    /// (truthy: 1/true/yes/on). See the FIPS design spec.
+    #[arg(long = "require-fips")]
+    #[serde(default)]
+    pub require_fips: bool,
+
+    /// GeoIP database and updater settings. Process-wide and restart-only.
+    #[arg(skip)]
+    #[serde(default)]
+    pub geoip: crate::geoip::GeoIpConfig,
+
+    /// How to select the FIPS-approved TLS policy (approved cipher list +
+    /// curves) on downstream listeners. `auto` (the default) follows the host
+    /// kernel's FIPS mode; `on` always enforces; `off` never does. A real FIPS
+    /// build enforces the policy unconditionally regardless of this setting.
+    ///
+    /// Accepts only `auto`/`on`/`off`. Also settable via `EDGION_FIPS_POLICY`
+    /// (same three values), which takes precedence over this field. `None`
+    /// means "not specified".
+    /// See skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
+    #[arg(
+        long = "fips-policy",
+        value_name = "MODE",
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "on"
+    )]
+    #[serde(default)]
+    pub fips_policy: Option<crate::tls::fips_profile::FipsPolicyMode>,
+
+    /// Reject RFC1918 / unique-local addresses for outbound URL targets by default.
+    /// A `target.blockPrivate` on the resource overrides this. Loopback and
+    /// link-local are always rejected regardless. Default false, matching
+    /// `classify_backend_addr`'s stance for Service targets.
+    /// Set in the gateway config file, or via `EDGION_OUTBOUND_BLOCK_PRIVATE`
+    /// (truthy: 1/true/yes/on).
+    #[arg(skip)]
+    #[serde(default)]
+    pub outbound_egress_block_private: bool,
+
+    /// TTL in milliseconds for `EgressResolver`'s per-client address memo.
+    /// Deliberately distinct from `EdgionGatewayConfig.dnsResolver.cacheTtl`, which
+    /// governs ExternalName self-resolution. Default 5s, matching
+    /// `backends::discovery::dns_cache::DEFAULT_DNS_CACHE_TTL`.
+    /// Set in the gateway config file, or via `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`.
+    #[arg(skip)]
+    #[serde(default = "default_outbound_egress_dns_cache_ttl_ms")]
+    pub outbound_egress_dns_cache_ttl_ms: u64,
+
+    /// Directory for the Wasm OCI image disk cache (manifests + layer blobs,
+    /// content-addressed). Relative paths resolve against the work directory.
+    /// Unset uses `wasm-oci-cache`; an empty string disables disk caching.
+    #[arg(skip)]
+    #[serde(default)]
+    pub wasm_oci_cache_dir: Option<String>,
+
+    /// Seconds since last use before a cached OCI file is purged (default 24h).
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_ttl_secs")]
+    pub wasm_oci_cache_ttl_secs: u64,
+
+    /// Seconds between purge sweeps of the OCI disk cache (default 1h).
+    /// Values below 1 second (including `0`) are clamped up to 1 second at
+    /// startup to avoid a busy purge loop; `0` carries no "disable" meaning.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_purge_interval_secs")]
+    pub wasm_oci_cache_purge_interval_secs: u64,
+
+    /// Total-size budget in bytes for the OCI disk cache (default 512MiB).
+    /// Enforced on every write with LRU eviction; `0` removes the cap.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_max_bytes")]
+    pub wasm_oci_cache_max_bytes: u64,
+
+    /// Per-request timeout in seconds for OCI pull requests (manifest, token,
+    /// and blob alike; istio-agent WASM_HTTP_REQUEST_TIMEOUT parity). Default 60.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_pull_timeout_secs")]
+    pub wasm_oci_pull_timeout_secs: u64,
+
+    /// Total attempts (including the first) for each OCI pull request;
+    /// transport errors and 5xx retry, 4xx never does. Default 3.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_pull_attempts")]
+    pub wasm_oci_pull_attempts: u32,
 }
 
-impl std::fmt::Debug for GatewayConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GatewayConfig")
-            .field("server_addr", &self.server_addr)
-            .field("admin_listen", &self.admin_listen)
-            .field("probe_listen", &self.probe_listen)
-            .field("admin_token", &self.admin_token.as_ref().map(|_| "[redacted]"))
-            .finish()
+/// 5s — matches `backends::discovery::dns_cache::DEFAULT_DNS_CACHE_TTL`.
+fn default_outbound_egress_dns_cache_ttl_ms() -> u64 {
+    5_000
+}
+
+fn default_wasm_oci_cache_ttl_secs() -> u64 {
+    86_400
+}
+fn default_wasm_oci_cache_purge_interval_secs() -> u64 {
+    3_600
+}
+fn default_wasm_oci_cache_max_bytes() -> u64 {
+    512 * 1024 * 1024
+}
+fn default_wasm_oci_pull_timeout_secs() -> u64 {
+    60
+}
+fn default_wasm_oci_pull_attempts() -> u32 {
+    3
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            server_addrs: Vec::new(),
+            admin_listen: None,
+            probe_listen: None,
+            admin_token: None,
+            require_fips: false,
+            geoip: crate::geoip::GeoIpConfig::default(),
+            fips_policy: None,
+            outbound_egress_block_private: false,
+            outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
+            wasm_oci_cache_dir: None,
+            wasm_oci_cache_ttl_secs: default_wasm_oci_cache_ttl_secs(),
+            wasm_oci_cache_purge_interval_secs: default_wasm_oci_cache_purge_interval_secs(),
+            wasm_oci_cache_max_bytes: default_wasm_oci_cache_max_bytes(),
+            wasm_oci_pull_timeout_secs: default_wasm_oci_pull_timeout_secs(),
+            wasm_oci_pull_attempts: default_wasm_oci_pull_attempts(),
+        }
     }
 }
 
@@ -208,6 +355,97 @@ pub fn integration_testing_mode_env_enabled(env_value: Option<&str>) -> bool {
         Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
         None => false,
     }
+}
+
+/// Env var that forces the FIPS-module startup assertion. Truthy: 1/true/yes/on.
+pub const REQUIRE_FIPS_ENV: &str = "EDGION_REQUIRE_FIPS";
+
+/// Whether `EDGION_REQUIRE_FIPS` is set to a truthy value (trimmed, lowercased).
+/// Unset/empty/other => false.
+pub fn require_fips_env_enabled(env_value: Option<&str>) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
+
+/// Env var that selects the FIPS-approved TLS policy. Accepts `auto`/`on`/`off`.
+pub const FIPS_POLICY_ENV: &str = "EDGION_FIPS_POLICY";
+
+/// The three outcomes of reading `EDGION_FIPS_POLICY`. `Invalid` is kept
+/// distinct from `Unset` so the caller can WARN on a typo rather than silently
+/// falling through — a misspelled value must never change policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvPolicy {
+    /// Not set, or set to whitespace.
+    Unset,
+    /// Set to an unrecognized token, carried for the WARN message.
+    Invalid(String),
+    /// Set to a recognized mode.
+    Set(crate::tls::fips_profile::FipsPolicyMode),
+}
+
+/// Parse `EDGION_FIPS_POLICY`. Unset or empty falls through to the config file.
+pub fn fips_policy_env_mode(env_value: Option<&str>) -> EnvPolicy {
+    let Some(raw) = env_value else {
+        return EnvPolicy::Unset;
+    };
+    if raw.trim().is_empty() {
+        return EnvPolicy::Unset;
+    }
+    match crate::tls::fips_profile::FipsPolicyMode::parse_token(raw) {
+        Some(mode) => EnvPolicy::Set(mode),
+        None => EnvPolicy::Invalid(raw.trim().to_string()),
+    }
+}
+
+/// Env var that force-enables `block_private` for outbound URL targets.
+/// Truthy: 1/true/yes/on.
+pub const OUTBOUND_BLOCK_PRIVATE_ENV: &str = "EDGION_OUTBOUND_BLOCK_PRIVATE";
+
+/// Whether `EDGION_OUTBOUND_BLOCK_PRIVATE` is set to a truthy value (trimmed,
+/// lowercased). Unset/empty/other => false.
+pub fn outbound_block_private_env_enabled(env_value: Option<&str>) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
+
+/// Env var overriding the outbound egress DNS cache TTL, in milliseconds.
+pub const OUTBOUND_DNS_CACHE_TTL_MS_ENV: &str = "EDGION_OUTBOUND_DNS_CACHE_TTL_MS";
+
+/// Resolve the outbound egress DNS cache TTL (ms): the env override takes
+/// precedence over `config_value` when present and parses as `u64`. An
+/// unparseable env value is not worth failing startup over — this logs a WARN
+/// and falls back to `config_value` instead of propagating the parse error.
+pub fn resolve_outbound_egress_dns_cache_ttl_ms(config_value: u64, env_value: Option<&str>) -> u64 {
+    match env_value {
+        Some(raw) => match raw.trim().parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                tracing::warn!(
+                    target: "startup",
+                    raw_value = raw,
+                    "EDGION_OUTBOUND_DNS_CACHE_TTL_MS is not a valid u64; keeping configured value"
+                );
+                config_value
+            }
+        },
+        None => config_value,
+    }
+}
+
+/// Startup gate: when FIPS mode is required but absent,
+/// return an error string for the caller to log before exiting non-zero.
+pub fn check_fips_requirement(require_fips: bool, module_available: bool) -> Result<(), String> {
+    if require_fips && !module_available {
+        return Err("FIPS required (require_fips / EDGION_REQUIRE_FIPS) but this binary \
+             does not run BoringSSL in FIPS mode; deploy a FIPS-mode build \
+             or unset the requirement"
+            .to_string());
+    }
+    Ok(())
 }
 
 /// Resolve the gateway admin token from its sources, highest precedence first:
@@ -362,6 +600,14 @@ pub struct MetricsConfig {
     pub request_duration: RequestDurationConfig,
     /// `edgion_backend_requests_total` per-label toggles
     pub backend_requests: BackendRequestsConfig,
+    /// Optional bounded GenAI token trend counter.
+    pub genai_tokens: GenAiTokensConfig,
+    /// Max distinct series before the runtime cardinality guard acts (0 = off).
+    #[serde(default = "default_cardinality_cap")]
+    pub cardinality_cap: usize,
+    /// Guard behavior on breach: enforce (drop new series) | observe (flag only).
+    #[serde(default)]
+    pub cardinality_mode: edgion_common::observe::cardinality_guard::CardinalityMode,
 }
 
 impl Default for MetricsConfig {
@@ -370,8 +616,25 @@ impl Default for MetricsConfig {
             listen: "0.0.0.0:12090".to_string(),
             request_duration: RequestDurationConfig::default(),
             backend_requests: BackendRequestsConfig::default(),
+            genai_tokens: GenAiTokensConfig::default(),
+            cardinality_cap: default_cardinality_cap(),
+            cardinality_mode: Default::default(),
         }
     }
+}
+
+fn default_cardinality_cap() -> usize {
+    10_000
+}
+
+/// `edgion_gateway_genai_tokens_total` configuration
+/// (`metrics.genai_tokens` in YAML).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GenAiTokensConfig {
+    /// Enable the bounded token rate/trend counter. Per-request access-log
+    /// usage is always recorded independently of this switch.
+    pub enabled: bool,
 }
 
 /// Request duration histogram configuration (`metrics.request_duration` in YAML)
@@ -531,6 +794,26 @@ pub fn get_backend_requests_config() -> &'static BackendRequestsConfig {
 }
 
 // ============================================
+// GenAI Token Counter Configuration
+// ============================================
+
+/// Global restart-bound GenAI token counter configuration.
+static GENAI_TOKENS_CONFIG: OnceLock<GenAiTokensConfig> = OnceLock::new();
+
+/// Initialize the global GenAI token counter configuration once at startup.
+pub fn init_genai_tokens_config(config: GenAiTokensConfig) {
+    let result = GENAI_TOKENS_CONFIG.set(config);
+    debug_assert!(result.is_ok(), "init_genai_tokens_config called more than once");
+}
+
+/// Get the GenAI token counter configuration. Tests and tooling that do not
+/// boot the Gateway default to disabled without registering the metric family.
+#[inline]
+pub fn get_genai_tokens_config() -> &'static GenAiTokensConfig {
+    GENAI_TOKENS_CONFIG.get_or_init(GenAiTokensConfig::default)
+}
+
+// ============================================
 // Access Log Options Global Configuration
 // ============================================
 
@@ -551,6 +834,10 @@ pub fn init_access_log_options(options: edgion_resources::observe::AccessLogOpti
 pub fn get_access_log_options() -> &'static edgion_resources::observe::AccessLogOptions {
     ACCESS_LOG_OPTIONS.get_or_init(edgion_resources::observe::AccessLogOptions::default)
 }
+
+// ============================================
+// GeoIP Log Options Global Configuration
+// ============================================
 
 // ============================================
 // LRU Cache Global Configuration
@@ -598,10 +885,46 @@ impl Default for LruCacheGlobalConfig {
 
 static LRU_CACHE_GLOBAL_CONFIG: OnceLock<LruCacheGlobalConfig> = OnceLock::new();
 
-/// Initialize the global LRU cache configuration (call once at startup).
-pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) {
+fn validate_effective_lru_cache_limits(capacity: usize, shards: usize) -> Result<(), String> {
+    if capacity == 0 {
+        return Err("LRU cache capacity must be greater than zero".to_string());
+    }
+    if capacity > MAX_LRU_CACHE_CAPACITY {
+        return Err(format!(
+            "LRU cache capacity {capacity} exceeds the safety ceiling {MAX_LRU_CACHE_CAPACITY}"
+        ));
+    }
+    let effective_shards = shards.max(1);
+    if effective_shards > MAX_LRU_CACHE_SHARDS {
+        return Err(format!(
+            "LRU cache shards {effective_shards} exceeds the safety ceiling {MAX_LRU_CACHE_SHARDS}"
+        ));
+    }
+    if effective_shards > capacity {
+        return Err("LRU cache shards must not exceed capacity".to_string());
+    }
+    Ok(())
+}
+
+/// Initialize the validated global LRU cache configuration once at startup.
+pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) -> Result<(), String> {
+    validate_effective_lru_cache_limits(config.default_capacity, config.default_shards)?;
     let result = LRU_CACHE_GLOBAL_CONFIG.set(config.clone());
     debug_assert!(result.is_ok(), "init_lru_cache_global_config called more than once");
+    Ok(())
+}
+
+pub fn resolve_lru_cache_limits(config: &LruCacheConfig) -> Result<(usize, usize), String> {
+    config
+        .validation_error()
+        .map_or(Ok(()), |error| Err(error.to_string()))?;
+    let (capacity, shards) = if config.capacity == 0 {
+        (get_default_lru_cache_capacity(), get_default_lru_cache_shards())
+    } else {
+        (config.capacity, config.shards)
+    };
+    validate_effective_lru_cache_limits(capacity, shards)?;
+    Ok((capacity, shards))
 }
 
 /// Get the default LRU cache capacity.
@@ -610,7 +933,7 @@ pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) {
 pub fn get_default_lru_cache_capacity() -> usize {
     LRU_CACHE_GLOBAL_CONFIG
         .get()
-        .map(|c| c.default_capacity)
+        .map(|config| config.default_capacity)
         .unwrap_or(DEFAULT_LRU_CACHE_CAPACITY)
 }
 
@@ -619,8 +942,100 @@ pub fn get_default_lru_cache_capacity() -> usize {
 pub fn get_default_lru_cache_shards() -> usize {
     LRU_CACHE_GLOBAL_CONFIG
         .get()
-        .map(|c| c.default_shards)
+        .map(|config| config.default_shards)
         .unwrap_or(DEFAULT_LRU_CACHE_SHARDS)
+}
+
+// ============================================
+// TinyUFO TTL Cache Global Configuration
+// ============================================
+
+const DEFAULT_TINY_UFO_TTL_CACHE_MAX_ENTRIES: usize = 1024;
+const DEFAULT_TINY_UFO_TTL_CACHE_MAX_LOGICAL_BYTES: &str = "4MiB";
+const DEFAULT_REFRESH_SINGLEFLIGHT_MAX_REGISTERED_KEYS: usize = 1024;
+
+fn default_tiny_ufo_ttl_cache_max_entries() -> usize {
+    DEFAULT_TINY_UFO_TTL_CACHE_MAX_ENTRIES
+}
+
+fn default_tiny_ufo_ttl_cache_max_logical_bytes() -> String {
+    DEFAULT_TINY_UFO_TTL_CACHE_MAX_LOGICAL_BYTES.to_string()
+}
+
+/// Global defaults for bounded TinyUFO TTL caches.
+///
+/// ## YAML Configuration Example:
+/// ```yaml
+/// tiny_ufo_ttl_cache:
+///   default_max_entries: 1024
+///   default_max_logical_bytes: 4MiB
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TinyUfoTtlCacheGlobalConfig {
+    #[serde(default = "default_tiny_ufo_ttl_cache_max_entries")]
+    pub default_max_entries: usize,
+
+    #[serde(default = "default_tiny_ufo_ttl_cache_max_logical_bytes")]
+    pub default_max_logical_bytes: String,
+}
+
+impl Default for TinyUfoTtlCacheGlobalConfig {
+    fn default() -> Self {
+        Self {
+            default_max_entries: DEFAULT_TINY_UFO_TTL_CACHE_MAX_ENTRIES,
+            default_max_logical_bytes: default_tiny_ufo_ttl_cache_max_logical_bytes(),
+        }
+    }
+}
+
+static TINY_UFO_TTL_CACHE_GLOBAL_CONFIG: OnceLock<TinyUfoTtlCacheGlobalConfig> = OnceLock::new();
+
+/// Initialize validated TinyUFO TTL-cache defaults once at Gateway startup.
+pub fn init_tiny_ufo_ttl_cache_global_config(config: &TinyUfoTtlCacheGlobalConfig) -> Result<(), String> {
+    resolve_tiny_ufo_ttl_cache_limits_with(config, &TinyUfoTtlCacheConfig::default())?;
+    let result = TINY_UFO_TTL_CACHE_GLOBAL_CONFIG.set(config.clone());
+    debug_assert!(
+        result.is_ok(),
+        "init_tiny_ufo_ttl_cache_global_config called more than once"
+    );
+    Ok(())
+}
+
+fn resolve_tiny_ufo_ttl_cache_limits_with(
+    global: &TinyUfoTtlCacheGlobalConfig,
+    plugin: &TinyUfoTtlCacheConfig,
+) -> Result<crate::cache::TinyUfoCacheLimits, String> {
+    if let Some(error) = plugin.validation_error() {
+        return Err(error.to_string());
+    }
+    let max_entries = if plugin.max_entries == 0 {
+        global.default_max_entries
+    } else {
+        plugin.max_entries
+    };
+    let logical_bytes = match plugin.parsed_max_logical_bytes().map_err(str::to_string)? {
+        Some(bytes) => bytes,
+        None => parse_byte_size(&global.default_max_logical_bytes)
+            .ok_or_else(|| "defaultMaxLogicalBytes must be a valid byte size".to_string())?,
+    };
+    let logical_bytes = usize::try_from(logical_bytes)
+        .map_err(|_| "TinyUFO TTL cache logical budget does not fit this platform".to_string())?;
+    validate_tiny_ufo_effective_limits(max_entries, logical_bytes).map_err(str::to_string)?;
+    let limits = crate::cache::TinyUfoCacheLimits::try_new(max_entries, logical_bytes).map_err(|e| e.to_string())?;
+    crate::cache::TinyUfoTtlCache::<String, String>::validate_limits(limits).map_err(|e| e.to_string())?;
+    Ok(limits)
+}
+
+pub fn resolve_tiny_ufo_ttl_cache_limits(
+    config: &TinyUfoTtlCacheConfig,
+) -> Result<crate::cache::TinyUfoCacheLimits, String> {
+    let global = TINY_UFO_TTL_CACHE_GLOBAL_CONFIG.get().cloned().unwrap_or_default();
+    resolve_tiny_ufo_ttl_cache_limits_with(&global, config)
+}
+
+pub fn get_refresh_singleflight_max_registered_keys() -> usize {
+    DEFAULT_REFRESH_SINGLEFLIGHT_MAX_REGISTERED_KEYS
 }
 
 // ============================================
@@ -649,21 +1064,32 @@ impl EdgionGatewayConfig {
     }
 
     /// Merge CLI config into file config (CLI takes precedence)
-    fn merge(base: &mut Self, cli: &Self) {
+    pub(crate) fn merge(base: &mut Self, cli: &Self) {
         // Work directory: CLI value takes precedence if provided
         if cli.work_dir.is_some() {
             base.work_dir = cli.work_dir.clone();
         }
 
-        // Gateway config
-        if cli.gateway.server_addr.is_some() {
-            base.gateway.server_addr = cli.gateway.server_addr.clone();
+        // Gateway config. `server_addrs` is a Vec: an EMPTY CLI vec means the
+        // flag was not passed and must not clobber the file value (spec §7.1).
+        if !cli.gateway.server_addrs.is_empty() {
+            base.gateway.server_addrs = cli.gateway.server_addrs.clone();
         }
         if cli.gateway.admin_listen.is_some() {
             base.gateway.admin_listen = cli.gateway.admin_listen.clone();
         }
         if cli.gateway.probe_listen.is_some() {
             base.gateway.probe_listen = cli.gateway.probe_listen.clone();
+        }
+        // FIPS: `fips_policy` is Option, so `Some` means the operator actually
+        // passed --fips-policy; None must leave the file's value alone.
+        if cli.gateway.fips_policy.is_some() {
+            base.gateway.fips_policy = cli.gateway.fips_policy;
+        }
+        // `require_fips` keeps its OR semantics: the CLI flag can only add the
+        // requirement, never remove one set in the file.
+        if cli.gateway.require_fips {
+            base.gateway.require_fips = true;
         }
 
         // Logging config
@@ -678,12 +1104,14 @@ impl EdgionGatewayConfig {
         }
     }
 
-    /// Get server_addr
-    pub fn server_addr(&self) -> Option<String> {
-        self.gateway.server_addr.clone()
+    /// Controller conf_sync addresses. One element == the previous
+    /// single-address behavior; empty == not configured.
+    pub fn server_addrs(&self) -> Vec<String> {
+        self.gateway.server_addrs.clone()
     }
 
-    /// Get admin_listen
+    /// Get admin_listen. Test-only: production always calls `admin_listen_or_default`.
+    #[cfg(test)]
     pub fn admin_listen(&self) -> Option<String> {
         self.gateway.admin_listen.clone()
     }
@@ -696,7 +1124,8 @@ impl EdgionGatewayConfig {
             .unwrap_or_else(|| DEFAULT_GATEWAY_ADMIN_LISTEN.to_string())
     }
 
-    /// Get probe_listen
+    /// Get probe_listen. Test-only: production always calls `probe_listen_or_default`.
+    #[cfg(test)]
     pub fn probe_listen(&self) -> Option<String> {
         self.gateway.probe_listen.clone()
     }
@@ -751,14 +1180,27 @@ mod tests {
         DEFAULT_MAX_ESTIMATOR_SLOTS_K,
     };
 
+    /// The gateway instance count is a PROCESS-GLOBAL, and `cargo test` runs the tests in
+    /// this binary on parallel threads. Without serialization, `set_and_get` writing 5 can
+    /// land between `never_zero`'s write of 0 and its read, so `never_zero` observes 5 and
+    /// fails an assertion about clamping that has nothing to do with what actually broke.
+    /// (Observed exactly once under a full `cargo test --all`, where cross-binary CPU
+    /// contention widens the window; the three tests pass on their own.)
+    ///
+    /// `parking_lot::Mutex` per the workspace lint: it does not poison, so a sibling test
+    /// panicking while holding the lock cannot cascade into unrelated failures here.
+    static INSTANCE_COUNT_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     #[test]
     fn test_gateway_instance_count_default() {
+        let _guard = INSTANCE_COUNT_LOCK.lock();
         // Default should be at least 1
         assert!(get_gateway_instance_count() >= 1);
     }
 
     #[test]
     fn test_gateway_instance_count_set_and_get() {
+        let _guard = INSTANCE_COUNT_LOCK.lock();
         set_gateway_instance_count(5);
         assert_eq!(get_gateway_instance_count(), 5);
         set_gateway_instance_count(1); // cleanup
@@ -766,22 +1208,45 @@ mod tests {
 
     #[test]
     fn test_gateway_instance_count_never_zero() {
+        let _guard = INSTANCE_COUNT_LOCK.lock();
         set_gateway_instance_count(0); // Try to set zero
         assert_eq!(get_gateway_instance_count(), 1); // Should be clamped to 1
+        set_gateway_instance_count(1); // cleanup: leave the global in its default state
     }
 
     #[test]
-    fn test_lru_cache_global_config_default() {
+    fn test_tiny_ufo_ttl_cache_global_config_default() {
+        let config = TinyUfoTtlCacheGlobalConfig::default();
+        assert_eq!(config.default_max_entries, 1024);
+        assert_eq!(config.default_max_logical_bytes, "4MiB");
+    }
+
+    #[test]
+    fn test_tiny_ufo_ttl_cache_default_limits_resolve() {
+        let limits = resolve_tiny_ufo_ttl_cache_limits_with(
+            &TinyUfoTtlCacheGlobalConfig::default(),
+            &TinyUfoTtlCacheConfig::default(),
+        )
+        .expect("default limits must be valid");
+        assert_eq!(limits.max_entries.get(), 1024);
+        assert_eq!(limits.max_logical_bytes.get(), 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_lru_cache_global_config_remains_available() {
         let config = LruCacheGlobalConfig::default();
         assert_eq!(config.default_capacity, 1024);
+        assert_eq!(config.default_shards, 0);
+        assert!(get_default_lru_cache_capacity() > 0);
     }
 
     #[test]
-    fn test_get_default_lru_cache_capacity_fallback() {
-        // Before init (or after init with default), capacity must be >= 1
-        // so ShardedLruCache::new() never panics
-        let cap = get_default_lru_cache_capacity();
-        assert!(cap >= 1, "capacity must be > 0");
+    fn lru_cache_limits_reject_zero_oversized_and_capacity_expanding_shards() {
+        assert!(validate_effective_lru_cache_limits(0, 1).is_err());
+        assert!(validate_effective_lru_cache_limits(MAX_LRU_CACHE_CAPACITY + 1, 1).is_err());
+        assert!(validate_effective_lru_cache_limits(4, 5).is_err());
+        assert!(validate_effective_lru_cache_limits(1024, MAX_LRU_CACHE_SHARDS + 1).is_err());
+        assert!(validate_effective_lru_cache_limits(1024, 8).is_ok());
     }
 
     #[test]
@@ -839,11 +1304,28 @@ mod tests {
     }
 
     #[test]
-    fn test_access_log_sensitive_default_is_off() {
+    fn server_addrs_merge_and_default() {
+        let mut base = EdgionGatewayConfig::default();
+        base.gateway.server_addrs = vec!["10.0.0.1:9090".into()];
+        let mut cli = EdgionGatewayConfig::default(); // empty server_addrs
+                                                      // An empty CLI vec must NOT clobber the file value (spec §7.1).
+        EdgionGatewayConfig::merge(&mut base, &cli);
+        assert_eq!(base.server_addrs(), vec!["10.0.0.1:9090".to_string()]);
+        // A non-empty CLI vec overrides.
+        cli.gateway.server_addrs = vec!["10.0.0.2:9090".into(), "10.0.0.3:9090".into()];
+        EdgionGatewayConfig::merge(&mut base, &cli);
+        assert_eq!(base.server_addrs().len(), 2);
+    }
+
+    #[test]
+    fn test_access_log_sensitive_default_is_replace() {
+        // Privacy-by-default: `ext` rendering (and the built-in sensitive
+        // fields) follow this mode, so shipping `off` would leave the
+        // EdgionGatewayConfig whitelist inert out of the box.
         let cfg: EdgionGatewayConfig = serde_yaml::from_str("{}").unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
-            edgion_resources::sensitive::SensitiveMode::Off
+            edgion_resources::sensitive::SensitiveMode::Replace
         ));
     }
 
@@ -884,6 +1366,20 @@ access_log_sensitive:
         // (120xx). Changing this would silently break the port-unification plan.
         let cfg = MetricsConfig::default();
         assert_eq!(cfg.listen, "0.0.0.0:12090");
+    }
+
+    #[test]
+    fn genai_token_metric_is_disabled_by_default_and_yaml_can_enable_it() {
+        assert!(!MetricsConfig::default().genai_tokens.enabled);
+
+        let cfg: MetricsConfig = serde_yaml::from_str(
+            r#"
+genai_tokens:
+  enabled: true
+"#,
+        )
+        .unwrap();
+        assert!(cfg.genai_tokens.enabled);
     }
 
     #[test]
@@ -945,7 +1441,7 @@ access_log_sensitive:
     fn admin_token_is_not_serialized() {
         let cfg = EdgionGatewayConfig {
             gateway: GatewayConfig {
-                admin_token: Some("must-not-leak".to_string()),
+                admin_token: Some("must-not-leak".into()),
                 ..Default::default()
             },
             ..Default::default()
@@ -960,12 +1456,162 @@ access_log_sensitive:
     #[test]
     fn admin_token_is_redacted_in_debug() {
         let cfg = GatewayConfig {
-            admin_token: Some("must-not-leak".to_string()),
+            admin_token: Some("must-not-leak".into()),
             ..Default::default()
         };
         let dbg = format!("{:?}", cfg);
         assert!(!dbg.contains("must-not-leak"), "admin_token must be redacted in Debug");
         assert!(dbg.contains("[redacted]"));
+    }
+
+    /// `GatewayConfig` derives `Debug` (see the struct doc): this is now a
+    /// smoke test that every field, including a nested config struct like
+    /// `geoip`, actually reaches the derived output — not a guard against a
+    /// hand-maintained `.field(...)` list going stale, which no longer exists
+    /// for this struct.
+    #[test]
+    fn debug_output_includes_geoip() {
+        let cfg = GatewayConfig::default();
+        let dbg = format!("{:?}", cfg);
+        assert!(
+            dbg.contains("geoip"),
+            "GatewayConfig Debug output must include the geoip field"
+        );
+    }
+
+    #[test]
+    fn require_fips_env_truthy_values() {
+        assert!(require_fips_env_enabled(Some("1")));
+        assert!(require_fips_env_enabled(Some(" TRUE ")));
+        assert!(require_fips_env_enabled(Some("yes")));
+        assert!(!require_fips_env_enabled(Some("0")));
+        assert!(!require_fips_env_enabled(Some("")));
+        assert!(!require_fips_env_enabled(None));
+    }
+
+    #[test]
+    fn outbound_egress_defaults_are_permissive_and_short_lived() {
+        let cfg = GatewayConfig::default();
+        assert!(
+            !cfg.outbound_egress_block_private,
+            "private ranges must be allowed by default, matching classify_backend_addr"
+        );
+        assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 5_000);
+    }
+
+    #[test]
+    fn outbound_egress_parses_from_yaml() {
+        let cfg: GatewayConfig =
+            serde_yaml::from_str("outbound_egress_block_private: true\noutbound_egress_dns_cache_ttl_ms: 30000\n")
+                .unwrap();
+        assert!(cfg.outbound_egress_block_private);
+        assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 30_000);
+    }
+
+    #[test]
+    fn wasm_oci_cache_fields_parse_and_default() {
+        let cfg = GatewayConfig::default();
+        assert_eq!(cfg.wasm_oci_cache_dir, None);
+        assert_eq!(cfg.wasm_oci_cache_ttl_secs, 86_400);
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 3_600);
+        assert_eq!(cfg.wasm_oci_cache_max_bytes, 512 * 1024 * 1024);
+        let cfg: GatewayConfig = serde_yaml::from_str(
+            "wasm_oci_cache_dir: \"\"\nwasm_oci_cache_ttl_secs: 60\n\
+             wasm_oci_cache_purge_interval_secs: 30\nwasm_oci_cache_max_bytes: 0\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.wasm_oci_cache_dir.as_deref(), Some(""));
+        assert_eq!(cfg.wasm_oci_cache_ttl_secs, 60);
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 30);
+        assert_eq!(cfg.wasm_oci_cache_max_bytes, 0);
+        // A zero purge interval parses as-is (no "disable" semantics); the
+        // busy-loop guard is a startup clamp in `configure_oci_disk_cache`,
+        // not a parse-time rejection.
+        let cfg: GatewayConfig = serde_yaml::from_str("wasm_oci_cache_purge_interval_secs: 0\n").unwrap();
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 0);
+        // Pull tuning defaults + YAML override.
+        assert_eq!(GatewayConfig::default().wasm_oci_pull_timeout_secs, 60);
+        assert_eq!(GatewayConfig::default().wasm_oci_pull_attempts, 3);
+        let cfg: GatewayConfig =
+            serde_yaml::from_str("wasm_oci_pull_timeout_secs: 15\nwasm_oci_pull_attempts: 5\n").unwrap();
+        assert_eq!(cfg.wasm_oci_pull_timeout_secs, 15);
+        assert_eq!(cfg.wasm_oci_pull_attempts, 5);
+    }
+
+    #[test]
+    fn outbound_egress_fields_come_from_config_file_not_cli() {
+        // Both fields are `#[arg(skip)]`: clap never populates them, and
+        // `merge()` does not copy them from the CLI-parsed struct into the
+        // file-loaded base config. Their only source is the config file (or
+        // the corresponding env var, applied separately in cli/mod.rs). This
+        // guards against a regression that re-adds a clap flag for these
+        // fields without also wiring `merge()` to honor it.
+        let yaml = "gateway:\n  outbound_egress_block_private: true\n  outbound_egress_dns_cache_ttl_ms: 30000\n";
+        let mut base: EdgionGatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(base.gateway.outbound_egress_block_private);
+        assert_eq!(base.gateway.outbound_egress_dns_cache_ttl_ms, 30_000);
+
+        // Simulate a CLI-parsed struct carrying different values (as would
+        // happen if a clap flag were mistakenly reintroduced and passed).
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.outbound_egress_block_private = false;
+        cli.gateway.outbound_egress_dns_cache_ttl_ms = 5_000;
+
+        EdgionGatewayConfig::merge(&mut base, &cli);
+
+        // merge() must leave these fields alone: the config-file values survive.
+        assert!(base.gateway.outbound_egress_block_private);
+        assert_eq!(base.gateway.outbound_egress_dns_cache_ttl_ms, 30_000);
+
+        // And GatewayConfig::default() still gives the documented defaults.
+        assert!(!GatewayConfig::default().outbound_egress_block_private);
+        assert_eq!(GatewayConfig::default().outbound_egress_dns_cache_ttl_ms, 5_000);
+    }
+
+    #[test]
+    fn outbound_block_private_env_truthy_values() {
+        assert!(outbound_block_private_env_enabled(Some("1")));
+        assert!(outbound_block_private_env_enabled(Some(" TRUE ")));
+        assert!(outbound_block_private_env_enabled(Some("yes")));
+        assert!(outbound_block_private_env_enabled(Some("On")));
+        assert!(!outbound_block_private_env_enabled(Some("0")));
+        assert!(!outbound_block_private_env_enabled(Some("")));
+        assert!(!outbound_block_private_env_enabled(None));
+    }
+
+    #[test]
+    fn outbound_egress_dns_cache_ttl_ms_env_overrides_when_valid() {
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(5_000, Some("30000")), 30_000);
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(5_000, Some(" 12 ")), 12);
+    }
+
+    #[test]
+    fn outbound_egress_dns_cache_ttl_ms_falls_back_on_unparseable_env() {
+        // An unparseable TTL must not panic or fail startup; the configured
+        // value is kept and a WARN is logged.
+        assert_eq!(
+            resolve_outbound_egress_dns_cache_ttl_ms(5_000, Some("not-a-number")),
+            5_000
+        );
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(7_500, Some("")), 7_500);
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(9_000, None), 9_000);
+    }
+
+    #[test]
+    fn check_fips_requirement_ok_when_not_required() {
+        assert!(check_fips_requirement(false, false).is_ok());
+        assert!(check_fips_requirement(false, true).is_ok());
+    }
+
+    #[test]
+    fn check_fips_requirement_ok_when_required_and_present() {
+        assert!(check_fips_requirement(true, true).is_ok());
+    }
+
+    #[test]
+    fn check_fips_requirement_err_when_required_but_missing() {
+        let err = check_fips_requirement(true, false).unwrap_err();
+        assert!(err.contains("FIPS"));
     }
 
     #[test]
@@ -1020,5 +1666,118 @@ access_log:
             }
             other => panic!("expected StringOutput::Otlp, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn fips_policy_env_mode_parses_tristate() {
+        use crate::tls::fips_profile::FipsPolicyMode;
+
+        assert!(matches!(
+            fips_policy_env_mode(Some("auto")),
+            EnvPolicy::Set(FipsPolicyMode::Auto)
+        ));
+        assert!(matches!(
+            fips_policy_env_mode(Some(" On ")),
+            EnvPolicy::Set(FipsPolicyMode::On)
+        ));
+        assert!(matches!(
+            fips_policy_env_mode(Some("off")),
+            EnvPolicy::Set(FipsPolicyMode::Off)
+        ));
+        // No compatibility layer: the legacy truthy/falsey vocabulary of the old
+        // boolean flag is no longer recognized.
+        assert!(matches!(fips_policy_env_mode(Some("1")), EnvPolicy::Invalid(_)));
+        assert!(matches!(fips_policy_env_mode(Some("false")), EnvPolicy::Invalid(_)));
+    }
+
+    #[test]
+    fn fips_policy_env_mode_unset_and_empty_fall_through() {
+        assert!(matches!(fips_policy_env_mode(None), EnvPolicy::Unset));
+        assert!(matches!(fips_policy_env_mode(Some("")), EnvPolicy::Unset));
+        assert!(matches!(fips_policy_env_mode(Some("   ")), EnvPolicy::Unset));
+    }
+
+    #[test]
+    fn fips_policy_env_mode_reports_garbage_instead_of_guessing() {
+        // A typo must not silently change policy in either direction; the caller
+        // WARNs and falls through to the config file.
+        match fips_policy_env_mode(Some("enabled")) {
+            EnvPolicy::Invalid(raw) => assert_eq!(raw, "enabled"),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_propagates_fips_policy_from_cli_and_preserves_file_when_omitted() {
+        use crate::tls::fips_profile::FipsPolicyMode;
+
+        // Regression test for the pre-existing bug: --fips-policy was parsed and
+        // then discarded by merge(), so the flag did nothing.
+        let mut file = EdgionGatewayConfig::default();
+        file.gateway.fips_policy = Some(FipsPolicyMode::On);
+
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.fips_policy = Some(FipsPolicyMode::Off);
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert_eq!(
+            file.gateway.fips_policy,
+            Some(FipsPolicyMode::Off),
+            "CLI must override the file"
+        );
+
+        // Omitted on the CLI (None) must NOT clobber the file's value. This is
+        // why the field is Option: a bare enum with a clap default_value would
+        // make "omitted" indistinguishable from "--fips-policy=auto".
+        let mut file = EdgionGatewayConfig::default();
+        file.gateway.fips_policy = Some(FipsPolicyMode::On);
+        let cli = EdgionGatewayConfig::default();
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert_eq!(
+            file.gateway.fips_policy,
+            Some(FipsPolicyMode::On),
+            "omitted CLI must preserve the file"
+        );
+    }
+
+    #[test]
+    fn merge_propagates_require_fips_with_or_semantics() {
+        let mut file = EdgionGatewayConfig::default();
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.require_fips = true;
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert!(
+            file.gateway.require_fips,
+            "CLI --require-fips must reach the merged config"
+        );
+
+        // OR semantics: a file `true` survives an absent CLI flag.
+        let mut file = EdgionGatewayConfig::default();
+        file.gateway.require_fips = true;
+        let cli = EdgionGatewayConfig::default();
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert!(file.gateway.require_fips);
+    }
+
+    #[test]
+    fn gateway_config_deserializes_fips_policy() {
+        use crate::tls::fips_profile::FipsPolicyMode;
+
+        let yaml = "fips_policy: auto\n";
+        let parsed: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.fips_policy, Some(FipsPolicyMode::Auto));
+
+        // Bare `on` resolves to a YAML boolean, so it must be quoted to reach
+        // the string parser.
+        let yaml = "fips_policy: \"on\"\n";
+        let parsed: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.fips_policy, Some(FipsPolicyMode::On));
+
+        // Omitted => None => the startup path applies Auto.
+        let parsed: GatewayConfig = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(parsed.fips_policy, None);
+
+        // No compatibility layer: a YAML boolean is rejected outright.
+        let yaml = "fips_policy: true\n";
+        assert!(serde_yaml::from_str::<GatewayConfig>(yaml).is_err());
     }
 }

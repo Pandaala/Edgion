@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: chain-hop2
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: chain-hop2
+addressType: IPv4
+ports:
+  - name: http
+    port: 58531
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

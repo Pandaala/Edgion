@@ -7,6 +7,7 @@
 //! |-------|---------|-------|
 //! | Standard primitive | `KeyList` | Unified string+regex list |
 //! | Standard primitive | `IpList` | CIDR range list |
+//! | Policy data | `RequestAccessUrlAllowList` | URL allow candidates bound by RequestAccessPolicy |
 //! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
@@ -19,6 +20,7 @@ pub mod ip_list;
 pub mod key_list;
 pub mod overlay;
 pub mod region_route;
+pub mod request_access_url_allow_list;
 pub mod selector;
 
 pub use ip_group::IpGroup;
@@ -26,6 +28,7 @@ pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
 pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride};
+pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
 
 use crate::resources::common::Condition;
@@ -49,29 +52,11 @@ fn default_enable() -> bool {
     true
 }
 
-/// Kind for EdgionConfigData
-pub const EDGION_CONFIG_DATA_KIND: &str = "EdgionConfigData";
-
-/// Reference to an EdgionConfigData resource by name (and optional namespace).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EdgionConfigDataRef {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    /// Controller-set cross-namespace denial marker. When `Some`, this ref lacks a
-    /// permitting `ReferenceGrant` (and the target is not `visibility: Cluster`); the
-    /// gateway withholds its matcher (deny-all fail-closed for allowRefs). Not
-    /// operator-facing — excluded from the CRD via `schemars(skip)`; serialized for
-    /// conf_sync so the gateway sees it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub ref_denied: Option<crate::resources::common::RefDenied>,
-}
+pub use crate::resources::config_data_ref::EdgionConfigDataRef;
 
 /// EdgionConfigData is a general-purpose, hot-swappable metadata/overlay primitive
 /// referenced by EdgionPlugins and EdgionStreamPlugins.
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(CustomResource, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -107,6 +92,60 @@ pub struct EdgionConfigDataSpec {
     /// The data entry. Each EdgionConfigData contains exactly one entry,
     /// discriminated by the `type` tag.
     pub data: ConfigEntry,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// operator-authored ingest paths; never serialized and never exposed in the
+    /// CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`EdgionConfigDataSpec`]. `unknown_fields` is
+/// derived from the submitted document and therefore is intentionally absent.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgionConfigDataSpecShadow {
+    #[serde(default = "default_enable")]
+    enable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active: Option<String>,
+    #[serde(default)]
+    visibility: ConfigDataVisibility,
+    data: ConfigEntry,
+}
+
+impl From<EdgionConfigDataSpecShadow> for EdgionConfigDataSpec {
+    fn from(shadow: EdgionConfigDataSpecShadow) -> Self {
+        Self {
+            enable: shadow.enable,
+            active: shadow.active,
+            visibility: shadow.visibility,
+            data: shadow.data,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Cached production schema used by all EdgionConfigData unknown-key checks.
+pub fn edgion_config_data_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(EdgionConfigDataSpec))
+}
+
+impl<'de> Deserialize<'de> for EdgionConfigDataSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(EdgionConfigDataSpecShadow::deserialize(deserializer)?.into());
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, edgion_config_data_spec_schema());
+        let mut spec: Self = EdgionConfigDataSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// Status of EdgionConfigData.
@@ -146,6 +185,10 @@ pub enum ConfigEntry {
     /// IP address / CIDR range list for IP-based filtering.
     IpList(IpListData),
 
+    /// Named URL allow candidates imported by RequestAccessPolicy. The
+    /// Controller binds nested IP/Secret references into the referring plugin.
+    RequestAccessUrlAllowList(RequestAccessUrlAllowListData),
+
     /// Generic active-profile selector. Carries only `active` (the profile name to
     /// activate) + an optional `description`. Referenced via `activeProfileRef` from a
     /// `GlobalConnectionIpRestriction` stream plugin (and reusable by other
@@ -172,6 +215,7 @@ impl EdgionConfigData {
         match &self.spec.data {
             ConfigEntry::KeyList(_) => "KeyList",
             ConfigEntry::IpList(_) => "IpList",
+            ConfigEntry::RequestAccessUrlAllowList(_) => "RequestAccessUrlAllowList",
             ConfigEntry::Selector(_) => "Selector",
             ConfigEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             ConfigEntry::Misc(_) => "Misc",
@@ -190,6 +234,11 @@ impl EdgionConfigData {
             // skipped at index-build time and surfaced via the PartiallyInvalid status condition,
             // NOT rejected here. KeyList/RegionRouteOverride remain all-or-nothing.
             ConfigEntry::IpList(_) => {}
+            ConfigEntry::RequestAccessUrlAllowList(data) => {
+                if let Err(error) = data.validate() {
+                    errors.push(error);
+                }
+            }
             ConfigEntry::KeyList(key_list) => {
                 if let Err(e) = crate::matcher::key_group_helpers::validate_key_groups_structure(
                     &key_list.items,
@@ -342,6 +391,7 @@ mod tests {
             active: None,
             visibility: ConfigDataVisibility::Namespace,
             data: ConfigEntry::IpList(IpListData { items: items.clone() }),
+            unknown_fields: Vec::new(),
         };
         let ed = EdgionConfigData {
             metadata: ObjectMeta {
@@ -380,6 +430,7 @@ mod tests {
             active: None,
             visibility: ConfigDataVisibility::Namespace,
             data: ConfigEntry::IpList(IpListData { items: items.clone() }),
+            unknown_fields: Vec::new(),
         };
         let ed = EdgionConfigData {
             metadata: ObjectMeta {

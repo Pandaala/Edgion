@@ -160,10 +160,8 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         let allow_arcs = resolve_ip_list_matchers(allow_keys);
         let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
         let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
-        access_decision_to_stream_result(
-            profile.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs),
-            || record_conn_ip_restriction_event("denied"),
-        )
+        let ip_decision = profile.check_ip_with_refs(&ctx.direct_peer_ip, &deny_refs, &allow_refs);
+        access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"))
     }
 }
 
@@ -171,6 +169,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
 mod tests {
     use super::*;
     use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    use crate::plugins::stream::stream_plugin_trait::StreamLayer;
     use edgion_resources::resources::edgion_config_data::{
         ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData, Selector,
     };
@@ -230,6 +229,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             name,
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable,
                 active: None,
                 visibility: Default::default(),
@@ -244,14 +244,14 @@ mod tests {
     #[tokio::test]
     async fn no_selector_base_allow_loopback() {
         let plugin = plugin_deny_nonloopback();
-        let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
     }
 
     #[tokio::test]
     async fn no_selector_base_deny_non_loopback() {
         let plugin = plugin_deny_nonloopback();
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
     }
 
@@ -265,9 +265,9 @@ mod tests {
         });
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config");
 
-        let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
-        let ctx2 = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx2 = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx2).await, StreamPluginResult::Deny(_)));
     }
 
@@ -276,7 +276,7 @@ mod tests {
         let mut config = make_config("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
         config.enable = false;
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config");
-        let ctx = StreamContext::new("1.2.3.4".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("1.2.3.4".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
     }
 
@@ -320,7 +320,7 @@ mod tests {
         let config = two_profile_config(ns, "sel-open");
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
         // Selector switches active profile to "open" → 8.8.8.8 is allowed.
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
     }
 
@@ -339,7 +339,7 @@ mod tests {
         let config = two_profile_config(ns, "sel-null");
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
         // active: null → no override → base "deny" profile → 8.8.8.8 denied.
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
     }
 
@@ -358,7 +358,7 @@ mod tests {
         let config = two_profile_config(ns, "sel-bad");
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
         // Unknown profile → fail-to-base → base "deny" → 8.8.8.8 denied.
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
     }
 
@@ -375,7 +375,7 @@ mod tests {
         let config = two_profile_config(ns, "not-a-selector");
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
         // Wrong variant → fail-to-base → base "deny" → 8.8.8.8 denied.
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
     }
 
@@ -396,10 +396,10 @@ mod tests {
         let config = two_profile_config(ns, "sel-envelope-off");
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
         // Envelope disabled → selector ignored → base "deny" → 8.8.8.8 denied.
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
         // Loopback still allowed by base.
-        let ctx_lo = StreamContext::new("127.0.0.1".parse().unwrap(), 8080);
+        let ctx_lo = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx_lo).await, StreamPluginResult::Allow));
     }
 
@@ -442,7 +442,7 @@ mod tests {
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
         // Denied ref → active_profile_ref_key is None → base "deny" profile used.
         // 8.8.8.8 must be denied (not allowed by "open").
-        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(
             matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
             "denied active_profile_ref must not switch profile; base deny must apply"
@@ -476,12 +476,12 @@ mod tests {
             active_profile_ref: None,
         };
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid");
-        let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080);
+        let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(
             plugin.on_connection(&ctx_block).await,
             StreamPluginResult::Deny(_)
         ));
-        let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
     }
 }

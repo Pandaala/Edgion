@@ -46,6 +46,8 @@ Edgion extension CRDs are installed via Edgion's own deployment manifest.
 | **EdgionConfigData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
 | **LinkSys** | edgion.io/v1alpha1 | External system integration: connection configuration for ES, Redis, Etcd, Webhook, File, and other data sources |
 | **EdgionAcme** | edgion.io/v1alpha1 | ACME automatic certificate issuance configuration: Let's Encrypt integration, executed only on the Leader Controller |
+| **EdgionBackendTrafficPolicy** | edgion.io/v1 | Direct-backend policy attached through homogeneous same-namespace `targetRefs`: all sections for Service, resilience sections for EdgionBackend; never attached to a Route |
+| **EdgionBackend** | edgion.io/v1 | AI provider endpoint, model catalog, and bounded credential pool; referenced directly from `HTTPRoute.backendRefs` |
 
 ## Conformance Testing
 
@@ -90,8 +92,8 @@ Edgion extends standard Gateway API through the following mechanisms:
 
 Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources.
 Most `edgion.io/*` annotations tune runtime behavior (e.g. `edgion.io/enable-http2`,
-`edgion.io/http-to-https-redirect`, `edgion.io/health-check`, `edgion.io/circuit-breaker`,
-`edgion.io/proxy-protocol`). The one annotation that references another resource is:
+`edgion.io/http-to-https-redirect`, `edgion.io/proxy-protocol`,
+`edgion.io/tcp-keepalive-time`). The one annotation that references another resource is:
 
 | Annotation | Applicable Resources | Description |
 |------|---------|------|
@@ -119,6 +121,11 @@ spec:
             kind: EdgionPlugins
             name: my-plugins
 ```
+
+For AI routing, the ExtensionRef attaches exactly one rule-level `AiProxy`. It stores only the
+`backendSelection` algorithm. The same rule's typed `HTTPRoute.backendRefs` remain the sole source
+of EdgionBackend candidates, declaration order, and weights. EBTP remains a direct backend policy
+for Service or EdgionBackend and does not attach to HTTPRoute.
 
 ### 3. Custom CRDs
 

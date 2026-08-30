@@ -1,13 +1,21 @@
 ---
 name: builtin-dispatch-non-exhaustive-lint
-description: Use when reviewing DSL `BuiltinId` dispatch findings that propose enabling `#![warn(non_exhaustive_omitted_patterns)]` on `lang/builtins.rs` or `lang/compiler/builtins.rs` to catch forgotten arms when new `BuiltinId` variants are added, OR that report the Redis-builtin predicate (`is_redis_builtin` / `is_redis_builtin_id`) as duplicated, OR that propose converting `BuiltinId::is_redis_builtin` to an exhaustive `match`.
+description: Use when reviewing DSL `BuiltinId` dispatch findings that propose enabling `#![warn(non_exhaustive_omitted_patterns)]` on the gateway runtime dispatcher or the edgion-dsl compiler table, OR that report the Redis-builtin predicate as duplicated, OR that propose converting `BuiltinId::is_redis_builtin` to an exhaustive `match`.
 ---
 
 # `non_exhaustive_omitted_patterns` Lint on `BuiltinId` Dispatch — NOT-AN-ISSUE
 
 ## Conclusion
 
-Adding `#![warn(non_exhaustive_omitted_patterns)]` (or `#![deny(...)]`) to the two `BuiltinId` dispatch files is a placebo: the lint only fires for matches over `#[non_exhaustive]` types from **other crates**. `BuiltinId` is defined in the same crate and is not marked `#[non_exhaustive]`, so the lint never triggers regardless of where the attribute is set. The protective work is done by removing `_ =>` catch-all arms instead, which forces native E0004 / `non_exhaustive_patterns` errors. Three of the four candidate matches already do this; only `call_builtin_redis` carried a `_ =>` arm, which has now been expanded to an explicit non-Redis variant list (issue-14 fix).
+Adding `#![warn(non_exhaustive_omitted_patterns)]` (or `#![deny(...)]`) does
+not strengthen the current contract. `BuiltinId` is an exhaustive public enum
+defined in `edgion-dsl`; normal Rust exhaustiveness checking applies both to
+compiler matches in that crate and runtime matches in `edgion-gateway`.
+Marking the enum `#[non_exhaustive]` merely to activate the lint in the consumer
+crate would weaken the stronger compile-time contract by requiring a wildcard.
+The protective work is therefore exhaustive enum matches without `_ =>`
+catch-alls. The string-pair namespace resolver cannot be exhaustive and remains
+test-protected.
 
 Fix suggestions of the form "add `#![warn(non_exhaustive_omitted_patterns)]` to make `BuiltinId` dispatch fail compilation on new variants" are **not accepted**.
 
@@ -15,7 +23,11 @@ Fix suggestions of the form "add `#![warn(non_exhaustive_omitted_patterns)]` to 
 
 **1. The `non_exhaustive_omitted_patterns` lint is scoped to external `#[non_exhaustive]` types**
 
-Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
+Per the Rust reference, the lint detects a wildcard that omits known variants of
+an external `#[non_exhaustive]` type. `BuiltinId` is not
+`#[non_exhaustive]`. It lives in `edgion-dsl/src/bytecode.rs`; compiler tables
+are in the same crate, while the runtime dispatcher is in `edgion-gateway`.
+Neither side benefits from this lint under the current enum contract.
 
 **2. Native exhaustiveness checking is the real lever**
 
@@ -23,10 +35,10 @@ For same-crate enum matches, removing the `_ =>` arm makes rustc emit E0004 (`no
 
 | Site | File:line | Status |
 |------|-----------|--------|
-| `call_builtin` | `lang/builtins.rs:74-…` | Already exhaustive (no `_ =>`) |
-| `call_builtin_redis` | `lang/builtins.rs:996-…` | Made exhaustive (issue-14) by replacing `_ =>` with explicit non-Redis variant list |
-| `builtin_expected_argc` | `lang/compiler/builtins.rs:91-…` | Already exhaustive (no `_ =>`) |
-| `resolve_namespace_method` | `lang/compiler/builtins.rs:7-84` | `match (&str, &str)`, **structurally cannot be exhaustive** — `_ => None` is required |
+| `call_builtin` | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | Exhaustive `BuiltinId` match |
+| `call_builtin_redis` | same runtime file | Exhaustive `BuiltinId` match with explicit non-Redis variants |
+| `builtin_expected_argc` | `edgion-dsl/src/compiler/builtins.rs` | Exhaustive `BuiltinId` match |
+| `resolve_namespace_method` | same compiler file | `match (&str, &str)`, structurally cannot be exhaustive; `_ => None` is required |
 
 For `resolve_namespace_method` the match key is a `(&str, &str)` tuple with an infinite domain; no lint or rustc check can force "every BuiltinId has a name mapping". A name-table omission must be caught by tests, not by the type system. The dispatch-side compile-time guarantee is the strongest enforcement available.
 
@@ -36,8 +48,8 @@ Landing `#![warn(non_exhaustive_omitted_patterns)]` on these files would create 
 
 ## Fix Suggestions Not Accepted
 
-- "Add `#![warn(non_exhaustive_omitted_patterns)]` (or `#![deny(...)]`) to `lang/builtins.rs` / `lang/compiler/builtins.rs`" — lint never fires for same-crate non-`#[non_exhaustive]` enums; ships dead config that looks protective
-- "Mark `BuiltinId` as `#[non_exhaustive]` and enable the lint" — same-crate `#[non_exhaustive]` is treated as exhaustive; still a no-op for these dispatch files
+- "Add `#![warn(non_exhaustive_omitted_patterns)]` (or `#![deny(...)]`) to the runtime or compiler table" — the enum is not `#[non_exhaustive]`; native exhaustive matches are stronger
+- "Mark `BuiltinId` as `#[non_exhaustive]` and enable the lint" — this forces an external wildcard and weakens the current compile-time break on new variants
 - "Switch to nightly `#![feature(non_exhaustive_omitted_patterns_lint)]`" — feature was stabilized; the limitation is the cross-crate scope, not stability
 - "Add an exhaustiveness-check unit test that pattern-matches every variant" — duplicates what native E0004 already does for the three enum-matching sites; adds no coverage for `resolve_namespace_method` (string match, see Rationale 2)
 
@@ -47,7 +59,9 @@ Re-open this decision only if:
 
 - Rust adds a same-crate-aware variant of `non_exhaustive_omitted_patterns` (or a separate lint such as a hypothetical `unreachable_exhaustive_wildcard`) that does fire on internal enums with `_ =>` arms.
 - A new `BuiltinId` dispatch site is added that legitimately needs a `_ =>` catch-all (e.g., a generic fallback dispatcher), at which point the trade-off becomes specific to that site.
-- The `BuiltinId` enum is moved to a separate crate (e.g., a published `edgion-dsl-bytecode` crate consumed by external integrations), where `#[non_exhaustive]` + the lint would start to bite.
+- The public bytecode compatibility policy changes and intentionally marks
+  `BuiltinId` as `#[non_exhaustive]`; only then reconsider the consumer-side
+  lint while preserving explicit known-variant coverage.
 
 ## Related: Redis-predicate consolidation (F-004, 2026-05-26)
 
@@ -72,6 +86,6 @@ exhaustive `match`" are **not accepted** for the reason above.
 
 ## Reference Cases
 
-- `tasks/todo/dsl-vm-rhai-research/issues/issue-14-enable-non-exhaustive-lint.md` — closed via the explicit-list rewrite of `call_builtin_redis`
-- `tasks/todo/dsl-vm-rhai-research/04-builtin-registration.md` §"Quick improvements worth doing now" — original proposal (now superseded by this rule and the issue-14 fix)
-- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::call_builtin_redis` — reference implementation of explicit non-Redis variant listing (the pattern any future BuiltinId-matching dispatcher should follow)
+- Historical `dsl-vm-rhai-research` issue 14 — closed via the explicit-list rewrite of `call_builtin_redis`; the task files are no longer present
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::Vm::call_builtin_redis` — reference implementation of explicit non-Redis variant listing
+- `edgion-dsl/src/compiler/builtins.rs::builtin_expected_argc` — compiler-side exhaustive table

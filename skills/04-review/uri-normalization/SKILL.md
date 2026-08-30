@@ -13,11 +13,11 @@ description: Review decision rules for URI normalization — which scenarios are
 
 The following findings have been covered by the path normalization default mechanism and are **no longer valid vulnerabilities** — close directly:
 
-- Path-based ACL using `RestrictionSource::Path` — path normalization is enabled by default (no `enabled` switch); such rules are already compared on the normalized path and cannot be bypassed by `%XX` / `//` / `/../`
+- Path-based ACL using `KeyGet::Path` (`keyMatch` / `keyExist` with `key: {type: path}`) — path normalization is enabled by default (no `enabled` switch); such rules are already compared on the normalized path and cannot be bypassed by `%XX` / `//` / `/../`. `KeyGet::RequestPath` (`key: {type: requestPath}`) is the entry-time raw path and is never normalized.
 - HTTPRoute / TLSRoute / GRPCRoute using `Exact` / `PathPrefix` path matching — config side is normalized at load time + request side is normalized; matching is performed in the same normalized space
 - HTTPRoute `RegularExpression` matching — request side is already normalized (note: regex patterns themselves are not normalized; the operator is responsible for writing the regex in normalized space, see "Scenarios still to report" item 5)
 - path-parameter `..;/`-style bypass — handled by the `strip_path_parameters` algorithm (step A3)
-  - **Footnote (v4)**: only closed when `preserve_path_parameters=false` (default). If the operator enables opt-out (`preserve_path_parameters=true`), the commitment degrades; such findings still need to be reported, prompting the operator to use `RestrictionSource::RequestPath` regex to block `;` patterns or to fix the ACL rule.
+  - **Footnote (v4)**: only closed when `preserve_path_parameters=false` (default). If the operator enables opt-out (`preserve_path_parameters=true`), the commitment degrades; such findings still need to be reported, prompting the operator to use a `keyMatch` / `keyExist` with `key: {type: requestPath}` regex to block `;` patterns or to fix the ACL rule.
 - Standard percent-encoding bypass, double-slash bypass, dot-segment bypass — all within commitment scope; covered by the normalization algorithm
 
 ---
@@ -32,7 +32,7 @@ The following scenarios **still need to be reported**:
 
 3. **Upstream is sensitive to literal `%2F` and the business depends on raw forwarding** — Edgion path normalization does not rewrite `req_header().uri`; the upstream receives the raw entry form (this is a design commitment, not a vulnerability). This behavior must be made explicit in documentation/comments
 
-4. **`RestrictionSource::Path` `deny` list in config is written as if targeting raw** (containing `%XX` literals) — prompt the operator: the `Path` view is compared after normalization; `%XX` literals will not match; should change to `RestrictionSource::RequestPath` or fix to a normalized form
+4. **`keyMatch` / `keyExist` with `key: {type: path}` written as if targeting raw** (containing `%XX` literals) — prompt the operator: `KeyGet::Path` is compared after normalization; `%XX` literals will not match; should change to `key: {type: requestPath}` (`KeyGet::RequestPath`) or fix to a normalized form
 
 5. **`RegularExpression` path config containing `%XX` / `//` / `/.` / `..;` literals** — request side is already normalized; regex containing the above literals never matches (silently ineffective); the operator must rewrite the regex into its normalized equivalent
 
@@ -40,7 +40,7 @@ The following scenarios **still need to be reported**:
 
 7. **HTTPRoute annotation `edgion.io/forward-raw-path` value other than "true" / "false"** — illegal config value; gateway treats as None but the operator's actual intent is lost; prompt to correct to a legal value
 
-8. **`forward_normalized_path = false` + business ACL rules mixing `Path` and `RequestPath`** — under global raw mode both `Path` and `RequestPath` views are effectively raw (`Path` still goes through normalization but upstream receives raw); mixing may mask raw-forward side effects
+8. **`forward_normalized_path = false` + business ACL rules mixing `KeyGet::Path` and `KeyGet::RequestPath`** — under global raw mode both views are effectively raw (`Path` still goes through normalization but upstream receives raw); mixing may mask raw-forward side effects
 
 ---
 

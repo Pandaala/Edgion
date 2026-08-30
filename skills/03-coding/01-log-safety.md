@@ -20,7 +20,7 @@
 | Category | Risk | Handling |
 |------|------|---------|
 | `client_cert_info` | subject / SAN may contain PII | Already wired into the `access_log_sensitive` global switch via `serialize_with = "masked::serialize"` |
-| `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` | Real user IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
+| `direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` | Physical/resolved client IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
 | Plugin log dynamic parameters | May contain username / IP / token | Use `push_fmt` + `sensitive(...)` to mark explicitly; DSL `log_warn` / `log_error` automatically go through `push_sensitive` |
 
 ### Code examples
@@ -107,7 +107,9 @@ The data plane (request/connection processing path) produces logs only through t
 
 **Any `tracing::` macro is forbidden on the request/connection processing hot path**, including `debug!`.
 
-**`println!` / `eprintln!` are globally forbidden**: production code must not use `println!` or `eprintln!`; use `tracing::` macros with a `component` field. Fatal errors at startup use `tracing::error!` + `std::process::exit(1)`.
+Long-running Controller/Gateway services must not use `println!` / `eprintln!` after
+tracing initialization; use structured tracing on cold/control paths. CLI user-facing
+stdout/stderr and pre-tracing startup/fatal fallbacks are intentional exceptions.
 
 ### Reasons
 
@@ -165,9 +167,16 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 - `routes/grpc/{match_engine,match_unit,integration}.rs` (gRPC matching, reuses HTTP proxy's `request_filter`)
 - `routes/http/session_persistence.rs` (sticky session in `upstream_peer`)
 - `lb/selection/{round_robin,least_conn,ewma,consistent_hash}.rs`, `lb/runtime_state/mod.rs` (per-call backend selection in `upstream_peer`)
-- `backends/mod.rs` peer selection, `backends/validation.rs` SSRF check, `backends/circuit_breaker/store.rs` circuit-breaking decision, `backends/policy/` per-request policy
+- `backends/mod.rs` peer selection, `backends/validation.rs` SSRF check, `backends/outlier_detection/store.rs` circuit-breaking decision, `backends/policy/` per-request policy
 - `cache/**` per-request lookup
 - SNI→cert matching in `tls/store/cert_matcher.rs` (called by `certificate_callback`)
+- `plugins/http/openid_connect/jwks_provider.rs` — `get_or_fetch_discovery` / `get_jwks` do a lazy
+  fetch on a cold cache, so both are request-path reachable. Its only cold caller is
+  `spawn_discovery_prewarm` in `openid_connect/plugin.rs`, which is where any cold-path log line for
+  this provider must live
+- `plugins/http/common/outbound/` — shared ForwardAuth/Webhook outbound-call and DNS-guard helpers;
+  request-time resolution and execution are data-plane, while constructors and config assembly may
+  remain cold-path
 - `runtime/server/error_response.rs` (response generated when `fail_to_proxy` / `request_filter` reject)
 
 #### Explicitly **not** data plane (even under `gateway/`)
@@ -175,8 +184,8 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 | Location | Reason |
 |------|------|
 | `plugins/**/conf_handler_impl.rs`, `PluginRuntime::build_*` | Plugin construction during config/sync; one-shot |
-| `plugins/**::new()` / `::from_config()` | Constructors, not request path |
-| `conf_sync/**`, `link_sys/**` | Controller↔Gateway gRPC, unrelated to requests |
+| `plugins/**::new()` / `::try_new()` / `::from_config()` | Constructors, not request path; the guard still requires an exact path/module-qualified-owner/function cold registration for constructors that trace |
+| `conf_sync/**`, LinkSys configuration/store management | Control/config paths; however LinkSys provider calls reached from DSL/plugins are request hot paths and remain tracing-free |
 | `api/**` | Admin API (control plane) |
 | Startup/shutdown under `runtime/server/**` | One-shot events |
 | Registration in `observe/metrics/registry.rs` | Startup phase |
@@ -202,8 +211,8 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 // TLS proxy: use ctx-based logging
 ctx.err_log = Some(format!("No matching TLSRoute for SNI={sni}"));
 
-// HTTP proxy: errors flow into the access log
-ctx.add_error(EdgionStatus::NoRoute);
+// HTTP proxy: typed errors flow into access-log diagnostics
+ctx.record_error(EdgionErrorCode::RouteNotFound);
 
 // Plugin: via PluginLog
 log.push("Deny rate-limited");
@@ -219,20 +228,28 @@ tracing::info!("Selected backend: {:?}", backend_ref);  // Leakage + performance
 
 Use during code review:
 
-- [ ] Any `println!` / `eprintln!` use? Must be replaced by a `tracing::` macro
+- [ ] Any `println!` / `eprintln!` in a long-running service after tracing init? Replace it; do not flag CLI output or pre-init fallback blindly
 - [ ] Are newly added `tracing::info!/warn!/error!` calls on the data-plane hot path? If so, switch to ctx-based
 - [ ] Do logs contain sensitive data such as Secret / Token / keys?
 - [ ] Do logs contain a full resource spec / backend address? If so, downgrade to debug
 - [ ] Do new control-plane logs include `kind` + `name/namespace` + `rv`? (Can be omitted inside a span — provided automatically by the span)
 - [ ] If the resource has been synced to the data plane, is `sv` present in the access log?
-- [ ] Do new keys added to `ctx_map` potentially contain sensitive information? (Deferred: logs are admin-level access; not a review-blocking item)
-- [ ] Do plugin stage_logs record full username / token? (Deferred: same as above)
+- [ ] Does a new `ctx_map` key store claims/decrypted payloads/tokens/secrets? Add it to `ACCESS_LOG_BLOCKED_CTX_KEYS` (`edgion-resources/src/resources/edgion_plugins/plugin_configs/access_log_extern.rs`) so no `AccessLogExtern from: ctx` declaration can ever project it. This is review-blocking.
+- [ ] Do plugin stage logs record a full username/token or unmasked dynamic error? This is review-blocking
 
 ---
 
 ## Periodic maintenance (run quarterly or after each "data-plane entry list" change)
 
-> **Automated gate**: `cicd/checks/check_gateway_no_tracing.py` enforces this rule in CI. The data/control boundary here is *function-level* — the same file often holds a constructor (`new`/`from_config`/`build`, control-plane, `tracing` allowed) and a per-request method (`run_request`, hot path, `tracing` forbidden) — which a file/regex scanner cannot separate, so the gate resolves the **enclosing function** of each `tracing` line. Over the "Data-plane entry list" files below (including every `plugins/http/*/plugin.rs`, `gateway_api_filters/`, the match engines, `lb/selection`, `backends/`, and the TLS-handshake callbacks), it flags a `tracing` use only when its enclosing function is **not** construction/config-build/once-init — recognised by name via the `COLD_FN` knob (`new`, `from_config`, `create`, `build`, `load_*`, `compile_*`, `init_*`, `parse_*`, `update`, `spawn_*`, …). It is **zero-tolerance** (the request/connection functions are already clean), with registered exceptions carrying an inline `// tracing-allow: <reason>` marker (currently only `pg_logging.rs`'s access-log-store-send warn). Run `--list` to see current matches; if a genuinely-cold function is flagged, rename it to a cold prefix or add its name to `COLD_FN`. Keep the gate's entry-list (`DP_DIRS`/`DP_FILES`/`DP_GLOBS`) in sync with the list below when either changes. The manual `rg` recipes here remain useful for the per-line decision context. (See also [../04-review/observability/observability-review-rule.md](../04-review/observability/observability-review-rule.md) → "Zero Tracing on the Data Plane".)
+> **Automated gate**: `cicd/checks/check_gateway_no_tracing.py` resolves the enclosing
+> function and treats every tracing use in the candidate set as hot by default. A cold
+> constructor/config builder must be registered by exact relative path, exact module-qualified owner,
+> and exact function name in `COLD_FUNCTION_REGISTRATIONS`, with a lifecycle reason; name prefixes such as
+> `build_*` or `parse_*` never grant an exemption. The registry is checked for stale,
+> duplicate, and known-hot entries. Run the checker self-test, the checker, and `--list`
+> rather than relying on a prose baseline. Approved hot-path exceptional sites require an
+> inline `// tracing-allow: <reason>` and review. Keep the candidate coverage synchronized
+> with this boundary, including provider operations invoked by plugins.
 
 **1. Scan data-plane entry files for newly introduced tracing** (note: only check **the entry files themselves** — `conf_handler_impl.rs` / `routes_mgr.rs` / `conf_handler.rs` in those directories belong to the config phase, do not scan the whole directory):
 
@@ -266,11 +283,12 @@ rg -n 'tracing::' \
   edgion-gateway/src/plugins/runtime/gateway_api_filters/ \
   edgion-gateway/src/plugins/http/*/plugin.rs \
   edgion-gateway/src/plugins/http/*/request_filter_impl.rs \
+  edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs \
   edgion-gateway/src/lb/selection/ \
   edgion-gateway/src/lb/runtime_state/ \
   edgion-gateway/src/backends/mod.rs \
   edgion-gateway/src/backends/validation.rs \
-  edgion-gateway/src/backends/circuit_breaker/store.rs \
+  edgion-gateway/src/backends/outlier_detection/store.rs \
   edgion-gateway/src/backends/policy/ \
   edgion-gateway/src/cache/ \
   edgion-gateway/src/runtime/server/error_response.rs
@@ -280,8 +298,8 @@ rg -n 'tracing::' \
 - be switched to ctx-based log / access log / PluginLog / metrics, **or**
 - be added to the exception table after review with a stated reason.
 
-> **Current baseline** (2026-04-19): Wave 4 tickets #03–#13 are not yet finished, so the command above is **expected** to hit `pg_*.rs` / `mtls_verify_callback.rs` init log / `lb/runtime_state/mod.rs` / `lb/selection/round_robin.rs` / `match_engine/radix_*.rs` and similar locations. Those are existing technical debt to be cleared by Wave 4, not new exemptions.
-> `parse_timeout.rs` is on the config-loading path (`ParsedTimeouts::from_config` is called only at listener build time) and has been registered in the exception table above; it can stay.
+`parse_timeout.rs` is on the config-loading path (`ParsedTimeouts::from_config` is called
+only at listener build time) and may trace as a cold function.
 
 **2. Verify that no new unregistered entries have been added to Pingora / plugin trait impls**:
 
@@ -310,5 +328,5 @@ This table is kept as a historical record; there are no remaining open items in 
 | ~~`connection_filter_bridge.rs`~~ | ~~Connection-filter debug/info~~ | ~~Remove all~~ | Fixed |
 | ~~`grpc/match_unit.rs`~~ | ~~Request-level warn~~ | ~~Remove~~ | Fixed |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~Remove~~ | Fixed |
-| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | `entry.rs` `AllowlistedCtx` is deny-by-default: ctx vars reach the log only via the per-route opt-in allowlist (`edgion.io/log-ctx-keys` or `edgion.io/log-keys` `type: ctx`), and the three sensitive keys stay hard-blocked even if allow-listed | Fixed |
+| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | Ctx vars reach the log only via an explicit `AccessLogExtern from: ctx` declaration; the three sensitive keys stay hard-blocked (`ACCESS_LOG_BLOCKED_CTX_KEYS`) even if declared. (Superseded the earlier per-route ctx-key allowlist annotation / `AllowlistedCtx`, both deleted.) | Fixed |
 | ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `access_log_sensitive` global masking switch with explicit `sensitive(...)` markers | Fixed |

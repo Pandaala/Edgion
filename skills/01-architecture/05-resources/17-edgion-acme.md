@@ -24,7 +24,7 @@ EdgionAcme is Edgion's custom-extension resource that implements automatic certi
 
 `EdgionAcmeStatus` is the controller's observation channel: in addition to lifecycle fields (`phase`, `certificateSerial`, `certificateNotAfter`, `lastRenewalTime`, `lastFailureReason`, etc.), there is `activeChallenges` — the list of HTTP-01 challenge tokens, written by `AcmeService` via the dedicated fieldManager `edgion-acme-challenges` through the `/status` subresource SSA. The Gateway reads via the `EdgionAcme.active_challenges()` helper (pointing at `status.activeChallenges`) to serve `/.well-known/acme-challenge/<token>`.
 
-`AcmeChallenge` is an internally-tagged enum with `#[serde(tag = "type")]`: `type: http-01` carries `gatewayRef`; `type: dns-01` carries `provider` / `credentialRef` / `propagationTimeout` / `propagationCheckInterval`. The two field groups are mutually exclusive at the type level — there is no illegal "type=http-01 but with dns01 fields" state.
+`AcmeChallenge` is an internally-tagged enum with `#[serde(tag = "type")]`: `type: http-01` carries `gatewayRef`; `type: dns-01` carries `provider` / `credentialRef` / `propagationTimeout`. The two field groups are mutually exclusive at the type level — there is no illegal "type=http-01 but with dns01 fields" state.
 
 ### validate
 
@@ -57,7 +57,9 @@ Handler side (`EdgionAcmeHandler::update_status`) **only** manages the Gateway-A
 
 - validation_errors empty → `Accepted=True/Accepted`
 - validation_errors non-empty → `Accepted=False/Invalid`, with message being the joined errors
-- The `last_failure_reason` text field is also kept for legacy tools that still read it
+- Current code still carries `last_failure_reason` alongside structured status.
+  This is pre-release removal debt for old tooling, not a field new consumers
+  should read or writers should extend.
 
 **phase and other ACME lifecycle fields** (`certificate_serial`, `last_renewal_time`, `secret_name`, etc.) are not written by the handler; they are updated independently by the background `AcmeService` via Server-Side Apply (field manager `edgion-acme-controller`). The three writers' field ownership does not overlap:
 - Handler writes `status.conditions` (Merge Patch)

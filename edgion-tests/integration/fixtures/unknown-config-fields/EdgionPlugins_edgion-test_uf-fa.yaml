@@ -1,0 +1,25 @@
+# DELIBERATELY MALFORMED (unknown-field negative test):
+# "successStatusCodes" is a stale/nonexistent key. ForwardAuthConfig
+# `#[serde(flatten)]`s ExternalHttpConnection into itself, so
+# `deny_unknown_fields` structurally cannot reject an unrecognized key here
+# (a known serde limitation) -- this is
+# exactly the case the schema walker exists to catch. Expect
+# "requestPlugins[0].config.successStatusCodes" to be reported while the
+# resource stays Accepted: True.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: uf-fa
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-service
+          port: 8080
+        decision: {}
+        successStatusCodes:
+          - 200
+          - 204

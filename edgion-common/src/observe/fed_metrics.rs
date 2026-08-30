@@ -2,7 +2,8 @@
 //!
 //! Emits Prometheus counters/gauges for the federation plane from the
 //! Controller's point of view: connection lifecycle, watch events it serves,
-//! ready-gate wait, admin-API RBAC denials, and kill-switch state. See
+//! ready-gate wait, admin-API RBAC denials, kill-switch state, and whether the
+//! federation client is actually running in this process. See
 //! `docs/superpowers/specs/2026-04-19-fix-24-fed-metrics-baseline-design.md`
 //! for the full design.
 //!
@@ -34,9 +35,19 @@ pub mod names {
     /// `kind` (known ResourceKind, "*", "RegionRoute", or "unknown" — never raw input),
     /// `source` ("center" | "cli_token" | "unknown" — identifies the auth path).
     pub const RBAC_DENIED_TOTAL: &str = "edgion_fed_rbac_denied_total";
-    /// Gauge: federation kill-switch state. 1.0 = enabled, 0.0 = disabled.
-    /// Emitted by the supervisor on each start/stop transition.
+    /// Gauge: federation kill-switch state — the OPERATOR'S intent
+    /// (`center.enabled`) only. 1.0 = enabled, 0.0 = disabled.
     pub const KILL_SWITCH_STATE: &str = "edgion_fed_kill_switch_state";
+    /// Gauge: whether the federation client is actually running in this
+    /// process. 1.0 = running, 0.0 = not running.
+    ///
+    /// This is deliberately separate from `KILL_SWITCH_STATE`: the federation
+    /// session is a process-wide singleton keyed by `controller_id`, so only
+    /// the leader replica runs the client. On a follower the kill switch is
+    /// still 1 (the operator never touched it) while this gauge is 0 — folding
+    /// the two together would make a dashboard report a kill switch that
+    /// nobody engaged.
+    pub const CLIENT_RUNNING: &str = "edgion_fed_client_running";
 }
 
 /// Bounded label value constants. Emitting any other value violates the
@@ -132,13 +143,24 @@ pub fn record_rbac_denied(verb: &str, kind: &str, source: &str) {
 
 /// Set the federation kill-switch state gauge.
 ///
-/// Call this on every supervisor start/stop transition so the current state is
-/// always visible in Prometheus without querying event history.
-/// Value: `1.0` when the federation client is enabled and running, `0.0` when
-/// it is disabled (kill-switch active).
+/// Reports the OPERATOR'S intent only (`center.enabled`), never the derived
+/// running state. Call this on every supervisor `apply` so the current intent
+/// is always visible in Prometheus without querying event history.
+/// Value: `1.0` when federation is enabled in config, `0.0` when the operator
+/// disabled it (kill-switch active).
 #[inline]
 pub fn record_kill_switch_state(enabled: bool) {
     gauge!(names::KILL_SWITCH_STATE).set(if enabled { 1.0 } else { 0.0 });
+}
+
+/// Set the federation client running gauge (see `names::CLIENT_RUNNING`).
+///
+/// `kill_switch_state == 1 && client_running == 0` is the normal, healthy
+/// steady state of a non-leader Controller replica: federation is enabled but
+/// only the leader may hold the session.
+#[inline]
+pub fn record_client_running(running: bool) {
+    gauge!(names::CLIENT_RUNNING).set(if running { 1.0 } else { 0.0 });
 }
 
 #[cfg(test)]
@@ -294,8 +316,13 @@ mod rbac_metric_tests {
     fn rbac_metric_names_are_stable_and_valid() {
         assert_eq!(names::RBAC_DENIED_TOTAL, "edgion_fed_rbac_denied_total");
         assert_eq!(names::KILL_SWITCH_STATE, "edgion_fed_kill_switch_state");
+        assert_eq!(names::CLIENT_RUNNING, "edgion_fed_client_running");
 
-        for n in [names::RBAC_DENIED_TOTAL, names::KILL_SWITCH_STATE] {
+        for n in [
+            names::RBAC_DENIED_TOTAL,
+            names::KILL_SWITCH_STATE,
+            names::CLIENT_RUNNING,
+        ] {
             assert!(n.starts_with("edgion_fed_"), "metric {n} must have edgion_fed_ prefix");
             assert!(!n.is_empty(), "metric name must not be empty");
             let first = n.chars().next().unwrap();
@@ -327,6 +354,7 @@ mod rbac_metric_tests {
             "delete",
             "failover",
             "acme-trigger",
+            "conf-sync-rotate",
             "reload",
             "server-info",
             "diagnostics",
@@ -359,6 +387,15 @@ mod rbac_metric_tests {
         record_kill_switch_state(false);
         // Toggle back to enabled to leave gauge in a known state.
         record_kill_switch_state(true);
+    }
+
+    /// `record_client_running` must not panic for both `true` and `false`.
+    /// It is a separate gauge from the kill switch on purpose: a non-leader
+    /// replica reports kill_switch=1 (operator intent) with client_running=0.
+    #[test]
+    fn client_running_gauge_does_not_panic() {
+        record_client_running(true);
+        record_client_running(false);
     }
 
     /// `record_rbac_denied` with the `source` label must not panic for

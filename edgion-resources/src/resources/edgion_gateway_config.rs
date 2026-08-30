@@ -4,7 +4,8 @@
 //! as parametersRef in GatewayClass to provide gateway-wide configuration.
 
 use super::common::Condition;
-use super::edgion_plugins::RealIpConfig;
+use super::edgion_plugins::plugin_configs::LinkSysRef;
+use super::edgion_plugins::{LogExtSource, RealIpConfig};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,24 +39,30 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub real_ip: Option<RealIpConfig>,
 
+    /// Gateway-owned headers sent to upstream requests.
+    #[serde(default)]
+    pub forwarded_headers: ForwardedHeadersConfig,
+
     /// Security protection configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_protect: Option<SecurityProtectConfig>,
+
+    /// GatewayClass-wide request-body buffering policy.
+    #[serde(default)]
+    pub request_body: RequestBodyConfig,
 
     /// Global plugins references that apply to all routes using this GatewayClass
     /// These plugins are executed before route-level plugins
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_plugins_ref: Option<Vec<PluginReference>>,
 
+    /// Access log extension policy (the masking whitelist).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log_extern: Option<AccessLogExternPolicy>,
+
     /// Preflight request handling policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_policy: Option<PreflightPolicy>,
-
-    /// Enable ReferenceGrant validation for cross-namespace references (default: false)
-    /// When enabled, cross-namespace references in Routes and Gateways will be validated
-    /// against ReferenceGrant policies
-    #[serde(default)]
-    pub enable_reference_grant_validation: bool,
 
     /// Global LinkSys provider configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,6 +77,195 @@ pub struct EdgionGatewayConfigSpec {
     /// Load-balancing-wide settings (panic threshold, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancing: Option<LoadBalancingConfig>,
+
+    /// Cluster-wide default for plugin / LinkSys outbound TLS verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_tls: Option<crate::resources::common::OutboundTlsConfig>,
+
+    /// Data-plane default DNS resolver for `ServiceExternalName` backends.
+    /// Overridden per-Gateway (annotation) and per-Service (annotation); this is
+    /// the gateway-wide fallback below those. Control-plane resolution does NOT
+    /// use this (it uses Service annotation → Controller YAML default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_resolver: Option<DnsResolverConfig>,
+}
+
+/// Data-plane default DNS resolver configuration (EdgionGatewayConfig).
+///
+/// `linkSysRef` (an httpdns LinkSys) and `servers` (inline standard DNS) are
+/// mutually exclusive; the structural CRD cannot express `oneOf`, so both stay
+/// optional and the exclusion is enforced at ingest.
+//
+// NOTE: no `PartialEq`/`Eq` — kept simple and consistent with the other EGC
+// sub-structs; not required by any consumer.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsResolverConfig {
+    /// httpdns LinkSys reference (`namespace` + `name`). Namespace is required
+    /// because EdgionGatewayConfig is cluster-scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_sys_ref: Option<LinkSysRef>,
+
+    /// Inline standard-DNS server list (`ip[:port]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub servers: Option<Vec<String>>,
+
+    /// Data-plane resolution cache TTL (GEP-2257 duration, default "5s").
+    #[serde(default = "default_dns_cache_ttl")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub cache_ttl: String,
+}
+
+/// Gateway-owned headers sent to upstream requests.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardedHeadersConfig {
+    /// Header receiving the final resolved RemoteIp value on upstream requests.
+    #[serde(default = "default_remote_ip_header")]
+    #[schemars(
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN),
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN)
+    )]
+    pub remote_ip_header: String,
+}
+
+fn default_remote_ip_header() -> String {
+    crate::gwapi_types::DEFAULT_REMOTE_IP_HEADER.to_string()
+}
+
+impl Default for ForwardedHeadersConfig {
+    fn default() -> Self {
+        Self {
+            remote_ip_header: default_remote_ip_header(),
+        }
+    }
+}
+
+impl ForwardedHeadersConfig {
+    /// Validate the operator-configured upstream RemoteIp header name.
+    pub fn validate(&self) -> Result<(), String> {
+        crate::gwapi_types::validate_remote_ip_header_name(&self.remote_ip_header)
+    }
+}
+
+fn default_dns_cache_ttl() -> String {
+    "5s".to_string()
+}
+
+// ============================================
+// Body Size Configuration
+// ============================================
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestBodyConfig {
+    /// Runtime switch. A body-capable binary still refuses capture when false.
+    #[serde(default = "default_request_body_enabled")]
+    pub enabled: bool,
+
+    /// Default in-memory bytes retained before spilling to disk.
+    #[serde(default = "default_memory_buffer_size")]
+    pub default_memory_buffer_size: String,
+
+    /// Optional business override for the in-memory spill threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_memory_buffer_size: Option<String>,
+
+    /// Default complete request-body cap.
+    #[serde(default = "default_request_body_max_size")]
+    pub default_max_body_size: String,
+
+    /// Optional business override for the complete request-body cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_size: Option<String>,
+
+    /// Wall-clock deadline shared by admission and execution of one
+    /// request-body storage file operation.
+    #[serde(default = "default_request_body_storage_operation_timeout")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub storage_operation_timeout: String,
+}
+
+impl RequestBodyConfig {
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let default_memory = validate_positive_byte_size(
+            Some(self.default_memory_buffer_size.as_str()),
+            "requestBody.defaultMemoryBufferSize",
+            &mut errors,
+        );
+        let memory = match self.max_memory_buffer_size.as_deref() {
+            Some(value) => validate_positive_byte_size(Some(value), "requestBody.maxMemoryBufferSize", &mut errors),
+            None => default_memory,
+        };
+        let default_body = validate_positive_byte_size(
+            Some(self.default_max_body_size.as_str()),
+            "requestBody.defaultMaxBodySize",
+            &mut errors,
+        );
+        let body = match self.max_body_size.as_deref() {
+            Some(value) => validate_positive_byte_size(Some(value), "requestBody.maxBodySize", &mut errors),
+            None => default_body,
+        };
+        if let (Some(memory), Some(body)) = (memory, body) {
+            if memory > body {
+                errors.push(
+                    "effective requestBody memory buffer size must not exceed the effective requestBody max body size"
+                        .to_string(),
+                );
+            }
+        }
+        match crate::duration::parse_duration(&self.storage_operation_timeout) {
+            Ok(timeout) if timeout.is_zero() => {
+                errors.push("requestBody.storageOperationTimeout must be greater than zero".to_string());
+            }
+            Ok(_) => {}
+            Err(error) => errors.push(format!(
+                "requestBody.storageOperationTimeout must be a valid duration: {error}"
+            )),
+        }
+        errors
+    }
+}
+
+impl Default for RequestBodyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_request_body_enabled(),
+            default_memory_buffer_size: default_memory_buffer_size(),
+            max_memory_buffer_size: None,
+            default_max_body_size: default_request_body_max_size(),
+            max_body_size: None,
+            storage_operation_timeout: default_request_body_storage_operation_timeout(),
+        }
+    }
+}
+
+fn default_request_body_enabled() -> bool {
+    true
+}
+
+fn default_memory_buffer_size() -> String {
+    "128KiB".to_string()
+}
+
+fn default_request_body_max_size() -> String {
+    "32MiB".to_string()
+}
+
+fn default_request_body_storage_operation_timeout() -> String {
+    "5s".to_string()
+}
+
+fn validate_positive_byte_size(value: Option<&str>, field: &str, errors: &mut Vec<String>) -> Option<u64> {
+    let value = value?;
+    match crate::resources::common::parse_byte_size(value) {
+        Some(bytes) if bytes > 0 => Some(bytes),
+        _ => {
+            errors.push(format!("{field} '{value}' is invalid (expected e.g. '128KiB')"));
+            None
+        }
+    }
 }
 
 // ============================================
@@ -144,23 +340,20 @@ pub struct HttpTimeout {
 pub struct ClientTimeout {
     /// Timeout for reading request from client
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_read_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub read_timeout: String,
 
     /// Timeout for writing response to client
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_write_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub write_timeout: String,
 
     /// HTTP keepalive timeout
     /// Format: Duration string (e.g., "75s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "75" = "75s")
     #[serde(default = "default_client_keepalive_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub keepalive_timeout: String,
 }
 
@@ -169,9 +362,8 @@ pub struct ClientTimeout {
 pub struct BackendTimeout {
     /// Timeout for connecting to upstream backend
     /// Format: Duration string (e.g., "5s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "5" = "5s")
     #[serde(default = "default_backend_connect_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_connect_timeout: String,
 
     /// Default per-attempt backend request timeout — the fallback for the
@@ -180,16 +372,14 @@ pub struct BackendTimeout {
     /// policy present it also acts as the per-try timeout (GEP-1731): an
     /// attempt exceeding it is canceled and retried. `"0s"` disables the bound.
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_backend_request_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_request_timeout: String,
 
     /// Idle timeout for backend connection pool
     /// Format: Duration string (e.g., "300s", "5m", "500ms")
-    /// Without unit defaults to seconds (e.g., "300" = "300s")
     #[serde(default = "default_backend_idle_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_idle_timeout: String,
 
     /// **DEPRECATED**: Use top-level `maxRetries` in EdgionGatewayConfigSpec instead.
@@ -208,12 +398,12 @@ pub struct BackendTimeout {
 pub struct TcpTimeout {
     /// Idle timeout for the established L4 relay. The activity clock resets on
     /// any byte progress in either direction (a completed read OR an advancing
-    /// partial write). "0" / "0s" disables it (unbounded — risky). Applies to
+    /// partial write). "0s" (any zero-valued duration) disables it (unbounded —
+    /// risky; a bare "0" is not valid GEP-2257 and is rejected at admission). Applies to
     /// plain TCP, TLS-terminated, and TLS-passthrough relays. UDP is not affected.
-    /// Format: duration string (e.g. "1h", "300s", "5m"); a bare number is
-    /// interpreted as seconds. Default "1h".
+    /// Format: GEP-2257 duration string (e.g. "1h", "300s", "5m"). Default "1h".
     #[serde(default = "default_tcp_idle_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub idle_timeout: String,
 
     /// Upper bound for establishing the upstream TCP connection (the TCP
@@ -223,16 +413,16 @@ pub struct TcpTimeout {
     /// `connectTimeout` baseline. A backend that silently drops SYNs (firewall,
     /// not-yet-ready pod) fails fast instead of stranding the downstream
     /// connection until the OS TCP retransmit timeout (~2m) fires.
-    /// "0" / "0s" disables it (unbounded — relies on the OS bound). Applies to
+    /// "0s" (any zero-valued duration) disables it (unbounded — relies on the OS
+    /// bound; a bare "0" is not valid GEP-2257 and is rejected at admission). Applies to
     /// plain TCP, TLS-terminated, and TLS-passthrough relays — in all three the
     /// upstream connect is plain TCP (TLS-terminated terminates downstream TLS
     /// separately; TLS-passthrough carries the end-to-end TLS handshake over the
     /// established relay), so this bounds the connect itself, not a TLS
     /// handshake. UDP is not affected.
-    /// Format: duration string (e.g. "10s", "1m", "500ms"); a bare number is
-    /// interpreted as seconds. Default "10s".
+    /// Format: GEP-2257 duration string (e.g. "10s", "1m", "500ms"). Default "10s".
     #[serde(default = "default_tcp_connect_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub connect_timeout: String,
 }
 
@@ -255,7 +445,8 @@ pub struct LoadBalancingConfig {
     /// Panic threshold percent (0-100). When the fraction of healthy backends
     /// for a service drops below this percent, the gateway ignores health
     /// filtering and load-balances across all backends. 0 (default) disables
-    /// panic mode. Per-service `edgion.io/panic-threshold` overrides this.
+    /// panic mode. An EdgionBackendTrafficPolicy's `loadBalancer.panicThreshold`
+    /// overrides this for its target Services.
     #[serde(default)]
     pub panic_threshold: u8,
 }
@@ -270,7 +461,7 @@ pub const DEFAULT_TCP_IDLE: std::time::Duration = std::time::Duration::from_secs
 /// section.
 ///
 /// - section absent (`None`)                      -> `Some(DEFAULT_TCP_IDLE)` (secure default)
-/// - explicit `"0"` / `"0s"` / any zero duration  -> `None` (operator opt-out, unbounded)
+/// - explicit `"0s"` / any zero-valued duration   -> `None` (operator opt-out, unbounded)
 /// - any other valid duration                     -> `Some(parsed)`
 /// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_IDLE)` (fail-safe, silent)
 ///
@@ -297,7 +488,7 @@ pub const DEFAULT_TCP_CONNECT: std::time::Duration = std::time::Duration::from_s
 /// `BasicPeer.options.connection_timeout` (`None` = no application-level bound).
 ///
 /// - section absent (`None`)                      -> `Some(DEFAULT_TCP_CONNECT)` (secure default)
-/// - explicit `"0"` / `"0s"` / any zero duration  -> `None` (operator opt-out, unbounded)
+/// - explicit `"0s"` / any zero-valued duration   -> `None` (operator opt-out, unbounded)
 /// - any other valid duration                     -> `Some(parsed)`
 /// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_CONNECT)` (fail-safe, silent)
 ///
@@ -351,13 +542,17 @@ impl Default for EdgionGatewayConfigSpec {
             http_timeout: None,
             max_retries: default_max_retries(),
             real_ip: None,
+            forwarded_headers: ForwardedHeadersConfig::default(),
             security_protect: None,
+            request_body: RequestBodyConfig::default(),
             global_plugins_ref: None,
+            access_log_extern: None,
             preflight_policy: None,
-            enable_reference_grant_validation: false,
             link_sys: None,
             tcp_timeout: None,
             load_balancing: None,
+            outbound_tls: None,
+            dns_resolver: None,
         }
     }
 }
@@ -475,6 +670,7 @@ pub struct PreflightPolicy {
 
     /// Status code to return when no CORS plugin is configured (default: 204)
     #[serde(default = "default_preflight_status_code")]
+    #[schemars(range(min = 200, max = 599))]
     pub status_code: u16,
 }
 
@@ -531,7 +727,145 @@ fn default_webhook_max_response_bytes() -> usize {
     16384
 }
 
+// ============================================
+// Access Log Extension Policy (masking whitelist)
+// ============================================
+
+/// Access log extension policy. Platform-owned: it lives on the cluster-scoped
+/// `EdgionGatewayConfig` (referenced via `GatewayClass.spec.parametersRef`) so a
+/// tenant who owns a route and its `EdgionPlugins` cannot widen masking.
+///
+/// Scope caveat: `bound_listeners` dedup (`runtime/server/base.rs`) skips a
+/// listener already bound at the same addr/protocol, so two Gateways of
+/// different GatewayClasses sharing an addr:port share the first one's config.
+/// The whitelist is therefore effectively per-listener, not per-Gateway.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AccessLogExternPolicy {
+    /// Keys logged in clear. Everything else is masked per
+    /// `access_log_sensitive.mode`.
+    pub unmasked_keys: UnmaskedKeys,
+}
+
+/// Per-source whitelists of keys that bypass masking.
+///
+/// Keyed by source rather than one flat list: `user-agent` as a header is
+/// harmless, while a cookie of the same name is a different object entirely, and
+/// a flat list could not tell them apart.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UnmaskedKeys {
+    /// Request header names. Matched case-insensitively.
+    pub header: Vec<String>,
+    /// Response header names. Matched case-insensitively.
+    pub resp_header: Vec<String>,
+    /// Query parameter names. Case-sensitive.
+    pub query: Vec<String>,
+    /// Cookie names. Case-sensitive.
+    pub cookie: Vec<String>,
+    /// Context variable names. Case-sensitive.
+    pub ctx: Vec<String>,
+}
+
+impl Default for UnmaskedKeys {
+    /// The defaults are the fields every access log already records that carry
+    /// no identity: content negotiation plus `x-request-id` for correlation.
+    ///
+    /// `referer` and `location` are deliberately absent — see the design spec.
+    /// `query` / `cookie` / `ctx` are empty because their key names are entirely
+    /// business-defined; there is no universally safe name.
+    fn default() -> Self {
+        Self {
+            header: [
+                "user-agent",
+                "origin",
+                "content-type",
+                "content-length",
+                "accept",
+                "x-request-id",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            resp_header: [
+                "content-type",
+                "content-length",
+                "cache-control",
+                "retry-after",
+                "x-request-id",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            query: Vec::new(),
+            cookie: Vec::new(),
+            ctx: Vec::new(),
+        }
+    }
+}
+
+impl UnmaskedKeys {
+    /// Whether `name` from `source` may be logged in clear.
+    ///
+    /// Category-1 sources (`routeLabel` / `routeAnnotation`) are never masked and
+    /// bypass this check upstream; they answer `false` here so a caller that
+    /// wrongly consults this cannot widen anything.
+    pub fn allows(&self, source: LogExtSource, name: &str) -> bool {
+        match source {
+            LogExtSource::Header => self.header.iter().any(|k| k.eq_ignore_ascii_case(name)),
+            LogExtSource::RespHeader => self.resp_header.iter().any(|k| k.eq_ignore_ascii_case(name)),
+            LogExtSource::Query => self.query.iter().any(|k| k == name),
+            LogExtSource::Cookie => self.cookie.iter().any(|k| k == name),
+            LogExtSource::Ctx => self.ctx.iter().any(|k| k == name),
+            LogExtSource::RouteLabel | LogExtSource::RouteAnnotation => false,
+        }
+    }
+}
+
 impl EdgionGatewayConfigSpec {
+    /// Validate the status emitted by the built-in preflight response.
+    pub fn validate_preflight_policy(&self) -> Vec<String> {
+        self.preflight_policy
+            .as_ref()
+            .filter(|policy| !crate::http_status::is_valid_final_http_status(policy.status_code))
+            .map(|policy| {
+                vec![format!(
+                    "preflightPolicy.statusCode must be between 200 and 599, got {}",
+                    policy.status_code
+                )]
+            })
+            .unwrap_or_default()
+    }
+
+    /// Validate the GatewayClass-wide request-body buffering policy.
+    pub fn validate_request_body(&self) -> Vec<String> {
+        self.request_body.validate()
+    }
+
+    /// Validate `spec.forwardedHeaders` at ingest. Returns error strings
+    /// suitable for an `Accepted=False/reason=Invalid` condition.
+    pub fn validate_forwarded_headers(&self) -> Vec<String> {
+        self.forwarded_headers.validate().err().into_iter().collect()
+    }
+
+    /// Validate `spec.dnsResolver` at ingest. Returns error strings suitable for
+    /// an `Accepted=False/reason=Invalid` condition (empty = OK).
+    ///
+    /// The structural CRD cannot express `oneOf`, so `linkSysRef` and `servers`
+    /// both stay optional in YAML and their mutual exclusion is enforced here.
+    pub fn validate_dns_resolver(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if let Some(dr) = &self.dns_resolver {
+            let has_ref = dr.link_sys_ref.is_some();
+            let has_servers = dr.servers.as_ref().is_some_and(|s| !s.is_empty());
+            if has_ref && has_servers {
+                errors
+                    .push("dnsResolver: `linkSysRef` and `servers` are mutually exclusive (set only one)".to_string());
+            }
+        }
+        errors
+    }
+
     /// Check for deprecated fields and log warnings.
     pub fn check_deprecated_fields(&self) {
         if let Some(ref http_timeout) = self.http_timeout {
@@ -606,7 +940,9 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_zero_is_unbounded_optout() {
-        for s in ["0", "0s", "0m", "0.0s"] {
+        // Any zero-valued GEP-2257 duration opts out; a bare "0" is not a
+        // valid duration (see resolve_parse_error_fails_safe_to_default).
+        for s in ["0s", "0m", "0h", "0ms"] {
             let t = TcpTimeout {
                 idle_timeout: s.to_string(),
                 connect_timeout: default_tcp_connect_timeout(),
@@ -617,11 +953,19 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_parse_error_fails_safe_to_default() {
-        let t = TcpTimeout {
-            idle_timeout: "not-a-duration".to_string(),
-            connect_timeout: default_tcp_connect_timeout(),
-        };
-        assert_eq!(resolve_tcp_idle_timeout(Some(&t)), Some(DEFAULT_TCP_IDLE));
+        // "0" (bare number) and "0.0s" (decimal) are NOT valid GEP-2257 and
+        // must NOT opt out — they fail safe to the bounded default.
+        for s in ["not-a-duration", "0", "0.0s"] {
+            let t = TcpTimeout {
+                idle_timeout: s.to_string(),
+                connect_timeout: default_tcp_connect_timeout(),
+            };
+            assert_eq!(
+                resolve_tcp_idle_timeout(Some(&t)),
+                Some(DEFAULT_TCP_IDLE),
+                "{s} should fail safe to default"
+            );
+        }
     }
 
     #[test]
@@ -669,7 +1013,9 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_connect_zero_is_unbounded_optout() {
-        for s in ["0", "0s", "0m", "0.0s"] {
+        // Any zero-valued GEP-2257 duration opts out; a bare "0" is not a
+        // valid duration (see resolve_connect_parse_error_fails_safe_to_default).
+        for s in ["0s", "0m", "0h", "0ms"] {
             let t = TcpTimeout {
                 idle_timeout: default_tcp_idle_timeout(),
                 connect_timeout: s.to_string(),
@@ -680,11 +1026,19 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_connect_parse_error_fails_safe_to_default() {
-        let t = TcpTimeout {
-            idle_timeout: default_tcp_idle_timeout(),
-            connect_timeout: "not-a-duration".to_string(),
-        };
-        assert_eq!(resolve_tcp_connect_timeout(Some(&t)), Some(DEFAULT_TCP_CONNECT));
+        // "0" (bare number) and "0.0s" (decimal) are NOT valid GEP-2257 and
+        // must NOT opt out — they fail safe to the bounded default.
+        for s in ["not-a-duration", "0", "0.0s"] {
+            let t = TcpTimeout {
+                idle_timeout: default_tcp_idle_timeout(),
+                connect_timeout: s.to_string(),
+            };
+            assert_eq!(
+                resolve_tcp_connect_timeout(Some(&t)),
+                Some(DEFAULT_TCP_CONNECT),
+                "{s} should fail safe to default"
+            );
+        }
     }
 
     #[test]
@@ -699,6 +1053,185 @@ mod tcp_timeout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preflight_policy_accepts_only_ordinary_final_statuses() {
+        let valid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "preflightPolicy": {"statusCode": 204}
+        }))
+        .unwrap();
+        assert!(valid.validate_preflight_policy().is_empty());
+
+        for status in [100, 101, 103, 600, 700] {
+            let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "preflightPolicy": {"statusCode": status}
+            }))
+            .unwrap();
+            assert_eq!(invalid.validate_preflight_policy().len(), 1, "{status}");
+        }
+    }
+
+    #[test]
+    fn forwarded_headers_default_to_x_real_ip() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert_eq!(spec.forwarded_headers.remote_ip_header, "X-Real-IP");
+        assert!(spec.validate_forwarded_headers().is_empty());
+    }
+
+    #[test]
+    fn forwarded_headers_accept_custom_remote_ip_header() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "forwardedHeaders": {"remoteIpHeader": "X-Edgion-Remote-IP"}
+        }))
+        .unwrap();
+        assert_eq!(spec.forwarded_headers.remote_ip_header, "X-Edgion-Remote-IP");
+        assert!(spec.validate_forwarded_headers().is_empty());
+    }
+
+    #[test]
+    fn forwarded_headers_reject_invalid_and_reserved_remote_ip_headers() {
+        for name in [
+            "",
+            "bad header",
+            "Host",
+            "Content-Length",
+            "Connection",
+            "X-Forwarded-For",
+        ] {
+            let spec: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "forwardedHeaders": {"remoteIpHeader": name}
+            }))
+            .unwrap();
+            assert_eq!(spec.validate_forwarded_headers().len(), 1, "{name} must be rejected");
+        }
+    }
+
+    #[test]
+    fn egc_outbound_tls_roundtrips() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "outboundTls": {"verify": false}
+        }))
+        .unwrap();
+        assert_eq!(s.outbound_tls.unwrap().verify, false);
+    }
+
+    #[test]
+    fn request_body_defaults_are_gateway_class_policy() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert!(s.request_body.enabled);
+        assert_eq!(s.request_body.default_memory_buffer_size, "128KiB");
+        assert_eq!(s.request_body.default_max_body_size, "32MiB");
+        assert_eq!(s.request_body.storage_operation_timeout, "5s");
+        assert!(s.validate_request_body().is_empty());
+    }
+
+    #[test]
+    fn request_body_overrides_parse_and_validate() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "256KiB",
+                "maxBodySize": "8MiB",
+                "storageOperationTimeout": "750ms"
+            }
+        }))
+        .unwrap();
+        let request_body = s.request_body;
+        assert_eq!(request_body.max_memory_buffer_size.as_deref(), Some("256KiB"));
+        assert_eq!(request_body.max_body_size.as_deref(), Some("8MiB"));
+        assert_eq!(request_body.storage_operation_timeout, "750ms");
+        assert!(request_body.validate().is_empty());
+    }
+
+    #[test]
+    fn request_body_rejects_invalid_and_inverted_limits() {
+        let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "garbage",
+                "maxBodySize": "0"
+            }
+        }))
+        .unwrap();
+        assert_eq!(invalid.validate_request_body().len(), 2);
+
+        let invalid_override: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "garbage",
+                "maxBodySize": "1"
+            }
+        }))
+        .unwrap();
+        assert_eq!(invalid_override.validate_request_body().len(), 1);
+
+        let inverted: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "requestBody": {
+                "maxMemoryBufferSize": "2MiB",
+                "maxBodySize": "1MiB"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            inverted.validate_request_body(),
+            vec!["effective requestBody memory buffer size must not exceed the effective requestBody max body size"]
+        );
+
+        for timeout in ["0s", "invalid"] {
+            let invalid_timeout: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "requestBody": { "storageOperationTimeout": timeout }
+            }))
+            .unwrap();
+            assert_eq!(invalid_timeout.validate_request_body().len(), 1, "{timeout}");
+        }
+    }
+
+    #[test]
+    fn egc_dns_resolver_absent_is_none() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert!(s.dns_resolver.is_none());
+        assert!(s.validate_dns_resolver().is_empty());
+    }
+
+    #[test]
+    fn egc_dns_resolver_link_sys_ref_roundtrips() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "dnsResolver": {"linkSysRef": {"namespace": "dns", "name": "aliyun"}}
+        }))
+        .unwrap();
+        let dr = s.dns_resolver.as_ref().unwrap();
+        let r = dr.link_sys_ref.as_ref().unwrap();
+        assert_eq!(r.namespace, "dns");
+        assert_eq!(r.name, "aliyun");
+        // cacheTtl defaults to 5s when omitted.
+        assert_eq!(dr.cache_ttl, "5s");
+        assert!(s.validate_dns_resolver().is_empty());
+    }
+
+    #[test]
+    fn egc_dns_resolver_servers_roundtrip_and_cache_ttl() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "dnsResolver": {"servers": ["1.1.1.1", "8.8.8.8:5353"], "cacheTtl": "10s"}
+        }))
+        .unwrap();
+        let dr = s.dns_resolver.as_ref().unwrap();
+        assert_eq!(dr.servers.as_ref().unwrap().len(), 2);
+        assert_eq!(dr.cache_ttl, "10s");
+        assert!(s.validate_dns_resolver().is_empty());
+    }
+
+    #[test]
+    fn egc_dns_resolver_ref_and_servers_are_mutually_exclusive() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "dnsResolver": {
+                "linkSysRef": {"namespace": "dns", "name": "aliyun"},
+                "servers": ["1.1.1.1"]
+            }
+        }))
+        .unwrap();
+        let errs = s.validate_dns_resolver();
+        assert!(
+            errs.iter().any(|e| e.contains("mutually exclusive")),
+            "both linkSysRef and servers set must be rejected, got: {errs:?}"
+        );
+    }
 
     #[test]
     fn test_deserialize_gateway_config() {
@@ -758,5 +1291,70 @@ spec:
         let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse");
         assert_eq!(config.spec.max_retries, 10);
         assert!(config.spec.http_timeout.is_none());
+    }
+}
+
+#[cfg(test)]
+mod access_log_extern_policy_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::LogExtSource;
+
+    #[test]
+    fn default_whitelist_allows_safe_headers_only() {
+        let w = UnmaskedKeys::default();
+        assert!(w.allows(LogExtSource::Header, "user-agent"));
+        assert!(w.allows(LogExtSource::Header, "content-type"));
+        // Header matching is case-insensitive (HTTP semantics).
+        assert!(w.allows(LogExtSource::Header, "User-Agent"));
+
+        // `referer` leaks someone else's full URL (session ids in the query);
+        // `location` carries OAuth implicit tokens and reset links. Neither is a
+        // default. Both remain addable by an operator.
+        assert!(!w.allows(LogExtSource::Header, "referer"));
+        assert!(!w.allows(LogExtSource::RespHeader, "location"));
+        // Weak PII / noise.
+        assert!(!w.allows(LogExtSource::Header, "accept-language"));
+        assert!(!w.allows(LogExtSource::Header, "accept-encoding"));
+    }
+
+    #[test]
+    fn default_whitelist_is_empty_for_business_defined_sources() {
+        // No key name is universally safe for these — operators opt in per cluster.
+        let w = UnmaskedKeys::default();
+        assert!(!w.allows(LogExtSource::Query, "page"));
+        assert!(!w.allows(LogExtSource::Cookie, "session"));
+        assert!(!w.allows(LogExtSource::Ctx, "tenant_id"));
+    }
+
+    #[test]
+    fn category_one_sources_are_never_consulted() {
+        // routeLabel/routeAnnotation bypass the whitelist entirely upstream of
+        // this call; `allows` must still answer false so a caller that wrongly
+        // consults it cannot accidentally widen anything.
+        let w = UnmaskedKeys::default();
+        assert!(!w.allows(LogExtSource::RouteLabel, "app"));
+        assert!(!w.allows(LogExtSource::RouteAnnotation, "owner"));
+    }
+
+    #[test]
+    fn cookie_and_ctx_names_are_case_sensitive() {
+        let w = UnmaskedKeys {
+            cookie: vec!["Session".to_string()],
+            ctx: vec!["tenant_id".to_string()],
+            ..Default::default()
+        };
+        assert!(w.allows(LogExtSource::Cookie, "Session"));
+        assert!(!w.allows(LogExtSource::Cookie, "session"));
+        assert!(w.allows(LogExtSource::Ctx, "tenant_id"));
+        assert!(!w.allows(LogExtSource::Ctx, "TENANT_ID"));
+    }
+
+    #[test]
+    fn operator_overrides_only_the_named_list() {
+        let policy: AccessLogExternPolicy = serde_yaml::from_str("unmaskedKeys:\n  cookie: [tier]\n").unwrap();
+        // The named list is replaced...
+        assert!(policy.unmasked_keys.allows(LogExtSource::Cookie, "tier"));
+        // ...and the unnamed ones keep their defaults.
+        assert!(policy.unmasked_keys.allows(LogExtSource::Header, "user-agent"));
     }
 }

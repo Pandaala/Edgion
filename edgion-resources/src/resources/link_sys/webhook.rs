@@ -1,7 +1,7 @@
 //! Webhook service configuration for LinkSys
 //!
 //! Defines the connection parameters and health check settings for an external
-//! HTTP webhook service. Referenced by KeyGet::Webhook via "namespace/name".
+//! HTTP webhook service. Referenced by the WebhookKeyGet plugin via "namespace/name".
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,14 +11,16 @@ use crate::resources::common::SecretSlot;
 // Re-export types moved to common::external_http so that existing callers using
 // `link_sys::webhook::{WebhookTarget, WebhookRetry, ExternalHttpConnection, …}` continue to compile.
 pub use crate::resources::common::external_http::{
-    validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff, PassiveHealthCheck,
-    WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookTarget,
+    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
+    PassiveHealthCheck, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookServiceRef,
+    WebhookTarget,
 };
 
 // Re-export the shared outbound-request types so that existing callers using
 // `link_sys::webhook::{ListFields, CustomField, ...}` continue to compile.
 pub use crate::resources::common::outbound_request::{
-    CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
+    BodySpec, CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec,
+    PresencePolicy,
 };
 
 // Re-export ResolvedSecrets so existing callers using
@@ -107,8 +109,8 @@ pub enum WebhookAuth {
 ///         - name: "X-Source"
 ///           value: "edgion"
 ///     timeoutMs: 3000
-///     successStatusCodes: [200]
-///     allowDegradation: true
+///     success:
+///       statusCodes: [200]
 ///     statusOnError: 503
 ///     healthCheck:
 ///       active:
@@ -124,11 +126,11 @@ pub enum WebhookAuth {
 pub struct WebhookServiceConfig {
     // ============================================================
     // Connection (flattened — target, tls, timeout, retry, rate_limit,
-    // health_check, max_response_bytes, success_status_codes)
+    // health_check, max_response_bytes, success)
     // ============================================================
     /// Shared external HTTP connection configuration.
     /// Contains target, TLS, timeout, retry, rate-limit, health-check,
-    /// max_response_bytes, and success_status_codes.
+    /// max_response_bytes, and success.
     #[serde(flatten)]
     pub conn: ExternalHttpConnection,
 
@@ -192,31 +194,6 @@ pub struct WebhookServiceConfig {
     /// Accepted but ignored in this release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_headers: Option<serde_json::Value>,
-
-    // ============================================================
-    // Degradation
-    // ============================================================
-    /// Whether to skip webhook resolution when the service is unavailable.
-    ///
-    /// - false (default): webhook failure causes key resolution to fail (returns None)
-    /// - true: webhook failure is silently skipped, key_get returns None and the
-    ///   fallback chain continues to the next source
-    #[serde(default)]
-    pub allow_degradation: bool,
-
-    /// HTTP status code to return when the webhook is unreachable and
-    /// allow_degradation is false. Only relevant when webhook is the sole key source.
-    /// Default: 503
-    #[serde(default = "default_status_on_error")]
-    pub status_on_error: u16,
-}
-
-// ============================================================
-// Defaults (webhook-only — not part of ExternalHttpConnection)
-// ============================================================
-
-fn default_status_on_error() -> u16 {
-    503
 }
 
 // ============================================================
@@ -232,8 +209,6 @@ impl Default for WebhookServiceConfig {
             resolved_secrets: None,
             request_method: None,
             default_headers: None,
-            allow_degradation: false,
-            status_on_error: default_status_on_error(),
         }
     }
 }
@@ -245,26 +220,21 @@ impl WebhookServiceConfig {
     /// are not validated; they are accepted for backward compatibility but not used at runtime.
     pub fn get_validation_error(&self) -> Option<String> {
         // Validate the target
-        if let Some(err) = validate_webhook_target(&self.conn.target) {
+        if let Some(err) = crate::resources::common::validate_connection_target(&self.conn) {
             return Some(err);
         }
 
         // Note: request_method is now a deprecated shim field and is not validated.
         // It was previously validated as a valid HTTP method, but is no longer used at runtime.
 
-        // Validate timeout
-        if self.conn.timeout_ms == 0 {
-            return Some("timeoutMs must be greater than 0".to_string());
-        }
+        // Note: `1 <= timeoutMs <= MAX_OUTBOUND_TIMEOUT_MS` and `maxResponseBytes > 0`
+        // are validated by `validate_connection_target` above (shared with
+        // forward_auth), so both consumers inherit the same checks instead of
+        // duplicating them here.
 
-        // Validate status on error
-        if !(200..=599).contains(&self.status_on_error) {
+        // Validate status on error (now on the shared connection struct)
+        if !(200..=599).contains(&self.conn.status_on_error) {
             return Some("statusOnError must be between 200 and 599".to_string());
-        }
-
-        // Validate max response bytes
-        if self.conn.max_response_bytes == 0 {
-            return Some("maxResponseBytes must be greater than 0".to_string());
         }
 
         // Validate the request field-name invariants (args/headers/cookies).
@@ -289,6 +259,19 @@ impl WebhookServiceConfig {
                     templates_to_check.push(t);
                 }
             }
+        }
+        match &self.request.body {
+            Some(BodySpec::Json { template }) | Some(BodySpec::Raw { template }) => {
+                templates_to_check.push(template);
+            }
+            Some(BodySpec::Form { fields }) => {
+                for f in fields {
+                    if let CustomSource::Template(t) = &f.source {
+                        templates_to_check.push(t);
+                    }
+                }
+            }
+            None => {}
         }
         for t in templates_to_check {
             if let Ok(compiled) = CompiledTemplate::compile(t) {
@@ -594,8 +577,8 @@ unknownField: value
     /// thing that can fail.
     fn valid_base_config() -> WebhookServiceConfig {
         let mut config = WebhookServiceConfig::default();
-        config.conn.target.backend_ref.name = "webhook-svc".to_string();
-        config.conn.target.backend_ref.port = Some(8080);
+        config.conn.target.service.name = Some("webhook-svc".to_string());
+        config.conn.target.service.port = Some(8080);
         config
     }
 
@@ -792,6 +775,72 @@ headers:
             serialize_with = "crate::redact::redact_opt::serialize"
         )]
         resolved_secrets: Option<ResolvedSecrets>,
+    }
+
+    #[test]
+    fn collect_secret_ref_names_includes_body_templates() {
+        let yaml_str = r#"
+body:
+  type: json
+  template: '{"token": "${secretRef:prod/webhook:token}"}'
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        assert_eq!(cfg.collect_secret_ref_names(), vec!["prod/webhook:token".to_string()]);
+    }
+
+    #[test]
+    fn collect_secret_ref_names_includes_form_field_templates() {
+        let yaml_str = r#"
+body:
+  type: form
+  fields:
+    - name: token
+      template: "${secretRef:prod/webhook:token}"
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        assert_eq!(cfg.collect_secret_ref_names(), vec!["prod/webhook:token".to_string()]);
+    }
+
+    #[test]
+    fn validation_rejects_malformed_secret_ref_in_body() {
+        // No namespace in the secretRef — validate_secret_ref_segments must reject.
+        let yaml_str = r#"
+body:
+  type: json
+  template: '{"token": "${secretRef:tok:token}"}'
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        let err = cfg
+            .get_validation_error()
+            .expect("must reject malformed body secretRef");
+        assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    #[test]
+    fn unresolved_secret_refs_reports_body_only_ref() {
+        let yaml_str = r#"
+body:
+  type: json
+  template: '{"token": "${secretRef:prod/webhook:token}"}'
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        assert_eq!(cfg.unresolved_secret_refs(), vec!["prod/webhook:token".to_string()]);
     }
 }
 

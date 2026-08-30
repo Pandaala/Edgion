@@ -66,7 +66,7 @@ use super::*;
 
 ```bash
 # List every source file that has an externalized test file:
-rg -l '#\[path = "tests/.*_test\.rs"\]' src
+rg -l '#\[path = "tests/.*_test\.rs"\]' edgion-*/src
 # Review only production changes (exclude separated tests + the integration harness):
 git diff main... -- ':(exclude)**/tests/*_test.rs' ':(exclude)**/tests.rs' ':(exclude)edgion-tests/src/**'
 ```
@@ -92,11 +92,11 @@ Unit tests mainly cover the following areas:
 # Full unit test run
 cargo test --all
 
-# Run only one module's tests
-cargo test --lib -p edgion -- types::resources::http_route
+# Run only one module's tests (select the owning workspace member)
+cargo test -p edgion-resources --lib resources::http_route
 
-# Run only a specific test function
-cargo test --lib test_function_name
+# Run only a specific test function in its owning crate
+cargo test -p edgion-gateway --lib test_function_name
 
 # Show test output (for debugging)
 cargo test --all -- --nocapture
@@ -207,7 +207,7 @@ If a PR deletes any test in the table above, the description must state:
 
 ## CI integration
 
-Unit tests run automatically in CI via `.github/workflows/ci.yml`:
+Workspace tests run automatically in CI via `.github/workflows/ci.yml`:
 
 ```yaml
 - name: Run tests

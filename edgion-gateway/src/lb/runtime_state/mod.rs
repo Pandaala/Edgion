@@ -16,7 +16,7 @@ use super::edgion_backend::EdgionBackend;
 
 // ── SP affinity map ───────────────────────────────────────────────────────────
 
-/// Session affinity map: token (CRC32 hex) → endpoint SocketAddr, per service key.
+/// Session affinity map: token (`generate_session_token` hex) → endpoint SocketAddr, per service key.
 /// Built lazily on first session persistence request. Invalidated when backends change.
 /// Cap: max 1024 entries per service to prevent memory explosion.
 static SP_AFFINITY: LazyLock<DashMap<String, Arc<std::collections::HashMap<String, std::net::SocketAddr>>>> =
@@ -32,38 +32,30 @@ pub fn invalidate_selector_cache(service_key: &str) {
     SP_AFFINITY.remove(service_key);
 }
 
-/// Look up a session token in the affinity map for a service.
-/// Returns the endpoint SocketAddr if the token is known.
-pub fn sp_affinity_lookup(service_key: &str, token: &str) -> Option<std::net::SocketAddr> {
-    SP_AFFINITY.get(service_key).and_then(|map| map.get(token).copied())
-}
-
 fn build_sp_affinity_map(
     backends: &[Arc<EdgionBackend>],
+    scope: Option<&str>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let mut map = std::collections::HashMap::with_capacity(backends.len().min(SP_AFFINITY_MAX_PER_SERVICE));
     for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
         if let SocketAddr::Inet(addr) = b.addr {
             let addr_str = addr.to_string();
-            // Threat model: this CRC32 of `IP:port` (no secret, no MAC) is a
-            // stickiness hint, NOT a security boundary. A client that knows a
-            // backend's `IP:port` can forge the matching token to pin its own
-            // requests to that backend, but the map only ever holds the service's
-            // real backends, so a forged token can only pick an existing backend
-            // (never an arbitrary address) and only affects the forging client's
-            // own traffic. See `session_persistence::generate_session_token` for
-            // the full rationale. Use an HMAC over a secret if affinity is ever
-            // promoted to a routing restriction.
-            let token = format!("{:08x}", crc32fast::hash(addr_str.as_bytes()));
+            // Threat model: this unkeyed hash of `IP:port` (no secret, no MAC)
+            // is a stickiness hint, NOT a security boundary. A client that
+            // knows a backend's `IP:port` can forge the matching token to pin
+            // its own requests to that backend, but the map only ever holds the
+            // service's real backends, so a forged token can only pick an
+            // existing backend (never an arbitrary address) and only affects
+            // the forging client's own traffic. See
+            // `session_persistence::generate_session_token` (the single token
+            // derivation — map keys and response-injected tokens must never
+            // drift) for the full rationale. Use an HMAC over a secret if
+            // affinity is ever promoted to a routing restriction.
+            let token = crate::routes::http::session_persistence::generate_scoped_session_token(scope, &addr_str);
             map.insert(token, addr);
         }
     }
     Arc::new(map)
-}
-
-/// Build or refresh the session affinity map for a service from its current backends.
-pub fn sp_affinity_build(service_key: &str, backends: &[Arc<EdgionBackend>]) {
-    SP_AFFINITY.insert(service_key.to_string(), build_sp_affinity_map(backends));
 }
 
 /// Get or lazily build the session affinity map. The `backends_fn` closure is
@@ -72,9 +64,29 @@ pub(crate) fn sp_affinity_get_or_build_key(
     service_key: &str,
     backends_fn: impl FnOnce() -> Arc<Vec<Arc<EdgionBackend>>>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
+    sp_affinity_get_or_build_scoped(service_key, None, backends_fn)
+}
+
+pub(crate) fn sp_affinity_get_or_build_scoped(
+    service_key: &str,
+    scope: Option<&str>,
+    backends_fn: impl FnOnce() -> Arc<Vec<Arc<EdgionBackend>>>,
+) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
+    // Typed scopes may include a direct backend UID. Keeping those generations in
+    // this process-global Service cache would let an in-flight request recreate
+    // a retired scope after hot-reload cleanup. Build the bounded view from the
+    // request-captured endpoint Arc instead; only ordinary Service affinity is
+    // cached globally.
+    if scope.is_some() {
+        return build_sp_affinity_map(&backends_fn(), scope);
+    }
+    let cache_key = match scope {
+        Some(_) => unreachable!(),
+        None => service_key.to_string(),
+    };
     SP_AFFINITY
-        .entry(service_key.to_string())
-        .or_insert_with(|| build_sp_affinity_map(&backends_fn()))
+        .entry(cache_key)
+        .or_insert_with(|| build_sp_affinity_map(&backends_fn(), scope))
         .value()
         .clone()
 }
@@ -149,7 +161,7 @@ pub fn remove_service(service_key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routes::http::session_persistence::generate_session_token;
+    use crate::routes::http::session_persistence::{generate_scoped_session_token, generate_session_token};
     use pingora_load_balancing::Backend;
     use std::net::SocketAddr as StdSocketAddr;
 
@@ -169,24 +181,71 @@ mod tests {
         let v4: StdSocketAddr = "10.0.0.1:8080".parse().unwrap();
         let v6: StdSocketAddr = "[::1]:30001".parse().unwrap();
         let svc = "ns/sp-round-trip";
-        sp_affinity_build(svc, &[backend(v4), backend(v6)]);
+        let backends = Arc::new(vec![backend(v4), backend(v6)]);
+        let map = sp_affinity_get_or_build_key(svc, || backends.clone());
+        let lookup = |token: &str| map.get(token).copied();
 
         // Token format: backend cell address formatted with `SocketAddr::to_string()`.
         let v4_token = generate_session_token(&v4.to_string());
         let v6_token = generate_session_token(&v6.to_string());
-        assert_eq!(sp_affinity_lookup(svc, &v4_token), Some(v4));
-        assert_eq!(sp_affinity_lookup(svc, &v6_token), Some(v6));
+        assert_eq!(lookup(&v4_token), Some(v4));
+        assert_eq!(lookup(&v6_token), Some(v6));
 
         // Unbracketed IPv6 form (`::1:30001`, from `format!("{}:{}", ip, port)`)
         // must NOT resolve — it is not a valid `SocketAddr::to_string()` output.
         let v6_unbracketed = generate_session_token(&format!("{}:{}", v6.ip(), v6.port()));
-        assert_eq!(sp_affinity_lookup(svc, &v6_unbracketed), None);
+        assert_eq!(lookup(&v6_unbracketed), None);
 
         // Token built from a rewritten peer port must NOT resolve: session tokens
         // key off the cell address, not the post-rewritten peer address.
         let v6_rewritten_port = generate_session_token("[::1]:8080");
-        assert_eq!(sp_affinity_lookup(svc, &v6_rewritten_port), None);
+        assert_eq!(lookup(&v6_rewritten_port), None);
 
         remove_service(svc);
+    }
+
+    #[test]
+    fn scoped_affinity_views_are_isolated_and_never_registered_globally() {
+        let addr: StdSocketAddr = "10.0.0.8:8080".parse().unwrap();
+        let svc = "ns/scoped-affinity";
+        let backends = Arc::new(vec![backend(addr)]);
+        let first_scope = "edgion.io/EdgionBackend/ns/first\0core/Service/ns/scoped-affinity";
+        let second_scope = "edgion.io/EdgionBackend/ns/second\0core/Service/ns/scoped-affinity";
+        let first = sp_affinity_get_or_build_scoped(svc, Some(first_scope), || backends.clone());
+        let second = sp_affinity_get_or_build_scoped(svc, Some(second_scope), || backends.clone());
+
+        let first_token = generate_scoped_session_token(Some(first_scope), &addr.to_string());
+        let second_token = generate_scoped_session_token(Some(second_scope), &addr.to_string());
+        assert_eq!(first.get(&first_token), Some(&addr));
+        assert!(!first.contains_key(&second_token));
+        assert_eq!(second.get(&second_token), Some(&addr));
+
+        let rebuilt = sp_affinity_get_or_build_scoped(svc, Some(first_scope), || backends.clone());
+        assert!(!Arc::ptr_eq(&first, &rebuilt));
+        assert!(!SP_AFFINITY.contains_key(&format!("{svc}\0{first_scope}")));
+        assert!(!SP_AFFINITY.contains_key(&format!("{svc}\0{second_scope}")));
+
+        let ordinary_first = sp_affinity_get_or_build_key(svc, || backends.clone());
+        let ordinary_second = sp_affinity_get_or_build_key(svc, || panic!("ordinary cache must be reused"));
+        assert!(Arc::ptr_eq(&ordinary_first, &ordinary_second));
+        remove_service(svc);
+    }
+
+    #[test]
+    fn scoped_affinity_view_has_the_canonical_endpoint_cap() {
+        let svc = "ns/scoped-bounded";
+        let scope = "edgion.io/EdgionBackend/ns/agent/uid\0core/Service/ns/scoped-bounded";
+        let backends = Arc::new(
+            (0..=SP_AFFINITY_MAX_PER_SERVICE)
+                .map(|index| {
+                    let third = ((index / 254) % 254 + 1) as u8;
+                    let fourth = (index % 254 + 1) as u8;
+                    backend(StdSocketAddr::from(([10, 1, third, fourth], 8080)))
+                })
+                .collect(),
+        );
+        let view = sp_affinity_get_or_build_scoped(svc, Some(scope), || backends);
+        assert_eq!(view.len(), SP_AFFINITY_MAX_PER_SERVICE);
+        assert!(!SP_AFFINITY.contains_key(&format!("{svc}\0{scope}")));
     }
 }

@@ -1,0 +1,26 @@
+# S14: ipRefs inside a RequestRestriction anyOf group.
+# Deny when the peer is in rr-ipref-list AND the path matches /admin/.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-iprefs-group
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ipRefs:
+                    - name: rr-ipref-list
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*/admin/.*"
+        status: 403
+        message: "Admin access denied from referenced IP list"

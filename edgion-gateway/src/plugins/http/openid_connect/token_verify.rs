@@ -1,13 +1,21 @@
 use super::*;
 
 impl OpenidConnect {
-    pub(super) async fn verify_token_via_introspection(&self, token: &str) -> VerifyResult<Value> {
+    /// `_session` is unused here (introspection never touches the JWKS
+    /// provider), but the signature must line up with `verify_jwt_token`
+    /// since `verify_token` dispatches to either branch depending on
+    /// `verification_mode`.
+    pub(super) async fn verify_token_via_introspection(
+        &self,
+        _session: &mut dyn PluginSession,
+        token: &str,
+    ) -> VerifyResult<Value> {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| OidcVerifyError::Other {
+            .map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to fetch OIDC discovery document: {}", e),
+                message: "Bad Gateway".to_string(),
             })?;
         let endpoint = self
             .config
@@ -48,9 +56,12 @@ impl OpenidConnect {
             ]),
         };
 
-        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Introspection request failed: {}", e),
+        let resp = request.send().await.map_err(|e| {
+            super::token_exchange::note_oidc_san_mismatch(&e);
+            OidcVerifyError::Other {
+                status: 502,
+                message: "Bad Gateway".to_string(),
+            }
         })?;
         if !resp.status().is_success() {
             return Err(OidcVerifyError::Other {
@@ -78,6 +89,7 @@ impl OpenidConnect {
 
     pub(super) async fn verify_jwt_token_internal(
         &self,
+        session: &mut dyn PluginSession,
         token: &str,
         validate_scopes: bool,
         audience_override: Option<&[String]>,
@@ -95,7 +107,7 @@ impl OpenidConnect {
             .map_err(|(status, message)| OidcVerifyError::Other { status, message })?;
 
         let mut jwks = self
-            .get_or_fetch_jwks(false)
+            .get_or_fetch_jwks(session, false)
             .await
             .map_err(|e| OidcVerifyError::JwksFetch(e.to_string()))?;
 
@@ -104,7 +116,7 @@ impl OpenidConnect {
             Err(JwkSelectError::KidNotFound) => {
                 // kid miss: force one refresh (singleflight + min refresh interval in cache layer)
                 jwks = self
-                    .get_or_fetch_jwks(true)
+                    .get_or_fetch_jwks(session, true)
                     .await
                     .map_err(|e| OidcVerifyError::JwksFetch(format!("refresh on kid miss: {}", e)))?;
                 select_jwk(&header, &jwks, token_alg).map_err(|_| OidcVerifyError::Other {
@@ -127,9 +139,9 @@ impl OpenidConnect {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| OidcVerifyError::Other {
+            .map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to fetch OIDC discovery document: {}", e),
+                message: "Bad Gateway".to_string(),
             })?;
 
         let mut validation = Validation::new(token_alg);
@@ -171,12 +183,16 @@ impl OpenidConnect {
         Ok(claims)
     }
 
-    pub(super) async fn verify_jwt_token(&self, token: &str) -> VerifyResult<Value> {
-        self.verify_jwt_token_internal(token, true, None, true).await
+    pub(super) async fn verify_jwt_token(&self, session: &mut dyn PluginSession, token: &str) -> VerifyResult<Value> {
+        self.verify_jwt_token_internal(session, token, true, None, true).await
     }
 
-    pub(super) async fn verify_jwt_token_allow_expired(&self, token: &str) -> VerifyResult<Value> {
-        self.verify_jwt_token_internal(token, true, None, false).await
+    pub(super) async fn verify_jwt_token_allow_expired(
+        &self,
+        session: &mut dyn PluginSession,
+        token: &str,
+    ) -> VerifyResult<Value> {
+        self.verify_jwt_token_internal(session, token, true, None, false).await
     }
 
     pub(super) fn is_refresh_wait_timeout(err: &OidcVerifyError) -> bool {
@@ -198,16 +214,16 @@ impl OpenidConnect {
         matches!(jwt_error, OidcVerifyError::InvalidFormat)
     }
 
-    pub(super) async fn verify_token(&self, token: &str) -> VerifyResult<Value> {
+    pub(super) async fn verify_token(&self, session: &mut dyn PluginSession, token: &str) -> VerifyResult<Value> {
         match self.config.verification_mode {
-            VerificationMode::JwksOnly => self.verify_jwt_token(token).await,
-            VerificationMode::IntrospectionOnly => self.verify_token_via_introspection(token).await,
+            VerificationMode::JwksOnly => self.verify_jwt_token(session, token).await,
+            VerificationMode::IntrospectionOnly => self.verify_token_via_introspection(session, token).await,
             VerificationMode::Auto => {
                 if self.config.use_jwks && Self::looks_like_jwt(token) {
-                    match self.verify_jwt_token(token).await {
+                    match self.verify_jwt_token(session, token).await {
                         Ok(claims) => Ok(claims),
                         Err(jwt_error) if Self::should_auto_fallback_to_introspection(&jwt_error) => {
-                            match self.verify_token_via_introspection(token).await {
+                            match self.verify_token_via_introspection(session, token).await {
                                 Ok(claims) => Ok(claims),
                                 Err(_) => Err(jwt_error),
                             }
@@ -215,7 +231,7 @@ impl OpenidConnect {
                         Err(err) => Err(err),
                     }
                 } else {
-                    self.verify_token_via_introspection(token).await
+                    self.verify_token_via_introspection(session, token).await
                 }
             }
         }
@@ -231,33 +247,41 @@ impl OpenidConnect {
             return None;
         }
         let key = Self::introspection_cache_key(token);
-        self.introspection_cache.get(&key).map(|e| e.claims)
+        self.introspection_cache.get(&key).0.map(|entry| entry.claims)
     }
 
     pub(super) async fn cache_introspection_claims(&self, token: &str, claims: &Value) {
-        if self.config.introspection_cache_ttl == 0 {
+        if self.config.introspection_cache_ttl == 0 || claims.get("active") != Some(&Value::Bool(true)) {
             return;
         }
         let key = Self::introspection_cache_key(token);
-        let config_ttl = Duration::from_secs(self.config.introspection_cache_ttl);
-        // Cap TTL at token's remaining lifetime
-        let token_remaining = claims["exp"]
-            .as_u64()
-            .and_then(|exp| exp.checked_sub(Self::now_unix_secs()))
-            .map(Duration::from_secs);
-        let ttl = match token_remaining {
-            Some(remaining) => config_ttl.min(remaining),
-            None => config_ttl,
-        };
+        let ttl =
+            Self::bounded_introspection_cache_ttl(claims, self.config.introspection_cache_ttl, Self::now_unix_secs());
         self.introspection_cache
-            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, Some(ttl));
-        // No retain/len check needed — LocalLruCache handles eviction automatically
+            .insert(key, IntrospectionCacheEntry { claims: claims.clone() }, ttl);
+        // Non-retention is a normal cache miss; the current request still uses
+        // the authoritative introspection result.
     }
 
-    pub(super) async fn validate_id_token_nonce(&self, id_token: &str, expected_nonce: &str) -> VerifyResult<()> {
+    pub(super) fn bounded_introspection_cache_ttl(claims: &Value, configured_ttl_secs: u64, now: u64) -> Duration {
+        let configured_ttl = Duration::from_secs(configured_ttl_secs);
+        claims
+            .get("exp")
+            .and_then(Value::as_u64)
+            .map_or(configured_ttl, |expires_at| {
+                configured_ttl.min(Duration::from_secs(expires_at.saturating_sub(now)))
+            })
+    }
+
+    pub(super) async fn validate_id_token_nonce(
+        &self,
+        session: &mut dyn PluginSession,
+        id_token: &str,
+        expected_nonce: &str,
+    ) -> VerifyResult<()> {
         let id_token_audience = vec![self.config.client_id.clone()];
         let claims = self
-            .verify_jwt_token_internal(id_token, false, Some(&id_token_audience), true)
+            .verify_jwt_token_internal(session, id_token, false, Some(&id_token_audience), true)
             .await?;
         let actual_nonce = claims.get("nonce").and_then(|v| v.as_str());
         if actual_nonce != Some(expected_nonce) {

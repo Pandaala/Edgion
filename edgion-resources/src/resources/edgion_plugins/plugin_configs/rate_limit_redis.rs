@@ -21,7 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use super::rate_limit::{LimitHeaderNames, OnMissingKey};
+use super::rate_limit::{LimitHeaderNames, OnKeyMiss};
 
 // ========== Rate Limit Algorithm ==========
 
@@ -105,8 +105,9 @@ pub struct RateLimitPolicy {
     #[schemars(range(min = 1))]
     pub rate: u64,
 
-    /// Time interval (e.g., "1s", "1m", "1h", "1d").
+    /// Time interval (GEP-2257 duration, e.g., "1s", "1m", "1h", "24h").
     /// Uses the same parse_duration() as RateLimit.
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
     /// Rate limiting algorithm (default: SlidingWindow).
@@ -133,7 +134,7 @@ pub struct RateLimitPolicy {
 /// config:
 ///   redisRef: "default/shared-redis"
 ///   key:
-///     - type: clientIp
+///     - type: remoteIp
 ///   policies:
 ///     - rate: 100
 ///       interval: "1s"
@@ -164,14 +165,18 @@ pub struct RateLimitRedisConfig {
 
     /// Key extraction sources (same KeyGet as RateLimit).
     ///
-    /// Multiple keys are combined with "_" separator.
-    /// Default: [] (empty, will use ClientIp at runtime if empty)
-    #[serde(default)]
+    /// A single key is used verbatim; multiple keys are combined into an
+    /// unambiguous composite key (`<byte-len>:<value>` per configured key,
+    /// "-" when it does not resolve, joined with "_").
+    /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
+    /// configuration meaning "one global bucket": it is not a key miss, so it
+    /// still rate-limits rather than falling through to `onKeyMiss`.
+    #[serde(default = "default_key_sources")]
     pub key: Vec<KeyGet>,
 
     /// Behavior when key cannot be extracted (default: Allow)
     #[serde(default)]
-    pub on_missing_key: OnMissingKey,
+    pub on_key_miss: OnKeyMiss,
 
     /// Default key fallback when extraction fails
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,6 +231,7 @@ pub struct RateLimitRedisConfig {
     /// total latency of a multi-policy check; on elapse the configured
     /// `on_redis_failure` policy applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub request_timeout: Option<String>,
 
     /// Parsed `request_timeout` (runtime only).
@@ -242,6 +248,14 @@ fn default_reject_status() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+/// Default key sources: rate-limit per client IP.
+///
+/// Must match the `Default` impl and the documented default — `#[serde(default)]`
+/// would yield an empty list instead, which is a different (global-bucket) policy.
+fn default_key_sources() -> Vec<KeyGet> {
+    vec![KeyGet::RemoteIp]
 }
 
 fn default_key_prefix() -> String {
@@ -264,7 +278,7 @@ impl Default for RateLimitRedisConfig {
             redis_ref: String::new(),
             policies: vec![],
             key: vec![KeyGet::default()],
-            on_missing_key: OnMissingKey::default(),
+            on_key_miss: OnKeyMiss::default(),
             default_key: None,
             reject_status: default_reject_status(),
             reject_message: None,
@@ -615,7 +629,7 @@ mod tests {
         let yaml = r#"
 redisRef: "default/shared-redis"
 key:
-  - type: clientIp
+  - type: remoteIp
 policies:
   - rate: 100
     interval: "1s"
@@ -642,7 +656,7 @@ policies:
     interval: "1m"
     algorithm: TokenBucket
 onRedisFailure: Deny
-onMissingKey: Deny
+onKeyMiss: Deny
 cost: 5
 maxKeyLen: 16384
 keyPrefix: "myapp:rl:"
@@ -653,7 +667,7 @@ keyPrefix: "myapp:rl:"
         assert_eq!(config.policies[1].algorithm, RateLimitAlgorithm::FixedWindow);
         assert_eq!(config.policies[2].algorithm, RateLimitAlgorithm::TokenBucket);
         assert_eq!(config.on_redis_failure, OnRedisFailure::Deny);
-        assert_eq!(config.on_missing_key, OnMissingKey::Deny);
+        assert_eq!(config.on_key_miss, OnKeyMiss::Deny);
         assert_eq!(config.cost, 5);
         assert_eq!(config.max_key_len, 16384);
         assert_eq!(config.key_prefix, "myapp:rl:");

@@ -150,7 +150,7 @@ EdgionDSL 的语法设计借鉴了 Rust 和 JavaScript 的习惯，降低学习�
 **变量声明。** 支持不可变和可变变量：
 
 ```
-let ip = req.client_ip()
+let ip = req.remote_ip()
 let mut count = 0
 count = count + 1
 ```
@@ -184,7 +184,7 @@ for name in req.header_names() {
 
 | 分类 | 数量 | 代表函数 |
 |------|------|---------|
-| 请求读取 | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.client_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
+| 请求读取 | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.direct_peer_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
 | 请求修改 | 6 | `req.set_header()`, `req.append_header()`, `req.remove_header()`, `req.set_uri()`, `req.set_host()`, `req.set_method()` |
 | 响应读取 | 3 | `resp.status()`, `resp.header()`, `resp.has_header()` |
 | 响应修改 | 3 | `resp.set_header()`, `resp.append_header()`, `resp.remove_header()` |
@@ -227,7 +227,7 @@ flowchart LR
 - **命名空间方法解析**：`req.header("X")` 被编译为 `CallBuiltin(ReqHeader, 1)`，直接映射到内置函数 ID
 - **常量池去重**：相同的字符串和整数常量共享同一个常量池条目
 
-**阶段 4: 字节码。** 编译产物 `CompiledScript` 包含四个字段：指令序列（`code: Vec<OpCode>`）、常量池（`constants: Vec<Constant>`）、局部变量槽数（`local_count`）和最大循环嵌套深度（`max_loop_depth`）。字节码附带版本号（当前 `BYTECODE_VERSION = 1`），序列化为 base64 编码的 JSON 格式，可在 Controller 和 Gateway 之间安全传输，也可持久化存储。反序列化时严格校验版本兼容性和载荷大小（最大 256KB 解码后）。
+**阶段 4: 字节码。** 编译产物 `CompiledScript` 包含格式版本、指令序列（`code: Vec<OpCode>`）、常量池（`constants: Vec<Constant>`）、局部变量槽数（`local_count`）、最大循环嵌套深度（`max_loop_depth`）和用于诊断的可选源码。字节码当前使用 `BYTECODE_VERSION = 3`，序列化为 base64 编码的 JSON 格式，可在 Controller 和 Gateway 之间安全传输，也可持久化存储。版本 3 新增静态有界的 JSON 多路径选择计划；版本 2 及更早版本和无版本载荷都会被拒绝，必须重新编译。反序列化时严格校验版本兼容性和载荷大小（最大 256KB 解码后）。
 
 **阶段 5: 执行。** 栈式虚拟机（Stack-based VM）逐条执行字节码指令。指令集包括栈操作（LoadConst、LoadNil、LoadTrue、LoadFalse、Pop）、局部变量操作（GetLocal、SetLocal）、算术运算、比较运算、逻辑运算、字符串方法（StartsWith、EndsWith、Contains、Matches）、控制流跳转、列表操作以及内置函数调用。
 
@@ -303,7 +303,8 @@ return next()
 **用例 3：内网 IP 限流豁免。** 从客户端 IP 判断是否为内网请求，若是则通过上下文变量标记，供后续 RateLimit 插件跳过限流：
 
 ```
-let ip = req.client_ip()
+// 该网络来源豁免规则故意使用物理传输对端。
+let ip = req.direct_peer_ip()
 
 // 内网 CIDR 段简单匹配
 if ip.starts_with("10.") || ip.starts_with("192.168.") || ip.starts_with("172.") {
@@ -349,7 +350,7 @@ pub trait RequestFilter: Send + Sync {
 
 **UpstreamResponse（上游响应阶段，异步）。** 在完整收到上游响应后执行。用于需要完整响应信息才能工作的插件，如基于响应状态码的条件逻辑。
 
-所有阶段共享同一个 `PluginSession` trait 作为会话抽象。`PluginSession` 提供了统一的请求/响应读写接口，包括 header 读取（`header_value`、`get_path`、`get_query_param`、`get_cookie`）、header 修改（`set_request_header`、`set_response_header`、`remove_request_header`）、上下文变量（`get_ctx_var`、`set_ctx_var`）、客户端信息（`client_addr`、`remote_addr`、`client_cert_info`）等方法。这一设计使得 DSL 引擎和原生 Rust 插件共享同一套会话接口，保证了行为的一致性。
+所有阶段共享同一个 `PluginSession` trait 作为会话抽象。`PluginSession` 提供了统一的请求/响应读写接口，包括 header 读取（`header_value`、`get_path`、`get_query_param`、`get_cookie`）、header 修改（`set_request_header`、`set_response_header`、`remove_request_header`）、上下文变量（`get_ctx_var`、`set_ctx_var`）、客户端信息（`direct_peer_ip`、`remote_ip`、`client_cert_info`）等方法。这一设计使得 DSL 引擎和原生 Rust 插件共享同一套会话接口，保证了行为的一致性。
 
 ### 5.2 Stream 插件体系
 
@@ -406,7 +407,7 @@ Edgion 将每条请求的完整生命周期压缩为一行 JSON 日志。`Access
 | `ts` | i64 | 毫秒级 UTC 时间戳（`chrono::Utc::now().timestamp_millis()`） |
 | `request_info` | RequestInfo | 请求元数据：method、path、status、client IP、协议、X-Trace-Id 等 |
 | `match_info` | RouteMatchInfo | 路由匹配结果，支持 HTTP 和 gRPC 两种路由类型（`#[serde(untagged)]` 枚举） |
-| `errors` | \[EdgionStatus\] | 请求生命周期中累积的错误列表 |
+| `diagnostics` | `[{kind, code}]` | 按发生顺序记录的请求诊断，包括已恢复故障和重要信息 |
 | `backend_context` | BackendContext | 后端上游信息：服务名、命名空间、上游 IP/端口、响应体大小、写入等待时间 |
 | `stage_logs` | \[StageLogs\] | 各插件阶段的执行日志——哪些插件被执行、耗时多少、返回了什么结果 |
 | `conn_est` | bool | 连接是否成功建立 |
@@ -506,7 +507,7 @@ Edgion 为每种协议 Listener 维护独立的日志通道和日志文件：
 
 Edgion 的 TLS 实现覆盖从证书管理到握手控制的完整链路：
 
-**多后端支持。** Edgion 通过 Cargo feature flag 支持三种 TLS 后端：`boringssl`（默认，Google 维护的 OpenSSL 分支，Cloudflare 和 Google 在生产中广泛使用）、`openssl`（传统 OpenSSL 库）。两种后端共享统一的 TLS Store 抽象层（`store.rs`），上层代码无需感知底层实现差异。此外，Pingora 框架层面还支持 rustls 作为纯 Rust TLS 实现，提供无 C 依赖的部署选项。
+**TLS 后端。** Edgion Gateway 使用 BoringSSL 作为受支持的 TLS 后端。仓库保留 rustls Cargo feature 仅作为未来开发入口，不属于受支持的构建或部署选项。
 
 **per-domain TLS 控制。** 通过 `EdgionTls` CRD，运维人员可以为每个域名独立配置 TLS 版本范围（TLS 1.2/1.3）、密码套件列表和 ALPN 协议。不同域名可以采用不同的安全策略——面向公网的域名强制 TLS 1.3，内部服务允许 TLS 1.2 以兼容老旧客户端。
 
@@ -626,7 +627,7 @@ Edgion 正在积极演进，以下是近期和中期的重点方向：
 
 **请求延迟直方图增强。** 在现有 `edgion_gateway_request_duration_ms` 基础上，引入 Native Histogram（Prometheus 原生直方图）支持，提供更高精度的延迟分布数据。同时增加上游连接建立耗时、TLS 握手耗时等细分阶段的独立直方图。
 
-**联邦管理中心。** 构建多集群统一配置同步平台（Edgion Center），通过 gRPC 双向流连接多个 Controller 实例，实现跨集群的配置分发、状态聚合和统一运维。联邦中心提供 HTTP Admin API 用于全局配置管理，并内置调度器定期巡检各集群的配置一致性。
+**联邦管理中心。** 构建多集群统一配置同步平台（Edgion Center），通过 gRPC 双向流连接多个 Controller 实例，实现跨集群的配置分发、状态聚合和统一运维。联邦中心提供 HTTP Admin API 用于全局配置管理；集群状态通过对可写配置覆盖层的反向 list/watch 与合并后的统计上报回流，而非周期性轮询。
 
 ---
 

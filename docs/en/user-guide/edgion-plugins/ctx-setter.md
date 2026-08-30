@@ -47,8 +47,8 @@ CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Pa
 
 | `type` | Extra field | Reads from |
 |--------|-------------|------------|
-| `clientIp` | — | The client IP address (respects RealIp if present) |
-| `clientIpAndPath` | — | Client IP combined with the request path |
+| `remoteIp` | — | The resolved client IP address |
+| `remoteIpAndPath` | — | Resolved client IP combined with the request path |
 | `header` | `name` | The named request header |
 | `query` | `name` | The named query-string parameter |
 | `cookie` | `name` | The named cookie |
@@ -56,7 +56,7 @@ CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Pa
 | `method` | — | The HTTP method |
 | `ctx` | `name` | An existing context variable set by an earlier rule or plugin |
 
-For a fixed literal, use the top-level `value` field instead of `from`. For a composite string built from multiple sources, use `template`.
+For a fixed literal, use the top-level `value` field instead of `from`. For a composite string built from multiple sources, use `template`. To resolve a value from a LinkSys webhook, use [WebhookKeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) — not a CtxSet `from` source.
 
 ### `template` variables
 
@@ -73,7 +73,7 @@ A `template` is a literal string with `${...}` markers. Supported markers:
 | `${requestPath}` | Entry-time raw path (frozen, immune to later rewrites) |
 | `${requestUri}` | Entry-time raw full URI (frozen) |
 | `${method}` | HTTP method |
-| `${clientIp}` | Client IP address |
+| `${remoteIp}` | Resolved client IP address |
 
 User-controlled values that contain `${...}` are emitted as literal text, so templates are not vulnerable to injection.
 
@@ -171,7 +171,7 @@ spec:
       config:
         vars:
           - name: "rate_key"
-            template: "${header:X-Tenant}_${clientIp}"
+            template: "${header:X-Tenant}_${remoteIp}"
 ```
 
 ### 2. Case conversion
@@ -315,5 +315,6 @@ spec:
 ## Related Documentation
 
 - [CtxSet (HTTPRoute filter view)](../http-route/filters/edgion-plugins/ctx-setter.md) - Using CtxSet within an HTTPRoute filter
+- [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) - Resolve a LinkSys webhook value into context
 - [RateLimit Plugin](rate-limit.md) - Can use CtxSet to construct rate limiting keys
 - [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

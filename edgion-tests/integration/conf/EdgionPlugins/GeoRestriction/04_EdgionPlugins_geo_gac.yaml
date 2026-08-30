@@ -1,0 +1,32 @@
+# Two-plugin chain, static (never hot-swapped): `IpRestriction` (non-geo, an
+# ordinary CIDR deny) THEN `GeoIpLocation` (geo-only). This is the intended
+# shape post-refactor -- GeoIpLocation only owns geo, and any other
+# restriction the request needs stays in its own plugin, executed in order on
+# the same chain (first `ErrTerminateRequest` wins, exactly like every other
+# multi-plugin HTTPRoute in this suite tree). See
+# edgion-gateway/src/plugins/runtime/plugin_runtime.rs.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        deny:
+          - name: block-us-source
+            cidrs:
+              - "127.0.0.6/32"
+    - enable: true
+      type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["RU"]

@@ -1,0 +1,15 @@
+# IpList for S14 RequestRestriction ipRefs (group + entry-level run).
+# Loopback 127.0.0.0/8 matches the test client's TCP peer (127.0.0.1).
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: rr-ipref-list
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: local
+          cidrs:
+            - "127.0.0.0/8"

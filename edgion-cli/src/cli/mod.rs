@@ -74,9 +74,9 @@ pub struct Cli {
 pub enum Commands {
     /// Apply a configuration from a file or directory
     Apply {
-        /// File or directory path
-        #[arg(short, long)]
-        file: String,
+        /// File or directory path; repeat the flag to reuse one client for an ordered batch
+        #[arg(short, long, required = true, action = clap::ArgAction::Append)]
+        file: Vec<String>,
 
         /// Perform a dry run without actually applying changes
         #[arg(long, default_value = "false")]
@@ -162,6 +162,9 @@ pub enum Commands {
     /// The full `edg_`-prefixed token is hashed — the exact string sent as Bearer.
     /// Does not contact the controller.
     GenToken,
+
+    /// Inspect or convert Proxy-Wasm artifacts locally (no authentication or network).
+    Wasm(commands::wasm::WasmArgs),
 }
 
 impl Cli {
@@ -189,6 +192,13 @@ impl Cli {
         // GenToken does not contact the controller at all — short-circuit before auth
         if let Commands::GenToken = &self.command {
             return token::gen_token();
+        }
+
+        // Wasm tooling is deliberately local-only. Keep this short-circuit before
+        // token resolution and EdgionClient construction so even an invalid
+        // server/token environment cannot cause authentication or network work.
+        if let Commands::Wasm(args) = &self.command {
+            return commands::wasm::execute(args);
         }
 
         // Pre-flight compat check: --metadata-only only works with --target center.
@@ -240,7 +250,7 @@ impl Cli {
                 if self.target != TargetType::Center {
                     anyhow::bail!("apply command only supported for 'center' target");
                 }
-                commands::apply::apply(&client, file, *dry_run).await
+                commands::apply::apply_many(&client, file, *dry_run).await
             }
             Commands::Get {
                 kind,
@@ -292,7 +302,7 @@ impl Cli {
                 }
                 commands::reload::reload(&client).await
             }
-            Commands::GenCerts(_) | Commands::Login { .. } | Commands::GenToken => {
+            Commands::GenCerts(_) | Commands::Login { .. } | Commands::GenToken | Commands::Wasm(_) => {
                 unreachable!() // all handled before dispatch
             }
         }

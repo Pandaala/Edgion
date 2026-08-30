@@ -150,7 +150,7 @@ impl LimitHeaderNames {
 /// Behavior when rate limit key cannot be extracted
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
-pub enum OnMissingKey {
+pub enum OnKeyMiss {
     /// Allow the request (default, fail-open)
     #[default]
     Allow,
@@ -171,7 +171,7 @@ pub enum OnMissingKey {
 ///   rate: 100              # 100 requests per interval
 ///   interval: "1s"         # 1 second window (default)
 ///   key:
-///     type: clientIp       # Rate limit by IP (default)
+///     type: remoteIp       # Rate limit by resolved IP (default)
 ///   showLimitHeaders: true
 /// ```
 ///
@@ -179,7 +179,7 @@ pub enum OnMissingKey {
 /// ```yaml
 /// # By client IP (default)
 /// key:
-///   type: clientIp
+///   type: remoteIp
 ///
 /// # By API key header
 /// key:
@@ -188,7 +188,7 @@ pub enum OnMissingKey {
 ///
 /// # By client IP + path combination
 /// key:
-///   type: clientIpAndPath
+///   type: remoteIpAndPath
 /// ```
 ///
 /// ## Algorithm Behavior:
@@ -206,31 +206,38 @@ pub struct RateLimitConfig {
 
     /// Time interval for rate calculation (default: "1s")
     ///
-    /// Supports: "1s", "10s", "1m", "5m", etc.
+    /// Supports GEP-2257 durations: "1s", "10s", "1m", "5m", etc.
     /// This determines how often the sliding window rotates.
     #[serde(default = "default_interval")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
     /// Rate limiting keys (dimensions)
     ///
     /// Specifies where to extract the rate limiting key from.
-    /// Multiple keys are combined with "_" separator.
+    /// A single key is used verbatim; multiple keys are combined into an
+    /// unambiguous composite key (`<byte-len>:<value>` per configured key,
+    /// "-" when it does not resolve, joined with "_").
+    ///
+    /// Default: [{ type: remoteIp }]. An explicitly empty list is a valid
+    /// configuration meaning "one global bucket": it is not a key miss, so it
+    /// still rate-limits rather than falling through to `onKeyMiss`.
     ///
     /// ## YAML Examples
     ///
     /// ```yaml
     /// # Single key - limit by client IP
     /// key:
-    ///   - type: clientIp
+    ///   - type: remoteIp
     ///
     /// # Multiple keys - limit by IP + API key + path
     /// key:
-    ///   - type: clientIp
+    ///   - type: remoteIp
     ///   - type: header
     ///     name: "X-Api-Key"
     ///   - type: path
     /// ```
-    #[serde(default)]
+    #[serde(default = "default_key_sources")]
     pub key: Vec<KeyGet>,
 
     /// Behavior when key cannot be extracted (default: Allow)
@@ -240,13 +247,13 @@ pub struct RateLimitConfig {
     ///
     /// Note: If `defaultKey` is configured, it takes precedence over this setting.
     #[serde(default)]
-    pub on_missing_key: OnMissingKey,
+    pub on_key_miss: OnKeyMiss,
 
     /// Default key to use when key cannot be extracted
     ///
     /// When configured, requests without a valid key will use this default key
     /// for rate limiting (all such requests share one rate limit bucket).
-    /// This takes precedence over `onMissingKey`.
+    /// This takes precedence over `onKeyMiss`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_key: Option<String>,
 
@@ -338,6 +345,14 @@ pub struct RateLimitConfig {
     pub effective_slots: Option<usize>,
 }
 
+/// Default key sources: rate-limit per client IP.
+///
+/// Must match the `Default` impl and the documented default — `#[serde(default)]`
+/// would yield an empty list instead, which is a different (global-bucket) policy.
+fn default_key_sources() -> Vec<KeyGet> {
+    vec![KeyGet::RemoteIp]
+}
+
 fn default_interval() -> String {
     "1s".to_string()
 }
@@ -360,7 +375,7 @@ impl Default for RateLimitConfig {
             rate: 100,
             interval: default_interval(),
             key: vec![KeyGet::default()],
-            on_missing_key: OnMissingKey::default(),
+            on_key_miss: OnKeyMiss::default(),
             default_key: None,
             reject_status: default_reject_status(),
             reject_message: None,
@@ -607,8 +622,10 @@ mod tests {
         assert_eq!(parse_duration("1s").unwrap(), Duration::from_secs(1));
         assert_eq!(parse_duration("2m").unwrap(), Duration::from_secs(120));
         assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
-        assert_eq!(parse_duration("1.5s").unwrap(), Duration::from_millis(1500));
+        assert_eq!(parse_duration("1h30m").unwrap(), Duration::from_secs(5400));
+        // Non-GEP-2257 forms (days, decimals) are rejected.
+        assert!(parse_duration("1d").is_err());
+        assert!(parse_duration("1.5s").is_err());
     }
 
     #[test]
@@ -719,27 +736,27 @@ key:
     }
 
     #[test]
-    fn test_yaml_key_client_ip() {
-        // Test clientIp key
+    fn test_yaml_key_remote_ip() {
+        // Test remoteIp key
         let yaml = r#"
 rate: 50
 key:
-  - type: clientIp
+  - type: remoteIp
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, vec![KeyGet::ClientIp]);
+        assert_eq!(config.key, vec![KeyGet::RemoteIp]);
     }
 
     #[test]
-    fn test_yaml_key_client_ip_and_path() {
-        // Test clientIpAndPath key
+    fn test_yaml_key_remote_ip_and_path() {
+        // Test remoteIpAndPath key
         let yaml = r#"
 rate: 50
 key:
-  - type: clientIpAndPath
+  - type: remoteIpAndPath
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.key, vec![KeyGet::ClientIpAndPath]);
+        assert_eq!(config.key, vec![KeyGet::RemoteIpAndPath]);
     }
 
     #[test]
@@ -749,7 +766,7 @@ key:
 rate: 100
 interval: "1s"
 key:
-  - type: clientIp
+  - type: remoteIp
   - type: header
     name: "X-API-Key"
   - type: path
@@ -759,7 +776,7 @@ key:
         assert_eq!(
             config.key,
             vec![
-                KeyGet::ClientIp,
+                KeyGet::RemoteIp,
                 KeyGet::Header {
                     name: "X-API-Key".to_string()
                 },
@@ -769,13 +786,28 @@ key:
     }
 
     #[test]
-    fn test_yaml_empty_key_defaults() {
-        // Test that empty key array defaults to clientIp
+    fn test_yaml_omitted_key_defaults_to_remote_ip() {
+        // An omitted `key` must match the documented default and the `Default`
+        // impl. It used to deserialize to an empty list, which the gateway then
+        // treated as a key miss — with the default `onKeyMiss: Allow` that
+        // silently disabled the limiter.
         let yaml = r#"
 rate: 50
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(config.key.is_empty()); // serde default is empty vec
+        assert_eq!(config.key, vec![KeyGet::RemoteIp]);
+    }
+
+    #[test]
+    fn test_yaml_explicit_empty_key_is_preserved() {
+        // An explicitly empty list is a valid "one global bucket" policy and is
+        // not rewritten to the default.
+        let yaml = r#"
+rate: 50
+key: []
+"#;
+        let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.key.is_empty());
     }
 
     // ==================== Cluster Scope Tests ====================
@@ -938,7 +970,7 @@ interval: "1s"
 scope: Cluster
 skewTolerance: 1.5
 key:
-  - type: clientIp
+  - type: remoteIp
 "#;
         let config: RateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.scope, RateLimitScope::Cluster);

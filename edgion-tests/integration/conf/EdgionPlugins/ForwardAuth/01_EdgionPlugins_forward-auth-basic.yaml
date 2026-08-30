@@ -66,6 +66,7 @@ spec:
             - X-User-Email
             - X-Saw-Custom-Hop      # propagate hop-by-hop stripping probe (test C)
             - X-Saw-Visible-Header  # propagate hop-by-hop stripping probe (test C)
+            - X-Saw-Expect          # propagate Expect withholding probe (test D)
           clientHeaders:
             - WWW-Authenticate
             - X-Auth-Error-Code

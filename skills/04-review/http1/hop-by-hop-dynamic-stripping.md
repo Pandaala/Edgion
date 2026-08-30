@@ -124,4 +124,27 @@ common-case attack surface (single `Connection: X-Custom`).
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a1.md → V5` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a1.md → V5` (CONFIRM)
+
+## Sibling rules — end-to-end headers withheld on purpose
+
+The `forward_all` branch of `CompiledRequest::collect_headers` skips more than
+the hop-by-hop set. Do not report those extra skips as over-broad stripping:
+
+- `Content-Length` / `Transfer-Encoding` —
+  [../forward-auth/outbound-subrequest-framing-owned-by-hop.md](../forward-auth/outbound-subrequest-framing-owned-by-hop.md)
+  (FA-BODY-001); also rejected at config time in `origin`/`custom`.
+- `Expect` —
+  [../forward-auth/outbound-expect-continue-not-relayed.md](../forward-auth/outbound-expect-continue-not-relayed.md)
+  (FA-BODY-002); an explicit `origin` listing still forwards it.
+
+Both are end-to-end headers, so hop-by-hop filtering correctly leaves them
+alone; they are withheld separately because they describe the inbound message
+rather than the outbound one being built.
+
+Scope: these two skips live in `collect_headers` and therefore cover ForwardAuth
+and the LinkSys webhook only. `request_mirror` strips `expect` with its own
+inline check. `all_endpoint_status` builds its outbound requests independently
+and still relays both — a known gap, tracked in
+`tasks/todo/all-endpoint-status-outbound-header-hygiene.md`, not a closed
+decision.

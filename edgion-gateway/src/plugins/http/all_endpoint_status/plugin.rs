@@ -26,6 +26,7 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
 use edgion_resources::resources::edgion_plugins::AllEndpointStatusConfig;
+use edgion_resources::HTTPBackendRefKind;
 
 /// Global configuration for AllEndpointStatus plugin.
 /// Stored in YAML config, loaded at gateway startup, applies to all instances.
@@ -114,14 +115,15 @@ fn elapsed_ms() -> u64 {
 /// Isolated connection pool — does NOT share with get_http_client().
 /// This prevents fan-out requests from starving other plugins' connections.
 static STATUS_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .pool_max_idle_per_host(5)
-        .pool_idle_timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(3))
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("failed to build AllEndpointStatus HTTP client")
+    crate::link_sys::http_client::build_outbound_client(crate::link_sys::http_client::OutboundClientConfig {
+        pool_max_idle_per_host: Some(5),
+        pool_idle_timeout: Some(Duration::from_secs(10)),
+        connect_timeout: Some(Duration::from_secs(3)),
+        disable_proxy: true,
+        redirect: crate::link_sys::http_client::OutboundRedirect::Deny,
+        ..Default::default()
+    })
+    .expect("failed to build AllEndpointStatus HTTP client")
 });
 
 fn get_status_http_client() -> &'static reqwest::Client {
@@ -396,15 +398,18 @@ impl AllEndpointStatus {
                     let req_method: reqwest::Method = method.parse().unwrap_or(reqwest::Method::GET);
                     let mut req = client.request(req_method, &url).timeout(timeout);
 
-                    // Forward original headers, filtering hop-by-hop
-                    // (RFC 9110 §7.6.1 — static set plus names dynamically listed
-                    // in the originating request's Connection: header value).
+                    // Forward original headers. Skip hop-by-hop (RFC 9110 §7.6.1),
+                    // Host (rewritten below to the backend service), and headers
+                    // that describe the inbound body — this probe sends none.
                     for (name, value) in &headers {
-                        if !is_hop_by_hop_or_listed(name, &dynamic_listed) && !name.eq_ignore_ascii_case("host") {
-                            req = req.header(name.as_str(), value.as_str());
+                        if is_hop_by_hop_or_listed(name, &dynamic_listed)
+                            || name.eq_ignore_ascii_case("host")
+                            || is_inbound_body_header(name)
+                        {
+                            continue;
                         }
+                        req = req.header(name.as_str(), value.as_str());
                     }
-                    // Set Host to backend service name
                     req = req.header("Host", backend_name.as_str());
 
                     match req.send().await {
@@ -463,6 +468,15 @@ impl AllEndpointStatus {
     }
 }
 
+/// Headers that describe the inbound message body.
+///
+/// `Content-Length` and `Expect` are end-to-end, so hop-by-hop filtering leaves
+/// them alone. The status probe sends no body, so copying them makes the backend
+/// wait for bytes that never arrive, or answer `417`.
+fn is_inbound_body_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("expect")
+}
+
 /// Fan-out with wall timeout that preserves partial results.
 async fn fan_out_with_wall_timeout(
     mut unordered: FuturesUnordered<impl std::future::Future<Output = EndpointResult>>,
@@ -474,19 +488,81 @@ async fn fan_out_with_wall_timeout(
 
     loop {
         tokio::select! {
-            Some(result) = unordered.next() => {
-                results.push(result);
+            result = unordered.next() => {
+                match result {
+                    Some(result) => results.push(result),
+                    None => break,
+                }
             }
             _ = &mut deadline => {
                 let remaining = unordered.len();
-                let _ = remaining;
                 return (results, remaining > 0);
             }
-            else => break,
         }
     }
 
     (results, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn endpoint_result(address: String) -> EndpointResult {
+        EndpointResult {
+            address,
+            status: Some(200),
+            latency_ms: 0,
+            body: Some("OK".to_string()),
+            body_truncated: false,
+            headers: None,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fan_out_returns_when_all_requests_complete() {
+        let futures = (0..2)
+            .map(|i| async move { endpoint_result(format!("127.0.0.1:{}", 30001 + i)) })
+            .collect();
+        let start = Instant::now();
+
+        let (results, wall_timeout_hit) = fan_out_with_wall_timeout(futures, Duration::from_secs(1)).await;
+
+        assert_eq!(results.len(), 2);
+        assert!(!wall_timeout_hit);
+        assert!(start.elapsed() < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn fan_out_preserves_results_completed_before_wall_timeout() {
+        let futures = [1_u64, 500]
+            .into_iter()
+            .map(|delay_ms| async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                endpoint_result(format!("delay-{delay_ms}"))
+            })
+            .collect();
+
+        let (results, wall_timeout_hit) = fan_out_with_wall_timeout(futures, Duration::from_millis(50)).await;
+
+        assert!(wall_timeout_hit);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].address, "delay-1");
+    }
+
+    #[test]
+    fn inbound_body_headers_are_content_length_and_expect() {
+        assert!(is_inbound_body_header("Content-Length"));
+        assert!(is_inbound_body_header("expect"));
+        assert!(
+            !is_inbound_body_header("Transfer-Encoding"),
+            "Transfer-Encoding is hop-by-hop, not an inbound-body header"
+        );
+        assert!(!is_inbound_body_header("authorization"));
+        assert!(!is_inbound_body_header("host"));
+        assert!(is_hop_by_hop_or_listed("Transfer-Encoding", &[]));
+    }
 }
 
 // ============================================================
@@ -590,6 +666,9 @@ impl RequestFilter for AllEndpointStatus {
         let mut unsafe_endpoint_count = 0usize;
 
         for backend_ref in &backend_refs {
+            if backend_ref.backend_kind() != HTTPBackendRefKind::Service {
+                continue;
+            }
             let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_namespace);
             let port = backend_ref.port.map(|p| p as u16).unwrap_or(80);
             let use_tls = backend_ref.backend_tls_policy.is_some();

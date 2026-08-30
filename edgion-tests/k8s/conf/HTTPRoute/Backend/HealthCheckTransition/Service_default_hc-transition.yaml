@@ -3,10 +3,6 @@ kind: Service
 metadata:
   name: hc-transition
   namespace: edgion-default
-  annotations:
-    edgion.io/health-check: "active:\n  type: http\n  path: /health\n  interval: 1s\n\
-      \  timeout: 1s\n  healthyThreshold: 1\n  unhealthyThreshold: 1\n  expectedStatuses:\n\
-      \    - 200\n"
 spec:
   ports:
   - port: 30001

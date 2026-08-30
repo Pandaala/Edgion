@@ -5,8 +5,8 @@
 //!
 //! # Design
 //!
-//! - **client_addr**: The TCP socket address (direct connection)
-//! - **remote_addr**: The extracted real client IP (from headers if behind trusted proxy)
+//! - **downstream_peer_ip**: The PROXY-effective peer before HTTP header processing
+//! - **RemoteIp**: The client IP resolved from trusted forwarded headers
 //! - Uses pre-built `IpRadixMatcher` for high-performance CIDR matching
 //! - Nginx-style extraction: traverse X-Forwarded-For from right to left, find first non-trusted IP
 //!
@@ -14,17 +14,17 @@
 //!
 //! ```text
 //! X-Forwarded-For: 203.0.113.1, 198.51.100.2, 192.168.1.1
-//! client_addr: 192.168.1.254:45678
+//! downstream_peer_ip: 192.168.1.254
 //! trusted_ips: ["192.168.0.0/16", "198.51.100.0/24"]
 //!
 //! Logic:
-//! 1. client_addr 192.168.1.254 -> matches trusted ✅ continue
+//! 1. downstream peer 192.168.1.254 -> matches trusted ✅ continue
 //! 2. Traverse XFF right-to-left:
 //!    - 192.168.1.1 -> matches trusted ✅ continue
 //!    - 198.51.100.2 -> matches trusted ✅ continue
 //!    - 203.0.113.1 -> not trusted ❌ this is the real IP
 //!
-//! Result: remote_addr = "203.0.113.1"
+//! Result: RemoteIp = "203.0.113.1"
 //! ```
 
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
@@ -156,51 +156,51 @@ impl RealIpExtractor {
     /// Extracts the real client IP address using Nginx-style logic
     ///
     /// # Arguments
-    /// * `client_addr` - TCP client address (socket addr with port)
+    /// * `downstream_peer_ip` - PROXY-effective peer IP
     /// * `headers` - Request headers
     ///
     /// # Returns
     /// * Real client IP address as string (without port)
-    pub fn extract_real_ip(&self, client_addr: &str, headers: &RequestHeader) -> String {
-        let client_ip = extract_ip_from_socket_addr(client_addr);
+    pub fn extract_real_ip(&self, downstream_peer_ip: &str, headers: &RequestHeader) -> String {
+        let downstream_peer_ip = extract_ip_from_socket_addr(downstream_peer_ip);
 
-        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&client_ip) {
-            return client_ip.to_string();
+        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&downstream_peer_ip) {
+            return downstream_peer_ip.to_string();
         }
 
         if let Some(header_value) = headers.headers.get(&self.real_ip_header) {
             if let Ok(xff_str) = header_value.to_str() {
-                return self.resolve_from_header(xff_str, &client_ip);
+                return self.resolve_from_header(xff_str, &downstream_peer_ip);
             }
         }
 
-        client_ip.to_string()
+        downstream_peer_ip.to_string()
     }
 
     /// Extracts the real client IP from a pre-fetched header value string.
     ///
     /// Used by the RealIp plugin which accesses headers via PluginSession.
-    pub fn extract_from_header_value(&self, client_addr: &str, header_value: &str) -> String {
-        let client_ip = extract_ip_from_socket_addr(client_addr);
+    pub fn extract_from_header_value(&self, downstream_peer_ip: &str, header_value: &str) -> String {
+        let downstream_peer_ip = extract_ip_from_socket_addr(downstream_peer_ip);
 
-        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&client_ip) {
-            return client_ip.to_string();
+        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&downstream_peer_ip) {
+            return downstream_peer_ip.to_string();
         }
 
-        self.resolve_from_header(header_value, &client_ip)
+        self.resolve_from_header(header_value, &downstream_peer_ip)
     }
 
     /// Core extraction logic shared by both entry points.
     ///
     /// Nginx behavior:
     /// - `recursive = true`: traverse right-to-left, skip trusted IPs, return first non-trusted.
-    /// - `recursive = false`: take rightmost IP; if trusted, use client_addr; if not, use it.
+    /// - `recursive = false`: take rightmost IP; if trusted, use the downstream peer; if not, use it.
     /// - Fallback when all IPs trusted (recursive mode): return leftmost IP.
     ///
     /// When `max_trusted_hops` is `Some(N)`, the right-to-left traversal stops
     /// after skipping `N` trusted hops — caps the attacker's ability to push
     /// the result leftward by forging a long trusted-looking prefix.
-    fn resolve_from_header(&self, header_value: &str, client_ip: &IpAddr) -> String {
+    fn resolve_from_header(&self, header_value: &str, downstream_peer_ip: &IpAddr) -> String {
         let iter = || header_value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
 
         if self.recursive {
@@ -227,14 +227,14 @@ impl RealIpExtractor {
             // All trusted (no cap hit): return leftmost IP (Nginx behavior)
             leftmost
                 .map(|ip| ip.to_string())
-                .unwrap_or_else(|| client_ip.to_string())
+                .unwrap_or_else(|| downstream_peer_ip.to_string())
         } else {
             // Non-recursive: take the rightmost IP directly
             let rightmost = iter().rev().find_map(|s| s.parse::<IpAddr>().ok());
             match rightmost {
-                Some(ip) if self.is_trusted_proxy(&ip) => client_ip.to_string(),
+                Some(ip) if self.is_trusted_proxy(&ip) => downstream_peer_ip.to_string(),
                 Some(ip) => ip.to_string(),
-                None => client_ip.to_string(),
+                None => downstream_peer_ip.to_string(),
             }
         }
     }
@@ -252,17 +252,6 @@ fn extract_ip_from_socket_addr(addr: &str) -> IpAddr {
         .map(|sa| sa.ip())
         .or_else(|_| addr.parse::<IpAddr>())
         .unwrap_or_else(|_| IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)))
-}
-
-/// Extracts IP address from socket address string and returns as string (without port)
-///
-/// # Arguments
-/// * `addr` - Socket address string (e.g., "192.168.1.1:45678")
-///
-/// # Returns
-/// * IP address as string (e.g., "192.168.1.1")
-pub fn extract_ip_string(addr: &str) -> String {
-    extract_ip_from_socket_addr(addr).to_string()
 }
 
 #[cfg(test)]
@@ -401,7 +390,7 @@ mod tests {
         ];
         let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), false, None).unwrap();
 
-        // Non-recursive: rightmost 192.168.1.1 is trusted → use client_addr
+        // Non-recursive: rightmost 192.168.1.1 is trusted → use the downstream peer.
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers
             .insert_header("X-Forwarded-For", "203.0.113.1, 198.51.100.2, 192.168.1.1")
@@ -431,13 +420,6 @@ mod tests {
         // All IPs trusted, recursive: return leftmost IP (Nginx behavior)
         let result = extractor.extract_real_ip("192.168.1.254:45678", &headers);
         assert_eq!(result, "203.0.113.1");
-    }
-
-    #[test]
-    fn test_extract_ip_string() {
-        assert_eq!(extract_ip_string("192.168.1.1:45678"), "192.168.1.1");
-        assert_eq!(extract_ip_string("192.168.1.1"), "192.168.1.1");
-        assert_eq!(extract_ip_string("[::1]:8080"), "::1");
     }
 
     #[test]
@@ -535,7 +517,7 @@ mod tests {
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "1.2.3.4, 10.0.0.99").unwrap();
-        // Non-recursive takes rightmost → 10.0.0.99 is trusted → fallback to client_addr.
+        // Non-recursive takes rightmost → 10.0.0.99 is trusted → fall back to the downstream peer.
         let result = extractor.extract_real_ip("10.0.0.1:45678", &headers);
         assert_eq!(result, "10.0.0.1");
     }

@@ -36,6 +36,6 @@ Re-open only if:
 ## Reference Cases
 
 - cookie-auth-04 (RFC 6265bis §4.1.2.5 / §5.2.5), closed 2026-05-20
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a5.md → V-A5-04`
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a5.md → V-A5-04`
 - Config field: `edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs`
 - Docs: `docs/en/user-guide/http-route/filters/edgion-plugins/csrf.md`

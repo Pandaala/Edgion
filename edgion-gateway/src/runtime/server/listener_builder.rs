@@ -8,7 +8,7 @@ use crate::runtime::ServerHeaderOpts;
 use anyhow::{Context, Result};
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::connectors::TransportConnector;
-use pingora_core::listeners::Listeners;
+use pingora_core::listeners::{Listeners, TcpSocketOptions};
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::Server;
 use pingora_core::services::listening::Service;
@@ -26,9 +26,12 @@ use crate::routes::udp::{get_global_udp_route_managers, get_udp_listener_registr
 #[cfg(feature = "boringssl")]
 use crate::tls::runtime::gateway::tls_pingora::TlsCallback;
 use edgion_resources::constants::annotations::edgion;
+use edgion_resources::matcher::ip_cidr_helpers::to_cidr_format;
+use edgion_resources::matcher::ip_radix_tree::{IpCidr, IpRadixMatcher};
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::resources::gateway::{GatewayTlsMode, Listener};
 use edgion_resources::ListenerKey;
+use pingora_core::protocols::l4::proxy_protocol::ProxyProtocolTrust;
 use tokio_util::sync::CancellationToken;
 
 /// Context passed to listener builders containing gateway-level information and listener config
@@ -42,6 +45,9 @@ pub struct ListenerContext {
     pub listener_key: ListenerKey,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    /// Name of the EGC referenced by this listener's GatewayClass.
+    /// `None` means the GatewayClass uses built-in defaults.
+    pub request_body_config_name: Option<String>,
     pub server_conf: Arc<ServerConf>,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
@@ -68,6 +74,138 @@ fn probe_tcp_bind(addr: &str, gateway_key: &str, listener_name: &str) -> Result<
         )
     })?;
     Ok(())
+}
+
+/// Whether this listener must expect an inbound PROXY protocol header.
+///
+/// A Gateway API `Listener` carries no annotations of its own, so the
+/// per-listener key `edgion.io/accept-proxy-protocol.<listener-name>` is
+/// consulted first and falls back to the Gateway-wide key.
+fn accept_proxy_protocol(context: &ListenerContext) -> bool {
+    let per_listener = format!("{}.{}", edgion::ACCEPT_PROXY_PROTOCOL, context.listener.name);
+    context
+        .gateway_annotations
+        .get(&per_listener)
+        .or_else(|| context.gateway_annotations.get(edgion::ACCEPT_PROXY_PROTOCOL))
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Socket options for this listener, or `None` when there is nothing to set.
+///
+/// Returning `None` rather than a defaulted struct keeps the bind path
+/// byte-for-byte what it was before PROXY protocol support existed.
+fn tcp_sock_opts(context: &ListenerContext) -> Option<TcpSocketOptions> {
+    accept_proxy_protocol(context).then(|| {
+        // `TcpSocketOptions` is `#[non_exhaustive]`, so a struct expression is
+        // rejected across crates even with `..Default::default()`.
+        let mut opts = TcpSocketOptions::default();
+        opts.proxy_protocol = true;
+        opts.proxy_protocol_trusted_sources = proxy_protocol_trusted_sources(context);
+        opts
+    })
+}
+
+/// CIDR-backed [`ProxyProtocolTrust`], reusing Edgion's radix matcher so
+/// pingora needs no CIDR parser of its own.
+#[derive(Debug)]
+struct CidrProxyProtocolTrust(IpRadixMatcher);
+
+impl ProxyProtocolTrust for CidrProxyProtocolTrust {
+    fn is_trusted(&self, addr: &std::net::SocketAddr) -> bool {
+        self.0.contains(&addr.ip())
+    }
+}
+
+/// Build the trusted-source matcher from a raw annotation value.
+///
+/// Returns `None` — meaning mandatory mode, a header required on every
+/// connection — for an empty value, an unparseable entry, or a match-all
+/// prefix. Falling back rather than building a partial matcher is deliberate: a
+/// partial list would silently treat the ranges it dropped as untrusted and
+/// mis-attribute their client addresses, which is far harder to notice than a
+/// listener that plainly requires a header.
+fn build_trusted_sources(raw: &str, gateway_key: &str, listener_name: &str) -> Option<Arc<dyn ProxyProtocolTrust>> {
+    let mut builder = IpRadixMatcher::builder();
+    // Split on commas and any whitespace: a YAML block scalar yields newlines,
+    // which would otherwise arrive as one unparseable entry.
+    for entry in raw
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        // A bare address needs a /32 or /128 before the matcher will take it.
+        let normalized = match to_cidr_format(entry) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    gateway=%gateway_key, listener=%listener_name, entry=%entry, error=%e,
+                    "invalid proxy-protocol-trusted-cidrs entry; requiring a header on every connection"
+                );
+                return None;
+            }
+        };
+        // Reject match-all on the PARSED prefix, never on the string. A suffix
+        // test lets `0.0.0.0/00`, `::/00`, `1.2.3.4/00` and `0.0.0.0/+0` through
+        // — the prefix parse accepts all of them as 0 — and each silently yields
+        // a matcher that trusts every peer, defeating the one invariant this
+        // list exists to enforce.
+        match IpCidr::parse(&normalized) {
+            Ok(IpCidr::V4 { prefix_len: 0, .. }) | Ok(IpCidr::V6 { prefix_len: 0, .. }) => {
+                tracing::warn!(
+                    gateway=%gateway_key, listener=%listener_name, entry=%entry,
+                    "proxy-protocol-trusted-cidrs must not match every address; requiring a header on every connection"
+                );
+                return None;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    gateway=%gateway_key, listener=%listener_name, entry=%entry, error=%e,
+                    "unparseable proxy-protocol-trusted-cidrs entry; requiring a header on every connection"
+                );
+                return None;
+            }
+        }
+        if let Err(e) = builder.insert(&normalized, "proxy-protocol-trusted") {
+            tracing::warn!(
+                gateway=%gateway_key, listener=%listener_name, entry=%entry, error=%e,
+                "could not index proxy-protocol-trusted-cidrs entry; requiring a header on every connection"
+            );
+            return None;
+        }
+    }
+    match builder.build() {
+        Ok(matcher) => Some(Arc::new(CidrProxyProtocolTrust(matcher))),
+        // An all-empty list yields EmptyTree; mandatory mode is the right answer.
+        Err(_) => None,
+    }
+}
+
+/// Peers allowed to speak PROXY protocol to this listener, or `None` for
+/// mandatory mode.
+fn proxy_protocol_trusted_sources(context: &ListenerContext) -> Option<Arc<dyn ProxyProtocolTrust>> {
+    let raw = context.gateway_annotations.get(edgion::PROXY_PROTOCOL_TRUSTED_CIDRS)?;
+    build_trusted_sources(raw, &context.gateway_key, &context.listener.name)
+}
+
+/// Bind a plain TCP endpoint on a service, honouring the PROXY protocol flag.
+fn add_tcp_endpoint<A>(service: &mut Service<A>, addr: &str, context: &ListenerContext) {
+    match tcp_sock_opts(context) {
+        Some(opts) => service.add_tcp_with_settings(addr, opts),
+        None => service.add_tcp(addr),
+    }
+}
+
+/// Build a single-endpoint [`Listeners`] for the services that construct their
+/// own listener set instead of using [`Service::add_tcp`].
+fn tcp_listeners(addr: &str, context: &ListenerContext) -> Listeners {
+    let mut listeners = Listeners::new();
+    match tcp_sock_opts(context) {
+        Some(opts) => listeners.add_tcp_with_settings(addr, opts),
+        None => listeners.add_tcp(addr),
+    }
+    listeners
 }
 
 /// Add an HTTP or HTTPS listener to the Pingora server
@@ -111,7 +249,7 @@ pub fn add_http_listener(
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-        http_service.add_tcp(&addr);
+        add_tcp_endpoint(&mut http_service, &addr, context);
 
         tracing::info!(
             gateway=%context.gateway_key,
@@ -153,12 +291,10 @@ pub fn add_http_listener(
     let preflight_handler = crate::routes::http::proxy_http::PreflightHandler::new(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
-
     let http_route_manager =
         crate::routes::http::get_global_http_route_managers().get_or_create_listener_manager(&context.listener_key);
     let grpc_route_manager =
         crate::routes::grpc::get_global_grpc_route_managers().get_or_create_listener_manager(&context.listener_key);
-
     let edgion_http = EdgionHttpProxy {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
@@ -173,6 +309,7 @@ pub fn add_http_listener(
         },
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
+        request_body_config_name: context.request_body_config_name.clone(),
         parsed_timeouts,
         enable_http2: context.enable_http2,
         real_ip_extractor,
@@ -233,7 +370,7 @@ pub fn add_http_listener(
                 tls_settings.enable_h2();
             }
             probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-            http_service.add_tls_with_settings(&addr, None, tls_settings);
+            http_service.add_tls_with_settings(&addr, tcp_sock_opts(context), tls_settings);
             let protocol = if enable_http2 {
                 "HTTPS (HTTP/2 enabled)"
             } else {
@@ -254,7 +391,7 @@ pub fn add_http_listener(
         }
     } else {
         probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-        http_service.add_tcp(&addr);
+        add_tcp_endpoint(&mut http_service, &addr, context);
         let protocol = if enable_http2 { "HTTP (h2c enabled)" } else { "HTTP" };
         tracing::info!(
             gateway=%context.gateway_key,
@@ -288,7 +425,11 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     };
 
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-    let mut tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
+    let mut tcp_service = Service::with_listeners(
+        format!("TCP-{}", listener_name),
+        tcp_listeners(&addr, context),
+        edgion_tcp,
+    );
 
     apply_connection_filter(&mut tcp_service, context);
 
@@ -385,7 +526,7 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     // Only bind the TLS endpoint; Listeners::tcp() would bind a plain TCP socket
     // on the same port, causing EEXIST when add_tls_with_settings tries to bind again.
-    tls_service.add_tls_with_settings(&addr, None, tls_settings);
+    tls_service.add_tls_with_settings(&addr, tcp_sock_opts(context), tls_settings);
 
     server.add_service(tls_service);
 
@@ -424,7 +565,7 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     let mut service = Service::with_listeners(
         format!("TLS-Passthrough-{}", listener_name),
-        Listeners::tcp(&addr),
+        tcp_listeners(&addr, context),
         proxy,
     );
 
@@ -448,6 +589,41 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
 /// This function dispatches to the appropriate listener builder based on the
 /// protocol specified in the listener configuration.
 pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()> {
+    if accept_proxy_protocol(&context) {
+        // Log the EFFECTIVE mode, not the raw annotation. A rejected trust list
+        // silently falls back to mandatory mode, so echoing the annotation here
+        // could claim `trusted_sources=0.0.0.0/0` on a listener that actually
+        // requires a header from everyone.
+        match proxy_protocol_trusted_sources(&context) {
+            Some(_) => tracing::info!(
+                gateway=%context.gateway_key,
+                listener=%context.listener.name,
+                port=%context.listener.port,
+                trusted_sources=%context
+                    .gateway_annotations
+                    .get(edgion::PROXY_PROTOCOL_TRUSTED_CIDRS)
+                    .map(String::as_str)
+                    .unwrap_or(""),
+                "Inbound PROXY protocol enabled for trusted sources; other peers are served as direct connections"
+            ),
+            None => tracing::info!(
+                gateway=%context.gateway_key,
+                listener=%context.listener.name,
+                port=%context.listener.port,
+                "Inbound PROXY protocol enabled; connections not starting with a valid header are rejected"
+            ),
+        }
+        // The connection filter runs at accept time, before the PROXY header is
+        // parsed, so its IP rules match the load balancer rather than the client.
+        if context.gateway_annotations.contains_key(edgion::EDGION_STREAM_PLUGINS) {
+            tracing::warn!(
+                gateway=%context.gateway_key,
+                listener=%context.listener.name,
+                "edgion-stream-plugins runs before the PROXY header is read, so its IP rules see the load balancer address, not the real client"
+            );
+        }
+    }
+
     match context.listener.protocol.to_uppercase().as_str() {
         "HTTP" => add_http_listener(server, &context, false, context.enable_http2),
         "HTTPS" => add_http_listener(server, &context, true, context.enable_http2),
@@ -487,11 +663,9 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
 /// Apply connection filter to a Pingora Service if the Gateway has the
 /// `edgion.io/edgion-stream-plugins` annotation set.
 ///
-/// The annotation value may be `name` (expanded with the Gateway's namespace) or the
-/// fully-qualified `namespace/name` referencing an EdgionStreamPlugins resource. This
-/// matches the bare-name convention documented for the Gateway annotation and aligns
-/// with the TCPRoute / TLSRoute handlers, which apply the same normalization before
-/// looking up the global `StreamPluginStore` (keyed by `namespace/name`).
+/// The annotation value must be an unqualified resource name and is expanded with the
+/// Gateway's namespace. Route-level StreamPlugins references have a separate contract
+/// and may still use a qualified `namespace/name` value.
 ///
 /// The filter runs at TCP level, before TLS handshake or HTTP parsing.
 fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContext) {
@@ -499,18 +673,23 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
         return;
     };
 
-    let trimmed = annotation_value.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    // The store is always keyed by the fully-qualified `namespace/name`. Expand a bare
-    // name using the Gateway's own namespace so doc-sanctioned short references resolve
-    // instead of silently fail-closing the listener.
-    let store_key = if trimmed.contains('/') {
-        trimmed.to_string()
-    } else {
-        let ns = context.gateway_namespace.as_deref().unwrap_or("default");
-        format!("{}/{}", ns, trimmed)
+    // The store is keyed by `namespace/name`, but Gateway-level attachments are
+    // same-namespace only. Use an impossible store key for a qualified annotation so
+    // bypassing Controller validation still fails closed in the data plane.
+    let store_key = match resolve_gateway_stream_plugin_store_key(
+        annotation_value,
+        context.gateway_namespace.as_deref().unwrap_or("default"),
+    ) {
+        Ok(Some(store_key)) => store_key,
+        Ok(None) => return,
+        Err(()) => {
+            tracing::warn!(
+            gateway=%context.gateway_key,
+            listener=%context.listener.name,
+            "Gateway edgion-stream-plugins reference must be an unqualified resource name; connections will be rejected"
+            );
+            String::new()
+        }
     };
 
     let store = get_global_stream_plugin_store();
@@ -535,4 +714,107 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
         store_key=%store_key,
         "ConnectionFilter enabled via edgion-stream-plugins annotation"
     );
+}
+
+fn resolve_gateway_stream_plugin_store_key(value: &str, gateway_ns: &str) -> Result<Option<String>, ()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else if trimmed.contains('/') {
+        Err(())
+    } else {
+        Ok(Some(format!("{}/{}", gateway_ns, trimmed)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_gateway_stream_plugin_store_key;
+
+    #[test]
+    fn gateway_stream_plugin_store_key_uses_gateway_namespace() {
+        assert_eq!(
+            resolve_gateway_stream_plugin_store_key("  policy  ", "app").unwrap(),
+            Some("app/policy".to_string())
+        );
+    }
+
+    #[test]
+    fn gateway_stream_plugin_store_key_rejects_qualified_name() {
+        assert!(resolve_gateway_stream_plugin_store_key("shared/policy", "app").is_err());
+    }
+}
+
+#[cfg(test)]
+mod proxy_protocol_trust_tests {
+    use super::*;
+
+    fn build(raw: &str) -> Option<Arc<dyn ProxyProtocolTrust>> {
+        build_trusted_sources(raw, "edgion-test/gw", "pp")
+    }
+
+    #[test]
+    fn cidr_and_bare_addresses_both_work() {
+        let trust = build("10.0.0.0/8, 192.168.1.5").expect("matcher built");
+        assert!(trust.is_trusted(&"10.1.2.3:1".parse().unwrap()));
+        assert!(trust.is_trusted(&"192.168.1.5:1".parse().unwrap()));
+        assert!(!trust.is_trusted(&"172.16.0.1:1".parse().unwrap()));
+    }
+
+    #[test]
+    fn invalid_entry_fails_closed_to_mandatory_mode() {
+        // A typo must not silently widen trust, and must not build a partial
+        // matcher that would mis-attribute the ranges it dropped.
+        assert!(build("10.0.0.0/8, not-an-ip").is_none());
+    }
+
+    #[test]
+    fn empty_value_falls_back_to_mandatory_mode() {
+        assert!(build("").is_none());
+        assert!(build("  , ,").is_none());
+    }
+
+    #[test]
+    fn ipv6_entries_work() {
+        // The matcher keeps separate v4 and v6 trees, so a v6 insert needs its
+        // own coverage rather than riding on the v4 cases.
+        let trust = build("2001:db8::/32, 2001:db8:cafe::1").expect("matcher built");
+        assert!(trust.is_trusted(&"[2001:db8::5]:1".parse().unwrap()));
+        assert!(trust.is_trusted(&"[2001:db8:cafe::1]:1".parse().unwrap()));
+        assert!(!trust.is_trusted(&"[2001:db9::1]:1".parse().unwrap()));
+    }
+
+    #[test]
+    fn match_all_prefixes_are_refused() {
+        // 0.0.0.0/0 would trust every peer, reinstating the sniff-everything
+        // mode the design rejects. Refusing keeps mandatory mode instead.
+        assert!(build("0.0.0.0/0").is_none());
+        assert!(build("::/0").is_none());
+    }
+
+    #[test]
+    fn match_all_cannot_be_smuggled_past_the_guard() {
+        // The prefix parse accepts these as 0, so a string-suffix test would
+        // let every one of them through and silently trust every peer. Note
+        // `1.2.3.4/00` in particular: it reads as one specific host.
+        for smuggled in ["0.0.0.0/00", "0.0.0.0/000", "0.0.0.0/+0", "::/00", "1.2.3.4/00"] {
+            assert!(build(smuggled).is_none(), "{smuggled} must not produce a matcher");
+        }
+    }
+
+    #[test]
+    fn slash_bearing_garbage_fails_closed() {
+        // to_cidr_format passes anything containing a slash through untouched,
+        // so these reach the CIDR parser rather than the bare-address path.
+        assert!(build("10.0.0.0/99").is_none());
+        assert!(build("foo/bar").is_none());
+    }
+
+    #[test]
+    fn newline_separated_entries_are_accepted() {
+        // A YAML block scalar arrives with newlines, not commas.
+        let trust = build("10.0.0.0/8\n192.168.1.5\n").expect("matcher built");
+        assert!(trust.is_trusted(&"10.1.2.3:1".parse().unwrap()));
+        assert!(trust.is_trusted(&"192.168.1.5:1".parse().unwrap()));
+    }
 }

@@ -1,0 +1,14 @@
+# Dedicated GatewayClass for the DnsResolution suite so its gateway binds to the
+# dns-res-egc EdgionGatewayConfig (which enables allowLoopbackUpstream), isolated
+# from the shared public-gateway class whose EGC is shadowed in a full-conf run.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: dns-res-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "DnsResolution suite gateway (loopback self-resolve enabled)"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: dns-res-egc

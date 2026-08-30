@@ -43,7 +43,7 @@ This path mainly serves:
 
 The chain is:
 
-- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. The legacy `from_httproute_filters()` / `from_grpcroute_filters()` are `#[deprecated]` and forward to the new entry points with rule scope by default.
+- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Do not use the deprecated forwarding methods still present in code; they are pre-release removal debt, not supported extension points.
 
 This path mainly serves:
 
@@ -94,11 +94,33 @@ You typically touch at least these locations:
 1. `edgion-resources/src/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
 2. `edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs`
 3. `edgion-resources/src/resources/edgion_plugins/mod.rs`
-4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
+4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` — the enum variant plus
+   **six** exhaustive matches: `type_name`, `validation_error`, `body_requirement`,
+   `dye_capabilities`, `dye_type_prefix`, `key_header_names`. All six are exhaustive, so the
+   compiler tells you if you miss one.
 5. `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
 6. `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
 7. `edgion-gateway/src/plugins/http/mod.rs`
-8. `edgion-gateway/src/plugins/runtime/plugin_runtime.rs`
+8. `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` — `get_plugin_name` plus all four
+   `create_*_from_edgion` constructors (the three where the plugin is invalid take a
+   `CreateResult::WrongStage` arm).
+
+Two more that the compiler does **not** catch:
+
+9. `config/crd/edgion-crd/edgion_plugins_crd.yaml` — add the type to the `type:` enum of every
+   stage the plugin is valid at. Miss this and the CRD prunes/rejects the plugin at admission,
+   i.e. it is un-appliable. Guarded by `edgion-resources/tests/plugin_crd_type_coverage.rs`.
+10. `edgion-resources/src/resources/edgion_plugins/validate.rs` — **only if the plugin is not
+    request-stage-only.** `HTTP_PLUGIN_STAGE_EXCEPTIONS` is the single source of truth for stage
+    applicability (request-only is the default and needs no entry); the CRD guard reads it via
+    `applicable_stages_by_name`. A key that names no real variant fails
+    `stage_exception_keys_are_real_variants`.
+
+Integration-test registration (suite module, `test_client.rs`, `run_integration.sh`,
+`capabilities.tsv`) is covered in
+[../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md). Note
+that a suite added to the `-r <Resource>` sweep but not the default sweep is **never run by CI** —
+`every_targeted_sweep_suite_also_runs_in_the_default_sweep` in `test_client.rs` guards that.
 
 ### If the plugin depends on a Secret
 
@@ -161,6 +183,7 @@ Good references in the current repo:
 - Plugins that depend on ctx variables: `real_ip`, `ctx_set`.
 - Plugins that depend on Secrets and complex validation: `jwt_auth`, `openid_connect`, `key_auth`.
 - Body filter: `bandwidth_limit`.
+- External-runtime plugin (embeds a separate execution engine — global engine/cache/pool + host ABI bridge, guest failure isolated from the gateway process): `wasm` (`edgion-gateway/src/plugins/http/wasm/`).
 
 ### 5. Register the construction logic in `PluginRuntime`
 
@@ -259,7 +282,7 @@ Don't reparse the entire request just to read a previous plugin's result.
 
 ## ExtensionRef has only one form: HTTPRoute / GRPCRoute filter list
 
-> **Note:** `EdgionPlugin::ExtensionRef` (the nested form, i.e. writing `type: ExtensionRef` inside `EdgionPlugins.spec.*Plugins`) has been removed (release `<version>`) — "plugin referencing plugin" is no longer supported. Route- and backend-level `ExtensionRef` (HTTPRoute / GRPCRoute / HTTPBackendRef filter lists, the Gateway API standard) is retained. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
+> **Note:** `EdgionPlugin::ExtensionRef` (the nested form, i.e. writing `type: ExtensionRef` inside `EdgionPlugins.spec.*Plugins`) has been removed (release `<version>`) — "plugin referencing plugin" is no longer supported. Route- and backend-level `ExtensionRef` (HTTPRoute / GRPCRoute / HTTPBackendRef filter lists, the Gateway API standard) is retained. See `docs/en/migrations/<version>-extension-ref.md`; the paired Chinese page is under `docs/zh-CN/migrations/`.
 
 ```yaml
 HTTPRoute.rules[].filters:
@@ -311,6 +334,33 @@ Current behavior:
 - Push plugin logs into the dedicated `edgion_plugins` log structure.
 
 If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.
+
+## Optional read-only request-body observation
+
+The Gateway has one internal, request-scoped observer seam for protocol
+frontends that need bounded metadata from the proxied request body without
+requiring full-body capture. It is not a general operator plugin API.
+
+- Registration is available only from the request stage through
+  `PluginSession::install_request_body_observer`. A false return always disables
+  observation and is failure-open; it must never reject the request.
+- Observers run synchronously after existing mutable request-body stream
+  handlers and before the mirror tee/upstream forwarding. They receive borrowed
+  immutable bytes and cannot replace, retain, replay, or aggregate the body.
+- The host caps slots, bytes, events, declared work, and retained scratch.
+  Retry reuses the canonical Pingora replay path and resets only fixed semantic
+  state; request-wide work counters do not reset.
+- BodyStorage remains the only request-body cache/spill owner. Installing an
+  observer does not enable capture, change framing, or disable retry.
+- Chunk processing emits no logs, metrics, or tracing. Exactly one static,
+  payload-free outcome per observer is drained through the existing access-log
+  stage at EOS or request cleanup.
+- Observer-owned factory, callback, retained-size, finalize, and destructor
+  panics use the canonical redacted panic scope and cannot expose their payload.
+
+Protocol parsing belongs to the registering frontend. It must use fixed-capacity
+state and charge semantic work before scanning; the generic seam does not
+contain JSON, protocol-method, or content-type recognition.
 
 ## Reading the request path
 
@@ -387,12 +437,12 @@ High-frequency APIs:
 
 - `header_value()` / `request_headers()`
 - `get_path()` / `get_request_path()` / `get_uri()` / `get_request_uri()` / `get_query()`
-- `client_addr()` / `remote_addr()` / `client_cert_info()`
+- `direct_peer_ip()` / `remote_ip()` / `client_cert_info()`
 - `set_request_header()` / `append_request_header()` / `remove_request_header()`
 - `set_upstream_uri()` / `set_upstream_host()` / `set_upstream_method()`
 - `write_response_header()` / `write_response_body()` / `shutdown()`
 - `set_ctx_var()` / `get_ctx_var()`
-- `key_get()` / `key_get_local()` / `key_set()`
+- `key_get()` / `key_set()`
 
 If the plugin will call external HTTP services, prefer reusing:
 
@@ -409,7 +459,8 @@ Keep the rules simple:
 
 - Record results, not lengthy internal traces.
 - Use short phrases ending with semicolons, e.g., `OK u=jack; `.
-- For verbose debugging, use `tracing::debug!()`; do not treat the access log as a debug dump.
+- Data-plane plugin callbacks must not use `tracing::` macros. Use concise `PluginLog` results in
+  phases that receive a log, or bounded metrics/per-request aggregation where appropriate.
 - Conditional skip (`cond_skip`) is written automatically by the conditional wrapper — do not invent your own format.
 - **No PluginLog in the `UpstreamResponseBodyFilter` phase**: the trait signature deliberately omits the log parameter; the body phase fires once per chunk, and per-chunk logging blows up. See the full constraint in [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero).
 
@@ -434,8 +485,9 @@ the runtime writes the response on the plugin's behalf.
 
 **Runtime fail-safe**: a plugin that violates this convention receives a 502
 Bad Gateway fallback from the runtime, and `PluginTerminateWithoutResponse`
-appears in the access log `errors[]` field. Fix the plugin so it writes its
-own response and the marker disappears.
+appears in the ordered access-log `diagnostics` array as
+`{"kind":"error","code":"PluginTerminateWithoutResponse"}`. Fix the plugin so
+it writes its own response and the marker disappears.
 
 ## Project-specific rules
 
@@ -452,6 +504,20 @@ In this repo:
 ### Comments and logs in code use English
 
 This is a general repo-wide convention; stay consistent with existing plugins.
+
+## Failure policy for plugins with a runtime dependency
+
+A plugin that calls a live per-request dependency must declare its failure behavior:
+
+- **Auth purpose → fixed fail-close, no operator knob** (e.g. forward_auth,
+  ldap_auth, openid_connect). Failing open is a security hole — do not add a
+  degrade switch.
+- **Non-auth → provide an explicit fail-open/fail-close knob, default fail-close.**
+- Prefer a two-variant `Open`/`Close` enum over a `bool` for the knob: a `bool`
+  named `failOpen` has polarity ambiguity (`false` = fail-close is a double
+  negative). This is a preference — the existing `OnRedisFailure` enum,
+  `failure_mode_allow: bool`, `fail_open: bool`, and dsl `error_policy` shapes
+  are grandfathered and not being migrated.
 
 ## Validation
 
@@ -501,7 +567,7 @@ Cover these four layers in priority order:
 
 ### If the plugin supports hot reload (`partial_update` / `full_set`)
 
-Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onMissingKey`).
+Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onKeyMiss`).
 
 - Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
 - conf directory convention: `edgion-tests/integration/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
@@ -527,7 +593,8 @@ Other references:
 
 ## Related
 
-- [docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
+- [docs/en/dev-guide/http-plugin-development.md](../../../docs/en/dev-guide/http-plugin-development.md)
+- [docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md) (Chinese mirror)
 - [observability/00-access-log.md](../../03-coding/observability/00-access-log.md)
 - [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
 - [14-link-sys-dev.md](14-link-sys-dev.md)

@@ -1,0 +1,19 @@
+# "Bare" listener: a Gateway carrying the GATEWAY-level edgion-stream-plugins
+# annotation (Stage-1 pre-accept ConnectionFilter,
+# edgion-gateway/src/plugins/stream/connection_filter_bridge.rs) with NO
+# TCPRoute attached at all. A connection here is evaluated purely at
+# accept time ("stage1" layer) — there is no Stage-2 "tcp" check to run
+# because no route ever matches.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-geo-bare-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tcp-geo-esp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: bare
+      protocol: TCP
+      port: 31952

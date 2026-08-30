@@ -39,8 +39,8 @@ spec:
     credentialRef:
       name: cloudflare-api-token
       namespace: default
-    propagationTimeout: 120     # seconds to wait for DNS propagation
-    propagationCheckInterval: 5 # seconds between DNS checks
+    propagationTimeout: 120s          # upper bound; polling exits as soon as records are visible
+    propagationCheckInterval: 5s      # authoritative-NS poll cadence
 
   storage:
     secretName: wildcard-tls-cert

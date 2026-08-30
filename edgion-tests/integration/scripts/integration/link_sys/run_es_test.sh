@@ -39,6 +39,9 @@ NC='\033[0m'
 # ── Paths ───────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
+CONF_SYNC_UTILS="${SCRIPT_DIR}/../../utils/conf_sync_certs.sh"
+# shellcheck source=../../utils/conf_sync_certs.sh
+source "$CONF_SYNC_UTILS"
 
 ES_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/elasticsearch"
 CONF_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf"
@@ -56,9 +59,10 @@ ES_PORT=19200
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
-# Gateway admin API requires a bearer token. Inherited from start_all_with_conf.sh
-# in normal runs; default here for standalone invocation.
-: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
+# Gateway admin API requires a bearer token. Must be EXPORTED so the gateway
+# child process (started below) inherits it and configures its admin token —
+# otherwise every admin API call returns 503 "no admin token configured".
+export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 ES_URL="http://127.0.0.1:${ES_PORT}"
 
@@ -258,8 +262,8 @@ cleanup() {
             fi
         done
 
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
 
         log_info "Stopping Elasticsearch container..."
         cd "$ES_DIR" && docker compose down --timeout 10 2>/dev/null || true
@@ -277,8 +281,8 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
 sleep 2
 log_success "Old processes cleaned up"
 
@@ -307,6 +311,11 @@ done
 log_section "Preparing work directory"
 mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
 
+# conf_sync is mTLS by default (the checked-in config/edgion-*.yaml carry the cert
+# paths, work-dir relative). Both binaries below run with WORK_DIR as their work
+# dir, so the cert set has to land there.
+conf_sync_distribute_certs "$WORK_DIR"
+
 if [ -d "${PROJECT_ROOT}/config/crd" ]; then
     cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
     log_success "CRD schemas copied"
@@ -316,6 +325,24 @@ fi
 # Step 3: Start Elasticsearch (Docker)
 # =============================================================================
 log_section "Starting Elasticsearch"
+
+# Generate the backend CA + server cert that the nginx TLS terminator
+# (es-tls-proxy) mounts. Required before `docker compose up` so the volume mount
+# at edgion-tests/certs/backend is populated. Drives the P0#3 outbound-TLS case.
+BACKEND_CERT_SCRIPT="${SCRIPT_DIR}/../../gen_certs/generate_backend_certs.sh"
+MTLS_CERT_SCRIPT="${SCRIPT_DIR}/../../gen_certs/generate_mtls_certs.sh"
+BACKEND_CA_CRT="${PROJECT_ROOT}/edgion-tests/certs/backend/ca.crt"
+MTLS_CLIENT_CRT="${PROJECT_ROOT}/edgion-tests/certs/mtls/valid-client.crt"
+MTLS_CLIENT_KEY="${PROJECT_ROOT}/edgion-tests/certs/mtls/valid-client.key"
+log_info "Generating backend + mTLS certs for the ES TLS terminators..."
+bash "$BACKEND_CERT_SCRIPT" > /dev/null 2>&1 || true
+bash "$MTLS_CERT_SCRIPT" > /dev/null 2>&1 || true
+if [ ! -f "$BACKEND_CA_CRT" ] || [ ! -f "$MTLS_CLIENT_CRT" ] || [ ! -f "$MTLS_CLIENT_KEY" ]; then
+    log_error "TLS certs not found after generation (backend CA / mTLS client cert)"
+    exit 1
+fi
+log_success "Backend + mTLS certs ready"
+
 cd "$ES_DIR"
 docker compose pull --quiet 2>/dev/null || true
 docker compose up -d 2>&1 | grep -v "^$" || true
@@ -373,6 +400,69 @@ for f in "${CONF_DIR}/base"/*.yaml; do
     "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" > /dev/null 2>&1 || true
 done
 log_success "Base config loaded"
+
+# CA Secret for the outbound-TLS LinkSys (es-tls-test, caSource: SecretRef).
+# Resolved by the Controller in the LinkSys namespace (default) — same-namespace,
+# so no ReferenceGrant is needed. Applied BEFORE the LinkSys CRDs so the caSecretRef
+# resolves on first reconcile (avoids a Pending->ready re-reconcile race).
+ES_CA_B64=$(base64 < "$BACKEND_CA_CRT" | tr -d '\n')
+ES_CA_SECRET_YAML="${CONFIG_DIR}/Secret_default_es-backend-ca.yaml"
+cat > "$ES_CA_SECRET_YAML" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: es-backend-ca
+  namespace: default
+type: Opaque
+data:
+  ca.crt: ${ES_CA_B64}
+EOF
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$ES_CA_SECRET_YAML" 2>&1
+log_success "ES backend CA Secret (default/es-backend-ca) loaded"
+
+# Client-identity Secret for the mutual-TLS LinkSys (es-mtls-test, clientSecretRef).
+# kubernetes.io/tls Secret carrying the valid client cert/key signed by the mTLS
+# client CA that the nginx mutual-TLS terminator trusts.
+ES_CLIENT_CRT_B64=$(base64 < "$MTLS_CLIENT_CRT" | tr -d '\n')
+ES_CLIENT_KEY_B64=$(base64 < "$MTLS_CLIENT_KEY" | tr -d '\n')
+ES_CLIENT_SECRET_YAML="${CONFIG_DIR}/Secret_default_es-client-cert.yaml"
+cat > "$ES_CLIENT_SECRET_YAML" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: es-client-cert
+  namespace: default
+type: kubernetes.io/tls
+data:
+  tls.crt: ${ES_CLIENT_CRT_B64}
+  tls.key: ${ES_CLIENT_KEY_B64}
+EOF
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$ES_CLIENT_SECRET_YAML" 2>&1
+log_success "ES mTLS client cert Secret (default/es-client-cert) loaded"
+
+# Global outboundTls default for the inheritance scenario (es-tls-inherit, P1#5).
+# Override the base EdgionGatewayConfig (same name -> upsert) by appending an
+# outboundTls block while keeping every original field. Cluster-scoped CA
+# references require an explicit namespace, so this points to the generated
+# Secret in `default`. This affects only this standalone run; the shared base
+# file is left untouched. Other ES scenarios set local overrides, so the global
+# default only changes the behavior of the no-local-CA es-tls-inherit client.
+# The filesystem config center derives identity from the filename, so this must
+# follow Kind_name.yaml instead of using a descriptive suffix.
+EGC_OVERRIDE_YAML="${CONFIG_DIR}/EdgionGatewayConfig_example-gateway.yaml"
+cp "${CONF_DIR}/base/EdgionGatewayConfig.yaml" "$EGC_OVERRIDE_YAML"
+cat >> "$EGC_OVERRIDE_YAML" <<'EOF'
+
+  # Appended by run_es_test.sh for the global outboundTls inheritance scenario.
+  outboundTls:
+    validation:
+      caCertificateRefs:
+        - kind: Secret
+          name: es-backend-ca
+          namespace: default
+EOF
+"$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$EGC_OVERRIDE_YAML" 2>&1
+log_success "EdgionGatewayConfig outboundTls global CA reference loaded"
 
 for f in $(ls "${CONF_DIR}/LinkSys/Elasticsearch"/*.yaml | sort); do
     "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
@@ -459,6 +549,94 @@ assert_eq "Client connected=true" "true" "$CONNECTED"
 
 RESP=$(gw_api GET "/api/v1/testing/link-sys/es/health")
 assert_json_success "All-clients health check" "$RESP"
+
+# ── 3.5 Outbound TLS: caSource SecretRef (private-CA REPLACE) ───────────────
+# es-tls-test connects to the nginx TLS terminator (https://127.0.0.1:19201)
+# whose server cert is signed by the backend test CA. caSource: SecretRef
+# REPLACES the public roots with that private CA, so a successful PING proves the
+# connector actually completed a TLS handshake trusting only the private CA.
+# es-tls-systemca is the negative control: same endpoint, caSource: System →
+# the private CA is not in the public roots → handshake fails → never connects.
+log_info "─── 3.5 Outbound TLS (caSource: SecretRef, CA REPLACE) ───"
+ES_TLS_CLIENT="default_es-tls-test"
+ES_TLS_SYSTEMCA_CLIENT="default_es-tls-systemca"
+
+RESP=$(gw_api GET "/configclient/LinkSys?namespace=default&name=es-tls-test")
+assert_json_success "es-tls-test CRD synced to Gateway" "$RESP"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/clients")
+assert_contains "es-tls-test client registered (CA Secret resolved)" "$RESP" "default/es-tls-test"
+
+# Positive: private CA trusted over TLS → PING succeeds.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_CLIENT}/ping")
+assert_json_success "es-tls-test PING over TLS succeeds (private CA REPLACE trusted)" "$RESP"
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_CLIENT}/health")
+assert_eq "es-tls-test connected=true over TLS" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+
+# Negative control: System roots only → the private CA is untrusted → PING fails.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_SYSTEMCA_CLIENT}/ping")
+assert_json_failure "es-tls-systemca PING fails (System roots do not trust the private CA)" "$RESP"
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_SYSTEMCA_CLIENT}/health")
+assert_ne "es-tls-systemca never connects (proves SecretRef REPLACES public roots)" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+
+# ── 3.6 Outbound TLS: verify=false honored (M-A1, no env gate) ──────────────
+# es-tls-noverify hits the SAME private-cert endpoint with NO CA and verify=false.
+# Elasticsearch is a reqwest provider (provider_can_disable=true), so the resolver
+# honors verify=false instead of rejecting it — and after M-A1 there is no
+# production/EDGION_ENV gate. The handshake to the untrusted private cert must
+# therefore succeed, in direct contrast to es-tls-systemca (verify on → fails).
+log_info "─── 3.6 Outbound TLS (verify=false honored, M-A1) ───"
+ES_TLS_NOVERIFY_CLIENT="default_es-tls-noverify"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/clients")
+assert_contains "es-tls-noverify client registered" "$RESP" "default/es-tls-noverify"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_NOVERIFY_CLIENT}/ping")
+assert_json_success "es-tls-noverify PING succeeds (verify=false honored, no CA)" "$RESP"
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_NOVERIFY_CLIENT}/health")
+assert_eq "es-tls-noverify connected=true (verify=false skips cert validation)" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+
+# ── 3.7 Outbound mTLS: clientSecretRef (client identity presented) ──────────
+# es-mtls-test connects to the mutual-TLS terminator (https://127.0.0.1:19202,
+# ssl_verify_client on). It trusts the server cert via caSecretRef AND presents a
+# client cert via clientSecretRef. A successful PING proves the connector actually
+# completed a mutual-TLS handshake. es-mtls-noclient is the negative control: same
+# endpoint, no client identity → nginx rejects the handshake → never connects.
+log_info "─── 3.7 Outbound mTLS (clientSecretRef) ───"
+ES_MTLS_CLIENT="default_es-mtls-test"
+ES_MTLS_NOCLIENT="default_es-mtls-noclient"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/clients")
+assert_contains "es-mtls-test client registered (CA + client cert resolved)" "$RESP" "default/es-mtls-test"
+
+# Positive: valid client cert presented → mutual-TLS handshake succeeds.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_MTLS_CLIENT}/ping")
+assert_json_success "es-mtls-test PING over mTLS succeeds (valid client cert)" "$RESP"
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_MTLS_CLIENT}/health")
+assert_eq "es-mtls-test connected=true over mTLS" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+
+# Negative control: no client identity → the mutual-TLS server rejects it.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_MTLS_NOCLIENT}/ping")
+assert_json_failure "es-mtls-noclient PING fails (no client cert presented)" "$RESP"
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_MTLS_NOCLIENT}/health")
+assert_ne "es-mtls-noclient never connects (mutual TLS requires a client cert)" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+
+# ── 3.8 Outbound TLS: global outboundTls inheritance ────────────────────────
+# es-tls-inherit has tls.enabled but NO local CA. It inherits the cluster-wide
+# EdgionGatewayConfig.outboundTls validation CA reference and connects
+# to the private-cert endpoint. A successful PING proves the global CA default was
+# inherited; es-tls-systemca (local caSource: System) still fails, proving a local
+# override beats the global default.
+log_info "─── 3.8 Outbound TLS (global outboundTls inheritance) ───"
+ES_TLS_INHERIT_CLIENT="default_es-tls-inherit"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/clients")
+assert_contains "es-tls-inherit client registered" "$RESP" "default/es-tls-inherit"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_INHERIT_CLIENT}/ping")
+assert_json_success "es-tls-inherit PING succeeds (inherited global CA default)" "$RESP"
+RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_TLS_INHERIT_CLIENT}/health")
+assert_eq "es-tls-inherit connected=true (global outboundTls CA inherited)" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
 
 # ── 4. Index Management ───────────────────────────────────────────────────
 log_info "─── 4. Index Management ───"

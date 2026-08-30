@@ -44,6 +44,7 @@ spec:
 | `fraction` | Object | ❌ | 无 (100%) | 镜像流量比例 |
 | `fraction.numerator` | Integer | ✅ | 无 | 分子 |
 | `fraction.denominator` | Integer | ✅ | 无 | 分母 |
+| `percent` | Integer | ❌ | 无 (100%) | 镜像请求百分比（0-100），Gateway API v1.5 字段名，与 `fraction` 二选一 |
 | `connectTimeoutMs` | Integer | ❌ | `1000` | 连接超时毫秒 |
 | `writeTimeoutMs` | Integer | ❌ | `1000` | 写入超时毫秒 |
 | `maxBufferedChunks` | Integer | ❌ | `5` | 最大缓冲 chunk 数 |
@@ -106,6 +107,7 @@ requestPlugins:
 2. 镜像失败不会导致主请求失败
 3. 请求体（body）也会被镜像，`maxBufferedChunks` 控制缓冲大小
 4. 当并发镜像数达到 `maxConcurrent` 上限时，新的镜像请求会被丢弃
+5. 如果镜像停止前下游传输没有到达真实 EOS，Edgion 会取消镜像请求，避免镜像目标把不完整上传当成完整 body；镜像结果为 `body_abandoned`。这既包括主上游停止消费请求 body，也包括后置请求阶段插件在 body pump 运行前结束请求。只有请求头携带传输层 EOS 才能证明空 body 已完整；HTTP/2 中仅有 `Content-Length: 0` 声明并不能提供该保证
 
 ---
 

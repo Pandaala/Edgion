@@ -1,0 +1,14 @@
+# attacker_header_cannot_forge_fields: `ext` is serialized through serde
+# (never a hand-built string), so an attacker-controlled header value
+# containing quotes/braces cannot break out of its JSON string and forge a
+# sibling field (e.g. a fake "status":999).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-forge
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: ua_field
+      from: header
+      name: user-agent

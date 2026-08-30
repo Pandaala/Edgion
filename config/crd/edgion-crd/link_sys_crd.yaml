@@ -22,7 +22,7 @@ spec:
                 type:
                   type: string
                   description: "System type"
-                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook"]
+                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook", "httpdns", "credentialSource"]
                 config:
                   type: object
                   description: "System-specific configuration"
@@ -83,28 +83,73 @@ spec:
                           type: boolean
                           description: "Enable TLS"
                           default: false
-                        insecureSkipVerify:
+                        verify:
                           type: boolean
-                          description: "Skip certificate verification (insecure)"
-                        certs:
+                          description: "Verify the peer TLS certificate (default true). verify: false is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify — verify: false is rejected at startup for them (the SDK has no skip-verify API)."
+                        validation:
                           type: object
-                          description: "TLS certificates; private key MUST be provided via secretRef (inline clientKey is rejected)"
+                          description: "CA trust configuration for outbound TLS connections"
                           properties:
-                            caCert:
+                            caCertificateRefs:
+                              type: array
+                              description: "References to CA certificate resources (Secret or ConfigMap)"
+                              items:
+                                type: object
+                                properties:
+                                  group:
+                                    type: string
+                                    description: "Group of the referent; defaults to empty string (core)"
+                                  kind:
+                                    type: string
+                                    description: "Kind of the referent; e.g. Secret or ConfigMap"
+                                  name:
+                                    type: string
+                                    description: "Name of the referent"
+                                  namespace:
+                                    type: string
+                                    description: "Namespace of the referent. Cross-namespace refs require a ReferenceGrant"
+                                required: [kind, name]
+                            wellKnownCACertificates:
                               type: string
-                              description: "CA certificate (PEM, public material)"
-                            clientCert:
+                              description: "Use well-known system CA certificates (e.g. Mozilla roots)"
+                              enum: [System]
+                            hostname:
                               type: string
-                              description: "Client certificate (PEM, public material)"
-                            secretRef:
-                              type: object
-                              description: "Secret reference (kubernetes.io/tls or Opaque with tls.crt/tls.key/ca.crt keys)"
-                              required: ["name"]
-                              properties:
-                                name:
-                                  type: string
-                                namespace:
-                                  type: string
+                              description: "Optional SNI override and default SAN check hostname"
+                            subjectAltNames:
+                              type: array
+                              description: "Subject alternative names to verify in the server certificate"
+                              items:
+                                type: object
+                                properties:
+                                  type:
+                                    type: string
+                                    description: "SAN type"
+                                    enum: [Hostname, URI]
+                                  hostname:
+                                    type: string
+                                    description: "Hostname SAN value (used when type is Hostname)"
+                                  uri:
+                                    type: string
+                                    description: "URI SAN value (used when type is URI)"
+                                required: [type]
+                        clientCertificateRef:
+                          type: object
+                          description: "Reference to a kubernetes.io/tls Secret for mTLS client identity"
+                          properties:
+                            group:
+                              type: string
+                              description: "Group of the referent; defaults to empty string (core)"
+                            kind:
+                              type: string
+                              description: "Kind of the referent; defaults to Secret"
+                            name:
+                              type: string
+                              description: "Name of the referent"
+                            namespace:
+                              type: string
+                              description: "Namespace of the referent. Cross-namespace refs require a ReferenceGrant"
+                          required: [name]
                     timeout:
                       type: object
                       description: "Timeout configuration (milliseconds)"
@@ -233,6 +278,38 @@ spec:
                       observedGeneration:
                         type: integer
                         format: int64
+                observedGeneration:
+                  type: integer
+                  format: int64
+                credentialState:
+                  type: string
+                  enum: [Idle, Valid, Expired, Unavailable]
+                publishedGeneration:
+                  type: string
+                issuedAt:
+                  type: string
+                  format: date-time
+                validUntil:
+                  type: string
+                  format: date-time
+                lastSuccessfulRefreshTime:
+                  type: string
+                  format: date-time
+                nextRefreshTime:
+                  type: string
+                  format: date-time
+                desiredConsumerCount:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                publishedConsumerCount:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                conflictedConsumerCount:
+                  type: integer
+                  format: int32
+                  minimum: 0
       subresources:
         status: {}
       additionalPrinterColumns:

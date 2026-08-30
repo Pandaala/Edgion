@@ -1,0 +1,40 @@
+# Outbound-path (ForwardAuth) coverage for upstreamAuthority (design doc
+# Stage 4). CtxSet runs first so ctx:tenant is set before ForwardAuth's own
+# outbound_call renders the SAME Service's upstreamAuthority policy for its
+# pre-check request. ForwardAuth is unconditionally fail-close, so
+# `statusOnError: 503` means a rejected label (render_empty or invalid_label)
+# surfaces as 503 from ForwardAuth itself — distinguishable from the standard
+# path's 502 — proving the rejection happened on the outbound leg, not the
+# main dispatch.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ua-ctxset-forwardauth
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: tenant
+            from:
+              type: header
+              name: X-Tenant
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: ua-svc-plain
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 3000
+        statusOnError: 503
+        request:
+          path:
+            template: "/echo"
+          method:
+            template: "GET"
+        decision:
+          upstreamHeaders: []
+          clientHeaders: []

@@ -1,0 +1,11 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: ai-gateway-egc
+spec:
+  server:
+    enableCompression: true
+  securityProtect:
+    # Test-only: the shared mock provider listens on loopback. Production
+    # Gateway configs remain fail-closed by default.
+    allowLoopbackUpstream: true

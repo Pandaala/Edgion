@@ -1,0 +1,28 @@
+# Private Gateway for this suite (replaces the former overlay of the shared
+# "edgion-plugins-gateway" Gateway). Carries the `edgion.io/edgion-plugins`
+# annotation for Tier 2 (gateway-annotation) AccessLogExtern coverage, needed
+# by three_tier_collision_route_wins.
+#
+# Port 31395 is dedicated to this suite (see edgion-tests/integration/conf/
+# ports.json, suite key "EdgionPlugins/AccessLogExtern") — distinct from the
+# shared edgion-plugins-gateway's port 31180.
+#
+# Tier 2's declared field (`collide`, sourced from the `x-gateway-val`
+# header — see 04_EdgionPlugins_als-gateway-tier.yaml) only ever fires for
+# this suite's own routes, since nothing else runs through this Gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: als-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-plugins: "edgion-default/als-gateway-tier"
+spec:
+  gatewayClassName: als-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31395
+      allowedRoutes:
+        namespaces:
+          from: All

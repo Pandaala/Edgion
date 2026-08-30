@@ -37,13 +37,12 @@ spec:
     # credentialRef:
     #   name: cloudflare-api-token
     #   namespace: default
-    # propagationTimeout: 120
-    # propagationCheckInterval: 5
+    # propagationTimeout: 120s
 
   renewal:
-    renewBeforeDays: 30                                        # Renew this many days before expiration
-    checkInterval: 86400                                       # Renewal check interval (seconds)
-    failBackoff: 300                                           # Backoff after failure (seconds)
+    renewBefore: 720h                                          # Renew this far before expiration (720h = 30 days)
+    checkInterval: 24h                                         # Renewal check interval (GEP-2257 duration)
+    failBackoff: 5m                                            # Backoff after failure (GEP-2257 duration)
 
   # externalAccountBinding:                                    # EAB (optional)
   #   keyId: "kid123"
@@ -97,16 +96,15 @@ spec:
 |-------|------|---------|-------------|
 | `provider` | `String` | — | DNS provider: `cloudflare` / `alidns` |
 | `credentialRef` | `SecretObjectReference` | — | API credentials Secret |
-| `propagationTimeout` | `u64` | `120` | DNS propagation timeout (seconds) |
-| `propagationCheckInterval` | `u64` | `5` | Propagation check interval (seconds) |
+| `propagationTimeout` | `String` | `"120s"` | Fixed DNS propagation wait before validation is requested (GEP-2257 duration) |
 
 ### renewal — Renewal Configuration
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `renewBeforeDays` | `u32` | `30` | Number of days before expiration to trigger renewal |
-| `checkInterval` | `u64` | `86400` | Renewal check interval (seconds, default 24h) |
-| `failBackoff` | `u64` | `300` | Backoff after failure (seconds, default 5min) |
+| `renewBefore` | `String` | `"720h"` | Lead time before expiration to trigger renewal (720h = 30 days) |
+| `checkInterval` | `String` | `"24h"` | Renewal check interval (GEP-2257 duration) |
+| `failBackoff` | `String` | `"5m"` | Backoff after failure (GEP-2257 duration) |
 
 ### storage — Certificate Storage
 

@@ -3,13 +3,16 @@
 //! Implements the CenterApi trait using local file system as the backend.
 //! Stores resources as YAML files with naming convention: Kind_namespace_name.yaml
 
+use crate::conf_mgr::conf_center::common::{ensure_expected_resource_version, merge_operator_update_yaml};
 use crate::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
 use async_trait::async_trait;
 use edgion_resources::resource::meta::extract_resource_metadata;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::fs;
+use tokio::sync::Mutex;
 
 use super::path_registry::PathRegistry;
 
@@ -86,6 +89,38 @@ impl FileSystemStorage {
         }
         build_resource_path(&self.root, kind, namespace, name)
     }
+
+    fn update_lock(&self, kind: &str, namespace: Option<&str>, name: &str) -> &Mutex<()> {
+        static UPDATE_LOCKS: OnceLock<[Mutex<()>; 64]> = OnceLock::new();
+        let locks = UPDATE_LOCKS.get_or_init(|| std::array::from_fn(|_| Mutex::new(())));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.root.hash(&mut hasher);
+        kind.hash(&mut hasher);
+        namespace.hash(&mut hasher);
+        name.hash(&mut hasher);
+        &locks[(hasher.finish() as usize) % locks.len()]
+    }
+
+    async fn write_existing_atomic(&self, path: &Path, content: &str) -> Result<(), ConfWriterError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ConfWriterError::io("Failed to create directory", e))?;
+        }
+
+        let formatted_content = format_yaml_pretty(content);
+        let seq = CREATE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = path.with_extension(format!("set.{seq}.tmp"));
+        fs::write(&tmp_path, formatted_content)
+            .await
+            .map_err(|e| ConfWriterError::io("Failed to write tmp file", e))?;
+
+        if let Err(e) = fs::rename(&tmp_path, path).await {
+            let _ = fs::remove_file(&tmp_path).await;
+            return Err(ConfWriterError::io("Failed to rename tmp file", e));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -98,30 +133,9 @@ impl CenterApi for FileSystemStorage {
         content: String,
     ) -> Result<(), ConfWriterError> {
         validate_path_components(kind, namespace, name)?;
+        let _guard = self.update_lock(kind, namespace, name).lock().await;
         let path = self.resolve_path(kind, namespace, name);
-
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ConfWriterError::io("Failed to create directory", e))?;
-        }
-
-        // Format YAML to pretty format for readability
-        let formatted_content = format_yaml_pretty(&content);
-
-        // Atomic write: write to a temp file then rename, so readers (file watcher,
-        // external tools) never observe a half-written file, and a crash mid-write
-        // leaves the previous good content in place.
-        let tmp_path = path.with_extension("yaml.tmp");
-        fs::write(&tmp_path, formatted_content)
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to write tmp file", e))?;
-
-        if let Err(e) = fs::rename(&tmp_path, &path).await {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(ConfWriterError::io("Failed to rename tmp file", e));
-        }
+        self.write_existing_atomic(&path, &content).await?;
 
         tracing::info!(
             component = "file_system_writer",
@@ -144,6 +158,7 @@ impl CenterApi for FileSystemStorage {
         content: String,
     ) -> Result<(), ConfWriterError> {
         validate_path_components(kind, namespace, name)?;
+        let _guard = self.update_lock(kind, namespace, name).lock().await;
         // Check the registry first: if a winner already exists for this key (e.g. a
         // legacy flat-layout file at root, or a previously-recorded nested file),
         // refuse the create rather than writing a new file at the default nested
@@ -218,14 +233,16 @@ impl CenterApi for FileSystemStorage {
         Ok(())
     }
 
-    async fn update_one(
+    async fn update_one_if_version(
         &self,
         kind: &str,
         namespace: Option<&str>,
         name: &str,
         content: String,
+        expected_resource_version: Option<&str>,
     ) -> Result<(), ConfWriterError> {
         validate_path_components(kind, namespace, name)?;
+        let _guard = self.update_lock(kind, namespace, name).lock().await;
         let path = self.resolve_path(kind, namespace, name);
 
         // Check if file exists
@@ -238,8 +255,13 @@ impl CenterApi for FileSystemStorage {
             )));
         }
 
-        // Delegate to set_one for actual write
-        self.set_one(kind, namespace, name, content).await?;
+        let current = fs::read_to_string(&path)
+            .await
+            .map_err(|e| ConfWriterError::io("Failed to read current resource for update", e))?;
+        ensure_expected_resource_version(&current, expected_resource_version)?;
+        let merged = merge_operator_update_yaml(&current, &content)?;
+
+        self.write_existing_atomic(&path, &merged).await?;
 
         tracing::info!(
             component = "file_system_writer",
@@ -338,8 +360,15 @@ impl CenterApi for FileSystemStorage {
         })
     }
 
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+    async fn delete_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        expected_resource_version: Option<&str>,
+    ) -> Result<(), ConfWriterError> {
         validate_path_components(kind, namespace, name)?;
+        let _guard = self.update_lock(kind, namespace, name).lock().await;
         let path = self.resolve_path(kind, namespace, name);
 
         if !path.exists() {
@@ -349,6 +378,17 @@ impl CenterApi for FileSystemStorage {
                 namespace.unwrap_or("_"),
                 name
             )));
+        }
+
+        // Validate before destroying: a rejected precondition must leave the live file
+        // untouched. Every in-process writer to this key is serialized behind the same
+        // update_lock, and FileSystem mode is the unconditional single leader, so there
+        // is no concurrent writer to guard the read/unlink pair against.
+        if expected_resource_version.is_some() {
+            let current = fs::read_to_string(&path)
+                .await
+                .map_err(|e| ConfWriterError::io("Failed to read current resource for delete", e))?;
+            ensure_expected_resource_version(&current, expected_resource_version)?;
         }
 
         fs::remove_file(&path)
@@ -703,5 +743,204 @@ mod list_filter_tests {
         // get_one resolves the same winner the list kept (registry winner_of).
         let one = storage.get_one("HTTPRoute", Some("default"), "r1").await.unwrap();
         assert!(one.contains("name: r1"));
+    }
+}
+
+#[cfg(test)]
+mod update_contract_tests {
+    use super::*;
+    use crate::conf_mgr::conf_center::traits::CenterApi;
+
+    #[tokio::test]
+    async fn update_preserves_server_fields_and_replaces_operator_fields() {
+        let tmp = tempfile::tempdir().expect("temporary directory must be created");
+        let storage = FileSystemStorage::new(tmp.path());
+        let current = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route
+  namespace: default
+  uid: uid-1
+  resourceVersion: "42"
+  generation: 7
+  ownerReferences:
+    - name: owner
+  finalizers:
+    - edgion.io/finalizer
+  labels:
+    old: label
+  annotations:
+    old: annotation
+spec:
+  hostnames: [old.example]
+  resolvedListeners:
+    - name: runtime-only
+status:
+  conditions:
+    - type: Accepted
+      status: "True"
+"#;
+        storage
+            .create_one("HTTPRoute", Some("default"), "route", current.to_string())
+            .await
+            .expect("seed resource must be created");
+
+        let requested = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route
+  namespace: default
+  resourceVersion: "43"
+  labels:
+    new: label
+spec:
+  hostnames: [new.example]
+status:
+  conditions: []
+"#;
+        storage
+            .update_one("HTTPRoute", Some("default"), "route", requested.to_string())
+            .await
+            .expect("resource update must succeed");
+
+        let stored = storage
+            .get_one("HTTPRoute", Some("default"), "route")
+            .await
+            .expect("updated resource must be readable");
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).expect("stored resource must be valid YAML");
+        assert_eq!(stored["metadata"]["uid"], "uid-1");
+        assert_eq!(stored["metadata"]["resourceVersion"], "43");
+        assert_eq!(stored["metadata"]["generation"], 7);
+        assert_eq!(stored["metadata"]["ownerReferences"][0]["name"], "owner");
+        assert_eq!(stored["metadata"]["finalizers"][0], "edgion.io/finalizer");
+        assert_eq!(stored["metadata"]["labels"]["new"], "label");
+        assert!(stored["metadata"].get("annotations").is_none());
+        assert_eq!(stored["spec"]["hostnames"][0], "new.example");
+        assert!(stored["spec"].get("resolvedListeners").is_none());
+        assert_eq!(stored["status"]["conditions"][0]["type"], "Accepted");
+    }
+
+    #[tokio::test]
+    async fn concurrent_updates_are_serialized_and_keep_server_state() {
+        let tmp = tempfile::tempdir().expect("temporary directory must be created");
+        let storage = Arc::new(FileSystemStorage::new(tmp.path()));
+        let second_storage = Arc::new(FileSystemStorage::new(tmp.path()));
+        assert!(std::ptr::eq(
+            storage.update_lock("HTTPRoute", Some("default"), "route"),
+            second_storage.update_lock("HTTPRoute", Some("default"), "route")
+        ));
+        let current = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route
+  namespace: default
+  uid: uid-1
+  resourceVersion: "42"
+  finalizers: [edgion.io/finalizer]
+spec:
+  hostnames: [old.example]
+  resolvedListeners: [{name: runtime-only}]
+status:
+  conditions: [{type: Accepted, status: "True"}]
+"#;
+        storage
+            .create_one("HTTPRoute", Some("default"), "route", current.to_string())
+            .await
+            .expect("seed resource must be created");
+
+        let mut tasks = Vec::new();
+        for index in 0..32 {
+            let storage = if index % 2 == 0 {
+                Arc::clone(&storage)
+            } else {
+                Arc::clone(&second_storage)
+            };
+            tasks.push(tokio::spawn(async move {
+                let requested = format!(
+                    "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: route\n  namespace: default\n  resourceVersion: '{}'\n  labels:\n    writer: '{index}'\nspec:\n  hostnames: [route-{index}.example]\n",
+                    100 + index
+                );
+                storage
+                    .update_one("HTTPRoute", Some("default"), "route", requested)
+                    .await
+            }));
+        }
+        for task in tasks {
+            task.await
+                .expect("update task must not panic")
+                .expect("concurrent update must succeed");
+        }
+
+        let stored = storage
+            .get_one("HTTPRoute", Some("default"), "route")
+            .await
+            .expect("updated resource must be readable");
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).expect("stored resource must be valid YAML");
+        assert_eq!(stored["metadata"]["uid"], "uid-1");
+        assert_eq!(stored["metadata"]["finalizers"][0], "edgion.io/finalizer");
+        assert_eq!(stored["status"]["conditions"][0]["type"], "Accepted");
+        assert!(stored["spec"].get("resolvedListeners").is_none());
+        let writer = stored["metadata"]["labels"]["writer"]
+            .as_str()
+            .expect("winning writer label must be present")
+            .parse::<u64>()
+            .expect("writer label must be numeric");
+        assert_eq!(
+            stored["metadata"]["resourceVersion"].as_str(),
+            Some((100 + writer).to_string().as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_expected_resource_version_conflicts_without_writing() {
+        let tmp = tempfile::tempdir().expect("temporary directory must be created");
+        let storage = FileSystemStorage::new(tmp.path());
+        let current = "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: route\n  namespace: default\n  resourceVersion: '42'\nspec: {hostnames: [current.example]}\n";
+        storage
+            .create_one("HTTPRoute", Some("default"), "route", current.to_string())
+            .await
+            .expect("seed resource must be created");
+
+        let requested =
+            "metadata: {name: route, namespace: default, resourceVersion: '43'}\nspec: {hostnames: [stale.example]}\n";
+        let error = storage
+            .update_one_if_version("HTTPRoute", Some("default"), "route", requested.to_string(), Some("41"))
+            .await
+            .expect_err("stale update must conflict");
+        assert!(matches!(error, ConfWriterError::Conflict(_)));
+        let stored = storage.get_one("HTTPRoute", Some("default"), "route").await.unwrap();
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+        assert_eq!(stored["metadata"]["resourceVersion"], "42");
+        assert_eq!(stored["spec"]["hostnames"][0], "current.example");
+    }
+
+    #[tokio::test]
+    async fn stale_delete_precondition_conflicts_without_removing_file() {
+        let tmp = tempfile::tempdir().expect("temporary directory must be created");
+        let storage = FileSystemStorage::new(tmp.path());
+        let current = "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: route\n  namespace: default\n  resourceVersion: '42'\nspec: {}\n";
+        storage
+            .create_one("HTTPRoute", Some("default"), "route", current.to_string())
+            .await
+            .expect("seed resource must be created");
+
+        let error = storage
+            .delete_one_if_version("HTTPRoute", Some("default"), "route", Some("41"))
+            .await
+            .expect_err("stale delete must conflict");
+        assert!(matches!(error, ConfWriterError::Conflict(_)));
+        assert!(storage.get_one("HTTPRoute", Some("default"), "route").await.is_ok());
+
+        storage
+            .delete_one_if_version("HTTPRoute", Some("default"), "route", Some("42"))
+            .await
+            .expect("matching delete precondition must succeed");
+        assert!(matches!(
+            storage.get_one("HTTPRoute", Some("default"), "route").await,
+            Err(ConfWriterError::NotFound(_))
+        ));
     }
 }

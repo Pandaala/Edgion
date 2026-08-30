@@ -1,0 +1,53 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: credential-exhaustion-primary
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/credential-exhaustion-primary
+    allowInsecureHttp: true
+    credentialPool:
+      redisRef: default/credential-exhaustion-redis
+      credentials:
+        - name: primary-a
+          secretRef:
+            name: ai-credential-exhaustion-a
+          limits:
+            requestsPerMinute: 1
+            tokensPerMinute: 256
+        - name: primary-b
+          secretRef:
+            name: ai-credential-exhaustion-b
+          limits:
+            requestsPerMinute: 1
+            tokensPerMinute: 256
+    models:
+      - name: fixture-model
+    defaults:
+      maxOutputTokens: 1
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: credential-exhaustion-secondary
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://127.0.0.1:30001/ai/credential-exhaustion-secondary
+    allowInsecureHttp: true
+    credentialPool:
+      redisRef: default/credential-exhaustion-redis
+      credentials:
+        - name: secondary-a
+          secretRef:
+            name: ai-credential-exhaustion-a
+          limits:
+            requestsPerMinute: 1
+            tokensPerMinute: 256
+    models:
+      - name: fixture-model
+    defaults:
+      maxOutputTokens: 1

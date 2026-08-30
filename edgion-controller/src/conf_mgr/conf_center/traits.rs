@@ -264,6 +264,22 @@ pub trait CenterApi: Send + Sync {
         namespace: Option<&str>,
         name: &str,
         content: String,
+    ) -> Result<(), ConfWriterError> {
+        self.update_one_if_version(kind, namespace, name, content, None).await
+    }
+
+    /// Update an existing resource when its current resourceVersion matches.
+    /// `None` makes the write unconditional and last-writer-wins — the
+    /// documented contract for callers that send no precondition, not a legacy
+    /// carve-out. See
+    /// `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+    async fn update_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+        expected_resource_version: Option<&str>,
     ) -> Result<(), ConfWriterError>;
 
     /// Get a single configuration YAML content
@@ -289,8 +305,24 @@ pub trait CenterApi: Send + Sync {
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError>;
 
-    /// Delete a single configuration
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError>;
+    /// Delete a single configuration without a concurrency precondition.
+    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+        self.delete_one_if_version(kind, namespace, name, None).await
+    }
+
+    /// Delete a single configuration when its current resourceVersion matches.
+    /// `None` makes the delete unconditional and last-writer-wins — the
+    /// documented contract for callers that send no precondition, not a legacy
+    /// carve-out. The admin `wipe` handler (`api/wipe_handlers.rs`) deletes
+    /// through the unconditional `delete_one` wrapper by design. See
+    /// `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+    async fn delete_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        expected_resource_version: Option<&str>,
+    ) -> Result<(), ConfWriterError>;
 
     /// List all configurations across all kinds.
     ///
@@ -382,6 +414,63 @@ pub trait CenterLifeCycle: Send + Sync {
     fn conf_dir_registry(&self) -> Option<Arc<crate::conf_mgr::conf_center::file_system::PathRegistry>> {
         None
     }
+
+    /// Per-leadership-term conf_sync stream cancellation slot (spec §6.1).
+    ///
+    /// The etcd election installs a fresh token at each campaign win and cancels
+    /// it at demotion, so a demoted leader's conf_sync streams are actively
+    /// closed instead of silently hanging (the gateway keys its leader signal on
+    /// the `watch_server_meta` stream ending). Default `None` = leadership terms
+    /// not applicable (Kubernetes / FileSystem); the gRPC server then scopes
+    /// streams to the process shutdown token exactly as before.
+    fn term_token_slot(&self) -> Option<Arc<arc_swap::ArcSwap<tokio_util::sync::CancellationToken>>> {
+        None
+    }
+
+    /// This center's view of controller leadership (spec §6.2).
+    ///
+    /// Default `NotApplicable` = leadership gating does not apply and the Admin
+    /// API 409 gate is disabled (Kubernetes routes admin traffic to the leader
+    /// via the leader Service; FileSystem is single-node). Only `EtcdCenter`
+    /// overrides this (S3/S4 zero-K8s-impact guard).
+    fn leadership_status(&self) -> LeadershipStatus {
+        LeadershipStatus::NotApplicable
+    }
+
+    /// Live leadership signal for process-wide singleton components.
+    ///
+    /// Today the sole consumer is the federation client supervisor: the
+    /// federation session is keyed by `controller_id` (`cluster/name`), which is
+    /// identical on every replica, so exactly one replica may hold it. The
+    /// receiver carries `true` while this process is the leader.
+    ///
+    /// This is ORTHOGONAL to [`CenterLifeCycle::leadership_status`], and the two
+    /// deliberately DISAGREE in Kubernetes mode: `leadership_status` feeds the
+    /// Admin API not-leader 409 gate and must stay `NotApplicable` there
+    /// (Kubernetes routes admin traffic to the leader via the `edgion.io/leader`
+    /// pod-label Service selector, and in `ha_mode: all-serve` followers must
+    /// keep serving reads), yet `leader_signal` DOES return `Some` there. Do not
+    /// "unify" them.
+    ///
+    /// `None` means this backend has no leader election at all (FileSystem), so
+    /// the caller is always eligible and must behave exactly as if the signal
+    /// were permanently `true`.
+    fn leader_signal(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        None
+    }
+}
+
+/// A center's leadership view, consumed by the Admin API not-leader gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeadershipStatus {
+    /// This center has no leader election (Kubernetes / FileSystem) — the gate
+    /// is disabled.
+    NotApplicable,
+    /// This process is the current leader — serve normally.
+    Leader,
+    /// This process is a standby. `leader_admin_addr` names the current leader's
+    /// admin endpoint when known (`None` during churn / before first refresh).
+    Follower { leader_admin_addr: Option<String> },
 }
 
 // ============================================================================
@@ -458,6 +547,19 @@ macro_rules! impl_center_api_delegate {
                 self.$field.update_one(kind, namespace, name, content).await
             }
 
+            async fn update_one_if_version(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                content: String,
+                expected_resource_version: Option<&str>,
+            ) -> Result<(), ConfWriterError> {
+                self.$field
+                    .update_one_if_version(kind, namespace, name, content, expected_resource_version)
+                    .await
+            }
+
             async fn get_one(
                 &self,
                 kind: &str,
@@ -486,6 +588,18 @@ macro_rules! impl_center_api_delegate {
 
             async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
                 self.$field.delete_one(kind, namespace, name).await
+            }
+
+            async fn delete_one_if_version(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                expected_resource_version: Option<&str>,
+            ) -> Result<(), ConfWriterError> {
+                self.$field
+                    .delete_one_if_version(kind, namespace, name, expected_resource_version)
+                    .await
             }
 
             async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {

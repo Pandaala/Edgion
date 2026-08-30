@@ -54,8 +54,8 @@ spec:
           - name: session_id
           - name: locale
     timeoutMs: 5000
-    successStatusCodes: [200]
-    allowDegradation: false
+    success:
+      statusCodes: [200]
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1
@@ -66,19 +66,17 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh3_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh3-resolver"
-              extract:
-                # The webhook backend echoes inbound headers under data.echo_headers.
-                # X-Request-ID is one of the declared origin headers, so a non-default
-                # value here proves the gateway forwarded the origin header transparently.
-                source: body
-                path: "data.echo_headers.x-request-id"
+            webhookRef: "edgion-default/wh3-resolver"
+            extract:
+              # The webhook backend echoes inbound headers under data.echo_headers.
+              # X-Request-ID is one of the declared origin headers, so a non-default
+              # value here proves the gateway forwarded the origin header transparently.
+              source: body
+              path: "data.echo_headers.x-request-id"
             default: "fallback-user"
 ---
 apiVersion: gateway.networking.k8s.io/v1

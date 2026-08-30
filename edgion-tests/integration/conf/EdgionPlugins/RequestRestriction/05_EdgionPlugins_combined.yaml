@@ -1,4 +1,4 @@
-# 5.  - 
+# 5. Combined deny groups
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -9,27 +9,28 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        mode: Blacklist
-        ruleGroups:
-          - rules:
-              - name: "block-bots"
-                source: Header
-                key: "User-Agent"
-                regex:
-                  - "(?i).*Bot.*"
-          - rules:
-              - name: "block-admin"
-                source: Path
-                regex:
-                  - ".*/admin/.*"
-                  - ".*/internal/.*"
-          - rules:
-              - name: "block-debug-cookie"
-                source: Cookie
-                key: "debug"
-                values:
-                  - "true"
-                  - "1"
+        mode: Deny
+        conditions:
+          anyOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "User-Agent"
+              regex:
+                - "(?i).*Bot.*"
+            - allOf:
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*/admin/.*"
+                    - ".*/internal/.*"
+            - type: keyMatch
+              key:
+                type: cookie
+                name: "debug"
+              values:
+                - "true"
+                - "1"
         status: 403
         message: "Access denied by security policy"
-

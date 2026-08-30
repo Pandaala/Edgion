@@ -111,7 +111,7 @@ impl RequestFilter for RequestRedirectFilter {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // Determine the original request scheme from TLS context
-        let original_scheme = if session.ctx().request_info.sni.is_some() {
+        let original_scheme = if session.ctx().request_info.sni().is_some() {
             "https"
         } else {
             "http"

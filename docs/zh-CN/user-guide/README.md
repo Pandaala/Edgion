@@ -2,7 +2,15 @@
 
 本章节面向应用开发者，介绍如何使用 Gateway API 配置路由规则。
 
+LLM / GenAI 流量请优先阅读独立的 [AI Gateway](../ai-gateway/) 专栏，而不是只在插件列表中查找。
+
 ## 目录
+
+### AI Gateway
+
+- [AI Gateway 概览](../ai-gateway/README.md)
+- [快速开始](../ai-gateway/quick-start.md)
+- [弹性与故障切换](../ai-gateway/resilience.md)
 
 ### HTTPRoute
 - [HTTPRoute 总览](./http-route/overview.md)

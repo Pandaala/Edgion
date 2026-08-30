@@ -40,7 +40,7 @@ pub struct BackfillSummary {
 /// rotated sibling starts with `{stem}.` (a real separator, so `es_fallbackX.log`
 /// does not match) and ends with `.{ext}`; the active file matches `{file_name}`
 /// exactly. The fallback path is assumed dedicated to this sink.
-pub fn discover_fallback_files(base_path: &Path) -> Vec<PathBuf> {
+fn discover_fallback_files(base_path: &Path) -> Vec<PathBuf> {
     let Some(dir) = base_path.parent() else {
         return Vec::new();
     };
@@ -81,7 +81,7 @@ pub fn discover_fallback_files(base_path: &Path) -> Vec<PathBuf> {
 /// Rename a fully-backfilled file to `<name>.backfilled-<ts>`. `ts` is a
 /// caller-supplied stamp (epoch seconds) — the engine does not read the clock
 /// itself so it stays unit-testable.
-pub fn mark_backfilled(path: &Path, ts: u64) -> std::io::Result<PathBuf> {
+fn mark_backfilled(path: &Path, ts: u64) -> std::io::Result<PathBuf> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())

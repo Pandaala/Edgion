@@ -48,9 +48,16 @@ retry documentation.
 
 | Value | Meaning |
 |-------|---------|
-| `"0s"` | Disables the timeout (no limit / infinite) — useful for long-lived streaming |
+| `"0s"` | Disables the route-configured deadline — useful for long-lived streaming; protocol-level liveness floors still apply to a transport that makes no progress |
 | Omitted | `backendRequest` falls back to the global default from `EdgionGatewayConfig` (`defaultRequestTimeout`, default `60s`); `request` has **no** global default — omitted means no end-to-end limit |
 | Positive duration | Explicit limit |
+
+For an H2 upstream request body, the Pingora transport retains a 10-second
+per-capacity-wait safety floor when every effective write deadline is disabled.
+It fires only when the upstream grants no request-body flow-control progress;
+it is re-armed after each grant and is not a total streaming duration. Any
+positive effective `backendRequest`, `request`, or gRPC deadline remains the
+authoritative write timeout, whether shorter or longer than 10 seconds.
 
 ### backendRequest is clamped to request
 

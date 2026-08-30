@@ -6,7 +6,7 @@ description: GatewayClass resource schema: controller binding and runtime config
 # GatewayClass Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Cluster
-> Gateway API v1.4.0 Core resource
+> Gateway API v1.5.0 Core resource
 
 GatewayClass defines the "type" of a Gateway, associating it with a specific controller implementation and optionally referencing a runtime configuration.
 

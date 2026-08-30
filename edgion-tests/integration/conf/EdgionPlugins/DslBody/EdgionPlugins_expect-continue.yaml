@@ -1,0 +1,31 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: expect-continue-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      body:
+        maxBodySize: 5B
+      config:
+        name: "expect-continue-body"
+        source: |
+          let body_bytes = req.body.byte_len()
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: expect-continue-pass
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "expect-continue-pass"
+        source: |
+          let body_bytes = req.body.byte_len()
+        errorPolicy: deny

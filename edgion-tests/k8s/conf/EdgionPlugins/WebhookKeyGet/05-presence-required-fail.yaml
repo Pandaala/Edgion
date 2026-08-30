@@ -1,7 +1,11 @@
 # Scenario 5: presence-required-fail (K8s mode)
 # ---------------------------------------------------------------------------
-# A required origin header (X-Required) with presence: required, and
-# allowDegradation: false + statusOnError: 403.
+# A required origin header (X-Required) with presence: required. The
+# statusOnError field below is part of the shared ExternalHttpConnection
+# schema but is NOT honored by the webhook connector (only forward_auth
+# reads it) -- WebhookKeyGet writes no value (or `default`) on any failure, including a
+# missing required field; WebhookKeyGet
+# just leaves the target var unset (no 403, no gateway-side status override).
 # Backend via Service (real selector) + auto EndpointSlice.
 apiVersion: v1
 kind: Service
@@ -41,8 +45,8 @@ spec:
           - name: X-Required
             presence: required
     timeoutMs: 5000
-    successStatusCodes: [200]
-    allowDegradation: false
+    success:
+      statusCodes: [200]
     statusOnError: 403
     maxResponseBytes: 4096
 ---
@@ -54,16 +58,14 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh5_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh5-resolver"
-              extract:
-                source: body
-                path: "data.user_id"
+            webhookRef: "edgion-default/wh5-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

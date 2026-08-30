@@ -9,6 +9,13 @@
 # Resources (Gateway, Route, Plugin, etc.) are stored in etcd instead of
 # the local file system or Kubernetes API.
 #
+# Like file_system mode, etcd is a NON-Kubernetes mode: the controller loads CRD schemas
+# from <work_dir>/config/crd at startup (K8s mode gets them from the API server instead).
+# The release tarball ships these; the container image does NOT bundle them -- if you run
+# this mode from the container image, mount config/crd into <work_dir>/config/crd. See
+# docs/en/getting-started/installation-and-deployment.md ("Running the container image in a
+# non-Kubernetes mode").
+#
 # ================================================================================
 
 work_dir: "."
@@ -25,6 +32,9 @@ logging:
 # Server Configuration
 # ============================================================================
 server:
+  # conf_sync listener. It carries resolved Secrets (TLS private keys, backend
+  # credentials) to the data plane and is mTLS by default (see the conf_sync_security
+  # section at the bottom), so binding it on all interfaces is safe.
   grpc_listen: "0.0.0.0:12151"
   # Secure default: loopback. A distributed etcd-backed deployment that needs
   # remote admin access must set 0.0.0.0 plus allow_admin_ips.
@@ -37,6 +47,22 @@ conf_center:
   type: etcd
   endpoints: [http://127.0.0.1:2379]
   key_prefix: /edgion
+
+  # Leader election (active-passive HA). ALWAYS ON in etcd mode — there is no
+  # enable/disable switch; on a single node the sole candidate wins instantly.
+  # `grpc_addr` / `admin_addr` are REQUIRED and must be ROUTABLE addresses of
+  # THIS controller instance (loopback / 0.0.0.0 are rejected at startup):
+  # gateways rotate to `grpc_addr` on failover, and a standby's Admin API names
+  # the leader's `admin_addr` in its 409 response. Requires etcd's `v3election`
+  # gRPC service (stock etcd serves it; some proxied deployments disable it —
+  # the controller probes at startup).
+  leader_election:
+    grpc_addr: 10.0.0.11:12151   # REQUIRED: this instance's conf_sync gRPC address
+    admin_addr: 10.0.0.11:12101  # REQUIRED: this instance's admin HTTP address
+    # identity: controller-a     # optional; defaults to hostname (human-facing only)
+    # lease_duration_secs: 15
+    # renew_deadline_secs: 10
+    # retry_period_secs: 2
 
   # Connection timeout (milliseconds)
   # connect_timeout_ms: 5000
@@ -71,3 +97,33 @@ conf_center:
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
+
+# ============================================================================
+# conf_sync Channel Security (mTLS)
+# ============================================================================
+# REQUIRED: omitting this section entirely makes the process REFUSE TO START
+# (fail-close, since 2026-07-14) -- the conf_sync channel carries resolved Secrets
+# (TLS private keys, backend credentials), so plaintext must be an explicit choice.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode), or skip_tls (plaintext).
+#
+# etcd mode is the profile MOST likely to be split across hosts, which is exactly why
+# it defaults to file-mode mTLS: the moment the Gateway runs on a different machine
+# than the Controller, plaintext here would put TLS private keys on the wire.
+#
+# Paths are resolved relative to work_dir. Generate the referenced set explicitly with:
+#   cargo run --bin edgion-cli -- gen-certs --output file --output-dir <work_dir>/certs/grpc --cert-name primary
+# In a real deployment point these at
+# the operator-managed absolute paths instead, e.g.:
+#
+#   conf_sync_security:
+#     tls:
+#       cert: /etc/edgion/conf-sync-certs/server.crt
+#       key:  /etc/edgion/conf-sync-certs/server.key
+#       ca:   /etc/edgion/conf-sync-certs/ca.crt
+#
+# and give the Gateway the matching client cert / key / ca.
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt
+    key: certs/grpc/primary/server.key
+    ca: certs/grpc/primary/ca.crt

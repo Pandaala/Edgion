@@ -14,6 +14,31 @@ pub enum StreamPluginResult {
     Deny(String),
 }
 
+/// Execution layer for a stream plugin chain.
+///
+/// This is intentionally closed because it is emitted as the bounded `layer`
+/// label on `edgion_geoip_denied_total`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamLayer {
+    /// Listener-level connection filter, before route matching.
+    Stage1,
+    /// TCPRoute-level plugin execution.
+    Tcp,
+    /// TLSRoute compatibility plugin execution.
+    Tls,
+}
+
+impl StreamLayer {
+    /// Return the bounded metric-label representation.
+    pub(crate) const fn as_metric_label(self) -> &'static str {
+        match self {
+            Self::Stage1 => "stage1",
+            Self::Tcp => "tcp",
+            Self::Tls => "tls",
+        }
+    }
+}
+
 /// Translate an [`AccessDecision`] into a [`StreamPluginResult`], invoking
 /// `on_deny` once on each deny outcome (used by the connection-IP-restriction
 /// plugins that also need to record a deny metric).
@@ -45,30 +70,21 @@ pub(crate) fn access_decision_to_stream_result(decision: AccessDecision, on_deny
 /// Context for stream plugin execution
 #[derive(Debug, Clone)]
 pub struct StreamContext {
-    /// Client IP address
-    pub client_ip: IpAddr,
+    /// Physical downstream transport peer IP.
+    pub direct_peer_ip: IpAddr,
     /// Listener port that received the connection
     pub listener_port: u16,
-    /// Optional: remote address string (for logging)
-    pub remote_addr: Option<String>,
+    /// Explicit execution layer used by bounded per-layer metrics.
+    pub layer: StreamLayer,
 }
 
 impl StreamContext {
-    /// Create a new stream context
-    pub fn new(client_ip: IpAddr, listener_port: u16) -> Self {
+    /// Create a new stream context for an explicit execution layer.
+    pub fn new(direct_peer_ip: IpAddr, listener_port: u16, layer: StreamLayer) -> Self {
         Self {
-            client_ip,
+            direct_peer_ip,
             listener_port,
-            remote_addr: None,
-        }
-    }
-
-    /// Create a stream context with remote address
-    pub fn with_remote_addr(client_ip: IpAddr, listener_port: u16, remote_addr: String) -> Self {
-        Self {
-            client_ip,
-            listener_port,
-            remote_addr: Some(remote_addr),
+            layer,
         }
     }
 }
@@ -81,4 +97,16 @@ pub trait StreamPlugin: Send + Sync {
 
     /// Execute plugin logic for a new TCP/UDP connection.
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamLayer;
+
+    #[test]
+    fn stream_layer_metric_labels_are_stable() {
+        assert_eq!(StreamLayer::Stage1.as_metric_label(), "stage1");
+        assert_eq!(StreamLayer::Tcp.as_metric_label(), "tcp");
+        assert_eq!(StreamLayer::Tls.as_metric_label(), "tls");
+    }
 }

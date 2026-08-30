@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: uf-misc
+  namespace: edgion-test
+spec:
+  data:
+    type: Misc
+    config:
+      arbitraryKey:
+        nestedThirdPartyField: true
+      experimentalList:
+        - name: alpha
+          vendorOption: enabled

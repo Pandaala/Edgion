@@ -1,0 +1,22 @@
+# TCPRoute carrying the ROUTE-level edgion-stream-plugins annotation, which
+# is what drives the Stage-2 "tcp" layer check in
+# edgion-gateway/src/routes/tcp/edgion_tcp.rs::check_stream_plugins
+# (resolve_stream_plugin_store_key reads route.metadata, never the Gateway's).
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: tcp-geo-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tcp-geo-esp"
+spec:
+  parentRefs:
+    - name: tcp-geo-gw
+      namespace: edgion-test
+      sectionName: tcp
+      port: 31951
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

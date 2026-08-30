@@ -1,11 +1,11 @@
 ---
 name: controller-resource-processor
-description: ResourceProcessor pipeline — ProcessorHandler trait, HandlerContext, 11-step processing flow, 20 Handler implementations, reference managers.
+description: ResourceProcessor pipeline — ProcessorHandler trait, ControllerRuntime-backed HandlerContext, processing flow, handler inventory, reference managers, and RawStore lookup.
 ---
 
 # ResourceProcessor Pipeline
 
-ResourceProcessor is the Controller's core processing engine. Each resource type owns its own `ResourceProcessor<K>` instance, which in turn holds `ServerCache<K>`, `Workqueue`, and a `ProcessorHandler<K>` implementation. It is responsible for the full lifecycle of a resource — receive, validate, parse, update status, and finally write to cache.
+ResourceProcessor is the Controller's core processing engine. Each resource type owns a `ResourceProcessor<K>` with a `ServerCache<K>`, Workqueue, handler, and shared `Arc<ControllerRuntime>`.
 
 ## ProcessorHandler\<K\> trait
 
@@ -35,7 +35,7 @@ where
     /// Delete cleanup: clear SecretRefManager registrations, etc.
     async fn on_delete(&self, obj: &K, ctx: &HandlerContext) {}
 
-    /// Post-change processing: invoked after saving to cache, used for cascading requeue.
+    /// Post-change processing: invoked before saving to cache, used for cascading requeue.
     async fn on_change(&self, obj: &K, ctx: &HandlerContext) {}
 
     /// Invoked after the init LIST phase completes; used for replace_all and other full-sync operations.
@@ -54,15 +54,18 @@ The context object passed to handler methods. It provides the following shared r
 
 | Field | Type | Purpose |
 |---|---|---|
-| `secret_ref_manager` | `Arc<SecretRefManager>` | Secret dependency tracking (which resources depend on which Secrets) |
+| `runtime` | `Arc<ControllerRuntime>` | Owns ProcessorRegistry, SecretStore, reference managers, and indexes; accessed through methods |
 | `metadata_filter` | `Option<Arc<MetadataFilterConfig>>` | Metadata cleanup-rule configuration |
 | `namespace_filter` | `Option<Arc<Vec<String>>>` | Namespace allowlist filter |
 | `trigger_chain` | `TriggerChain` | Cascade trigger chain, used for cycle detection during requeue |
 | `max_trigger_cycles` | `usize` | Max number of times the same (kind, key) is allowed to repeat in the trigger chain (default 5) |
+| `max_trigger_depth` | `usize` | Maximum total trigger-chain depth (default 20) |
 
 Key methods:
 
-- `requeue(kind, key)` — cross-resource requeue with built-in cycle detection. Checks whether the target (kind, key) has appeared more than `max_trigger_cycles` times in `trigger_chain`; if so, the requeue is dropped and an error is logged. Dispatches to the target Processor's Workqueue via `PROCESSOR_REGISTRY.requeue_with_chain()`.
+- `runtime()` — access the per-ConfCenter state owner and its stores/indexes.
+- `secret_ref_manager()` — access the runtime-owned Secret dependency manager.
+- `requeue(kind, key)` — enforce cycle/depth limits, then dispatch through `runtime.processor_registry.requeue_with_chain()`.
 - `clean_metadata(obj)` — clean up resource metadata according to the `metadata_filter` configuration.
 
 ## 11-Step Processing Flow
@@ -96,7 +99,8 @@ The delete flow (`process_delete`) is simpler: call `handler.on_delete()` to cle
 
 ## Handler Implementations
 
-There are 20 Handler implementations covering all resource types:
+Handler coverage follows `edgion-resources/src/resource/defs.rs` and
+`handlers/mod.rs`; avoid copying a fixed total into new guidance.
 
 ### Gateway API Routes (5)
 
@@ -122,11 +126,11 @@ There are 20 Handler implementations covering all resource types:
 | Handler | Resource | Key processing |
 |---|---|---|
 | `ServiceHandler` | Service | Requeue dependent routes on change |
-| `EndpointSliceHandler` | EndpointSlice | Stored directly; consumed by Gateway on demand |
+| `EndpointSliceHandler` | EndpointSlice | Updates endpoint state and requeues dependent resources |
 | `SecretHandler` | Secret | Cascading requeue of dependent resources on change |
-| `ConfigmapHandler` | ConfigMap | Stored directly; no requeue dependencies |
+| `ConfigmapHandler` | ConfigMap | Updates CA/config references and requeues dependents |
 
-### Edgion Custom Resources (7)
+### Edgion Custom Resources
 
 | Handler | Resource | Key processing |
 |---|---|---|
@@ -137,6 +141,7 @@ There are 20 Handler implementations covering all resource types:
 | `EdgionAcmeHandler` | EdgionAcme | ACME certificate configuration, Secret references |
 | `EdgionConfigDataHandler` | EdgionConfigData | Plugin metadata |
 | `LinkSysHandler` | LinkSys | LinkSys configuration |
+| `EdgionBackendTrafficPolicyHandler` | EdgionBackendTrafficPolicy | Policy validation, precedence/conflict status, and affected-route requeue |
 
 ### Shared Utility Modules
 
@@ -188,7 +193,7 @@ Error types: `AcceptedError`, `ResolvedRefsError` are used to build failure cond
 
 Semantic change detection: when comparing new and old status, ignores non-semantic fields like `lastTransitionTime` to avoid unnecessary K8s API writes. Use `status_semantically_changed(kind, old_json, new_json)` to decide whether to persist.
 
-## RawStore — Cross-resource O(1) Key Lookup
+## RawStore and ServerCache — Choose the Correct Cross-resource View
 
 `ServerCache` only stores resources that pass `handler.filter()` (e.g., `GatewayHandler` filters by `gatewayClassName`). When a Route needs to look up a Gateway that does not belong to this controller (parentRef can point to any Gateway), `ServerCache` cannot find it, leading to incorrect Route status calculations.
 
@@ -200,23 +205,27 @@ pub trait RawStore<K>: Send + Sync {
 }
 ```
 
-### Two Backend Implementations
+### Backend Implementations
 
 | Backend | Type | Data source | Injection timing |
 |---|---|---|---|
 | `KubeRawStore<K>` | Wraps `reflector::Store<K>` | Maintained automatically by the reflector, in real-time sync with the K8s API | Injected in `run_with_api` immediately after `reflector::store()` |
-| `FsRawStore<K>` | `RwLock<HashMap<String, Arc<K>>>` | Maintained by `FileSystemResourceController` during InitApply/Apply/Delete and worker processing | Injected at `FileSystemResourceController::new()` |
+| `LocalRawStore<K>` | `RwLock<HashMap<String, Arc<K>>>` | Maintained by FileSystem and Etcd controllers during init/apply/delete and worker processing | Injected by the non-Kubernetes resource controllers |
 
-### ProcessorObj Exposed Interface
+### ProcessorObj Exposed Interfaces
 
-`ProcessorObj` trait (object-safe) adds:
+`ProcessorObj` exposes both views through object-safe, typed-erased getters:
 
 ```rust
 fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
+fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 ```
 
-Implementation: takes `Arc<K>` from `raw_store`, coerces directly to `Arc<dyn Any + Send + Sync>` and returns it — **zero serialization overhead**.
-The caller restores the concrete type via `downcast::<ConcreteType>()`:
+`get_raw_any` takes `Arc<K>` from `raw_store` and coerces it directly to
+`Arc<dyn Any + Send + Sync>`. `get_cached_any` clones the processed resource
+from `ServerCache` and wraps it in the same typed-erased form. Neither path
+serializes the object. The caller restores the concrete type with
+`downcast::<ConcreteType>()`:
 
 ```rust
 let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast::<Gateway>().ok()?;
@@ -224,13 +233,28 @@ let arc: Arc<Gateway> = processor.get_raw_any(&key)?.downcast::<Gateway>().ok()?
 
 When `raw_store` has not been injected (before the init phase), it returns `None`, behaving the same as before — no regression.
 
+Choose the view by the field being consumed:
+
+- Use `get_raw_any` when handler-filtered resources must remain visible, or for
+  the current resource inside `on_change` because cache save happens afterward.
+- Use `get_cached_any` when the decision must match the object sent through
+  conf_sync or must observe Controller-derived fields populated by `preparse`
+  or `parse` (for example, PluginPolicy stamps or resolved references).
+- Never combine a ServerCache existence check with RawStore content. That can
+  validate one generation/view while the Gateway consumes another.
+
+Processed objects can contain resolved secrets. Callers must downcast and
+project only the required fields, never serialize the returned object directly
+to an external response.
+
 ### Callers
 
 | Function | Location | Lookup target |
 |---|---|---|
-| `lookup_gateway` | `route_utils.rs` | `PROCESSOR_REGISTRY.get("Gateway")?.get_raw_any("ns/name")?.downcast::<Gateway>()` |
-| `lookup_service_cluster_ip` | `gateway.rs` | `PROCESSOR_REGISTRY.get("Service")?.get_raw_any("ns/name")?.downcast::<Service>()` |
+| `lookup_gateway` | `route_utils.rs` | `runtime.processor_registry.get("Gateway")?...downcast::<Gateway>()` |
+| `lookup_service_cluster_ip` | `gateway.rs` | `runtime.processor_registry.get("Service")?...downcast::<Service>()` |
+| `ai_proxy_admission_state` | `http_route.rs` | Processed `EdgionPlugins` with Controller-stamped `policy_action` |
 
 ### Key Files
 
-- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/raw_store.rs` — `RawStore<K>` trait, `KubeRawStore<K>`, `FsRawStore<K>`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/raw_store.rs` — `RawStore<K>` trait, `KubeRawStore<K>`, `LocalRawStore<K>`

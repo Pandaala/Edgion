@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use super::stream_plugin_runtime::StreamPluginRuntime;
 use super::tls_route::TlsRoutePluginRuntime;
 use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionStreamPlugins;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =
@@ -50,7 +51,7 @@ pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPl
     let ns = esp.metadata.namespace.as_deref().unwrap_or("default");
 
     let stream_plugin_runtime = match &esp.spec.plugins {
-        Some(plugins) => Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns)),
+        Some(plugins) => Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns, &esp.key_name())),
         None => Arc::<StreamPluginRuntime>::default(),
     };
     let tls_route_plugin_runtime = match &esp.spec.tls_route_plugins {
@@ -91,21 +92,6 @@ impl StreamPluginStore {
         map.get(key).cloned()
     }
 
-    /// Get the compiled stream plugins by namespace and name
-    pub fn get_by_ns_name(&self, namespace: &str, name: &str) -> Option<Arc<CompiledStreamPlugins>> {
-        let key = format!("{}/{}", namespace, name);
-        self.get(&key)
-    }
-
-    /// Execute a function with the compiled stream plugins reference
-    pub fn with_plugin<F, R>(&self, key: &str, f: F) -> Option<R>
-    where
-        F: FnOnce(&CompiledStreamPlugins) -> R,
-    {
-        let map = self.plugins.load();
-        map.get(key).map(|c| f(c))
-    }
-
     /// Replace all compiled stream plugins atomically
     pub fn replace_all(&self, plugins: HashMap<String, Arc<CompiledStreamPlugins>>) {
         self.plugins.store(Arc::new(plugins));
@@ -125,11 +111,6 @@ impl StreamPluginStore {
         }
 
         self.plugins.store(Arc::new(new_map));
-    }
-
-    /// Get all compiled plugins
-    pub fn get_all(&self) -> Arc<StreamPluginMap> {
-        self.plugins.load_full()
     }
 
     /// Get total count of stream plugins

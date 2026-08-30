@@ -1,0 +1,24 @@
+# Parent route for the dynamic scenario: delegates /api/v1/billing to every
+# HTTPRoute in edgion-deleg-dyn. The scenario then rewrites the child route
+# and asserts the flattened routing follows without touching this parent.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: delegation-dyn-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-dyn-gateway
+      namespace: edgion-test
+  hostnames:
+    - "delegation-dyn.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: "*"
+          namespace: edgion-deleg-dyn

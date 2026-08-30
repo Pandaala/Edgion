@@ -78,7 +78,10 @@ edgion-gateway/src/plugins/stream/
 
 - The Stage-2 runtime (`run_tls_route_plugins`) is invoked from **both** TLS proxies: the TLS-terminate proxy [../../../edgion-gateway/src/routes/tls/proxy.rs](../../../edgion-gateway/src/routes/tls/proxy.rs) and the TLS-passthrough proxy [../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs](../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs). Any binding-site change must touch both paths.
 - `tls_route_plugin_runtime` runs first.
-- If a resource has no `tlsRoutePlugins` but has the legacy `plugins`, the current implementation falls back to the Stage 1 runtime for compatibility.
+- Current code falls back from missing `tlsRoutePlugins` to `plugins`. This is a
+  pre-release compatibility debt, not a Stage-2 contract. New code and fixtures
+  must populate `tlsRoutePlugins`; do not depend on or extend the fallback, and
+  remove it when the corresponding code change is in scope.
 - Suitable for:
   - SNI-dependent logic.
   - Logic that depends on which `TLSRoute` was matched.
@@ -187,8 +190,12 @@ The current key is:
 ```yaml
 metadata:
   annotations:
-    edgion.io/edgion-stream-plugins: "namespace/name"
+    edgion.io/edgion-stream-plugins: "policy-name"
 ```
+
+On `Gateway`, the annotation accepts only an unqualified name and resolves it in the
+Gateway namespace. TCPRoute, TLSRoute, and UDPRoute retain their separate `name` or
+`namespace/name` contract.
 
 Existing binding sites:
 
@@ -221,7 +228,20 @@ spec:
         #   - name: corp-allowlist   # namespace defaults to edgion-test
 ```
 
-### Reference it from a `TCPRoute` / `TLSRoute` / Gateway
+### Reference it from a Gateway
+
+Gateway-level attachments accept only an unqualified name and resolve it in the
+Gateway namespace:
+
+```yaml
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: tcp-allow-localhost
+```
+
+### Reference it from a `TCPRoute` / `TLSRoute` / `UDPRoute`
+
+Route-level attachments retain their separate `name` or `namespace/name` contract:
 
 ```yaml
 metadata:
@@ -380,7 +400,7 @@ How to write it: follow the structure of `edgion-tests/src/client/dynamic/scenar
 - Are the enum, runtime, and module exports all wired?
 - Is an existing configuration struct reused instead of copying a near-duplicate one?
 - After `ResourceMeta` preprocessing, are the runtime fields actually initialized?
-- Does annotation parsing support both `name` and `namespace/name` reference formats?
+- Does Gateway annotation parsing accept only a same-namespace `name`, while route annotation parsing still supports both `name` and `namespace/name`?
 - After updating / deleting the resource, does the Gateway store hot-reload correctly?
 
 ## Related

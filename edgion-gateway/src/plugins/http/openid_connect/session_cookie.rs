@@ -9,7 +9,7 @@ impl OpenidConnect {
     }
 
     pub(super) fn resolve_client_secret(&self) -> OidcResult<String> {
-        if let Some(ref resolved) = self.config.resolved_client_secret {
+        if let Some(ref resolved) = self.config.resolved_oidc_client_secret {
             if !resolved.is_empty() {
                 return Ok(resolved.clone());
             }

@@ -57,7 +57,8 @@ Parse the invocation arguments:
 
 | Argument form | Action |
 |---|---|
-| Looks like a path (contains `/`) | Use it directly as `ISSUE_DIR` |
+| Existing file path | Set it as `TARGET_FILE`; set `ISSUE_DIR` to its parent |
+| Existing directory path | Use it as `ISSUE_DIR` |
 | Looks like an issue ID (e.g. `c1-012`, `g3-016`) | `grep -r "<id>" tasks/` to find the file; infer `ISSUE_DIR` from its parent directory |
 | Both a path and an issue ID | Use the path as `ISSUE_DIR`, use the ID to select the file within it |
 | No argument | List candidate directories: `find tasks -mindepth 1 -maxdepth 1 -type d -name "review-*"`. If exactly one exists, use it. If multiple exist, present the list and ask the user which to use. |
@@ -66,8 +67,12 @@ Record the resolved `ISSUE_DIR` and confirm it to the user before continuing.
 
 ### P1 — Pick the target file
 
-- If the user named a specific issue ID or filename, locate that file under `ISSUE_DIR`.
-- Otherwise: `ls <ISSUE_DIR>` → sort alphabetically → pick the first file.
+- If `TARGET_FILE` was resolved, use it.
+- If the user named a specific issue ID or filename, locate that finding under `ISSUE_DIR`.
+- Otherwise, select the first finding file alphabetically while excluding batch
+  metadata and templates:
+  `find <ISSUE_DIR> -maxdepth 1 -type f -name '*.md' ! -name 'INDEX.md' ! -name '_*' | sort`.
+- Never process `INDEX.md` as a finding.
 
 ### P2 — Read the issue file completely.
 
@@ -93,8 +98,8 @@ File: <file:line>
 Disposition: <value from issue file>
 
 ### Classification
-Module        : control-plane (Controller) | data-plane (Gateway) | shared (types / common / utils)
-                | center (federation) | cli (edgion-cli) | build-ci | docs-only
+Module        : control-plane (Controller, including its federation client) | data-plane (Gateway)
+                | shared (dsl / resources / common) | cli (edgion-cli) | tests | build-ci | docs-only
 Issue type    : bug (correctness) | security | performance | code-quality (refactor / readability)
                 | observability (logs / metrics / tracing) | design tradeoff | doc / comment
                 | test gap | other (specify)
@@ -290,7 +295,8 @@ Mode: sequential, verify after each step
 
 Execute each sub-step in order:
 1. Implement the sub-step (main agent or single subagent).
-2. Run `cargo check --all-targets` — must pass before proceeding to the next sub-step.
+2. Run a package-qualified check for the affected crate, such as
+   `cargo check -p <crate> --all-targets`, before proceeding to the next sub-step.
 3. If the check fails: fix the error in the current sub-step before moving on.
 4. Proceed to the next sub-step only after the check passes.
 
@@ -306,7 +312,8 @@ Run after Step 3 for all ✅ code fixes. Also the primary work for 📝 verdicts
 
 Ask: does the fix change user-visible behavior, a configuration field, a default value, or a public API?
 
-- If **yes**: find the relevant page(s) under `docs/en/` and update them. Check whether the corresponding `docs/zh/` page also needs updating (update if straightforward; otherwise add a `<!-- TODO: sync zh -->` comment).
+- If **yes**: update the paired pages under `docs/en/` and `docs/zh-CN/` in the
+  same change, following `skills/11-doc/SKILL.md`.
 - If **no**: note "docs not affected" and continue.
 
 ### 4b. Skills knowledge base (`skills/`)
@@ -314,18 +321,18 @@ Ask: does the fix change user-visible behavior, a configuration field, a default
 Ask: does the fix resolve a pattern that could be re-reported in a future review?
 
 - If **yes**: **create ONE independent per-finding file** at
-  `skills/04-review/<topic>/<finding-id>-<slug>.md` recording why the old behavior was a
+  `skills/04-review/<topic>/<descriptive-slug>.md` recording why the old behavior was a
   defect and how it was fixed (or, for ⚠️, why the tradeoff is accepted) and what re-reports
   to reject. Use the `_template.md` shape and its frontmatter (`status`, `finding_id`,
   `closed`). This is also the primary action for ⚠️ accepted-tradeoff verdicts.
-  - **One finding = one new file. Do NOT append the conclusion into any shared / aggregate
-    file** — not the `04-review/SKILL.md` "Usage principles" list, not any central
-    closed-findings log, not another finding's file. This is the rule that keeps parallel
-    `/fix-issue` runs conflict-free: N findings closed in parallel = N independent new files,
-    zero merge conflicts.
+  - **One finding = one detailed file.** Add one concise row to
+    `skills/04-review/CLOSED-FINDINGS.md` after the detailed file is ready. Do
+    not copy the detailed rationale into the index. Serialize this small index
+    update when parallel fixes finish.
   - Pick `<topic>` = the directory where sibling findings of the same family already live
-    (`ls skills/04-review/`); create the directory if the family is new. Discovery later is by
-    `grep -rl '<keyword>' skills/04-review/` over the topic directories — there is no central index.
+    (`find skills/04-review -mindepth 1 -maxdepth 1 -type d`); create the directory if the family is new. Discovery later is by
+    `rg -l '<keyword>' skills/04-review/` over the topic directories and the
+    central coverage index.
 - Ask: does the fix change a design decision, architectural constraint, or coding rule
   documented in an EXISTING specific skill file (not an index)? If so, update that one file.
 - Check `skills/SKILL.md` "Key constraints" table — if the fix touches a listed constraint, update the table entry.
@@ -391,11 +398,17 @@ If the subagent reports **Issues Found**:
 
 Run in sequence:
 
-1. `cargo check --all-targets` — must pass.
-2. `cargo clippy --all-targets` — must pass with no new warnings.
+1. `cargo fmt --all` — apply formatting first.
+2. `cargo check --workspace --all-targets` — must pass, including `edgion-tests`.
+3. `cargo clippy --workspace --all-targets` — must pass with no new warnings.
+4. `python3 cicd/checks/validate_agent_docs.py` — must pass.
+5. `python3 cicd/checks/check_ssa_force.py` — must pass.
+6. Run targeted tests proportionate to the finding; run `cargo test --all`
+   only when the user explicitly requests it.
 
-If both pass:
-- Delete the issue file: `rm <ISSUE_DIR>/<filename>`
+If all required checks and targeted tests pass:
+- Delete the issue file with the repository editing mechanism (for example,
+  an `apply_patch` delete), not a destructive shell command.
 - Report to the user:
   ```
   Closed: <ISSUE_DIR>/<filename>
@@ -420,8 +433,8 @@ When tempted to skip a step, check this table first:
 | "Scope gate is paranoid for this one" | If you spent ≥3 seconds wondering whether to trigger it, trigger it and let the user choose A/B/C. |
 | "While I'm in this file I'll fix the nearby thing too" | Out-of-scope edits are the #1 source of regressions in this project. Record it as a new todo, don't bundle. |
 | "Step 5 review is overkill for a 1-line / comment-only change" | Step 5 is mandatory. No exceptions for trivial or 📝 verdicts. The Iron Law says so. |
-| "Subagent review just said LGTM, I can skip the cargo checks" | Step 6 cargo check + clippy run on real compiler output. Subagents read code, they don't compile it. |
-| "cargo check passed, clippy is probably fine" | Step 6 requires both. Clippy catches a different class of defect. |
+| "Subagent review just said LGTM, I can skip the checks" | Step 6 runs real compiler output and repository guards. Subagents read code; they do not replace those checks. |
+| "cargo check passed, clippy is probably fine" | Step 6 requires the complete quick-check set. Clippy and the repository guards catch different defect classes. |
 | "Reverting subagent's out-of-scope change is wasteful, I'll keep it since it's already done" | Keeping out-of-scope work means the diff no longer matches what the user approved in Step 2. Revert. |
 | "User said 'go ahead' once, I can skip future confirmation prompts" | Approval is per-gate, not blanket. Each presented panel needs its own confirmation. |
 | "One sentence in 'What is wrong' is enough, the user can read the issue file" | The Step 1 panel is the user's decision surface; if it doesn't say which module, which path category, and what breaks operationally, the user is forced to re-open the file. Fill in all three sub-sections (Context / Defect / Why it matters). |

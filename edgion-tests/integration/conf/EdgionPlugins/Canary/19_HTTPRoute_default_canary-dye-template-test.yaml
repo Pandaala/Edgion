@@ -1,0 +1,26 @@
+# backendRefs deliberately omits canary-app-v2, so canary-dye-template's
+# activeProfile ("canary" -> canary-app-v2) is a misconfigured profile and
+# the entry takes its onInvalid=fallback branch, triggering the templated
+# response dye rule.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-dye-template-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-dye-template.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-dye-template

@@ -1,0 +1,12 @@
+# Port from ports.json key "HTTPRoute/SseStreaming".
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: sse-streaming-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: sse-streaming-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31947

@@ -7,7 +7,9 @@ use axum::{
 use edgion_resources::prelude_resources::*;
 use std::sync::Arc;
 
-use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
+use super::common::{
+    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource,
+};
 use super::types::*;
 use edgion_resources::resource::is_kind_cluster_scoped;
 
@@ -111,6 +113,7 @@ pub async fn create_cluster(
 pub async fn update_cluster(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, name)): Path<(String, String)>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -122,6 +125,7 @@ pub async fn update_cluster(
     let is_k8s = state.is_k8s_mode();
     let writer = state.conf_center();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let expected_resource_version = expected_resource_version(&headers, &content)?;
 
     // The URL name is the authoritative storage key, but the body content is what
     // gets persisted. Reject a body whose metadata.name contradicts the URL,
@@ -144,7 +148,13 @@ pub async fn update_cluster(
             validate_resource(state.schema_validator.as_ref(), kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), None, &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    None,
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -153,7 +163,13 @@ pub async fn update_cluster(
             validate_resource(state.schema_validator.as_ref(), kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), None, &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    None,
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -176,6 +192,7 @@ pub async fn update_cluster(
 pub async fn delete_cluster(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, name)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -187,8 +204,9 @@ pub async fn delete_cluster(
     let writer = state.conf_center();
 
     // delete_one returns NotFound if the resource does not exist.
+    let expected_resource_version = expected_resource_version(&headers, "{}")?;
     writer
-        .delete_one(kind.as_str(), None, &name)
+        .delete_one_if_version(kind.as_str(), None, &name, expected_resource_version.as_deref())
         .await
         .map_err(map_writer_error)?;
 
@@ -261,6 +279,7 @@ mod update_identity_tests {
         let result = update_cluster(
             State(state),
             Path(("GatewayClass".to_string(), "gc-a".to_string())),
+            HeaderMap::new(),
             gateway_class_body("gc-b"),
         )
         .await;
@@ -276,6 +295,7 @@ mod update_identity_tests {
         let result = update_cluster(
             State(state),
             Path(("GatewayClass".to_string(), "gc-a".to_string())),
+            HeaderMap::new(),
             gateway_class_body("gc-a"),
         )
         .await;

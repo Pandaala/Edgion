@@ -9,6 +9,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
@@ -67,6 +68,7 @@ impl EdgionStreamPluginsHandler {
                 }
                 EdgionStreamPlugin::IpRestriction(_) => None,
                 EdgionStreamPlugin::ConnectionRateLimit(_) => None,
+                EdgionStreamPlugin::GeoIpLocation(_) => None,
             })
     }
 
@@ -109,6 +111,7 @@ impl EdgionStreamPluginsHandler {
                     }
                 }
                 EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+                EdgionStreamPlugin::GeoIpLocation(_) => {}
             }
         }
 
@@ -154,6 +157,7 @@ impl EdgionStreamPluginsHandler {
                     }
                 }
                 EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+                EdgionStreamPlugin::GeoIpLocation(_) => {}
             }
         }
 
@@ -181,6 +185,31 @@ impl Default for EdgionStreamPluginsHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     fn preparse(&self, esp: &mut EdgionStreamPlugins, _ctx: &HandlerContext) -> Vec<String> {
+        // Plugin policy: clear any inbound policy_action and re-stamp from the
+        // compiled policy. Runs before validation; hits surface via the
+        // PluginPolicyRestricted condition in update_status, NOT as
+        // validation errors (Accepted keeps meaning "valid and synced").
+        let _ = super::super::plugin_policy_stamp::stamp_stream_entries(esp);
+
+        // Unknown-field diagnostic: `spec.unknown_fields` was already
+        // populated by the ingest hook, loader, or Admin API seam, so this
+        // is a pure read — no re-walk here. Warn once on the apply path; the
+        // status-side UnknownConfigFields condition is stamped in
+        // update_status, mirroring PluginPolicyRestricted. Advisory only:
+        // this never touches `Accepted` or blocks the resource from syncing.
+        if !esp.spec.unknown_fields.is_empty() {
+            let paths = bounded_unknown_field_paths(&esp.spec.unknown_fields);
+            tracing::warn!(
+                component = "conf_mgr",
+                event = "unknown_config_fields_detected",
+                kind = "EdgionStreamPlugins",
+                namespace = %esp.metadata.namespace.as_deref().unwrap_or("default"),
+                name = %esp.metadata.name.as_deref().unwrap_or(""),
+                paths = ?paths,
+                "EdgionStreamPlugins document has keys the schema does not recognize; they are ignored, config still syncs unchanged"
+            );
+        }
+
         let mut errors = Vec::new();
 
         // Both stages validate disabled entries with `is_enabled()` skipped, mirroring the
@@ -227,6 +256,19 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                     errors.push(format!(
                         "plugins[{idx}] (GlobalConnectionIpRestriction): config invalid: {e}"
                     ));
+                }
+            }
+            // GeoIpLocation: stateless field validation, layer-parameterized
+            // (`is_stream: true`). This does NOT go through the generic
+            // `PluginValidation::validation_error()` trait (that fixed
+            // signature has no layer flag) — it calls the exact same
+            // `GeoIpLocationConfig::check_fields(true)` the gateway's
+            // `GeoIpLocation` stream-plugin constructor calls via
+            // `validate_and_init(true)`, so the two paths cannot drift. See
+            // `GeoIpLocationConfig`'s module doc.
+            if let EdgionStreamPlugin::GeoIpLocation(cfg) = &entry.plugin {
+                if let Some(e) = cfg.check_fields(true) {
+                    errors.push(format!("plugins[{idx}] (GeoIpLocation): {e}"));
                 }
             }
         }
@@ -358,12 +400,22 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             partially_invalid_condition(Some(msg), generation)
         };
 
+        // Computed before the mutable `status` borrow below (collect_policy_hits_stream
+        // needs a shared borrow of `esp`, which would otherwise overlap it).
+        let policy_hits = super::super::plugin_policy_stamp::collect_policy_hits_stream(esp);
+
         let status = esp
             .status
             .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
+        super::super::plugin_policy_stamp::apply_policy_condition(&mut status.conditions, &policy_hits, generation);
+        super::super::unknown_fields_stamp::apply_unknown_fields_condition(
+            &mut status.conditions,
+            &esp.spec.unknown_fields,
+            generation,
+        );
     }
 }
 
@@ -450,6 +502,7 @@ fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<
                 }
             }
             EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+            EdgionStreamPlugin::GeoIpLocation(_) => {}
         }
     }
 
@@ -654,6 +707,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace
@@ -789,6 +843,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "l4-blk",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -835,6 +890,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -893,6 +949,7 @@ spec:
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -953,7 +1010,7 @@ spec:
         allow:
           - name: default
             cidrs: ["10.0.0.0/8"]
-        ipSource: RemoteAddr
+        ipSource: DirectPeerIp
         message: blocked
         status: 403
 "#;
@@ -1177,6 +1234,112 @@ spec:
         assert_eq!(accepted.reason, "Invalid");
     }
 
+    // ── PluginPolicyRestricted condition removal (Task 4) ───────────────────
+
+    #[test]
+    fn update_status_removes_stale_policy_condition_when_no_hits() {
+        // Simulates the K8s watch echo: object arrives with a live
+        // PluginPolicyRestricted condition but the (absent) policy stamps
+        // nothing. update_status must remove the stale condition.
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+            condition_reasons, condition_true, condition_types,
+        };
+        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
+
+        let spec = EdgionStreamPluginsSpec {
+            plugins: None,
+            tls_route_plugins: None,
+            unknown_fields: Vec::new(),
+        };
+        let mut esp = EdgionStreamPlugins::new("policy-restricted-esp", spec);
+        esp.metadata.namespace = Some("default".to_string());
+        esp.status = Some(EdgionStreamPluginsStatus {
+            conditions: vec![condition_true(
+                condition_types::PLUGIN_POLICY_RESTRICTED,
+                condition_reasons::RESTRICTED_BY_POLICY,
+                "stale",
+                Some(1),
+            )],
+        });
+
+        let handler = EdgionStreamPluginsHandler::new();
+        handler.update_status(&mut esp, &make_ctx(), &[]);
+
+        assert!(esp
+            .status
+            .unwrap()
+            .conditions
+            .iter()
+            .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
+    }
+
+    // ── UnknownConfigFields condition ───────────────────────────────────────
+
+    #[test]
+    fn update_status_sets_unknown_config_fields_condition_with_exact_paths() {
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::condition_types;
+        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
+
+        let spec = EdgionStreamPluginsSpec {
+            plugins: None,
+            tls_route_plugins: None,
+            unknown_fields: vec!["plugins[0].config.denys".to_string()],
+        };
+        let mut esp = EdgionStreamPlugins::new("typo-esp", spec);
+        esp.metadata.namespace = Some("default".to_string());
+
+        let handler = EdgionStreamPluginsHandler::new();
+        handler.update_status(&mut esp, &make_ctx(), &[]);
+
+        let status = esp.status.unwrap();
+        let cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == condition_types::UNKNOWN_CONFIG_FIELDS)
+            .expect("UnknownConfigFields condition must be present");
+        assert_eq!(cond.status, "True");
+        assert_eq!(cond.message, "plugins[0].config.denys");
+
+        // Accepted must stay True and untouched by this advisory condition.
+        let accepted = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == condition_types::ACCEPTED)
+            .expect("Accepted condition must be present");
+        assert_eq!(accepted.status, "True");
+    }
+
+    #[test]
+    fn update_status_removes_unknown_config_fields_condition_when_fixed() {
+        // Simulates the operator fixing the typo on the next generation:
+        // update_status must REMOVE the stale condition (the wedge trap the
+        // stamp module's doc comment warns about).
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+            condition_reasons, condition_true, condition_types,
+        };
+
+        let mut esp = clean_esp();
+        esp.spec.unknown_fields = Vec::new(); // fixed
+        esp.status = Some(EdgionStreamPluginsStatus {
+            conditions: vec![condition_true(
+                condition_types::UNKNOWN_CONFIG_FIELDS,
+                condition_reasons::UNKNOWN_FIELDS_DETECTED,
+                "stale",
+                Some(1),
+            )],
+        });
+
+        let handler = EdgionStreamPluginsHandler::new();
+        handler.update_status(&mut esp, &make_ctx(), &[]);
+
+        assert!(esp
+            .status
+            .unwrap()
+            .conditions
+            .iter()
+            .all(|c| c.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
+    }
+
     // ── Inline entry-error collection tests ──────────────────────────────────
 
     #[test]
@@ -1304,6 +1467,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
                 visibility: Default::default(), // Namespace
@@ -1372,6 +1536,7 @@ spec:
                 enable: false,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),

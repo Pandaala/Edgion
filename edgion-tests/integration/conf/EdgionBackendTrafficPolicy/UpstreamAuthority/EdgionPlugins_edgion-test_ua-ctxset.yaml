@@ -1,0 +1,20 @@
+# Sets ctx:tenant from the X-Tenant request header (no default, so an
+# omitted header leaves ctx:tenant genuinely unset, which is what drives the
+# fail-closed "render_empty" case). CtxSet's requestPlugins stage runs before
+# peer selection, which is a hard ordering requirement for upstreamAuthority
+# rendering (design doc §5.5).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ua-ctxset
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: tenant
+            from:
+              type: header
+              name: X-Tenant

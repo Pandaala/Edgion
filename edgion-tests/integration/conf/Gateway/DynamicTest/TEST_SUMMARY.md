@@ -58,8 +58,7 @@ DynamicTest/
 ## Running the Test
 
 ```bash
-cd /Users/caohao/ws1/Edgion
-./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway --dynamic-test
+./edgion-tests/integration/scripts/integration/run_integration.sh -r Gateway
 ```
 
 ## Expected Output

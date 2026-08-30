@@ -1,0 +1,18 @@
+# httpdns resolver whose endpoint is DOWN (nothing listens on 127.0.0.1:65530),
+# with `fallback: system`. Exercises the failure-fallback path: the HTTP DNS
+# fetch fails, so resolution falls back to the OS resolver, which resolves the
+# ExternalName (`localhost`) to 127.0.0.1 and still serves.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-httpdns-dead
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:65530/dns/resolve?host={domain}"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system

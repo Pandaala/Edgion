@@ -1,0 +1,19 @@
+# Active gRPC health check (overall server health) that keeps grpc-hc-healthy in
+# rotation.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: grpc-hc-healthy-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: grpc-hc-healthy
+  healthCheck:
+    active:
+      type: grpc
+      port: 30021
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1

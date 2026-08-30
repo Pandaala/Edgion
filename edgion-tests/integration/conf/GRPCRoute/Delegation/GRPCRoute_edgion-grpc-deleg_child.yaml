@@ -1,0 +1,39 @@
+# Delegation child owned by the application team.
+# Reverse-lock: `parentRefs` carries a `kind: GRPCRoute` entry naming the
+# platform team's delegation-parent explicitly, so only that route may
+# delegate into this one (and the child gets its own Accepted condition for
+# this parentRef — see grpc_route.rs update_status's
+# `delegation_accepted_condition`).
+# Rule 1 narrows the delegated test.TestService scope to SayHello -> the
+# child's own backend Service.
+# Rule 2 matches a DIFFERENT service entirely (test.OtherService); it falls
+# outside every delegated scope and must be dropped by the controller's
+# flatten step (recorded as PartiallyInvalid on the parent).
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: child
+  namespace: edgion-grpc-deleg
+spec:
+  parentRefs:
+    - kind: GRPCRoute
+      group: gateway.networking.k8s.io
+      name: delegation-parent
+      namespace: edgion-test
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: child-grpc-svc
+          port: 30021
+    - matches:
+        - method:
+            type: Exact
+            service: test.OtherService
+            method: Whatever
+      backendRefs:
+        - name: child-grpc-svc
+          port: 30021

@@ -33,11 +33,14 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use super::acme_client::{AcmeCertificateResult, AcmeClient};
-use super::dns_provider::create_dns_provider;
+use super::dns_provider::{create_dns_provider, DnsProvider};
+use super::propagation;
 use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
+use edgion_common::time::now_rfc3339;
+use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_acme::{
     AcmeCertPhase, AcmeChallenge, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
@@ -55,6 +58,19 @@ static ACME_SERVICE: Mutex<Option<AcmeServiceHandle>> = Mutex::new(None);
 /// work into (or holding resources for) the new generation. Starts at 0; the
 /// first running generation is 1, so a value of 0 never identifies a live timer.
 static ACME_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Test-only serialization lock for the process-global `ACME_SERVICE`.
+///
+/// `test_timer_generation_isolation` installs a real handle into `ACME_SERVICE`
+/// and asserts nothing else enqueues into its receiver within a time window.
+/// Any concurrently running test that drives `EdgionAcmeHandler::parse` reaches
+/// `notify_resource_changed` -> `get_sender()`, which clones whatever handle is
+/// currently installed and sends into it — landing a stray message in the
+/// isolation test's receiver and tripping its assertion. Every test that touches
+/// the global (installs a handle, or reads it via the notify path) must hold this
+/// lock so they run serially. Held across `.await`, hence `tokio::sync::Mutex`.
+#[cfg(test)]
+pub(crate) static ACME_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Handle to send commands to the ACME service
 struct AcmeServiceHandle {
@@ -77,9 +93,9 @@ enum AcmeCommand {
 /// Called during controller startup (after caches are ready).
 /// Must call `stop_acme_service()` before calling this again (e.g. on re-election).
 ///
-/// On startup, the service performs a full scan of all EdgionAcme resources
-/// to recover renewal timers that were lost during controller restart.
-pub fn start_acme_service(client: Client) {
+/// On startup, the service scans EdgionAcme resources in the configured watch
+/// namespaces to recover renewal timers that were lost during controller restart.
+pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>) {
     let mut guard = ACME_SERVICE.lock();
     if guard.is_some() {
         tracing::warn!(
@@ -98,8 +114,20 @@ pub fn start_acme_service(client: Client) {
     drop(guard); // Release lock before spawning tasks
 
     let service = AcmeServiceWorker::new(client.clone(), generation);
-    tokio::spawn(async move {
+    let worker_handle = tokio::spawn(async move {
         service.run(rx).await;
+    });
+    crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(1.0);
+    crate::services::supervision::observe_worker("acme", worker_handle, move || {
+        // Lock + generation check + gauge write are one critical section: a
+        // check-then-write outside the lock could interleave with a full
+        // stop+start and zero the NEW generation's series.
+        let guard = ACME_SERVICE.lock();
+        let current = guard.as_ref().map(|h| h.generation) == Some(generation);
+        if current {
+            crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(0.0);
+        }
+        current
     });
 
     // Spawn startup scan: re-schedule renewal checks for all existing EdgionAcme resources.
@@ -118,7 +146,7 @@ pub fn start_acme_service(client: Client) {
             );
             return;
         }
-        scan_all_acme_resources(startup_client).await;
+        scan_all_acme_resources(startup_client, &watch_namespaces).await;
     });
 
     tracing::info!(
@@ -143,29 +171,31 @@ pub fn start_acme_service(client: Client) {
 pub fn stop_acme_service() {
     let mut guard = ACME_SERVICE.lock();
     if guard.take().is_some() {
+        crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(0.0);
         tracing::info!(component = "acme_service", "ACME service stopped");
     }
     // Dropping the AcmeServiceHandle drops the mpsc::Sender, which closes
     // the channel. The worker loop will observe `recv() => None` and exit.
 }
 
-/// Startup scan: enumerate all EdgionAcme resources in the cluster and
+/// Startup scan: enumerate EdgionAcme resources in the configured namespaces and
 /// trigger a `ResourceChanged` event for each one.
 ///
 /// This ensures that:
 /// - `Ready` certs get their renewal timers re-established
 /// - `Pending`/`Failed` certs get retried
 /// - Nothing is silently forgotten after a controller restart
-async fn scan_all_acme_resources(client: Client) {
+async fn scan_all_acme_resources(client: Client, watch_namespaces: &[String]) {
     use kube::api::ListParams;
 
     tracing::info!(component = "acme_service", "Starting full scan of EdgionAcme resources");
 
-    let api: Api<EdgionAcme> = Api::all(client);
-    match api.list(&ListParams::default()).await {
-        Ok(list) => {
-            let count = list.items.len();
-            for acme in list.items {
+    let result = list_acme_resources(client, watch_namespaces, &ListParams::default()).await;
+
+    match result {
+        Ok(items) => {
+            let count = items.len();
+            for acme in items {
                 let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
                 let name = acme.metadata.name.as_deref().unwrap_or_default();
                 let key = format!("{}/{}", ns, name);
@@ -185,6 +215,27 @@ async fn scan_all_acme_resources(client: Client) {
             );
         }
     }
+}
+
+async fn list_acme_resources(
+    client: Client,
+    watch_namespaces: &[String],
+    params: &kube::api::ListParams,
+) -> std::result::Result<Vec<EdgionAcme>, kube::Error> {
+    if watch_namespaces.is_empty() {
+        return Ok(Api::<EdgionAcme>::all(client).list(params).await?.items);
+    }
+
+    let mut items = Vec::new();
+    for namespace in watch_namespaces {
+        items.extend(
+            Api::<EdgionAcme>::namespaced(client.clone(), namespace)
+                .list(params)
+                .await?
+                .items,
+        );
+    }
+    Ok(items)
 }
 
 /// Clone the current sender from the global handle.
@@ -286,6 +337,23 @@ fn exponential_backoff(base_secs: u64, attempt: u32) -> Duration {
     Duration::from_secs(backoff)
 }
 
+/// Parse a GEP-2257 duration field from the CR spec, falling back to the
+/// documented default when the string is invalid. Handler validation rejects
+/// invalid durations at admission; this guards the lenient-admission path
+/// where an unvalidated CR can still reach the service.
+fn spec_duration_or(value: &str, field: &'static str, default: Duration) -> Duration {
+    parse_duration(value).unwrap_or_else(|e| {
+        tracing::warn!(
+            component = "acme_service",
+            field = field,
+            value = %value,
+            error = %e,
+            "Invalid GEP-2257 duration in EdgionAcme spec; using default"
+        );
+        default
+    })
+}
+
 // ============================================================================
 // ACME Service Worker
 // ============================================================================
@@ -373,8 +441,12 @@ impl AcmeServiceWorker {
             AcmeCertPhase::Ready => {
                 if !self.needs_renewal(&acme) {
                     // Not time to renew yet — schedule next check
-                    let check_interval = acme.spec.renewal.check_interval;
-                    schedule_renewal_check(self.generation, key.to_string(), Duration::from_secs(check_interval));
+                    let check_interval = spec_duration_or(
+                        &acme.spec.renewal.check_interval,
+                        "checkInterval",
+                        Duration::from_secs(86400),
+                    );
+                    schedule_renewal_check(self.generation, key.to_string(), check_interval);
                     return;
                 }
                 // Fall through to start renewal
@@ -422,7 +494,8 @@ impl AcmeServiceWorker {
         let retry_tracker = self.retry_tracker.clone();
         let key_owned = key.to_string();
         let is_renewal = *phase == AcmeCertPhase::Ready;
-        let fail_backoff_base = acme.spec.renewal.fail_backoff;
+        let fail_backoff_base =
+            spec_duration_or(&acme.spec.renewal.fail_backoff, "failBackoff", Duration::from_secs(300)).as_secs();
         let generation = self.generation;
 
         tokio::spawn(async move {
@@ -461,7 +534,7 @@ impl AcmeServiceWorker {
                     let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
                     if let Err(status_err) = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
                         status.last_failure_reason = Some(format!("{:#}", e));
-                        status.last_failure_time = Some(chrono::Utc::now().to_rfc3339());
+                        status.last_failure_time = Some(now_rfc3339());
                     })
                     .await
                     {
@@ -518,7 +591,12 @@ impl AcmeServiceWorker {
             Err(_) => return true, // Can't parse expiry
         };
 
-        let renew_before = chrono::Duration::days(acme.spec.renewal.renew_before_days as i64);
+        let renew_before = chrono::Duration::from_std(spec_duration_or(
+            &acme.spec.renewal.renew_before,
+            "renewBefore",
+            Duration::from_secs(720 * 3600),
+        ))
+        .unwrap_or_else(|_| chrono::Duration::days(30));
         let renew_at = expiry - renew_before;
 
         chrono::Utc::now() >= renew_at
@@ -570,7 +648,7 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
     update_acme_status(&api, name, AcmeCertPhase::Ready, |status| {
         status.certificate_serial = cert_info.serial.clone();
         status.certificate_not_after = cert_info.not_after.clone();
-        status.last_renewal_time = Some(chrono::Utc::now().to_rfc3339());
+        status.last_renewal_time = Some(now_rfc3339());
         status.last_failure_reason = None;
         status.last_failure_time = None;
         status.secret_name = Some(acme.spec.storage.secret_name.clone());
@@ -582,12 +660,12 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
     .await?;
 
     // 8. Schedule renewal check
-    let check_interval = acme.spec.renewal.check_interval;
-    schedule_renewal_check(
-        generation,
-        format!("{}/{}", namespace, name),
-        Duration::from_secs(check_interval),
+    let check_interval = spec_duration_or(
+        &acme.spec.renewal.check_interval,
+        "checkInterval",
+        Duration::from_secs(86400),
     );
+    schedule_renewal_check(generation, format!("{}/{}", namespace, name), check_interval);
 
     tracing::info!(
         component = "acme_service",
@@ -728,6 +806,7 @@ async fn execute_dns01_flow(
         provider,
         credential_ref,
         propagation_timeout,
+        propagation_check_interval,
         ..
     } = &acme.spec.challenge
     else {
@@ -776,16 +855,66 @@ async fn execute_dns01_flow(
     }
 
     // Phase 3: Wait for DNS propagation before notifying ACME server.
-    // Use `propagation_timeout` (default 120s) as the wait duration, NOT `propagation_check_interval`.
-    // DNS TXT records can take time to propagate globally; waiting too briefly causes validation failure.
-    let wait_secs = (*propagation_timeout).max(10);
+    // Poll the zone's authoritative nameservers for the challenge TXT records
+    // and activate as soon as every record is visible; `propagation_timeout`
+    // is a true upper bound. On expiry with a record definitively observed
+    // missing, fail into the retry/backoff path (activating anyway would burn
+    // an ACME validation attempt); if the check never completed at all (e.g.
+    // firewalled DNS egress), degrade to the legacy fixed wait: WARN and
+    // proceed optimistically.
+    let timeout = spec_duration_or(propagation_timeout, "propagationTimeout", Duration::from_secs(120))
+        .max(Duration::from_secs(10));
+    let interval = spec_duration_or(
+        propagation_check_interval,
+        "propagationCheckInterval",
+        Duration::from_secs(5),
+    )
+    .max(Duration::from_secs(1));
     tracing::info!(
         component = "acme_service",
         name = %name,
-        wait_secs = wait_secs,
-        "Waiting for DNS propagation before activating challenges"
+        timeout_secs = timeout.as_secs(),
+        interval_secs = interval.as_secs(),
+        "Polling DNS propagation before activating challenges"
     );
-    tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+    let txt_records: Vec<(String, String)> = created_records
+        .iter()
+        .map(|(domain, digest)| (propagation::challenge_txt_fqdn(domain), digest.clone()))
+        .collect();
+    let poll_start = std::time::Instant::now();
+    let outcome = propagation::poll_propagation(&txt_records, interval, timeout, |fqdn, expected| async move {
+        edgion_common::dns::txt_probe::check_txt_propagation(&fqdn, &expected, propagation::CHECK_ROUND_BUDGET).await
+    })
+    .await;
+    match outcome {
+        propagation::PropagationOutcome::Propagated => {
+            tracing::info!(
+                component = "acme_service",
+                name = %name,
+                elapsed_secs = poll_start.elapsed().as_secs(),
+                "DNS propagation confirmed on authoritative nameservers"
+            );
+        }
+        propagation::PropagationOutcome::TimedOutConfirmedMissing => {
+            cleanup_txt_records(dns_provider.as_ref(), &created_records).await;
+            anyhow::bail!(
+                "DNS propagation not confirmed within propagationTimeout ({}s): \
+                 at least one challenge TXT record was observed missing on the \
+                 zone's authoritative nameservers and never confirmed present",
+                timeout.as_secs()
+            );
+        }
+        propagation::PropagationOutcome::TimedOutUnverified => {
+            tracing::warn!(
+                component = "acme_service",
+                name = %name,
+                timeout_secs = timeout.as_secs(),
+                "DNS propagation could not be verified (authoritative nameservers \
+                 unreachable from this controller); proceeding optimistically after \
+                 the full propagationTimeout"
+            );
+        }
+    }
 
     // Phase 4: NOW tell the ACME server to start validation
     // (DNS records have been created and had time to propagate)
@@ -805,11 +934,17 @@ async fn execute_dns01_flow(
         .complete_dns01_order(order_ctx, &acme.spec.domains, &acme.spec.key_type)
         .await;
 
-    // Phase 6: Clean up DNS records (even if order failed). Cleanup is
-    // best-effort and non-fatal, but still bounded by the same controller-level
-    // timeout so a hung removal call cannot keep this task alive after the order
-    // has otherwise finished.
-    for (domain, value) in &created_records {
+    // Phase 6: Clean up DNS records (even if order failed).
+    cleanup_txt_records(dns_provider.as_ref(), &created_records).await;
+
+    cert_result.context("Failed to complete DNS-01 ACME order")
+}
+
+/// Best-effort, non-fatal removal of challenge TXT records. Each removal is
+/// bounded by the controller-level timeout so a hung provider call cannot
+/// keep the ACME flow task alive after the order has otherwise finished.
+async fn cleanup_txt_records(dns_provider: &dyn DnsProvider, created_records: &[(String, String)]) {
+    for (domain, value) in created_records {
         match tokio::time::timeout(DNS_OP_TIMEOUT, dns_provider.remove_txt_record(domain, value)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
@@ -830,8 +965,6 @@ async fn execute_dns01_flow(
             }
         }
     }
-
-    cert_result.context("Failed to complete DNS-01 ACME order")
 }
 
 /// Fetch DNS credentials from the K8s Secret referenced by the EdgionAcme spec.
@@ -1080,7 +1213,12 @@ async fn create_or_update_cert_secret(
         ..Default::default()
     };
 
-    let pp = PatchParams::apply("edgion-acme-controller");
+    // `force`: this is the data-plane TLS Secret. Adopting a Secret that already exists
+    // (the common `kubectl create secret tls` -> switch-to-ACME migration) leaves its
+    // fields owned by another manager; an unforced apply would then 409 on every
+    // renewal until the certificate expires and TLS breaks. The controller is the sole
+    // authority for the content it writes here. (Guard: cicd/checks/check_ssa_force.py)
+    let pp = PatchParams::apply("edgion-acme-controller").force();
     api.patch(name, &pp, &Patch::Apply(secret))
         .await
         .context("Failed to create/update TLS certificate Secret")?;
@@ -1131,7 +1269,12 @@ async fn create_or_update_edgion_tls(client: &Client, acme: &EdgionAcme) -> Resu
     let ar = kube::api::ApiResource::from_gvk(&gvk);
     let api: Api<kube::api::DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
 
-    let pp = PatchParams::apply("edgion-acme-controller");
+    // `force`: EdgionTls is an operator-facing CRD, so a hand-created or hand-edited
+    // instance (owned by kubectl) is expected; without force the apply 409s and ACME
+    // can never wire its issued cert up. SSA force only claims the fields this apply
+    // writes — operator edits to other fields survive. Mirrors the forced `patch_status`
+    // calls above. (Guard: cicd/checks/check_ssa_force.py)
+    let pp = PatchParams::apply("edgion-acme-controller").force();
     api.patch(&tls_name, &pp, &Patch::Apply(edgion_tls))
         .await
         .context("Failed to create/update EdgionTls")?;
@@ -1202,6 +1345,58 @@ fn parse_resource_key(key: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::{Response, StatusCode};
+    use kube::client::Body;
+    use serde_json::json;
+    use std::convert::Infallible;
+    use tower::service_fn;
+
+    fn empty_acme_list() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "apiVersion": "edgion.io/v1",
+                    "kind": "EdgionAcmeList",
+                    "metadata": {"resourceVersion": "1"},
+                    "items": []
+                }))
+                .expect("response JSON must serialize"),
+            ))
+            .expect("response must build")
+    }
+
+    #[tokio::test]
+    async fn startup_scan_lists_only_configured_namespaces() {
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&paths);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                captured.lock().push(request.uri().path().to_string());
+                Ok::<_, Infallible>(empty_acme_list())
+            }
+        });
+
+        let client = Client::new(service, "default");
+        let items = list_acme_resources(
+            client,
+            &["team-a".into(), "team-b".into()],
+            &kube::api::ListParams::default(),
+        )
+        .await
+        .expect("namespace-scoped lists must succeed");
+
+        assert!(items.is_empty());
+        assert_eq!(
+            *paths.lock(),
+            vec![
+                "/apis/edgion.io/v1/namespaces/team-a/edgionacmes",
+                "/apis/edgion.io/v1/namespaces/team-b/edgionacmes"
+            ]
+        );
+    }
 
     // ================================================================
     // exponential_backoff
@@ -1264,6 +1459,12 @@ mod tests {
     /// let the cases race against each other.
     #[tokio::test]
     async fn test_timer_generation_isolation() {
+        // Serialize against any other test that touches the global `ACME_SERVICE`
+        // (e.g. the handler tests whose `parse` reaches `notify_resource_changed`
+        // -> `get_sender()`), so a concurrent notify cannot clone the handle we
+        // install below and enqueue a stray message into our receiver.
+        let _guard = ACME_TEST_MUTEX.lock().await;
+
         // --- Generation 1 starts ---
         let (tx1, _rx1) = mpsc::channel::<AcmeCommand>(8);
         let gen1 = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;

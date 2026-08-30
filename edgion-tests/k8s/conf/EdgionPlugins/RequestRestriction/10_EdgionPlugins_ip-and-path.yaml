@@ -1,0 +1,27 @@
+# 10. IP and path in one group: deny only when BOTH hold
+#     (directPeerIp in 127.0.0.1/::1) AND (path matches /admin/) => deny.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-ip-and-path
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                - type: directPeerIpMatch
+                  ips:
+                    - "127.0.0.1"
+                    - "::1"
+                - type: keyMatch
+                  key:
+                    type: path
+                  regex:
+                    - ".*/admin/.*"
+        status: 403
+        message: "Admin access denied from local peer"

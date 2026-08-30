@@ -1,0 +1,73 @@
+# Two backends for the ConnectTimeout scenario:
+#
+#   ct-svc-a: points at a BLACKHOLE address (10.255.255.1:1) — a reserved,
+#     non-routable IP that neither completes the TCP handshake nor sends a
+#     RST, so the connect attempt just hangs until something enforces a
+#     deadline. The EdgionBackendTrafficPolicy in this scenario attaches
+#     `connection.connectTimeout: 300ms` to THIS Service key
+#     ("edgion-test/ct-svc-a"), so the gateway's connect attempt must fail
+#     fast at ~300ms instead of the global 5s defaultConnectTimeout.
+#
+#   ct-svc-b: points at the shared plain-HTTP test_server listener
+#     (127.0.0.1:30001, same backend other suites like RetryBudget use). No
+#     BTP override applies to it, so it must keep working normally — proving
+#     the connect-timeout override is per-backend, not global.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ct-svc-a
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http
+      port: 1
+      targetPort: 1
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ct-svc-a-slice
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: ct-svc-a
+addressType: IPv4
+ports:
+  - name: http
+    port: 1
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "10.255.255.1"
+    conditions:
+      ready: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ct-svc-b
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ct-svc-b-slice
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: ct-svc-b
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

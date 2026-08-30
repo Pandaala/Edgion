@@ -1,0 +1,35 @@
+# Gateway for the inbound PROXY protocol standalone integration test.
+#
+# The Gateway-wide annotation turns PROXY protocol on for every listener, and the
+# per-listener key switches it back off for `plain`. That single fixture therefore
+# exercises both halves of the annotation contract: the Gateway-wide default and
+# the per-listener override (a Gateway API Listener carries no annotations of its
+# own, which is why the listener name is a key suffix).
+#
+# Ports live in the 584xx range reserved by test_proxy_protocol_inbound.sh so they
+# never collide with the shared 12xxx stack or the 583xx plugin-policy block.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ppin-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/accept-proxy-protocol: "true"
+    edgion.io/accept-proxy-protocol.plain: "false"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # Behind the L4 load balancer: every connection must start with a PROXY header.
+    - name: pp
+      protocol: HTTP
+      port: 58430
+      allowedRoutes:
+        namespaces:
+          from: All
+    # Control listener: same Gateway, PROXY protocol explicitly disabled.
+    - name: plain
+      protocol: HTTP
+      port: 58431
+      allowedRoutes:
+        namespaces:
+          from: All

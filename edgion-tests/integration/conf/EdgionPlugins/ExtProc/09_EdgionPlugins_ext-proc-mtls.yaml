@@ -1,0 +1,27 @@
+# ExtProc over mutual TLS. The processor trusts the integration client CA and
+# the gateway presents the `ext-proc-client` identity generated at runtime.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-mtls
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30043"
+          timeoutMs: 2000
+          tls:
+            enabled: true
+            validation:
+              caCertificateRefs:
+                - kind: Secret
+                  name: backend-ca
+            clientCertificateRef:
+              name: ext-proc-client
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false

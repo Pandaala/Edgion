@@ -7,10 +7,14 @@ description: Use when reviewing the LinkSys Webhook active health-check task lif
 
 **Status:** ⚠️ accepted tradeoff · 2026-05-25
 **Severity:** Low (BadLogic — pattern inconsistency / overstated delay)
+**Note (2026-07-08)**: the legacy webhook `health.rs` module this describes was removed
+entirely as dead code (`spawn_active_health_check` had zero production callers — the
+production webhook path had moved to `resolver.rs` → `manager.rs::ManagedOutboundClient`).
+Kept for historical design-rationale context.
 
 ## Conclusion
 
-`spawn_active_health_check` (`edgion-gateway/src/link_sys/providers/webhook/health.rs:14-75`) runs an
+`spawn_active_health_check` (formerly `edgion-gateway`'s `link_sys/providers/webhook/health.rs:14-75`) runs an
 infinite `loop { tokio::time::sleep(interval).await; ...; client.get(..).send().await; ... }` with no
 cooperative exit branch. Termination is by `JoinHandle::abort()` only: `WebhookManager::upsert`
 (`manager.rs:187-190`) and `WebhookManager::remove` (`manager.rs:199-203`) abort the stored
@@ -95,6 +99,6 @@ Re-open this decision only if:
   abort-only precedent.
 - [link-sys-F011](webhook-manager-rwlock-intentional.md) — related decision on the
   `WebhookEntry { runtime, health_task }` coupling and why the `RwLock` registry stays.
-- `edgion-gateway/src/link_sys/providers/webhook/health.rs` — `spawn_active_health_check`.
+- Formerly `edgion-gateway`'s `link_sys/providers/webhook/health.rs` (removed 2026-07-08) — `spawn_active_health_check`.
 - `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — `WebhookEntry`, `upsert` / `remove`
   abort sites.

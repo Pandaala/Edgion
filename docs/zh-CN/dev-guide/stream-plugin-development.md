@@ -124,7 +124,7 @@ Gateway 侧最关键的是这几块：
 ```yaml
 metadata:
   annotations:
-    edgion.io/edgion-stream-plugins: "namespace/name"
+    edgion.io/edgion-stream-plugins: "policy-name"
 ```
 
 它目前主要出现在三类位置：
@@ -135,6 +135,12 @@ metadata:
 
 这不是一个纯文档约定，而是当前实现真正会读取的键。
 仓库里历史上出现过 `edgion.io/stream-plugins` 这种旧写法，新改动不应该继续沿用。
+
+在 `Gateway` 上，该值必须是不带命名空间的资源名，并在 Gateway 自身命名空间内解析。
+包含 `/` 的值会被 Controller 拒绝，Gateway 还会以 fail-close 方式进行防御。
+`TCPRoute`、`TLSRoute` 和 `UDPRoute` 保留各自的 `name` 或 `namespace/name` 约定。
+如果需要集中维护数据并让各命名空间自行拥有插件策略，可为每个命名空间保留本地
+`EdgionStreamPlugins`，并通过现有授权机制引用共享 `EdgionConfigData`。
 
 ## 开发时建议的顺序
 
@@ -161,7 +167,7 @@ metadata:
 
 ### 2. 引用层
 
-- `Gateway` / `TCPRoute` / `TLSRoute` 上的注解能正确解析 `name` 或 `namespace/name`
+- `Gateway` 注解只接受同命名空间的 `name`；`TCPRoute` / `TLSRoute` / `UDPRoute` 注解仍可解析 `name` 或 `namespace/name`
 - 删除资源后，Gateway 不会继续引用旧对象
 
 ### 3. 运行层

@@ -4,6 +4,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // conf_sync: Controller <-> Gateway configuration sync.
     let proto_dir = "src/conf_sync/proto";
     tonic_build::configure()
+        .bytes([".conf_sync.ListResponse.data"])
         // `.conf_sync.ResourceKind` has no message in the proto today, so this
         // extern mapping is inert; point it at the real type for correctness.
         .extern_path(

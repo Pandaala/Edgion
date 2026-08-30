@@ -20,23 +20,21 @@ Use cases:
 - Supports custom authentication scheme names (`headerType`, e.g., `ldap` / `basic`)
 - Supports anonymous degradation (`anonymous`)
 - Supports hiding credential headers (`hideCredentials`)
-- Supports authentication result caching (`cacheTtl`)
 - Supports LDAPS / StartTLS (via `ldaps` / `startTls`)
 
 ## Workflow
 
 1. Read request header: first reads `Proxy-Authorization`, then `Authorization`
 2. Parse format: `{headerType} base64(username:password)`
-3. Optional cache hit: if cached, allow through directly
-4. Build Bind DN:
+3. Build Bind DN:
    - Default: `{attribute}={username},{baseDn}`
    - Template: `bindDnTemplate` replaces `{username}`
    - `{username}` is treated as a DN attribute value and escaped per RFC 4514
      (special characters like `, + " \ < > ; =` and leading `#` / surrounding spaces
      are escaped to their `\HH` hex form). The template must therefore describe a
      DN; using it as a search-filter template is not supported.
-5. LDAP Simple Bind verification
-6. On success, inject upstream headers and continue forwarding
+4. LDAP Simple Bind verification
+5. On success, inject upstream headers and continue forwarding
 
 ## Configuration Parameters
 
@@ -46,7 +44,7 @@ Use cases:
 | `ldapPort` | Integer | `389` | LDAP port |
 | `ldaps` | Boolean | `false` | Whether to enable LDAPS |
 | `startTls` | Boolean | `false` | Whether to enable StartTLS (mutually exclusive with `ldaps`) |
-| `verifyLdapHost` | Boolean | `true` | Whether to verify the certificate hostname |
+| `verify` | Boolean | `true` | Verify the LDAP server's TLS certificate. When `false`, peer certificate validation is skipped (operator responsibility; a WARN is logged at startup). |
 | `baseDn` | String | **Required** | Base DN |
 | `attribute` | String | **Required** | User attribute (e.g., `uid` / `cn`) |
 | `bindDnTemplate` | String | none | Custom Bind DN template, must contain `{username}` |
@@ -54,7 +52,6 @@ Use cases:
 | `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding |
 | `anonymous` | String | none | Anonymous username (when configured, allows unauthenticated requests) |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
-| `cacheTtl` | Integer | `60` | Authentication cache TTL (seconds), `0` disables caching |
 | `timeout` | Integer | `10000` | LDAP timeout (milliseconds) |
 | `keepalive` | Integer | `60000` | Reserved field |
 | `credentialIdentifierHeader` | String | `X-Credential-Identifier` | Header for passing the authenticated username |
@@ -79,6 +76,9 @@ spec:
         attribute: "uid"
         timeout: 3000
 ```
+
+LDAP authentication results are not cached. Every credential-bearing request
+is checked against the authoritative LDAP service.
 
 ## Using `headerType: basic` Example
 
@@ -139,14 +139,12 @@ When allowing anonymous access, the following headers are injected:
 ## Security Recommendations
 
 - Prefer `ldaps: true` or `startTls: true` in production
-- Keep `verifyLdapHost: true`
+- Keep `verify: true` (the default); `verify: false` is operator responsibility and should only be used for testing
 - Enable `hideCredentials: true` to prevent credentials from being passed to upstream
-- Set a reasonable `cacheTtl` (e.g., 60–300 seconds) to balance performance and credential revocation latency
 - Enable account lockout and brute-force protection policies on the LDAP server
+- Stack the `RateLimit` plugin and size the LDAP service for the protected request rate
 
-> **Accepted tradeoff — cache-hit timing.** A cached credential returns faster than an uncached one (which performs a full LDAP bind). This timing difference only reveals *cache state* (whether an exact `(username, password)` pair was authenticated recently); credential validity is already conveyed by the `200`/`401` status, and triggering a cache hit requires already knowing the full valid credential. No response jitter is added — it would penalize every legitimate authenticated request. Operators who must hide cache membership can set `cacheTtl: 0` to disable caching, and can stack the `RateLimit` plugin to throttle probing.
-
-> **Accepted tradeoff — per-request LDAP connection.** Each cache-miss authentication opens a new TCP (and optional TLS) connection to the LDAP server, runs `simple_bind`, and unbinds immediately. There is no connection pool, because LDAP `simple_bind` is session-rebinding (a successful bind mutates the connection's authenticated identity for the rest of that TCP session): a naive pool that hands sockets across users carries a real cross-identity-leak risk that is strictly worse than the ephemeral-port pressure it would relieve. For high-throughput deployments, keep `cacheTtl` non-zero (60–300 s recommended) so steady-state traffic is absorbed by the in-process cache, and stack `RateLimit` to bound cache-miss bursts. Setting `cacheTtl: 0` means **every** request opens an LDAP connection — only choose it when the LDAP server is sized for that load.
+> **Accepted tradeoff — per-request LDAP connection.** Each authentication opens a new TCP (and optional TLS) connection, runs `simple_bind`, and unbinds immediately. There is no connection pool because LDAP `simple_bind` changes the connection's authenticated identity; unsafe cross-user reuse is worse than the connection overhead.
 
 ## Related Documentation
 

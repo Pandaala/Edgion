@@ -1,0 +1,14 @@
+# Outlier detection for cb-alias. Independent gateway/app error counters:
+# gateway (502/503/504) threshold 3, app (>=500) threshold 10.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: cb-alias-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: cb-alias
+  outlierDetection:
+    consecutiveErrors: 10
+    consecutiveGatewayErrors: 3

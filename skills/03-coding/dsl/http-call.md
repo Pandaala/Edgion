@@ -1,103 +1,114 @@
-# DSL http.call — Implementation Guide
+# DSL `http.call` Implementation Guide
 
-## Overview
+`http.call(method, url, body [, timeout_ms [, headers]])` is an asynchronous outbound
+HTTP builtin. Its failures are intentionally split between runtime errors and a result
+map; scripts using a deny error policy must understand that distinction.
 
-`http.call(method, url, body [, timeout_ms [, headers]])` is an async builtin in EdgionDSL that lets scripts make outbound HTTP requests. It never raises a runtime error — all failures (timeout, SSRF block, bad scheme, network error) return `status = 0`.
+## Ownership and Key Files
 
-## Key files
+| File | Responsibility |
+|------|----------------|
+| `edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs` | `DslConfig` and HTTP limit/security fields |
+| `edgion-dsl/src/bytecode.rs`, `compiler/` | Builtin ID, bytecode, static compilation |
+| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | Argument validation, SSRF checks, request/result mapping |
+| `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime` and the permissive/guarded reqwest clients |
+| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | Async execution and panic isolation |
+| `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | Lock-in tests |
 
-| File | Role |
-|------|------|
-| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `call_builtin_http` + SSRF helpers |
-| `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime` struct + global `DSL_HTTP_CLIENT` |
-| `edgion-gateway/src/plugins/http/dsl/config.rs` | Config fields: `http_max_timeout_ms`, `http_max_response_body_bytes`, `http_block_private_ips` |
-| `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` | `OpCode::MakeMap(u16)`, `OpCode::IndexGet` |
-| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `MakeMap` handler, `IndexGet` handler (Map + List), async `execute` / `execute_safe` |
-| `edgion-gateway/src/plugins/http/dsl/lang/compiler/expr.rs` | `ExprKind::Index` → `OpCode::IndexGet` |
-| `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | Unit + integration tests |
+Gateway `dsl/config.rs` is a re-export, not the schema owner.
 
-## Return value shape
+## Return Shape
 
-```
+```text
 Map {
-  "status":  Int   // HTTP status code, or 0 on failure
-  "body":    Str   // Response body (truncated at min(httpMaxResponseBodyBytes, max_string_len))
-  "headers": Map   // Lowercase header name → last value for that name
+  "status":  Int
+  "body":    Str
+  "headers": Map
 }
 ```
 
-The body is first streaming-capped at `max_response_body_bytes`, then silently truncated to
-`max_string_len` (UTF-8 boundary aware) before being wrapped in `Value::Str`, so the effective
-cap is `min(httpMaxResponseBodyBytes, max_string_len)` (default `min(1 MiB, 8 KiB)` = 8 KiB).
-Why truncation rather than raising `StringTooLong` →
-[http-call body cap](../../04-review/dsl-builtins/http-call-body-truncate-to-max-string-len.md).
+Successful calls use the HTTP status. Network, timeout, and response-stream failures
+return status `0`, an empty body, and an empty header map. Response bodies are
+streaming-capped, then UTF-8-safely truncated to
+`min(httpMaxResponseBodyBytes, max_string_len)`.
 
-## DslRuntime fields
+The third argument accepts `Str`, `Nil`, or the opaque `Body` value obtained from
+`req.body`. A `Body` call takes an immutable logical snapshot at call start and pulls
+raw bytes from memory, spill files, and mutation segments without first materializing
+the complete body as `String` or `Bytes`. The snapshot length supplies the exact
+`Content-Length`; an empty `Body` therefore sends `Content-Length: 0`, while `Nil`
+attaches no request body.
 
-```rust
-pub struct DslRuntime {
-    pub max_timeout_ms: u64,            // from httpMaxTimeoutMs (default 5000)
-    pub max_response_body_bytes: usize, // from httpMaxResponseBodyBytes (default 1 MiB)
-    pub block_private_ips: bool,        // from httpBlockPrivateIps (default false)
-    // ... other fields
-}
-```
+## Errors That Do Not Return Status 0
 
-## Global HTTP client
+`call_builtin_http` raises `RuntimeError::ApiError` for invalid arity, malformed URL,
+unsupported scheme or method, a blocked IP-literal host, or
+caller-supplied `Content-Length` / `Transfer-Encoding` on an opaque `Body` call.
+Invalid timeout, body, or header-map value types raise `RuntimeError::TypeError`.
+Those errors flow through `DslErrorPolicy` (`Ignore`, `Deny`, or `DenyWith`); they
+are not result maps.
 
-`DSL_HTTP_CLIENT` is a `OnceLock<reqwest::Client>` initialized once with:
-- `redirect::Policy::limited(10)`
-- `pool_max_idle_per_host(4)`
-- No per-plugin timeout or redirect override — limits are enforced per-call in `call_builtin_http`.
+Opaque-Body availability, read, scan-budget, and request-size-limit failures raise the
+hard fail-close `RuntimeError::BodyAccess`, bypassing `DslErrorPolicy`. Network,
+timeout, response-body stream, and dial-time resolved-address rejection failures use
+the status-0 map. Preserve this split when changing validation or adding arguments.
 
-## SSRF protection
+## Runtime Limits
 
-`is_ssrf_blocked_ip_literal(host: &str) -> bool` in `builtins.rs`:
+`DslRuntime` receives these fields from `DslConfig`:
 
-1. Strips `%zone_id` suffix (IPv6 zone IDs).
-2. Strips `[` `]` brackets — reqwest's `url` crate returns IPv6 hosts as `[::1]`.
-3. Parses with `IpAddr::from_str`.
-4. Checks `is_private_v4` (loopback + private + link-local + unspecified) or IPv4-mapped IPv6 (`to_ipv4_mapped()`) or IPv6 fc00::/7 + fe80::/10.
+- `httpMaxTimeoutMs` (default 5000)
+- `httpMaxRequestBodyBytes` (default 1 MiB, explicit maximum 32 MiB)
+- `httpMaxResponseBodyBytes` (default 1 MiB)
+- `httpBlockPrivateIps` (default false)
 
-URL scheme validation runs before the IP check: only `http` and `https` are allowed; others return status 0 immediately.
+Call timeouts are clamped to the configured maximum. For an opaque `Body`, the effective
+request limit is the smaller of `httpMaxRequestBodyBytes` and the gateway's resolved
+physical request-body cap. Bytes actually fetched from the snapshot count against the
+VM's cumulative body-scan budget; unfetched bytes are refunded if the peer responds
+early or stops reading.
 
-## Async VM
+The shared `Value` representation is `Value::Map(Box<IndexMap<String, Value>>)`; its
+display/string conversion is `[map:<len>]`, and boxing preserves the `Value` size
+invariant.
 
-`execute()` and `execute_safe()` in `vm.rs` are `async fn`. The bridge from sync Pingora upstream filter to async VM uses `tokio::task::block_in_place`.
+## SSRF Boundary
 
-`execute_safe` wraps with `AssertUnwindSafe` + `catch_unwind` to prevent panics from propagating.
+All process-global HTTP clients disable environment proxy inheritance. `Str` and `Nil`
+calls follow at most 10 redirects. With private-IP blocking on, direct IP literals are
+checked before sending, while every hostname is resolved through `EgressResolver`; the
+resolver classifies the exact addresses handed to reqwest for dialing. Loopback, private,
+link-local, unspecified, IPv4-mapped IPv6, ULA, and IPv6 link-local destinations are
+blocked. Redirect hops use the same literal and dial-time DNS checks.
 
-## Value::Map
+Opaque `Body` calls never follow redirects because their pull stream is intentionally
+single-use; the 3xx response is returned to the script. This also avoids silently
+changing methods or replaying request bytes.
 
-- Type: `Value::Map(IndexMap<String, Value>)` (preserves insertion order).
-- `OpCode::MakeMap(n)`: pops `n` key-value pairs from the stack (reversed), builds map.
-- `OpCode::IndexGet`: handles both `List` (Int key → string element) and `Map` (Str key → Value | Nil).
-- `len()` builtin handles `Value::Map` → `Ok(Value::Int(m.len() as i64))`.
-- `to_string` on `Map` → `"[map]"`.
+The custom resolver closes the DNS-rebinding gap because reqwest dials the classified
+addresses rather than independently resolving the hostname again. Network-level egress
+controls remain recommended as defense in depth. Rejections of request-derived DSL
+destinations increment the canonical egress metric without emitting a WARN per address,
+which avoids client-driven log amplification.
 
-## Config YAML example
+## Example
 
 ```yaml
-spec:
-  requestPlugins:
-    - enable: true
-      type: Dsl
-      config:
-        name: "my-script"
-        source: |
-          let r = http.call("GET", "http://internal-svc/health", nil, 1000)
-          if r["status"] != 200 {
-            return deny(503, "backend down")
-          }
-        httpMaxTimeoutMs: 3000
-        httpMaxResponseBodyBytes: 65536
-        httpBlockPrivateIps: false
-        errorPolicy: deny
+type: Dsl
+config:
+  source: |
+    let r = http.call("GET", "https://status.example.com/health", nil, 1000)
+    if r["status"] != 200 {
+      return deny(503, "backend down")
+    }
+  httpMaxTimeoutMs: 3000
+  httpMaxRequestBodyBytes: 1048576
+  httpMaxResponseBodyBytes: 65536
+  httpBlockPrivateIps: true
+  errorPolicy: deny
 ```
 
-## Adding new tests
-
-Integration test config: `edgion-tests/integration/conf/EdgionPlugins/Dsl/24_EdgionPlugins_dsl-http-call.yaml`
-Test client: `edgion-tests/src/client/suites/edgion_plugins/dsl/dsl.rs` — see `test_http_call_success` (scenario 24).
-
-Use `resp.set_header()` in DSL test scripts when you need to assert on the result from the test client — `req.set_header()` only reaches the backend echo, not the test client response.
+Integration coverage lives in
+`edgion-tests/integration/conf/EdgionPlugins/Dsl/24_EdgionPlugins_dsl-http-call.yaml`
+and the DSL client suite. Use `resp.set_header()` when a test client must observe a
+computed value; `req.set_header()` changes only the upstream request.

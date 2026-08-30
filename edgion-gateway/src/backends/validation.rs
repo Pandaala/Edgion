@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use crate::backends::get_roundrobin_store;
-use edgion_resources::HTTPBackendRef;
+use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind};
 
 /// Validate that a given IP is a valid EndpointSlice address for one of the route's backend_refs.
 ///
@@ -18,6 +18,9 @@ pub fn validate_endpoint_in_route(
     route_namespace: &str,
 ) -> Result<(usize, u16), String> {
     for (idx, br) in route_backend_refs.iter().enumerate() {
+        if !is_direct_endpoint_backend_ref(br) {
+            continue;
+        }
         let ns = br.namespace.as_deref().unwrap_or(route_namespace);
         let service_key = format!("{}/{}", ns, br.name);
         let br_port = br.port.map(|p| p as u16);
@@ -34,6 +37,10 @@ pub fn validate_endpoint_in_route(
     }
 
     Err(format!("IP {} not found in any backend_ref EndpointSlices", target_ip))
+}
+
+fn is_direct_endpoint_backend_ref(backend_ref: &HTTPBackendRef) -> bool {
+    backend_ref.ref_denied.is_none() && backend_ref.backend_kind() == HTTPBackendRefKind::Service
 }
 
 /// Check if a given IP:port exists in a Service's EndpointSlices.
@@ -103,5 +110,28 @@ mod tests {
         assert!(check_endpoint_slice_with_port(&slice, &ip_valid, 8080));
         assert!(!check_endpoint_slice_with_port(&slice, &ip_valid, 9090)); // Wrong port
         assert!(!check_endpoint_slice_with_port(&slice, &ip_invalid, 8080)); // Wrong IP
+    }
+
+    #[test]
+    fn denied_service_refs_are_not_direct_endpoint_candidates() {
+        let mut backend_ref = HTTPBackendRef {
+            name: "cross-namespace".to_string(),
+            namespace: Some("other-ns".to_string()),
+            port: Some(8080),
+            weight: Some(1),
+            group: None,
+            kind: Some("Service".to_string()),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        };
+        assert!(is_direct_endpoint_backend_ref(&backend_ref));
+
+        backend_ref.ref_denied = Some(edgion_resources::resources::common::RefDenied {
+            target_namespace: "other-ns".to_string(),
+            target_name: "cross-namespace".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
+        assert!(!is_direct_endpoint_backend_ref(&backend_ref));
     }
 }

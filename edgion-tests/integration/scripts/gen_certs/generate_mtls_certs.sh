@@ -49,9 +49,10 @@ BACKEND_TLS_SECRET_DIR="$SECRET_OUTPUT_ROOT/HTTPRoute/Backend/BackendTLS"
 HEADER_CERT_AUTH_SECRET_DIR="$SECRET_OUTPUT_ROOT/EdgionPlugins/HeaderCertAuth"
 GATEWAY_BACKEND_TLS_SECRET_DIR="$SECRET_OUTPUT_ROOT/Gateway/TLS/BackendTLSGatewayCert"
 FV_SECRET_DIR="$SECRET_OUTPUT_ROOT/Gateway/FrontendValidation"
+EXTPROC_SECRET_DIR="$SECRET_OUTPUT_ROOT/EdgionPlugins/ExtProc"
 
 mkdir -p "$CERTS_DIR"
-mkdir -p "$MTLS_SECRET_DIR" "$BACKEND_TLS_SECRET_DIR" "$HEADER_CERT_AUTH_SECRET_DIR" "$GATEWAY_BACKEND_TLS_SECRET_DIR" "$FV_SECRET_DIR"
+mkdir -p "$MTLS_SECRET_DIR" "$BACKEND_TLS_SECRET_DIR" "$HEADER_CERT_AUTH_SECRET_DIR" "$GATEWAY_BACKEND_TLS_SECRET_DIR" "$FV_SECRET_DIR" "$EXTPROC_SECRET_DIR"
 
 all_required_certs_exist() {
     local cert_files=(
@@ -174,6 +175,30 @@ kind: Secret
 metadata:
   name: backend-client-cert
   namespace: edgion-test
+type: kubernetes.io/tls
+data:
+  tls.crt: $client_cert_b64
+  tls.key: $client_key_b64
+EOF
+}
+
+write_ext_proc_client_secret() {
+    if [ ! -f "$CERTS_DIR/valid-client.crt" ] || [ ! -f "$CERTS_DIR/valid-client.key" ]; then
+        log_error "Missing valid client cert/key for ExtProc mTLS Secret generation."
+        return 1
+    fi
+
+    local client_cert_b64
+    local client_key_b64
+    client_cert_b64=$(base64 < "$CERTS_DIR/valid-client.crt" | tr -d '\n')
+    client_key_b64=$(base64 < "$CERTS_DIR/valid-client.key" | tr -d '\n')
+
+    cat > "$EXTPROC_SECRET_DIR/Secret_edgion-default_ext-proc-client.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ext-proc-client
+  namespace: edgion-default
 type: kubernetes.io/tls
 data:
   tls.crt: $client_cert_b64
@@ -447,6 +472,7 @@ fi
 
 write_mtls_suite_secrets
 write_backend_tls_client_secret
+write_ext_proc_client_secret
 write_gateway_backend_tls_client_secret
 write_header_cert_auth_ca_secret
 write_frontend_validation_secrets
@@ -459,6 +485,8 @@ log_info "  - $MTLS_SECRET_DIR/Secret_edge_ca-chain.yaml"
 log_info "  - $MTLS_SECRET_DIR/Secret_edge_mtls-server.yaml"
 log_info "BackendTLS client cert secret:"
 log_info "  - $BACKEND_TLS_SECRET_DIR/ClientCert_edge_backend-client-cert.yaml"
+log_info "ExtProc client cert secret:"
+log_info "  - $EXTPROC_SECRET_DIR/Secret_edgion-default_ext-proc-client.yaml"
 log_info "Gateway backend TLS client cert secret:"
 log_info "  - $GATEWAY_BACKEND_TLS_SECRET_DIR/Secret_edge_gateway-client-cert.yaml"
 log_info "HeaderCertAuth CA secret:"

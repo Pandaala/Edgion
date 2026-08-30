@@ -25,19 +25,22 @@ The `tasks/` layout has two independent axes:
 - Acceptance happens via a GitHub PR. There is no separate `done/` directory; completed work is archived by git history once the branch is merged.
 
 **Review-batch axis** — global review passes:
-- `tasks/review-N-<slug>/` (e.g., `review-2/`, `review-dead-code/`) — one file per finding from a global review pass; consumed by `04-review/fix-review-issue.skill`; finding files are deleted as each issue is closed.
+- `tasks/review-<batch-or-slug>/` — one file per finding from a global review pass; consumed by `04-review/fix-review-issue.skill`; finding files are deleted as each issue is closed.
 
 Task granularity is flexible: a single file `<task-name>.md` or a separate directory works. Use kebab-case for names (e.g., `log-tracing-optimization`); for complex tasks (multi-document set), use a directory.
 
 ## Task profiles
 
-Real tasks come in four shapes. Pick the closest profile when creating a new task folder; the prescribed-document set below applies only to `feature` tasks.
+Tasks use four supported shapes. Pick the closest profile when creating a new
+task; the prescribed-document set below applies only to `feature` tasks. Names
+in the Shape column are illustrative unless the path is explicitly identified
+as a current task.
 
-| Profile | Required files | Optional files | When to use | Example |
+| Profile | Required files | Optional files | When to use | Shape |
 |---------|----------------|----------------|-------------|---------|
-| `feature` | `<name>.md` (Meta + scope) | Full 7-doc set: `00-context.md` ... `07-changelog.md` | Multi-module changes, new features, design needed | `tasks/todo/doc-standards-alignment/` |
-| `investigation` | `README.md` | `01-...07-` numbered reports; optional `issues/` pool | Pure research, competitor analysis, scoping work | `tasks/todo/dsl-vm-rhai-research/` |
-| `review-batch` | `INDEX.md` | One file per finding: `<area>-NN-<slug>.md` | Output of a global review pass; consumed by `04-review/fix-review-issue.skill` | `tasks/review-2/`, `tasks/review-dead-code/` |
+| `feature` | `<name>.md` (Meta + scope) | Full 7-doc set: `00-context.md` ... `07-changelog.md` | Multi-module changes, new features, design needed | `tasks/todo/<feature-name>/` |
+| `investigation` | `README.md` | `01-...07-` numbered reports; optional `issues/` pool | Pure research, competitor analysis, scoping work | `tasks/todo/<investigation-name>/` |
+| `review-batch` | `INDEX.md` | One file per finding: `<area>-NN-<slug>.md` | Output of a global review pass; consumed by `04-review/fix-review-issue.skill` | `tasks/review-<batch-or-slug>/` |
 | `docs` / `single-file` | `<name>.md` | none | Small docs alignment, single-feature TODO, hotfix tracking | `tasks/pending/cel-validation-rules.md` |
 
 The phase pruning table below applies primarily to `feature` profile. For `investigation`, skip phases 4 (Test) and 5 (Review) — the deliverable is the report, not code. For `review-batch`, the entire batch is itself a workflow output; no per-finding phases.
@@ -146,8 +149,8 @@ tasks/pending/<task-name>/
 |-----------|----------------|----------|
 | New feature | All | — |
 | Bug fix | 1, 3, 4 | 2 (if the fix is obvious), 5 |
-| Refactor | 1, 2, 3, 5 | 4 (if no external change) |
-| Docs only | 3 | 1, 2, 4, 5 |
+| Refactor | 1, 2, 3, 4, 5 | New behavioral tests may be unnecessary, but compile/lint and relevant regression verification are still required |
+| Docs only | 3, 4 | 1, 2, 5; verification means relevant link, structure, and documentation checks rather than Rust tests |
 | Config change | 1, 3, 4 | 2, 5 |
 | Investigation-only | 1, 2 | 3 (Implementation), 4 (Test) ✗, 5 (Review) ✗ — deliverable is the report |
 | Hotfix | 1, 3, 4, 5 | 2 may collapse into 1 if the fix is self-contained |
@@ -159,6 +162,7 @@ tasks/pending/<task-name>/
 3. **Context first**: before entering the implementation phase, `00-context.md` should be ready so AI has paths to follow
 4. **Subtask threshold**: when changes are estimated to exceed 3 modules or 5 files, create `03-subtasks.md` to break them down
 5. **Record issues immediately**: write blockers into `05-issues.md` as soon as they appear; don't defer
+6. **Write task content in English**: `tasks/` is not an exception to the repository's English-only rule; do not copy the language of legacy task files
 
 ## Status values
 
@@ -172,8 +176,12 @@ tasks/pending/<task-name>/
 
 - [ ] Follows `skills/03-coding/00-logging-and-tracing-ids.md`
 - [ ] Follows `skills/03-coding/01-log-safety.md`
-- [ ] `cargo fmt --all -- --check` passes
-- [ ] `cargo clippy --all-targets` is warning-free
+- [ ] `cargo fmt --all` has been applied
+- [ ] `cargo check --workspace --all-targets` passes
+- [ ] `cargo clippy --workspace --all-targets` is warning-free
+- [ ] `python3 cicd/checks/validate_agent_docs.py` passes
+- [ ] `python3 cicd/checks/check_ssa_force.py` passes
+- [ ] Targeted tests appropriate to the change pass; run `cargo test --all` only when the user explicitly requests it
 
 ## Task-completion checklist
 
@@ -183,7 +191,8 @@ tasks/pending/<task-name>/
 | Review findings | `skills/04-review/` | Project-specific reusable findings |
 | User docs | `docs/en/`, `docs/zh-CN/` | User-visible behavior change |
 | Architecture decision | `skills/01-architecture/` | System-design change |
-| New resource/plugin docs | `docs/*/dev-guide/` | New resource or plugin added |
+| New resource/plugin usage docs | `docs/*/user-guide/` or `docs/*/ops-guide/` | User-visible resource or plugin added |
+| Contributor extension guide | `docs/*/dev-guide/` | Contributor-facing implementation workflow changed |
 
 ## Default workflow
 
@@ -194,4 +203,4 @@ tasks/pending/<task-name>/
 5. Advance through the lifecycle phases, creating documents on demand
 6. Write blockers into `05-issues.md` as soon as they appear
 7. Update the document index and status in the main task file as work progresses
-8. Open a GitHub PR for acceptance when the implementation is ready; the branch is archived in git history once merged
+8. Hand off a review-ready change and ask for explicit authorization before any commit, push, or GitHub PR creation; merged work is archived in git history

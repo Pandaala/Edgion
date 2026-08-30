@@ -154,19 +154,24 @@ Authorization: Bearer <admin-token>
 ```json
 {
   "ts": 1767089146376,
-  "client-addr": "192.168.1.20",
-  "host": "api.example.com",
-  "path": "/health",
-  "status": 200,
+  "request_info": {
+    "direct_peer_ip": "192.168.1.20",
+    "host": "api.example.com",
+    "path": "/health",
+    "status": 200
+  },
   "match_info": { },
   "backend_context": { },
-  "plugin_logs": [ ],
-  "info": [ ],
-  "errors": [ ]
+  "genai": { },
+  "stage_logs": [ ],
+  "diagnostics": [
+    { "kind": "info", "code": "AcmeChallengeServed" },
+    { "kind": "error", "code": "BackendRequestTimeoutRetry" }
+  ]
 }
 ```
 
-请求作用域字段（`client-addr`、`host`、`path`、`status` 等）直接平铺在顶层对象中；路由、后端和插件信息为嵌套结构。
+请求作用域字段（`direct_peer_ip`、`host`、`path`、`status` 等）嵌套在 `request_info` 对象内、下沉一层；路由、后端和插件信息与它一起并列在顶层。
 
 ## 字段参考
 
@@ -175,25 +180,28 @@ Authorization: Bearer <admin-token>
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `ts` | Integer | 条目时间戳，纪元毫秒 |
+| `request_info` | Object | 请求作用域字段——见下方[请求字段](#请求字段) |
 | `match_info` | Object | 匹配的路由标识（无路由匹配时省略） |
 | `backend_context` | Object | 后端标识和上游时序（无后端时省略/`null`） |
-| `plugin_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
-| `info` | Array\<String\> | 网关内部信息事件（为空时省略） |
-| `errors` | Array\<String\> | 处理过程中捕获的错误原因（为空时省略） |
+| `genai` | Object | 最终 GenAI 用量与有界 per-attempt 核算（非 AI 请求省略） |
+| `stage_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
+| `diagnostics` | Array\<Object\> | 按发生顺序记录的请求诊断项 `{kind, code}`；`kind` 为 `info` 或 `error`（为空时省略） |
+| `diagnostics_full` | Boolean | 有诊断项因有界缓冲区已满而被丢弃时为 `true`（否则省略） |
+| `ext` | Object | 来自 [`AccessLogExtern`](#扩展日志accesslogextern) 的操作员声明字段（未采集到任何字段时省略） |
 
 ### 请求字段
 
-直接平铺在顶层对象中。每个字段不存在时省略。
+嵌套在顶层 `request_info` 对象内、下沉一层（见上方[顶层字段](#顶层字段)），而非平铺在条目顶层。可选字段不存在时省略；`status` 始终存在，未知的最终结果记为 `0`。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `client-addr` | String | 客户端 TCP 连接地址 |
+| `direct_peer_ip` | String | 下游物理传输对端（`DirectPeerIp`） |
 | `client-port` | Integer | 客户端 TCP 端口 |
-| `remote-addr` | String | 代理解析后的真实客户端 IP（如来自 `X-Forwarded-For`） |
+| `remote_ip` | String | 经过适用的 PROXY/RealIp 解析后的客户端 IP（`RemoteIp`） |
 | `x-trace-id` | String | 每请求追踪 ID；客户端传递相同值可关联日志 |
 | `host` | String | 请求 `Host` 头 |
 | `path` | String | 规范化后的请求路径 |
-| `status` | Integer | 响应状态码 |
+| `status` | Integer | 最终下游 HTTP 状态，与 Nginx/OpenResty `$status` 语义一致；`0` 表示未观察到最终状态 |
 | `x-forwarded-for` | String | `X-Forwarded-For` 头值（存在时） |
 | `discover_protocol` | String | 自动检测的协议。示例：`grpc`、`websocket` |
 | `grpc_service` | String | gRPC 服务名（仅 gRPC 请求） |
@@ -237,12 +245,38 @@ Authorization: Bearer <admin-token>
 
 无后端使用时（路由未匹配，或请求被插件短路），`backend_context` 为 `null` 或省略。
 
-### `plugin_logs` 字段
+### `genai` 字段
 
-`plugin_logs` 是阶段组的数组；每个组包含一个执行阶段的每插件日志。
+最终请求汇总包含 `provider`、`model`、`input_tokens`、`output_tokens`、可选的 cache token 计数与
+`estimated_cost_usd`、`streaming`、`usage_estimated`、可选的 `quota_status` 与 `ttft_ms`，以及下方的
+per-attempt 字段。`attempts` 最多包含八次已派发尝试，其序列化段上限为 8 KiB。当为遵守上述任一边界而
+省略后续汇总时，会出现 `attempts_truncated: true`。
+
+| `attempts[]` 字段 | 类型 | 说明 |
+|--------------------|------|------|
+| `number` | Integer | 从 1 起的已派发尝试序号 |
+| `service` | String | 有界的带 Namespace 的 EdgionBackend 键（`namespace/name`） |
+| `provider` | String | 固定提供商枚举 |
+| `credential` | String | 非敏感配置凭据别名；绝不是提供商凭据或 Secret 数据 |
+| `status` | Integer | 收到时的提供商 HTTP 状态 |
+| `failure` | String | 固定类别：`retryable_status`、`ambiguous_transport`、`backend_request_timeout` 或 `incomplete_response`。`incomplete_response` 表示**提供商**提前中断；由网关自身结束的流（超配额，或配额已无法执行）不是提供商故障，不带 `failure`，请改看其错误诊断 |
+| `retry_after_seconds` | Integer | 接受的有界 Retry-After 冷却，单位秒 |
+| `ttft_ms` | Integer | 最终成功尝试到达首个非空响应体分片的时间 |
+| `usage_source` | String | `reported` 或 `estimated` |
+| `input_tokens` | Integer | 该次尝试的上报或有界估算输入 token |
+| `output_tokens` | Integer | 该次尝试的上报或有界估算输出 token |
+| `estimated_cost_usd` | String | 配置定价时的估算尝试成本 |
+
+账本从不存储提供商 URL、解析后的地址、Secret 值、请求/响应体、提供商错误文本、prompt、completion
+或工具参数。对派发后的歧义结果，Redis 可能保守地保留完整的「输入 + 最大输出」预留直至窗口过期。
+该预留用于保护限流；它与此处记录的持久观测/有界估算用量不同，也不表示已消耗全部预留 token。
+
+### `stage_logs` 字段
+
+`stage_logs` 是阶段组的数组；每个组包含一个执行阶段的每插件日志。
 
 ```json
-"plugin_logs": [
+"stage_logs": [
   {
     "stage": "request_filters",
     "logs": [
@@ -258,7 +292,8 @@ Authorization: Bearer <admin-token>
 | `stage` | String | 执行阶段。示例：`request_filters`、`upstream_response_filters` |
 | `logs[].name` | String | 插件名称 |
 | `logs[].time_cost` | Integer | 插件执行时间（**微秒**） |
-| `logs[].log` | Array\<String\> | 插件输出的日志行 |
+| `logs[].cond_skip` | String | 插件被跳过的原因（`skip:<type>,<detail>` 或 `!run:<type>,<detail>`）。格式不变；插件实际执行时省略。 |
+| `logs[].log` | Array\<String\> | 插件输出的日志行。复合条件范围（超过一个原子叶子）还会为命中叶子写入不含值且带稳定集合位置的描述符；零个或一个叶子的范围会抑制这条重复的仅匹配信号。`cond_skip`、命名分组归因、最终策略结果与错误不受影响。body / 染色求值保持静默。 |
 | `logs[].log_full` | Boolean | 仅在插件日志缓冲区溢出并丢弃条目时出现且为 `true` |
 
 常见插件日志行：
@@ -273,14 +308,140 @@ Authorization: Bearer <admin-token>
 
 `log_full: true` 表示插件输出的日志数据超过了每插件缓冲区的容量，后续行被丢弃。将其视为需要精简插件日志输出的提示，而非错误。
 
-### `errors` 取值
+### `diagnostics` 取值
 
-| 值 | 说明 |
-|----|------|
-| `RouteNotFound` | 请求无匹配路由 |
-| `XffHeaderTooLong` | `X-Forwarded-For` 头超过允许长度 |
-| `BackendNotFound` | 后端服务无法解析 |
-| `UpstreamConnectError` | 上游连接失败 |
+诊断项保留发生顺序及重复项。`error` 表示请求过程中遇到过失败、拒绝或降级，但不等于必须告警，
+因为后续重试可能成功。告警应按具体 `code` 制定，并可结合最终状态和聚合频率。诊断码没有数字形式，
+也不隐含 HTTP 状态。
+
+| Kind | Code | 说明 |
+|------|------|------|
+| `error` | `RouteNotFound` | 请求无匹配路由 |
+| `error` | `XffHeaderTooLong` | `X-Forwarded-For` 头超过允许长度 |
+| `error` | `BackendRequestTimeoutRetry` | 某次上游尝试达到单次超时后发生重试 |
+| `info` | `AcmeChallengeServed` | 网关在本地返回 ACME HTTP-01 挑战响应 |
+
+## 扩展日志：AccessLogExtern
+
+access log 出厂时是固定字段集。若要追加路由元数据、请求/响应字段或插件派生值，唯一支持的方式是声明 `AccessLogExtern`。它取代了此前五个互不相关的旧载体（路由注解标签投影、JSON 白名单注解、逗号分隔的 ctx-key 注解、以及 CtxSet 与注解之间的隐式耦合），这些旧机制已全部删除，不保留别名。
+
+### 它是声明，不是插件
+
+`AccessLogExtern` 条目从不作为请求过滤器执行。它位于 `EdgionPlugins.spec.accessLogExtern`——一个专用数组，不属于任何请求/响应插件阶段——仅在写入日志行时才被读取。正因如此，即使响应根本没有经过任何插件，`AccessLogExtern` 字段依然会出现：未匹配路由的 404、421 SNI 不匹配、400 系列、ACME 挑战响应，或被短路的 CORS 预检。
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: audit-fields
+  namespace: default
+spec:
+  accessLogExtern:
+    - key: tenant        # 日志条目 `ext` 块内的字段名
+      from: ctx           # 来源类型
+      name: tenant_id     # 该来源内的 key
+    - key: ua
+      from: header
+      name: user-agent
+```
+
+每个条目仅为一个字段声明一个来源——不存在把多个值组合进一个字段的模板语法。若需要组合值（如 `"{tenant}:{tier}"`），先用 `CtxSet` 插件计算一次，再用 `from: ctx` 记录这个 ctx 变量。在 `AccessLogExtern` 层做组合的方案已被评估并否决：组合后的字符串没有单一的来源归属，逐字段的脱敏无法正确应用于它。
+
+### 来源
+
+| `from` | 读取内容 | 是否脱敏 |
+|---|---|---|
+| `routeLabel` | 匹配路由（HTTPRoute/GRPCRoute）的 `metadata.labels` 键 | 从不脱敏 |
+| `routeAnnotation` | 匹配路由的 `metadata.annotations` 键（`kubectl.kubernetes.io/*` 与 `edgion.io/*` 键会在准入时上报到 `Accepted=False`，并在网关加载该资源时被丢弃——见下方硬黑名单） | 从不脱敏 |
+| `header` | 请求头（重复头取第一个值；非 UTF-8 值视为不存在） | 除非白名单，否则脱敏 |
+| `query` | 客户端实际发送的 query 字符串，冻结于请求入口——不受后续 rewrite 影响 | 除非白名单，否则脱敏 |
+| `cookie` | 请求 cookie（`set-cookie`/响应 cookie 不可达——见下方硬黑名单） | 除非白名单，否则脱敏 |
+| `respHeader` | 实际写出的响应头；上游从未响应时（连接失败、超时）不存在 | 除非白名单，否则脱敏 |
+| `ctx` | 插件设置的上下文变量（`CtxSet`、DSL `ctx.set`、webhook `KeyGet` 结果等）——读取时机在每个阶段的每个生产者写入之后 | 除非白名单，否则脱敏 |
+
+有一小部分名称在任何脱敏设置下都不可作为来源。命名它们会在 `EdgionPlugins` 资源的 `Accepted=False` 状态条件中被报告；与该报告相互独立，网关在加载该资源时还会丢弃该字段，因此它永远不会真正被投影进日志行：
+
+| 来源 | 被禁止的名称 |
+|---|---|
+| `header` / `respHeader` | `authorization`、`proxy-authorization`、`cookie`、`set-cookie`、`x-api-key`、`api-key`、`apikey`、`x-auth-token`、`authentication`、`x-amz-security-token`、`www-authenticate`、`proxy-authenticate` |
+| `ctx` | `jwt_claims`、`oidc_claims`、`jwe_payload` |
+| `routeAnnotation` | `kubectl.kubernetes.io/` 或 `edgion.io/` 前缀下的任何键 |
+
+### 字段落在哪里
+
+所有采集到的字段进入同一个嵌套的 `ext` 对象，仅嵌套一层，值始终渲染为字符串：
+
+```json
+{"ts": 1752633600000, "request_info": {"host": "api.example.com", "path": "/users"}, "ext": {"tenant": "acme", "ua": "***"}}
+```
+
+若该请求未采集到任何字段，`ext` 会从这一行整体省略。
+
+### 挂载层级
+
+`AccessLogExtern` 最多可在三个层级声明，按以下顺序生效——同名 key 冲突时后声明的层级覆盖先声明的层级：
+
+| 顺序 | 层级 | 声明位置 |
+|---|---|---|
+| 1 | GatewayClass 全局 | `EdgionGatewayConfig.spec.globalPluginsRef` |
+| 2 | Gateway | `Gateway` 上的 `edgion.io/edgion-plugins` 注解 |
+| 3 | Route | HTTPRoute / GRPCRoute 上指向某个 `EdgionPlugins` 的 `ExtensionRef` filter |
+
+**全局审计字段应放在第 1 层。** 第 2 层（Gateway 注解）在任何未匹配到路由的响应上都是空的——404、421、400 系列、ACME、gRPC `UNIMPLEMENTED`——因为一个请求本应使用的 Gateway 只有在路由匹配解析*之后*才知道。第 1 层直接从 proxy service 解析，因此在包括这些响应在内的每一条响应上都存在。这是预期行为而非缺陷：在匹配之前就赋值 Gateway 意味着要在一个监听器可能服务的多个 Gateway 之间猜测。
+
+**给全局层的 key 加上有辨识度的前缀**（例如用 `gw_tenant` 而非 `tenant`），因为冲突解决是静默的：如果某个路由层字段恰好与全局字段同名，路由的值会胜出，而日志不会给出任何提示表明一个全局字段被覆盖了。
+
+### 脱敏
+
+`routeLabel` 与 `routeAnnotation` 的值从不脱敏——它们是操作员在路由自身元数据中编写的配置，而非请求数据。其余所有来源默认脱敏，除非该具体 key 在 `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` 中被列入白名单（按来源类型分——`header`、`respHeader`、`query`、`cookie`、`ctx`）。白名单 schema 与默认条目见 [EdgionGatewayConfig](../configuration/edgion-gateway-config.md)。
+
+白名单**未命中仍会输出该字段**——是脱敏而非丢弃——因此操作员看到的是 `"ext":{"session":"***"}`，能明确知道该值已解析出来只是未加入白名单，而不是面对一个缺失的字段去猜测：究竟是来源没有值、字段名写错了，还是一个被禁止的名称已在 `Accepted=False` 中上报、并在网关加载该资源时被丢弃了。
+
+脱敏渲染遵循与内置敏感字段相同的全局开关 `access_log_sensitive.mode`（见[网关配置 → access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)）。**从本版本起 `access_log_sensitive.mode` 默认值为 `replace`**，因此开箱即可、无需任何额外配置：`ext` 字段只要未加入白名单就会渲染为 `***`；而 `path`、`direct_peer_ip`、`remote_ip`、`x-forwarded-for`、`sni`、`request_uri` 这六个内置字段则是**无条件**渲染为 `***`——白名单对这六个内置字段不生效，它们始终经由 `masked::serialize` 脱敏，与 `unmaskedKeys` 无关。
+
+**不存在既保留 `path` 可读、又对 `ext` 中的 cookie 脱敏的配置。** `mode: off` 会让白名单失效（一切都渲染为明文，包括 `ext`）；`mode: wrap` 会把原始值写进网关自己的本地日志文件/stdout，用 `<E>value</E>` 标记以便下游管道在入库前剥离——但原始值仍留在本地磁盘上。如果需要可读的 path，请在这两种权衡中明确二选一；不存在第三种既保留内置字段明文又能脱敏 `ext` 的配置。
+
+### 已知限制（设计如此，非缺陷）
+
+- **`redirect_http` 监听器（纯 HTTP→HTTPS 重定向服务）永不输出 `ext`。** 它使用一套独立的极简日志 schema，根本没有 `ext` 字段——该路径上没有插件链可供声明挂载。
+- **gRPC-web/WebSocket 连接建立时产生的第二条 access log 行不带 `ext`**——只有该请求的最终日志行才带。这是正确行为：采集器只针对最终那条日志行运行。
+- **`debug-access-log` 插件写入的 `X-Debug-Access-Log` 响应头故意永不携带 `ext`。** 若填充它，将把操作员声明的字段值回传给发起请求的客户端。
+
+### 完整示例
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: default-config
+spec:
+  accessLogExtern:
+    unmaskedKeys:
+      header: [user-agent, origin, content-type, content-length, accept, x-request-id]
+      ctx: [tenant_id]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-route
+  namespace: production
+spec:
+  rules:
+    - backendRefs: [{ name: api-service, port: 8080 }]
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: audit-fields
+```
+
+```json
+{"ts": 1752633600000, "request_info": {"host": "api.example.com", "path": "/users", "status": 200},
+ "ext": {"tenant": "acme", "ua": "Mozilla/5.0"}}
+```
+
+上方[声明](#它是声明不是插件)的 `audit-fields` 资源所定义的两个字段在此都渲染为明文：`ua`（`from: header, name: user-agent`）被 `unmaskedKeys.header` 加入白名单，`tenant`（`from: ctx, name: tenant_id`）被 `unmaskedKeys.ctx` 加入白名单。
 
 ## 特殊字段
 
@@ -353,13 +514,15 @@ access_log_options:
 ```json
 {
   "ts": 1767089146376,
-  "client-addr": "192.168.1.20",
-  "client-port": 54882,
-  "remote-addr": "192.168.1.20",
-  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-  "host": "test.example.com",
-  "path": "/health",
-  "status": 200,
+  "request_info": {
+    "direct_peer_ip": "192.168.1.20",
+    "client-port": 54882,
+    "remote_ip": "192.168.1.20",
+    "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
+    "host": "test.example.com",
+    "path": "/health",
+    "status": 200
+  },
   "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
   "backend_context": {
     "name": "api-service",
@@ -376,9 +539,11 @@ access_log_options:
 ```json
 {
   "ts": 1767089146377,
-  "host": "api.example.com",
-  "path": "/api/data",
-  "status": 200,
+  "request_info": {
+    "host": "api.example.com",
+    "path": "/api/data",
+    "status": 200
+  },
   "backend_context": {
     "name": "api-service",
     "namespace": "production",
@@ -395,10 +560,12 @@ access_log_options:
 ```json
 {
   "ts": 1767089149015,
-  "host": "wrong-hostname.example.com",
-  "path": "/test",
-  "status": 404,
-  "errors": ["RouteNotFound"],
+  "request_info": {
+    "host": "wrong-hostname.example.com",
+    "path": "/test",
+    "status": 404
+  },
+  "diagnostics": [{ "kind": "error", "code": "RouteNotFound" }],
   "backend_context": null
 }
 ```
@@ -408,12 +575,14 @@ access_log_options:
 ```json
 {
   "ts": 1767089148470,
-  "host": "grpc.example.com",
-  "path": "/test.TestService/SayHello",
-  "status": 200,
-  "discover_protocol": "grpc",
-  "grpc_service": "test.TestService",
-  "grpc_method": "SayHello",
+  "request_info": {
+    "host": "grpc.example.com",
+    "path": "/test.TestService/SayHello",
+    "status": 200,
+    "discover_protocol": "grpc",
+    "grpc_service": "test.TestService",
+    "grpc_method": "SayHello"
+  },
   "backend_context": {
     "name": "grpc-service",
     "namespace": "production",
@@ -428,16 +597,16 @@ access_log_options:
 
 ```bash
 # 所有 4xx 响应
-cat logs/edgion_access.log | jq 'select(.status >= 400 and .status < 500)'
+cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
 
 # 按上游首字节时间排序最慢的请求
-cat logs/edgion_access.log | jq -r '[.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
+cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
 # 耗时超过 100 微秒的插件执行
-cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
+cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # 端到端追踪一个请求
-cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
+cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
 ```
 
 重点关注的字段：
@@ -445,7 +614,7 @@ cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a
 - `ht`（首字节时间）：后端首字节时间；值高说明后端延迟高。
 - `ct`（连接时间）：值高说明网络或连接池问题。
 - `et`（总耗时）：每次尝试的总时间，含重试。
-- `plugin_logs[].time_cost`：插件开销（微秒）。
+- `stage_logs[].time_cost`：插件开销（微秒）。
 - `log_full: true`：插件日志缓冲区溢出。
 
 ## 常见问题
@@ -464,7 +633,7 @@ cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a
 
 ### Q4：请求被插件拒绝了——看哪里？
 
-**A**：查看 `plugin_logs`。拒绝插件的 `log` 数组通常包含原因（例如 BasicAuth 的 `Auth failed` 或 Cors 的 `Origin rejected`）。当插件短路请求时，`backend_context` 通常为 `null`。
+**A**：查看 `stage_logs`。拒绝插件的 `log` 数组通常包含原因（例如 BasicAuth 的 `Auth failed` 或 Cors 的 `Origin rejected`）。当插件短路请求时，`backend_context` 通常为 `null`。
 
 ### Q5：如何获取某个路由的更详细插件诊断？
 

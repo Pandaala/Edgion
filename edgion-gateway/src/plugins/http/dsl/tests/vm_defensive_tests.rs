@@ -1,8 +1,34 @@
 //! Tests that the VM's defensive error paths fire correctly when hand-crafted
 //! bytecode bypasses the Validator.
 
-use super::super::lang::bytecode::{Constant, OpCode, BYTECODE_VERSION};
+use super::super::lang::bytecode::{Constant, JsonSelectEntry, OpCode, BYTECODE_VERSION};
 use super::*;
+
+#[test]
+fn test_vm_handcrafted_body_hmac_stack_underflow_is_safe() {
+    let script = CompiledScript {
+        version: BYTECODE_VERSION,
+        code: vec![OpCode::BodyHmacSha256, OpCode::ReturnNext],
+        constants: vec![],
+        local_count: 0,
+        max_loop_depth: 0,
+        source: None,
+        source_map: None,
+    };
+    let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+    let mut session = MockPluginSession::new();
+    let mut log = PluginLog::new("test");
+    let runtime = DslRuntime::default();
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session as &mut dyn PluginSession, &mut log, &runtime));
+    assert!(matches!(
+        result,
+        Err(RuntimeError::Internal { ref message }) if message == "stack underflow"
+    ));
+}
 
 /// A hand-crafted script with LoadConst(0) pointing at a Regex constant bypasses
 /// the Validator and reaches the VM. The VM must return RuntimeError::Internal,
@@ -159,4 +185,49 @@ fn test_vm_loadconst_out_of_bounds_returns_internal_error() {
         "expected out-of-bounds error, got: {}",
         err
     );
+}
+
+#[test]
+fn test_vm_rejects_malformed_json_select_plans_without_validator() {
+    for (entries, expected) in [
+        (vec![], "validated JSON select plan is empty"),
+        (
+            vec![
+                JsonSelectEntry {
+                    name: "duplicate".to_string(),
+                    path: "$.first".to_string(),
+                },
+                JsonSelectEntry {
+                    name: "duplicate".to_string(),
+                    path: "$.second".to_string(),
+                },
+            ],
+            "validated JSON select output name is duplicated",
+        ),
+        (
+            vec![JsonSelectEntry {
+                name: "value".to_string(),
+                path: "$.*".to_string(),
+            }],
+            "invalid validated JSON select path",
+        ),
+    ] {
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::JsonSelect(0), OpCode::ReturnNext],
+            constants: vec![Constant::JsonSelect(entries)],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let error = match Vm::new(script, VmLimits::default()) {
+            Ok(_) => panic!("malformed JSON select plan unexpectedly initialized"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(expected),
+            "expected {expected:?}, got: {error}"
+        );
+    }
 }

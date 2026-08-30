@@ -138,3 +138,99 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 9. IP and path in one group
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/ip-and-path
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-ip-and-path
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 10. ipRefs in a RequestRestriction group
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/iprefs-group
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-iprefs-group
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 11. entry-level conditions.run ipRefs
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/iprefs-run
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-iprefs-run
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 12. RequestRestriction HMAC (resolved credentials)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/rr-hmac
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-hmac
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 13. Missing ipRefs in RequestRestriction Deny mode
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/missing-ipref-deny
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-missing-ipref-deny
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 14. Missing ipRefs in entry-level conditions.run
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/missing-ipref-run
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-missing-ipref-run
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

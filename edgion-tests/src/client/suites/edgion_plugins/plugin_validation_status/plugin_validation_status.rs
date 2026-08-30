@@ -14,7 +14,7 @@
 //   08_EdgionPlugins_ep-validation-fault-injection-invalid.yaml — FaultInjection: ratio out of range + mutual exclusion
 //
 // Scenarios:
-//   1. jwt_auth_invalid          → Accepted=False/Invalid, message contains "secretRef"
+//   1. jwt_auth_invalid          → Accepted=False/Invalid, message contains "issuerGroups"
 //   2. cors_invalid              → Accepted=False/Invalid, message contains "allow_credentials"
 //   3. direct_ep_invalid         → Accepted=False/Invalid, message contains "regex"
 //   4. rate_limit_invalid        → Accepted=False/Invalid, message contains "rate"
@@ -22,6 +22,8 @@
 //   6. dsl_invalid               → Accepted=False/Invalid, message contains "DSL compile errors"
 //   7. cors_regex_invalid        → Accepted=False/Invalid, message contains "allow_origins_by_regex"
 //   8. fault_injection_invalid   → Accepted=False/Invalid, message contains "delay.ratio"
+//   9. condition_set_structural_invalid → malformed bounded boolean shapes are rejected by the Admin API
+//  10. condition_set_empty_invalid      → an empty operator is retained with Accepted=False/Invalid
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -136,7 +138,7 @@ impl PluginValidationStatusTestSuite {
             "JwtAuth 'ep-validation-jwt-auth-invalid': no credential → Accepted=False/Invalid",
             |ctx: TestContext| {
                 Box::pin(
-                    async move { assert_accepted_false(&ctx, "ep-validation-jwt-auth-invalid", "secretRef").await },
+                    async move { assert_accepted_false(&ctx, "ep-validation-jwt-auth-invalid", "issuerGroups").await },
                 )
             },
         )
@@ -208,9 +210,10 @@ impl PluginValidationStatusTestSuite {
     // Scenario 6: Dsl with an uncompilable inline source → Accepted=False/Invalid
     //
     // DslConfig::validation_error() runs the full data-plane validation path
-    // (DslPlugin::validate_config → resolve_script → compile_dsl_source). An
-    // uncompilable `source` is reported as "DSL compile errors: ..." which the
-    // controller joins verbatim into the Accepted condition message.
+    // (DslConfig::compile_and_validate → edgion_dsl::resolve_script →
+    // compile_dsl_source). An uncompilable `source` is reported as
+    // "DSL compile errors: ..." which the controller joins verbatim into the
+    // Accepted condition message.
     // =========================================================================
 
     fn dsl_invalid() -> TestCase {
@@ -265,6 +268,88 @@ impl PluginValidationStatusTestSuite {
             },
         )
     }
+
+    fn condition_set_structural_invalid() -> TestCase {
+        TestCase::new(
+            "condition_set_structural_invalid",
+            "ConditionSet rejects both operators and forbidden recursive shapes",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let cases = [
+                        (
+                            "both-operators",
+                            "allOf:\n            - type: probability\n              ratio: 1.0\n          anyOf:\n            - type: probability\n              ratio: 1.0",
+                        ),
+                        (
+                            "allof-to-anyof",
+                            "allOf:\n            - anyOf:\n                - type: probability\n                  ratio: 1.0",
+                        ),
+                        (
+                            "anyof-to-anyof",
+                            "anyOf:\n            - anyOf:\n                - type: probability\n                  ratio: 1.0",
+                        ),
+                    ];
+
+                    for (suffix, condition_set) in cases {
+                        let name = format!("ep-validation-condition-set-{suffix}");
+                        let yaml = format!(
+                            "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {name}\n  namespace: default\nspec:\n  requestPlugins:\n    - enable: true\n      type: Cors\n      config: {{}}\n      conditions:\n        run:\n          {condition_set}\n"
+                        );
+                        if ctx.apply_yaml(&yaml).await.is_ok() {
+                            let _ = ctx.delete_resource("EdgionPlugins", NS, &name).await;
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("ConditionSet structural case '{suffix}' was accepted"),
+                            );
+                        }
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Both operators and forbidden recursive shapes were rejected".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    fn condition_set_empty_invalid() -> TestCase {
+        TestCase::new(
+            "condition_set_empty_invalid",
+            "ConditionSet empty allOf is surfaced as Accepted=False/Invalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    const NAME: &str = "ep-validation-condition-set-empty";
+                    const YAML: &str = r#"apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-condition-set-empty
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config: {}
+      conditions:
+        run:
+          allOf: []
+"#;
+
+                    let start = Instant::now();
+                    if let Err(error) = ctx.apply_yaml(YAML).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to apply empty ConditionSet: {error}"),
+                        );
+                    }
+                    let result = assert_accepted_false(&ctx, NAME, "allOf must be non-empty").await;
+                    let _ = ctx.delete_resource("EdgionPlugins", NS, NAME).await;
+                    result
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for PluginValidationStatusTestSuite {
@@ -282,6 +367,8 @@ impl TestSuite for PluginValidationStatusTestSuite {
             Self::dsl_invalid(),
             Self::cors_regex_invalid(),
             Self::fault_injection_invalid(),
+            Self::condition_set_structural_invalid(),
+            Self::condition_set_empty_invalid(),
         ]
     }
 }

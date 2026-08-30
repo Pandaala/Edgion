@@ -1,36 +1,13 @@
-//! Global store for BackendTLSPolicy resources
-//!
-//! This module provides a thread-safe store for BackendTLSPolicy resources
-//! with O(1) reverse lookup capability and efficient incremental updates.
-//!
-//! ## Performance Optimization
-//!
-//! The store maintains two data structures:
-//! 1. **Primary map**: `namespace/name -> BackendTLSPolicy` for direct lookups (RwLock)
-//! 2. **Reverse index**: `namespace/name -> Vec<BackendTLSPolicy>` for target lookups (ArcSwap)
-//!
-//! The reverse index enables O(1) lookup when finding policies that apply to a specific
-//! Service, instead of O(n) iteration over all policies. Policies in the reverse index
-//! are pre-sorted by Gateway API precedence rules (oldest creation timestamp first,
-//! then alphabetically by name).
-//!
-//! ## Thread Safety
-//!
-//! - **policies**: Protected by RwLock for concurrent reads, exclusive writes
-//! - **reverse_index**: Uses ArcSwap for lock-free atomic updates
-//! - Query path (`get_policies_for_target`) is completely lock-free
-//!
-//! ## Update Strategy
-//!
-//! - **Full replacement** (`replace_all`): Rebuilds entire reverse index
-//! - **Incremental update** (`update`): Only rebuilds affected target entries
+//! Typed immutable runtime store for `BackendTLSPolicy` resources.
 
 use arc_swap::ArcSwap;
-use parking_lot::RwLock;
+use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
+use edgion_resources::resources::edgion_backend_traffic_policy::{
+    PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
+};
+use edgion_resources::resources::BackendTLSPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
-
-use edgion_resources::resources::BackendTLSPolicy;
 
 static GLOBAL_BACKEND_TLS_POLICY_STORE: LazyLock<Arc<BackendTLSPolicyStore>> =
     LazyLock::new(|| Arc::new(BackendTLSPolicyStore::new()));
@@ -39,268 +16,295 @@ pub fn get_global_backend_tls_policy_store() -> Arc<BackendTLSPolicyStore> {
     GLOBAL_BACKEND_TLS_POLICY_STORE.clone()
 }
 
-/// Type alias for the backend TLS policy map (key: namespace/name)
 type BackendTLSPolicyMap = HashMap<String, Arc<BackendTLSPolicy>>;
+type ReverseIndexMap = HashMap<PolicyTargetKey, Vec<Arc<BackendTLSPolicy>>>;
 
-/// Type alias for the reverse index map (key: target identifier, value: list of policies sorted by priority)
-type ReverseIndexMap = HashMap<String, Vec<Arc<BackendTLSPolicy>>>;
+struct BackendTLSPolicySnapshotData {
+    generation: u64,
+    policies: BackendTLSPolicyMap,
+    reverse_index: ReverseIndexMap,
+}
+
+/// One immutable policy generation. Captured handles remain valid after reload.
+#[derive(Clone)]
+pub struct BackendTLSPolicySnapshot {
+    inner: Arc<BackendTLSPolicySnapshotData>,
+}
+
+impl BackendTLSPolicySnapshot {
+    #[inline]
+    pub fn generation(&self) -> u64 {
+        self.inner.generation
+    }
+
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<Arc<BackendTLSPolicy>> {
+        self.inner.policies.get(key).cloned()
+    }
+
+    #[inline]
+    pub fn get_policies_for_target(&self, target: &PolicyTargetKey) -> Vec<Arc<BackendTLSPolicy>> {
+        self.inner.reverse_index.get(target).cloned().unwrap_or_default()
+    }
+
+    /// Whether any synced policy directly names this typed target, including a
+    /// present-but-ineligible policy omitted from the effective reverse index.
+    pub fn has_direct_candidate(&self, target: &PolicyTargetKey) -> bool {
+        self.inner.policies.values().any(|policy| {
+            let namespace = policy.metadata.namespace.as_deref().unwrap_or_default();
+            policy
+                .spec
+                .target_refs
+                .iter()
+                .any(|target_ref| target_ref.canonical_key(namespace).as_ref() == Ok(target))
+        })
+    }
+
+    /// Oldest-wins within the most specific applicable attachment bucket.
+    /// An unrelated section is never used as a fallback.
+    pub fn get_policy(&self, target: &PolicyTargetKey, section: Option<&str>) -> Option<Arc<BackendTLSPolicy>> {
+        let candidates = self.inner.reverse_index.get(target)?;
+        if let Some(section) = section {
+            if let Some(policy) = candidates.iter().find(|policy| {
+                policy.spec.target_refs.iter().any(|target_ref| {
+                    target_ref.canonical_key(&target.namespace).as_ref() == Ok(target)
+                        && target_ref.section_name.as_deref() == Some(section)
+                })
+            }) {
+                return Some(Arc::clone(policy));
+            }
+        }
+        candidates
+            .iter()
+            .find(|policy| {
+                policy.spec.target_refs.iter().any(|target_ref| {
+                    target_ref.canonical_key(&target.namespace).as_ref() == Ok(target)
+                        && target_ref.section_name.is_none()
+                })
+            })
+            .cloned()
+    }
+}
 
 pub struct BackendTLSPolicyStore {
-    /// Main policy map (namespace/name -> policy), protected by RwLock
-    policies: RwLock<BackendTLSPolicyMap>,
-    /// Reverse index (target identifier -> sorted policies) for O(1) query
-    /// Key format: "namespace/name" (group/kind omitted — targetRef can only reference Services)
-    reverse_index: ArcSwap<ReverseIndexMap>,
+    snapshot: ArcSwap<BackendTLSPolicySnapshotData>,
 }
 
 impl BackendTLSPolicyStore {
     pub fn new() -> Self {
         Self {
-            policies: RwLock::new(HashMap::new()),
-            reverse_index: ArcSwap::from_pointee(HashMap::new()),
+            snapshot: ArcSwap::from_pointee(BackendTLSPolicySnapshotData {
+                generation: 0,
+                policies: HashMap::new(),
+                reverse_index: HashMap::new(),
+            }),
         }
     }
 
-    /// Sort policies by Gateway API precedence rules
-    ///
-    /// 1. Older creation timestamp first
-    /// 2. Alphabetically by name (on ties)
     #[inline]
-    fn sort_policies_by_precedence(policies: &mut [Arc<BackendTLSPolicy>]) {
-        policies.sort_by(|a, b| {
-            // 1. Sort by creation timestamp (oldest first)
-            let ts_cmp = a.metadata.creation_timestamp.cmp(&b.metadata.creation_timestamp);
-            if ts_cmp != std::cmp::Ordering::Equal {
-                return ts_cmp;
-            }
-
-            // 2. Sort alphabetically by name (on ties)
-            let name_a = a.metadata.name.as_deref().unwrap_or("");
-            let name_b = b.metadata.name.as_deref().unwrap_or("");
-            name_a.cmp(name_b)
-        });
+    pub fn snapshot(&self) -> BackendTLSPolicySnapshot {
+        BackendTLSPolicySnapshot {
+            inner: self.snapshot.load_full(),
+        }
     }
 
-    /// Build reverse index from policies
-    ///
-    /// Creates a map from target identifier to sorted list of policies
-    fn build_reverse_index(policies: &BackendTLSPolicyMap) -> ReverseIndexMap {
-        let mut index: HashMap<String, Vec<Arc<BackendTLSPolicy>>> = HashMap::new();
-
-        for policy in policies.values() {
-            let policy_namespace = policy.namespace().unwrap_or("");
-
-            for target_ref in &policy.spec.target_refs {
-                let target_key = Self::build_target_key(policy_namespace, target_ref);
-
-                index.entry(target_key).or_default().push(policy.clone());
-            }
-        }
-
-        // Sort each policy list by Gateway API precedence rules
-        for policies_list in index.values_mut() {
-            Self::sort_policies_by_precedence(policies_list);
-        }
-
-        index
-    }
-
-    /// Build a target key from target reference components
-    /// Key format: namespace/name
-    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy,
-    /// and can only target `group: ""`, `kind: "Service"`, so namespace/name is sufficient.
     #[inline]
-    fn build_target_key(
-        policy_namespace: &str,
-        target_ref: &edgion_resources::resources::backend_tls_policy::BackendTLSPolicyTargetRef,
-    ) -> String {
-        let target_name = &target_ref.name;
-        format!("{}/{}", policy_namespace, target_name)
+    fn policy_resource_equivalent(left: &BackendTLSPolicy, right: &BackendTLSPolicy) -> bool {
+        left.metadata.name == right.metadata.name
+            && left.metadata.namespace == right.metadata.namespace
+            && left.metadata.uid == right.metadata.uid
+            && left.metadata.creation_timestamp == right.metadata.creation_timestamp
+            && left.spec.target_refs == right.spec.target_refs
+            && left.spec.resolved_target_class == right.spec.resolved_target_class
+            && left.spec.validation == right.spec.validation
+            && left.spec.options == right.spec.options
+            && Self::secret_data_vec_eq(
+                left.spec.resolved_ca_certificates.as_deref(),
+                right.spec.resolved_ca_certificates.as_deref(),
+            )
+            && Self::secret_data_eq(
+                left.spec.resolved_client_certificate.as_ref(),
+                right.spec.resolved_client_certificate.as_ref(),
+            )
+            && left.spec.use_system_ca == right.spec.use_system_ca
     }
 
-    /// Extract all target keys from a policy
-    fn extract_target_keys(policy: &BackendTLSPolicy) -> Vec<String> {
-        let policy_namespace = policy.namespace().unwrap_or("");
-        policy
-            .spec
-            .target_refs
-            .iter()
-            .map(|target_ref| Self::build_target_key(policy_namespace, target_ref))
+    fn secret_data_eq(
+        left: Option<&k8s_openapi::api::core::v1::Secret>,
+        right: Option<&k8s_openapi::api::core::v1::Secret>,
+    ) -> bool {
+        match (left, right) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.metadata.name == right.metadata.name
+                    && left.metadata.namespace == right.metadata.namespace
+                    && left.type_ == right.type_
+                    && left.data == right.data
+            }
+            _ => false,
+        }
+    }
+
+    fn secret_data_vec_eq(
+        left: Option<&[k8s_openapi::api::core::v1::Secret]>,
+        right: Option<&[k8s_openapi::api::core::v1::Secret]>,
+    ) -> bool {
+        match (left, right) {
+            (None, None) => true,
+            (Some(left), Some(right)) if left.len() == right.len() => left.iter().zip(right).all(|(left, right)| {
+                left.metadata.name == right.metadata.name
+                    && left.metadata.namespace == right.metadata.namespace
+                    && left.type_ == right.type_
+                    && left.data == right.data
+            }),
+            _ => false,
+        }
+    }
+
+    fn retain_equivalent_arcs(current: &BackendTLSPolicyMap, incoming: BackendTLSPolicyMap) -> BackendTLSPolicyMap {
+        incoming
+            .into_iter()
+            .map(|(key, policy)| {
+                let policy = current
+                    .get(&key)
+                    .filter(|old| Self::policy_resource_equivalent(old, &policy))
+                    .cloned()
+                    .unwrap_or(policy);
+                (key, policy)
+            })
             .collect()
     }
 
-    /// Check if a policy matches a given target key
-    fn policy_matches_target(policy: &BackendTLSPolicy, target_key: &str) -> bool {
-        let policy_namespace = policy.namespace().unwrap_or("");
-
-        policy
+    /// Controller eligibility marker plus a defensive target-kind check.
+    fn policy_target_keys(&self, policy: &BackendTLSPolicy) -> Vec<PolicyTargetKey> {
+        let Some(resolved_class) = policy.spec.resolved_target_class else {
+            return Vec::new();
+        };
+        if policy.spec.target_refs.len() != 1 {
+            return Vec::new();
+        }
+        let namespace = policy.namespace().unwrap_or("");
+        let keys: Vec<_> = policy
             .spec
             .target_refs
             .iter()
-            .any(|target_ref| Self::build_target_key(policy_namespace, target_ref) == target_key)
+            .filter_map(|target| target.canonical_key(namespace).ok())
+            .collect();
+        let all_refs_valid = keys.len() == policy.spec.target_refs.len();
+        let class_matches = keys.iter().all(|key| {
+            matches!(
+                (resolved_class, key.target_kind),
+                (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
+                    | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
+            )
+        });
+        let section_supported = policy.spec.target_refs.iter().all(|target| {
+            target.section_name.is_none()
+                || keys
+                    .first()
+                    .is_some_and(|key| key.target_kind == PolicyTargetKind::Service)
+        });
+        (all_refs_valid && class_matches && section_supported)
+            .then_some(keys)
+            .unwrap_or_default()
     }
 
-    /// Check if a backend TLS policy exists
+    fn sort_policies_by_precedence(policies: &mut [Arc<BackendTLSPolicy>]) {
+        policies.sort_by_key(|policy| precedence_key(&policy.metadata));
+    }
+
+    fn build_reverse_index(&self, policies: &BackendTLSPolicyMap) -> ReverseIndexMap {
+        let mut index: ReverseIndexMap = HashMap::new();
+        for policy in policies.values() {
+            for target in self.policy_target_keys(policy) {
+                index.entry(target).or_default().push(Arc::clone(policy));
+            }
+        }
+        for candidates in index.values_mut() {
+            Self::sort_policies_by_precedence(candidates);
+        }
+        index
+    }
+
+    fn reverse_index_equivalent(left: &ReverseIndexMap, right: &ReverseIndexMap) -> bool {
+        left.len() == right.len()
+            && right.iter().all(|(target, policies)| {
+                left.get(target).is_some_and(|existing| {
+                    existing.len() == policies.len()
+                        && existing
+                            .iter()
+                            .zip(policies)
+                            .all(|(left, right)| Arc::ptr_eq(left, right))
+                })
+            })
+    }
+
+    fn publish(&self, incoming: BackendTLSPolicyMap) {
+        // Config sync serializes ConfHandler writes for this resource kind.
+        // Keep this load-build-store path single-writer unless publication is
+        // changed to provide its own writer synchronization.
+        let current = self.snapshot.load_full();
+        let policies = Self::retain_equivalent_arcs(&current.policies, incoming);
+        let reverse_index = self.build_reverse_index(&policies);
+        let unchanged = policies.len() == current.policies.len()
+            && policies
+                .iter()
+                .all(|(key, policy)| current.policies.get(key).is_some_and(|old| Arc::ptr_eq(old, policy)))
+            && Self::reverse_index_equivalent(&current.reverse_index, &reverse_index);
+        if unchanged {
+            return;
+        }
+        self.snapshot.store(Arc::new(BackendTLSPolicySnapshotData {
+            generation: current
+                .generation
+                .checked_add(1)
+                .expect("BackendTLSPolicy snapshot generation exhausted"),
+            policies,
+            reverse_index,
+        }));
+    }
+
     pub fn contains(&self, key: &str) -> bool {
-        self.policies.read().contains_key(key)
+        self.snapshot.load().policies.contains_key(key)
     }
 
-    /// Get a backend TLS policy by key (namespace/name)
     pub fn get(&self, key: &str) -> Option<Arc<BackendTLSPolicy>> {
-        self.policies.read().get(key).cloned()
+        self.snapshot().get(key)
     }
 
-    /// Get a backend TLS policy by namespace and name
     pub fn get_by_ns_name(&self, namespace: &str, name: &str) -> Option<Arc<BackendTLSPolicy>> {
-        let key = format!("{}/{}", namespace, name);
-        self.get(&key)
+        self.get(&format!("{namespace}/{name}"))
     }
 
-    /// Replace all backend TLS policies atomically
-    pub fn replace_all(&self, new_policies: HashMap<String, Arc<BackendTLSPolicy>>) {
-        // Update policies map and build reverse_index under write lock to prevent race conditions
-        {
-            let mut policies_write = self.policies.write();
-            *policies_write = new_policies;
-
-            // Build reverse_index while holding write lock to ensure consistency
-            let reverse_index = Self::build_reverse_index(&policies_write);
-            self.reverse_index.store(Arc::new(reverse_index));
-        } // Write lock released; both structures updated atomically
+    pub fn replace_all(&self, new_policies: BackendTLSPolicyMap) {
+        self.publish(new_policies);
     }
 
-    /// Update backend TLS policies with intelligent index rebuild strategy
-    ///
-    /// Uses incremental rebuild when few targets are affected, otherwise full rebuild
-    pub fn update(&self, add_or_update: HashMap<String, Arc<BackendTLSPolicy>>, remove: &HashSet<String>) {
-        // Early return if no changes
+    pub fn update(&self, add_or_update: BackendTLSPolicyMap, remove: &HashSet<String>) {
         if add_or_update.is_empty() && remove.is_empty() {
             return;
         }
-
-        // Perform all operations under a single write lock to prevent race conditions
-        {
-            let mut policies_write = self.policies.write();
-
-            // Step 1: Collect affected target keys (under write lock protection)
-            let mut affected_targets = HashSet::new();
-
-            // 1.1 Collect targets from policies being removed
-            for key in remove.iter() {
-                if let Some(old_policy) = policies_write.get(key) {
-                    affected_targets.extend(Self::extract_target_keys(old_policy));
-                }
-            }
-
-            // 1.2 Collect targets from policies being added/updated (both old and new)
-            for (key, new_policy) in &add_or_update {
-                // If updating, collect targets from old policy
-                if let Some(old_policy) = policies_write.get(key) {
-                    affected_targets.extend(Self::extract_target_keys(old_policy));
-                }
-                // Collect targets from new policy
-                affected_targets.extend(Self::extract_target_keys(new_policy));
-            }
-
-            // Early return if no affected targets (shouldn't happen, but be safe)
-            if affected_targets.is_empty() {
-                tracing::warn!("Update called with changes but no affected targets");
-                return;
-            }
-
-            // Step 2: Update policies map
-            for (key, policy) in add_or_update {
-                policies_write.insert(key, policy);
-            }
-            for key in remove {
-                policies_write.remove(key);
-            }
-
-            // Step 3: Choose rebuild strategy based on affected targets
-            let total_policies = policies_write.len();
-            let affected_count = affected_targets.len();
-
-            // Heuristic: prefer incremental only when few targets changed relative to the
-            // total policy count.
-            //   A = affected_count, P = total_policies, R = avg target_refs per policy
-            // Incremental clones the current index (O(P*R)) and then, for each affected
-            // target, rescans all policies (~O(A*P) match checks); full rebuild is a single
-            // O(P*R) pass. The A < P/10 threshold is a cheap "small change ratio" proxy,
-            // not the exact O(A*P)-vs-O(P*R) crossover.
-            let use_incremental = affected_count < total_policies.max(10) / 10;
-
-            let new_index = if use_incremental {
-                // Incremental update: only rebuild affected targets
-                let current_index = self.reverse_index.load();
-                let mut new_index = (**current_index).clone();
-
-                for target_key in &affected_targets {
-                    let mut target_policies = Vec::new();
-
-                    // Find all policies that match this target
-                    for policy in policies_write.values() {
-                        if Self::policy_matches_target(policy, target_key) {
-                            target_policies.push(policy.clone());
-                        }
-                    }
-
-                    if target_policies.is_empty() {
-                        new_index.remove(target_key);
-                    } else {
-                        // Sort by Gateway API precedence rules
-                        Self::sort_policies_by_precedence(&mut target_policies);
-                        new_index.insert(target_key.clone(), target_policies);
-                    }
-                }
-
-                tracing::debug!(
-                    affected_targets = affected_count,
-                    total_policies = total_policies,
-                    strategy = "incremental",
-                    "Update completed"
-                );
-
-                new_index
-            } else {
-                // Full rebuild is more efficient
-                tracing::debug!(
-                    affected_targets = affected_count,
-                    total_policies = total_policies,
-                    strategy = "full_rebuild",
-                    "Update completed (using full rebuild)"
-                );
-
-                Self::build_reverse_index(&policies_write)
-            };
-            self.reverse_index.store(Arc::new(new_index));
-        } // Write lock released; both structures updated atomically
+        let mut policies = self.snapshot.load().policies.clone();
+        policies.extend(add_or_update);
+        for key in remove {
+            policies.remove(key);
+        }
+        self.publish(policies);
     }
 
-    /// Get policies that apply to a given target (O(1) lookup using reverse index)
-    ///
-    /// Returns policies sorted by Gateway API precedence rules:
-    /// 1. Older creation timestamp first
-    /// 2. Alphabetically by name (on ties)
-    pub fn get_policies_for_target(&self, name: &str, namespace: Option<&str>) -> Vec<Arc<BackendTLSPolicy>> {
-        let index = self.reverse_index.load();
-
-        let target_namespace = namespace.unwrap_or("");
-        let target_key = format!("{}/{}", target_namespace, name);
-        index.get(&target_key).cloned().unwrap_or_default()
+    pub fn get_policies_for_target(&self, target: &PolicyTargetKey) -> Vec<Arc<BackendTLSPolicy>> {
+        self.snapshot().get_policies_for_target(target)
     }
 
-    /// Count of policies
     pub fn count(&self) -> usize {
-        self.policies.read().len()
+        self.snapshot.load().policies.len()
     }
 
-    /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> BackendTLSPolicyStoreStats {
-        let policies_count = self.policies.read().len();
-        let reverse_index = self.reverse_index.load();
+        let snapshot = self.snapshot.load();
         BackendTLSPolicyStoreStats {
-            policies: policies_count,
-            reverse_index_targets: reverse_index.len(),
+            policies: snapshot.policies.len(),
+            reverse_index_targets: snapshot.reverse_index.len(),
         }
     }
 }
@@ -314,5 +318,209 @@ pub struct BackendTLSPolicyStoreStats {
 impl Default for BackendTLSPolicyStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
+    };
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    fn policy(
+        resource_name: &str,
+        target_kind: PolicyTargetKind,
+        target_name: &str,
+        section: Option<&str>,
+        marker: Option<ResolvedPolicyTargetClass>,
+    ) -> Arc<BackendTLSPolicy> {
+        let (group, kind) = match target_kind {
+            PolicyTargetKind::Service => ("", "Service"),
+            PolicyTargetKind::EdgionBackend => ("edgion.io", "EdgionBackend"),
+        };
+        Arc::new(BackendTLSPolicy {
+            metadata: ObjectMeta {
+                namespace: Some("tenant".to_string()),
+                name: Some(resource_name.to_string()),
+                uid: Some(format!("uid-{resource_name}")),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: group.to_string(),
+                    kind: kind.to_string(),
+                    name: target_name.to_string(),
+                    section_name: section.map(str::to_string),
+                }],
+                resolved_target_class: marker,
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: "backend.example.com".to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: None,
+                },
+                options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                use_system_ca: true,
+            },
+            status: None,
+        })
+    }
+
+    fn target(kind: PolicyTargetKind) -> PolicyTargetKey {
+        PolicyTargetKey {
+            target_kind: kind,
+            namespace: "tenant".to_string(),
+            name: "shared".to_string(),
+        }
+    }
+
+    #[test]
+    fn typed_targets_and_sections_do_not_leak() {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([
+            (
+                "tenant/service-grpc".to_string(),
+                policy(
+                    "service-grpc",
+                    PolicyTargetKind::Service,
+                    "shared",
+                    Some("grpc"),
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            ),
+            (
+                "tenant/backend".to_string(),
+                policy(
+                    "backend",
+                    PolicyTargetKind::EdgionBackend,
+                    "shared",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Ai),
+                ),
+            ),
+        ]));
+        let snapshot = store.snapshot();
+        assert!(snapshot.get_policy(&target(PolicyTargetKind::Service), None).is_none());
+        assert_eq!(
+            snapshot
+                .get_policy(&target(PolicyTargetKind::Service), Some("grpc"))
+                .unwrap()
+                .name(),
+            "service-grpc"
+        );
+        assert_eq!(
+            snapshot
+                .get_policy(&target(PolicyTargetKind::EdgionBackend), None)
+                .unwrap()
+                .name(),
+            "backend"
+        );
+    }
+
+    #[test]
+    fn equivalent_update_retains_generation_arc_and_old_handle() {
+        let store = BackendTLSPolicyStore::new();
+        let input = policy(
+            "policy",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        store.replace_all(HashMap::from([("tenant/policy".to_string(), input)]));
+        let first = store.snapshot();
+        let first_policy = first.get_policy(&target(PolicyTargetKind::Service), None).unwrap();
+
+        store.replace_all(HashMap::from([(
+            "tenant/policy".to_string(),
+            policy(
+                "policy",
+                PolicyTargetKind::Service,
+                "shared",
+                None,
+                Some(ResolvedPolicyTargetClass::Service),
+            ),
+        )]));
+        let equivalent = store.snapshot();
+        assert_eq!(first.generation(), equivalent.generation());
+        assert!(Arc::ptr_eq(
+            &first_policy,
+            &equivalent.get_policy(&target(PolicyTargetKind::Service), None).unwrap()
+        ));
+
+        store.replace_all(HashMap::new());
+        assert_eq!(store.snapshot().generation(), first.generation() + 1);
+        assert_eq!(first_policy.name(), "policy", "old Arc remains usable");
+    }
+
+    #[test]
+    fn absent_or_mismatched_marker_is_not_eligible() {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([
+            (
+                "tenant/absent".to_string(),
+                policy("absent", PolicyTargetKind::Service, "shared", None, None),
+            ),
+            (
+                "tenant/mismatch".to_string(),
+                policy(
+                    "mismatch",
+                    PolicyTargetKind::Service,
+                    "shared",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Ai),
+                ),
+            ),
+        ]));
+        assert!(store
+            .snapshot()
+            .get_policy(&target(PolicyTargetKind::Service), None)
+            .is_none());
+    }
+
+    #[test]
+    fn missing_timestamp_loses_and_uid_change_replaces_arc() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+
+        let store = BackendTLSPolicyStore::new();
+        let mut missing = policy(
+            "missing",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut missing).metadata.creation_timestamp = None;
+        let mut dated = policy(
+            "dated",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut dated).metadata.creation_timestamp = Some(Time("2026-01-01T00:00:00Z".parse().unwrap()));
+        store.replace_all(HashMap::from([
+            ("tenant/missing".to_string(), missing),
+            ("tenant/dated".to_string(), dated),
+        ]));
+        assert_eq!(
+            store
+                .snapshot()
+                .get_policy(&target(PolicyTargetKind::Service), None)
+                .unwrap()
+                .name(),
+            "dated"
+        );
+
+        let first = store.snapshot().get("tenant/dated").unwrap();
+        let mut recreated = (*first).clone();
+        recreated.metadata.uid = Some("replacement-uid".to_string());
+        store.replace_all(HashMap::from([("tenant/dated".to_string(), Arc::new(recreated))]));
+        let second = store.snapshot().get("tenant/dated").unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
     }
 }

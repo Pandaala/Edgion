@@ -17,21 +17,25 @@ pub mod backend_tls_policy_ref;
 pub mod configmap_utils;
 mod context;
 pub mod credential;
+pub mod credential_source_state;
 pub mod edgion_config_data_utils;
 pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
 pub mod listener_port_manager;
 pub mod namespace_store;
+pub(crate) mod plugin_policy_stamp;
 mod processor;
 pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
 pub mod region_route_table;
+pub mod route_delegation_index;
 pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
 pub mod status_utils;
+pub(crate) mod unknown_fields_stamp;
 
 pub use context::HandlerContext;
 pub use credential::{ResolveError, SecretMaterialResolver};
@@ -43,17 +47,16 @@ pub use raw_store::{KubeRawStore, LocalRawStore, RawStore};
 // `k8s_openapi::Condition` (not our local `types::common::Condition`) and has
 // its own `k8s_condition_unknown` helper.
 pub use status_utils::{
-    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
-    resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,
-    ResolvedRefsError,
+    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, resolved_refs_condition,
+    set_parent_conditions_full, update_condition, AcceptedError, ResolvedRefsError,
 };
 
 pub use handlers::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
-    EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
-    EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
-    LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler,
-    TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
+    EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
+    GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 pub use ref_manager::{BidirectionalRefManager, RefManagerStats, RefValue, ResourceRef};
@@ -72,9 +75,11 @@ pub use ref_grant::{
 
 pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey};
 
-pub use attached_route_tracker::{AttachedRouteTracker, Attachment, RouteRef};
+pub use attached_route_tracker::AttachedRouteTracker;
 
 pub use gateway_route_index::GatewayRouteIndex;
+
+pub use route_delegation_index::RouteDelegationIndex;
 
 pub use service_ref::{new_service_ref_manager, ServiceRefManager};
 

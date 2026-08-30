@@ -1,9 +1,27 @@
 use anyhow::Result;
 use std::path::PathBuf;
+use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
+
+const PINGORA_H1_CLIENT_TARGET: &str = "pingora_core::protocols::http::v1::client";
+const PINGORA_H1_PROXY_TARGET: &str = "pingora_proxy::proxy_h1";
+
+fn system_log_event_allowed(target: &str, level: &Level) -> bool {
+    let protected_target = [PINGORA_H1_CLIENT_TARGET, PINGORA_H1_PROXY_TARGET]
+        .iter()
+        .any(|protected| {
+            target == *protected
+                || target
+                    .strip_prefix(protected)
+                    .is_some_and(|rest| rest.starts_with("::"))
+        });
+
+    !protected_target || level == &Level::ERROR
+}
 
 /// Configuration for the logging system
 #[derive(Debug, Clone)]
@@ -75,7 +93,15 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
             .boxed()
     };
 
-    let subscriber = tracing_subscriber::registry().with(env_filter).with(file_layer);
+    // Pingora's upstream HTTP/1 implementation logs complete request headers at
+    // DEBUG/TRACE. Keep those two upstream targets at ERROR even when an operator
+    // enables a broader RUST_LOG directive; serialized headers can no longer use
+    // HeaderValue's sensitive metadata for redaction.
+    let pingora_h1_filter = filter_fn(|metadata| system_log_event_allowed(metadata.target(), metadata.level()));
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(pingora_h1_filter)
+        .with(file_layer);
 
     if config.console {
         let console_layer = tracing_subscriber::fmt::layer()
@@ -94,14 +120,31 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     Ok(guard)
 }
 
-/// Initialize logging with default configuration
-pub async fn init_default() -> Result<WorkerGuard> {
-    init_logging(LogConfig::default()).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pingora_h1_header_log_targets_have_an_error_floor() {
+        for target in [
+            PINGORA_H1_CLIENT_TARGET,
+            "pingora_core::protocols::http::v1::client::nested",
+            PINGORA_H1_PROXY_TARGET,
+            "pingora_proxy::proxy_h1::nested",
+        ] {
+            assert!(!system_log_event_allowed(target, &Level::TRACE));
+            assert!(!system_log_event_allowed(target, &Level::DEBUG));
+            assert!(!system_log_event_allowed(target, &Level::INFO));
+            assert!(!system_log_event_allowed(target, &Level::WARN));
+            assert!(system_log_event_allowed(target, &Level::ERROR));
+        }
+
+        assert!(system_log_event_allowed(
+            "pingora_core::connectors::http",
+            &Level::TRACE
+        ));
+        assert!(system_log_event_allowed("edgion_common::observe", &Level::TRACE));
+    }
 
     #[tokio::test]
     async fn test_logging_from_different_threads() {

@@ -5,6 +5,12 @@ pub mod net;
 pub use net::*;
 
 pub mod real_ip_extractor;
-pub use real_ip_extractor::{extract_ip_string, RealIpExtractor};
+pub use real_ip_extractor::RealIpExtractor;
 
 pub mod proxy_protocol;
+
+pub mod client_ip;
+pub use client_ip::{resolve_transport_client_addrs, TransportClientAddrs};
+
+pub mod redacted;
+pub use redacted::RedactedString;

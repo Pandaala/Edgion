@@ -4,7 +4,7 @@
 //! Each system type has its own sub-module for runtime management:
 //! - `redis/` — Redis client (standalone/sentinel/cluster) via fred
 //! - `etcd/` — Etcd client (v3 API) via etcd-client
-//! - `webhook/` — HTTP webhook service for KeyGet::Webhook resolution
+//! - `webhook/` — HTTP webhook service for the WebhookKeyGet plugin
 //! - `local_file/` — File-based log writer with rotation
 //!
 //! The `LinkSysStore` provides a unified store with `ConfHandler<LinkSys>` integration,
@@ -20,11 +20,9 @@ pub mod template;
 // core/runtime boundary: backend-agnostic core logic (credential / TLS / health /
 // lifecycle, or a provider the controller also needs) belongs in the common
 // `link_sys_core`; data-plane runtime providers and stores belong in this module.
-pub use edgion_common::link_sys_core::{credential, health, lifecycle, tls, LinkSysHealth};
+pub use edgion_common::link_sys_core::{credential, health, http_client, lifecycle, outbound_tls, tls, LinkSysHealth};
 
-pub use providers::webhook::{
-    get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,
-};
+pub use providers::webhook::{get_webhook_call_handle, WebhookCallHandle};
 pub use providers::{LocalFileWriter, LogType};
 pub use runtime::{
     create_link_sys_handler, get_es_client, get_etcd_client, get_global_link_sys_store, get_kafka_client,

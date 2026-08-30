@@ -1,7 +1,7 @@
 // RateLimit dynamic hot-reload test suites.
 //
-// Initial (onMissingKey=Allow): request without X-Rate-Key → 200
-// Update  (onMissingKey=Deny):  request without X-Rate-Key → 429
+// Initial (onKeyMiss=Allow): request without X-Rate-Key → 200
+// Update  (onKeyMiss=Deny):  request without X-Rate-Key → 429
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -9,10 +9,7 @@ use std::time::Instant;
 const HOST: &str = "rate-limit-dynamic.example.com";
 
 async fn do_request_without_key(ctx: &TestContext) -> reqwest::Result<u16> {
-    // Hard-code the EdgionPlugins listener port (matches dsl/dynamic.rs).
-    // ctx.http_url() defaults to the test_server backend (30001) under
-    // run_dynamic_scenario, which would bypass the gateway entirely.
-    let url = format!("http://{}:31180/test/rate-limit-dynamic", ctx.target_host);
+    let url = format!("{}/test/rate-limit-dynamic", ctx.http_url());
     ctx.http_client
         .get(&url)
         .header("host", HOST)
@@ -31,7 +28,7 @@ impl RateLimitDynamicInitialTestSuite {
     fn missing_key_allow_200() -> TestCase {
         TestCase::new(
             "rate_limit_dyn_initial_missing_key_200",
-            "[INITIAL] missing X-Rate-Key with onMissingKey=Allow → 200",
+            "[INITIAL] missing X-Rate-Key with onKeyMiss=Allow → 200",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -66,7 +63,7 @@ impl RateLimitDynamicUpdateTestSuite {
     fn missing_key_deny_429() -> TestCase {
         TestCase::new(
             "rate_limit_dyn_update_missing_key_429",
-            "[UPDATE] missing X-Rate-Key with onMissingKey=Deny → 429",
+            "[UPDATE] missing X-Rate-Key with onKeyMiss=Deny → 429",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

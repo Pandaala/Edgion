@@ -4,7 +4,7 @@
 # BuildallTest（debug ）
 # =============================================================================
 
-set -e
+set -eo pipefail
 
 # 
 RED='\033[0;31m'
@@ -16,6 +16,7 @@ NC='\033[0m' # No Color
 # projectdirectory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+FULL_TEST=false
 
 # =============================================================================
 # log
@@ -40,30 +41,28 @@ log_section() {
 }
 
 # =============================================================================
-# Build
-# =============================================================================
-
-# Buildbinaryfile
-build_binary() {
-    local name=$1
-    local target=$2
-    
-    log_info "Build $name..."
-    
-    if cargo build $target 2>&1; then
-        log_success "$name Buildsuccess"
-        return 0
-    else
-        log_error "$name Buildfailed"
-        return 1
-    fi
-}
-
-# =============================================================================
 # 
 # =============================================================================
 main() {
     local start_time=$(date +%s)
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --full-test)
+                FULL_TEST=true
+                shift
+                ;;
+            -h|--help)
+                echo "Usage: $0 [--full-test]"
+                return 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo "Usage: $0 [--full-test]" >&2
+                return 2
+                ;;
+        esac
+    done
     
     echo ""
     echo -e "${BLUE}Edgion TestPrepare - Build${NC}"
@@ -88,69 +87,125 @@ main() {
         export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
         log_info "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
         log_info "LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
+    else
+        # Runtime scripts resolve artifacts from the project-local target tree.
+        # Ignore an inherited custom target dir so producer and consumers cannot
+        # silently disagree about the prepared artifact set.
+        export CARGO_TARGET_DIR="${PROJECT_ROOT}/target"
     fi
 
-    # Build Controller (exit immediately on failure)
-    # Now its own workspace crate — needs -p to disambiguate the package from the
-    # equally-named binary.
-    log_section "Build edgion-controller"
-    if ! build_binary "edgion-controller" "-p edgion-controller --bin edgion-controller"; then
-        log_error "Build failed! Exiting..."
+    # One Cargo invocation lets Cargo schedule the complete dependency graph
+    # once and guarantees that --no-prepare child jobs consume a coherent set
+    # of binaries from the same source revision.
+    log_section "Build integration binaries"
+    if ! cargo build \
+        -p edgion-controller --bin edgion-controller \
+        -p edgion-gateway --bin edgion-gateway \
+        -p edgion-cli --bin edgion-cli \
+        -p edgion-tests --bin test_server \
+        -p edgion-tests --bin test_client \
+        -p edgion-tests --bin test_client_direct \
+        -p edgion-tests --bin resource_diff \
+        -p edgion-tests --bin config_load_validator \
+        -p edgion-tests --bin cache_residue; then
+        log_error "Integration binary build failed"
         exit 1
     fi
-    
-    # Build Gateway (now its own workspace crate — needs -p to disambiguate
-    # the package from the equally-named binary).
-    log_section "Build edgion-gateway"
-    if ! build_binary "edgion-gateway" "-p edgion-gateway --bin edgion-gateway"; then
-        log_error "Build failed! Exiting..."
+    log_success "Integration binaries built successfully"
+
+    # Precompile the ignored real-Redis integration test and copy the hashed
+    # Cargo test artifact to a stable execution-phase path. Runtime scripts
+    # must never invoke Cargo after services or test scenarios have started.
+    log_section "Build ignored integration test executables"
+    local credential_test_bin
+    if ! credential_test_bin=$(cargo test \
+        -p edgion-tests \
+        --test credential_reservation_redis \
+        --no-run \
+        --message-format=json-render-diagnostics \
+        | python3 -c '
+import json
+import sys
+
+executables = []
+for line in sys.stdin:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    target = event.get("target") or {}
+    executable = event.get("executable")
+    if event.get("reason") == "compiler-artifact" and target.get("name") == "credential_reservation_redis" and executable:
+        executables.append(executable)
+if not executables:
+    raise SystemExit(1)
+print(executables[-1])
+'); then
+        log_error "Credential reservation Redis test compilation failed"
         exit 1
     fi
-    
-    # Build edgion-cli (now its own workspace crate — needs -p to disambiguate
-    # the package from the equally-named binary).
-    log_section "Build edgion-cli"
-    if ! build_binary "edgion-cli" "-p edgion-cli --bin edgion-cli"; then
-        log_error "Build failed! Exiting..."
+    if [ ! -x "$credential_test_bin" ]; then
+        log_error "Credential reservation Redis test executable is missing: ${credential_test_bin}"
         exit 1
+    fi
+    local target_root="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}"
+    local stable_credential_test_bin="${target_root}/debug/credential_reservation_redis"
+    cp -f "$credential_test_bin" "$stable_credential_test_bin"
+    chmod 755 "$stable_credential_test_bin"
+    log_success "Ignored integration test executable prepared: ${stable_credential_test_bin}"
+
+    if $FULL_TEST; then
+        log_section "Build external ExtProc fixture"
+        local fixture_dir="${PROJECT_ROOT}/edgion-tests/integration/fixtures/ext_proc_external"
+        local fixture_bin="${target_root}/debug/ext_proc_external_processor"
+        if [ ! -f "${fixture_dir}/go.mod" ] || [ ! -f "${fixture_dir}/go.sum" ]; then
+            log_error "External ExtProc fixture module is incomplete: ${fixture_dir}"
+            exit 1
+        fi
+        if ! command -v go >/dev/null 2>&1; then
+            log_error "Go 1.24 or newer is required for --full-test ExtProc coverage"
+            exit 1
+        fi
+
+        local go_version
+        if ! go_version=$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null); then
+            log_error "Unable to inspect the local Go toolchain (automatic toolchain downloads are disabled)"
+            exit 1
+        fi
+        local go_major go_minor
+        go_major=$(printf '%s\n' "$go_version" | sed -n 's/^go\([0-9][0-9]*\)\.\([0-9][0-9]*\).*$/\1/p')
+        go_minor=$(printf '%s\n' "$go_version" | sed -n 's/^go\([0-9][0-9]*\)\.\([0-9][0-9]*\).*$/\2/p')
+        if [ -z "$go_major" ] || [ -z "$go_minor" ] \
+            || [ "$go_major" -lt 1 ] \
+            || { [ "$go_major" -eq 1 ] && [ "$go_minor" -lt 24 ]; }; then
+            log_error "Go 1.24 or newer is required; local toolchain reports ${go_version:-unknown}"
+            exit 1
+        fi
+
+        if ! (cd "$fixture_dir" && GOTOOLCHAIN=local go mod verify); then
+            log_error "External ExtProc fixture module verification failed"
+            exit 1
+        fi
+        if ! (cd "$fixture_dir" && GOTOOLCHAIN=local go test -mod=readonly ./...); then
+            log_error "External ExtProc fixture tests failed"
+            exit 1
+        fi
+        if ! (cd "$fixture_dir" && GOTOOLCHAIN=local go build -mod=readonly -trimpath -o "$fixture_bin" .); then
+            log_error "External ExtProc fixture build failed"
+            exit 1
+        fi
+        if [ ! -x "$fixture_bin" ]; then
+            log_error "External ExtProc fixture binary is missing: ${fixture_bin}"
+            exit 1
+        fi
+        log_success "External ExtProc fixture prepared: ${fixture_bin}"
     fi
 
-    # Build test_server
-    log_section "Build test_server"
-    if ! build_binary "test_server" "-p edgion-tests --bin test_server"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build test_client
-    log_section "Build test_client"
-    if ! build_binary "test_client" "-p edgion-tests --bin test_client"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build test_client_direct
-    log_section "Build test_client_direct"
-    if ! build_binary "test_client_direct" "-p edgion-tests --bin test_client_direct"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build resource_diff
-    log_section "Build resource_diff"
-    if ! build_binary "resource_diff" "-p edgion-tests --bin resource_diff"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # Build config_load_validator
-    log_section "Build config_load_validator"
-    if ! build_binary "config_load_validator" "-p edgion-tests --bin config_load_validator"; then
-        log_error "Build failed! Exiting..."
-        exit 1
-    fi
-    
-    # 
+    # NOTE: prepare.sh is build-only. conf_sync mTLS certificates are runtime
+    # material and are generated per work directory by the script that creates
+    # it (conf_sync_distribute_certs) — never into the repo root.
+
+    #
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     

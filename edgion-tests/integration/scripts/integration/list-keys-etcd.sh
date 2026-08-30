@@ -39,7 +39,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+UTILS_DIR="${PROJECT_ROOT}/edgion-tests/integration/scripts/utils"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 if [[ ! -x "$CONTROLLER_BIN" ]]; then
     log_warn "edgion-controller binary not found at $CONTROLLER_BIN; SKIP"
@@ -88,6 +91,9 @@ trap cleanup EXIT
 log_section "Setup"
 mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 ln -s "${PROJECT_ROOT}/config/crd" "${CONFIG_DIR}/crd"
+# conf_sync is mTLS by default: put the certs where the emitted block expects them
+# (work-dir relative), then let the shared emitter write the transport block.
+conf_sync_distribute_certs "$WORK_DIR"
 
 cat > "${CONFIG_DIR}/edgion-controller.yaml" <<EOF
 work_dir: "${WORK_DIR}"
@@ -107,12 +113,18 @@ logging:
 conf_center:
   type: etcd
   endpoints: ["${ETCD_ENDPOINT}"]
-  prefix: "${ETCD_PREFIX}"
+  key_prefix: "${ETCD_PREFIX}"
+  # Required since etcd HA landed: advertised (never dialed) non-loopback
+  # addresses; validation rejects loopback/0.0.0.0.
+  leader_election:
+    grpc_addr: "10.255.255.1:${CONTROLLER_GRPC_PORT}"
+    admin_addr: "10.255.255.1:${CONTROLLER_ADMIN_PORT}"
 
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
 EOF
+conf_sync_security_block server >> "${CONFIG_DIR}/edgion-controller.yaml"
 log_info "Config written (etcd prefix=${ETCD_PREFIX})"
 
 log_section "Start Controller (Etcd mode)"

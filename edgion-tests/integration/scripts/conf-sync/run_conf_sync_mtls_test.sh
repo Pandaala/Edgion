@@ -28,7 +28,7 @@ UTILS_DIR="${SCRIPT_DIR}/../utils"
 CERTS_DIR_SCRIPT="${SCRIPT_DIR}/../gen_certs"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
-source "${UTILS_DIR}/inject_conf_sync_mtls.sh"
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 # Ports — use different gRPC port to avoid conflict with plain-text tests
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
@@ -197,9 +197,9 @@ start_mtls_environment() {
 
     # ── 0. Kill old processes ──
     log_info "Killing old processes..."
-    pkill -9 -f "edgion-controller" 2>/dev/null || true
-    pkill -9 -f "edgion-gateway" 2>/dev/null || true
-    pkill -9 -f "test_server" 2>/dev/null || true
+    pkill -9 -f "debug/edgion-controller" 2>/dev/null || true
+    pkill -9 -f "debug/edgion-gateway" 2>/dev/null || true
+    pkill -9 -f "debug/test_server" 2>/dev/null || true
     sleep 2
 
     # ── 1. Check binaries ──
@@ -240,7 +240,7 @@ start_mtls_environment() {
 
     # ── 3. Generate conf_sync mTLS certificates ──
     log_section "Generating conf_sync mTLS certificates"
-    conf_sync_generate_and_distribute_certs "${WORK_DIR}"
+    conf_sync_distribute_certs "${WORK_DIR}"
     log_success "All mTLS certificates present (primary + secondary)"
 
     # ── 4. Generate YAML configs with multi-cert mTLS section ──
@@ -252,6 +252,7 @@ start_mtls_environment() {
     # Controller YAML: base + multi-cert mTLS override
     # active: primary selects the primary cert; secondary is listed but inactive
     cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml"
+    conf_sync_strip_security_block "$controller_yaml"
     cat >> "$controller_yaml" <<EOF
 
 # ── Multi-cert mTLS override for integration test ──
@@ -275,6 +276,7 @@ EOF
     # Gateway YAML: base + multi-cert mTLS override
     # active: primary selects the primary cert; secondary is listed but inactive
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml"
+    conf_sync_strip_security_block "$gateway_yaml"
     cat >> "$gateway_yaml" <<EOF
 
 # ── Multi-cert mTLS override for integration test ──
@@ -299,6 +301,7 @@ EOF
     local gateway_yaml_compat="${WORK_DIR}/edgion-gateway-mtls-compat.yaml"
 
     cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml_compat"
+    conf_sync_strip_security_block "$controller_yaml_compat"
     cat >> "$controller_yaml_compat" <<EOF
 
 # ── Backward-compat single-cert mTLS (old format, still supported) ──
@@ -311,6 +314,7 @@ conf_sync_security:
 EOF
 
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml_compat"
+    conf_sync_strip_security_block "$gateway_yaml_compat"
     cat >> "$gateway_yaml_compat" <<EOF
 
 # ── Backward-compat single-cert mTLS (old format, still supported) ──
@@ -493,7 +497,10 @@ EOF
             break
         fi
         sleep 1
-        ((lb_waited++))
+        # Use assignment, not `((lb_waited++))`: post-increment returns exit status 1
+        # when the old value is 0, which `set -e` (line 18) turns into a silent death
+        # on bash 5 (Linux/CI). bash 3.2 (macOS) does not enforce -e here.
+        lb_waited=$((lb_waited + 1))
     done
 
     # Verify mTLS in gateway logs
@@ -609,7 +616,7 @@ test_resource_diff() {
             log_info "resource_diff attempt $attempt failed, retrying in ${delay}s..."
             sleep $delay
         fi
-        ((attempt++))
+        attempt=$((attempt + 1))
     done
     log_error "resource_diff failed after $max_retries attempts"
     tail -15 "${WORK_DIR}/logs/resource_diff_mtls.log" 2>/dev/null || true

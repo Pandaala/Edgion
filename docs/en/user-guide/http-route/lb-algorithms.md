@@ -1,10 +1,12 @@
 # Load Balancing Algorithms
 
 > **🔌 Edgion extension**
-> 
-> Selecting a non-default load balancing algorithm is an Edgion extension expressed through `LBPolicy*` ExtensionRefs on `backendRefs[].filters`; it is not part of standard Gateway API.
+>
+> Selecting a non-default load balancing algorithm is an Edgion extension expressed through the `spec.loadBalancer` section of an `EdgionBackendTrafficPolicy` custom resource attached to a Service; it is not part of standard Gateway API.
 
-Edgion distributes requests across a backend's endpoints. By default it uses weighted round-robin; you can opt a backend into consistent hashing, least-connection, or latency-aware EWMA selection.
+Edgion distributes requests across a backend's endpoints. By default it uses weighted round-robin; you can opt a **Service** into consistent hashing, least-connection, or latency-aware EWMA selection.
+
+`EdgionBackendTrafficPolicy` also carries [active health checks](./backends/health-check.md) and [outlier detection](./backends/circuit-breaker.md) for the same Service; see the [full schema reference](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md) for all three sections together.
 
 ## Supported algorithms
 
@@ -12,26 +14,39 @@ Edgion distributes requests across a backend's endpoints. By default it uses wei
 |-----------|----------------|-------------|
 | RoundRobin (default) | Weighted round-robin across healthy endpoints | General-purpose HTTP traffic |
 | ConsistentHash | Hashes a request attribute onto a Ketama ring | Cache affinity, sticky-by-key routing |
-| LeastConnection | Endpoint with the fewest in-flight connections | Long-lived connections (gRPC streams, WebSocket) |
-| EWMA | Endpoint with the lowest exponentially weighted moving average latency | Heterogeneous backends with uneven latency |
+| LeastConn | Endpoint with the fewest in-flight connections | Long-lived connections (gRPC streams, WebSocket) |
+| Ewma | Endpoint with the lowest exponentially weighted moving average latency | Heterogeneous backends with uneven latency |
 
-When no policy is configured, the default weighted round-robin selector is used.
+When no policy is configured, or `loadBalancer.type: RoundRobin`, the default weighted round-robin selector is used.
 
 ## How to configure
 
-A load balancing policy is declared as an `ExtensionRef` filter **on a backendRef** (not on the rule). The filter uses `group: edgion.io` and one of the `LBPolicy*` kinds. These ExtensionRefs are recognized by their `kind` and consumed before plugin processing, so they never reach the plugin pipeline.
+A load balancing policy is declared in `spec.loadBalancer` on an `EdgionBackendTrafficPolicy` resource, attached to a Service via `spec.targetRefs` (same namespace as the policy). This is a **per-destination** setting: one algorithm applies to a Service regardless of which route(s) send traffic to it.
 
-| `kind` | Meaning | `name` field |
+| `loadBalancer.type` | Meaning | `consistentHash` |
 |--------|---------|--------------|
-| `LBPolicyConsistentHash` | Consistent hashing | Selects the hash key (see below) |
-| `LBPolicyLeastConn` | Least connections | `default` (value is ignored) |
-| `LBPolicyEwma` | EWMA latency selection | `default` (value is ignored) |
+| `RoundRobin` | Weighted round-robin (default) | Not applicable |
+| `LeastConn` | Least connections | Not applicable |
+| `Ewma` | EWMA latency selection | Not applicable |
+| `ConsistentHash` | Consistent hashing | Required — selects the hash key (see below) |
 
-`group` may also be left empty (the core API group) — it is accepted as equivalent to `edgion.io`. Any other group, or an unrecognized `kind`, is ignored and the backend keeps the default RoundRobin algorithm.
+`consistentHash` is required when `type: ConsistentHash` and rejected (spec invalid) for any other type.
 
 ### Minimal example: least connections
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: api-lb-policy
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: api-service
+  loadBalancer:
+    type: LeastConn
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -46,12 +61,6 @@ spec:
     - backendRefs:
         - name: api-service
           port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyLeastConn
-                name: default
 ```
 
 ## Algorithm details
@@ -66,40 +75,42 @@ spec:
 
 - Ketama-based consistent hash ring: the same hash key maps to the same endpoint as long as the endpoint set is unchanged.
 - When endpoints change, only roughly 1/N of keys remap.
-- The hash key comes from a request attribute selected by the `name` field.
+- The hash key comes from a request attribute selected by `consistentHash.hashOn` + `consistentHash.key`.
 - If the selected attribute is **missing on a request** (for example, the named header is not present), the hash key is empty and that request falls back to round-robin selection.
 
-The `name` field selects the hash key using a `<source>.<key>` form:
+`consistentHash.hashOn` selects the hash source, and `consistentHash.key` names the specific header / cookie / query parameter:
 
-| `name` value | Hash key |
+| `hashOn` value | Hash key |
 |--------------|----------|
-| `header.<HeaderName>` | The value of that request header |
-| `cookie.<CookieName>` | The value of that cookie |
-| `arg.<QueryParam>` | The value of that query-string argument |
-
-The `<source>` prefix must be exactly `header`, `cookie`, or `arg`. A `name` that does not parse into one of these forms causes the policy to be **ignored**, and the backend keeps the default RoundRobin algorithm.
+| `header` | The value of the request header named by `key` |
+| `cookie` | The value of the cookie named by `key` |
+| `queryParam` | The value of the query-string argument named by `key` |
 
 ```yaml
-backendRefs:
-  - name: cache-service
-    port: 6379
-    filters:
-      - type: ExtensionRef
-        extensionRef:
-          group: edgion.io
-          kind: LBPolicyConsistentHash
-          # Hash on the X-User-Id header
-          name: header.X-User-Id
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: cache-lb-policy
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: cache-service
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      hashOn: header
+      key: X-User-Id
 ```
 
-### LeastConnection
+### LeastConn
 
 - Selects the endpoint with the fewest active connections.
 - Connection counting is service-scoped: the same endpoint IP under different services is tracked independently.
 - The counter increments when a request connects and decrements when it completes; retried attempts decrement correctly so a retry does not leak a count.
 - New endpoints (count 0) are preferred; removed endpoints drain gracefully — no new requests, existing ones finish.
 
-### EWMA
+### Ewma
 
 - Selects the endpoint with the lowest exponentially weighted moving average of latency.
 - Update formula: `new = alpha × latency + (1 - alpha) × old`, with a default alpha of 10%.
@@ -112,58 +123,41 @@ backendRefs:
 ### Cache service with consistent hashing by cookie
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
 metadata:
-  name: cache-route
+  name: cache-lb-policy
   namespace: production
 spec:
-  parentRefs:
-    - name: main-gateway
-  hostnames:
-    - "cache.example.com"
-  rules:
-    - backendRefs:
-        - name: cache-service
-          port: 6379
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyConsistentHash
-                name: cookie.session_id
+  targetRefs:
+    - kind: Service
+      name: cache-service
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      hashOn: cookie
+      key: session_id
 ```
 
 ### gRPC service with EWMA
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
 metadata:
-  name: grpc-route
+  name: grpc-lb-policy
   namespace: production
 spec:
-  parentRefs:
-    - name: main-gateway
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /grpc
-      backendRefs:
-        - name: grpc-service
-          port: 50051
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyEwma
-                name: default
+  targetRefs:
+    - kind: Service
+      name: grpc-service
+  loadBalancer:
+    type: Ewma
 ```
 
 ### Weighted canary with the default algorithm
 
-No policy filter is needed — weighted round-robin is the default:
+No `EdgionBackendTrafficPolicy` is needed — weighted round-robin is the default. Weight is still expressed on the route's `backendRefs`:
 
 ```yaml
 rules:
@@ -178,13 +172,15 @@ rules:
 
 ## Notes
 
-- **Scope**: a policy applies to the service named by the backendRef it is attached to.
-- **Shared services**: when several routes attach different policies to the same service, the service honors the union of those policies; the LB layer picks the appropriate one per request. A policy is removed only when the last route referencing it is deleted.
-- **Health checks**: all algorithms filter out unhealthy endpoints automatically.
+- **Scope**: a policy applies to every Service named in its `targetRefs` (same namespace as the policy) — this is per-**destination**, not per-route. Every route sending traffic to that Service uses the same algorithm.
+- **Conflicts**: when more than one `EdgionBackendTrafficPolicy` targets the same Service, the **oldest** `creationTimestamp` wins (ties break by name); the loser's status reports `Accepted=False`/reason `Conflicted` on the affected ancestor Gateway(s) in `status.ancestors[]`. There is no per-field merge or union across policies — see [Conflict Resolution](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution).
+- **Health checks and outlier detection**: all algorithms filter out unhealthy / ejected endpoints automatically (configured in the same policy's `healthCheck` / `outlierDetection` sections).
 - **Weight**: all algorithms honor the `weight` field on backendRefs.
 
 ## Related documents
 
 - [Backend configuration](./backends/README.md)
+- [Backend Active Health Check](./backends/health-check.md)
+- [Circuit Breaker (Outlier Detection)](./backends/circuit-breaker.md)
 - [Session persistence](./resilience/session-persistence.md)
 - [HTTPRoute overview](./overview.md)

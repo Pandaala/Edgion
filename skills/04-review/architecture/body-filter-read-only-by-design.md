@@ -32,15 +32,22 @@ transcode, or WAF-inspect bodies at the filter layer. Edgion's body-filter phase
 `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs:11-30` ("Plugins can
 inspect the chunk and return an optional Duration to throttle ... This trait deliberately omits
 the `&mut PluginLog` argument ... Body filters are invoked once per upstream chunk"). The
-behaviour is "this class of plugin cannot be written yet", which harms no in-flight request; the
-only concrete current limitation is HMAC body validation, which already fails *gracefully*
-(`hmac_auth/plugin.rs:361-362` emits `push_err("body not supported")`, not a crash).
+behaviour is "this class of plugin cannot be written yet", which harms no in-flight request.
+
+> **Update (2026-07-18):** the request/response body-**read** scaffolding now exists
+> (`PluginSession::read_request_body`/`read_response_body` + `BodyRequirement` body gate; see
+> `docs/superpowers/specs/2026-07-18-plugin-body-read-scaffolding.md`). HMAC `validate_request_body`
+> is now wired through that gate (its old `push_err("body not supported")` stub is gone) and
+> fail-closes (500) until full-body **buffering** (P0 `tasks/todo/llm-ai-gateway/01-body-processing-runtime.md`)
+> lands. Body **mutation** (`encodeData`/`decodeData`-style) is still not implemented and the
+> read-only per-chunk contract below still stands.
 
 **2. The framework already has the mutable handle; the boundary is intentional, not accidental**
 
 Pingora hands `pg_upstream_response_body_filter.rs:14-20` a `body: &mut Option<bytes::Bytes>`.
 The plugin runtime *deliberately* narrows it: `PluginRuntime::run_upstream_response_body_plugins`
-(`plugin_runtime.rs:1114-1138`) takes `body: &Option<bytes::Bytes>` and forwards `&body` to each
+in `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` takes
+`body: &Option<bytes::Bytes>` and forwards `&body` to each
 plugin. So the read-only signature is a chosen contract at the runtime boundary, not a place
 where a mutable reference was lost by oversight. Widening it would mean a new chunk-rewrite
 result type, a max-expanded-chunk cap to bound allocation, and re-validating every plugin in the
@@ -66,9 +73,9 @@ bolted on as a review patch.
 - "Add a `RequestBodyFilter` trait backed by a Pingora `request_body_filter` callback" — same
   reasoning; the existing `pg_request_body_filter.rs` callback is internal-mirroring-only by
   design and not a plugin extension point.
-- "Make HMAC `validate_request_body` work by buffering the body in the plugin" — that depends on
-  the request-body capability above; the current graceful `push_err("body not supported")` is the
-  accepted behaviour until the feature is designed.
+- ~~"Make HMAC `validate_request_body` work by buffering the body in the plugin"~~ — **superseded
+  2026-07-18.** The body-read API + gate now exist and HMAC is wired to them; the plugin fail-closes
+  (500) until the P0 buffering runtime lands. Body **mutation** (below) remains unaccepted.
 
 ## Re-evaluation Triggers
 
@@ -88,7 +95,7 @@ Re-open this decision only if:
   the same boundary)
 - `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs`
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs`
-- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs:1114-1138`
+- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs::PluginRuntime::run_upstream_response_body_plugins`
 - `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs:361-362`
 </content>
 </invoke>

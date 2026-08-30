@@ -8,6 +8,25 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Sum the value of every Prometheus text-exposition line whose metric name is
+/// exactly `metric` and whose label set contains every `key="value"` pair in
+/// `labels` (order-independent substring match on the label block).
+///
+/// Shared scrape helper for suites that need one labeled counter's value —
+/// e.g. `edgion_geoip_denied_total{layer="tcp",reason="deny_country"}` — where
+/// the metric is the ONLY observable for a given denial (no access-log entry,
+/// no client address). Returns 0.0 if the metric/label combination has never
+/// been recorded (the metrics crate does not pre-register label combinations).
+pub fn counter_value(raw: &str, metric: &str, labels: &[(&str, &str)]) -> f64 {
+    let prefix = format!("{metric}{{");
+    let prefix_bare = format!("{metric} ");
+    raw.lines()
+        .filter(|line| line.starts_with(&prefix) || line.starts_with(&prefix_bare))
+        .filter(|line| labels.iter().all(|(k, v)| line.contains(&format!("{k}=\"{v}\""))))
+        .filter_map(|line| line.split_whitespace().last()?.parse::<f64>().ok())
+        .sum()
+}
+
 /// Backend request metric data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendMetric {

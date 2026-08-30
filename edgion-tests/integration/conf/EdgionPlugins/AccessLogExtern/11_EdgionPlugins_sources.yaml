@@ -1,0 +1,50 @@
+# sources_resolve: one accessLogExtern field per `from` source.
+#   routeLabel      -> HTTPRoute metadata.labels.sl
+#   routeAnnotation -> HTTPRoute metadata.annotations.sa
+#   header          -> request header x-src-header
+#   query           -> request query param srcq
+#   cookie          -> request cookie srccookie
+#   respHeader      -> X-Src-Resp, set by the ResponseHeaderModifier below
+#   ctx             -> ctx var src_ctx, set by the CtxSet below
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-sources
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: src_ctx
+            template: "ctx-value"
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Src-Resp"
+            value: "resp-value"
+  accessLogExtern:
+    - key: src_label
+      from: routeLabel
+      name: sl
+    - key: src_annotation
+      from: routeAnnotation
+      name: sa
+    - key: src_header
+      from: header
+      name: x-src-header
+    - key: src_query
+      from: query
+      name: srcq
+    - key: src_cookie
+      from: cookie
+      name: srccookie
+    - key: src_resp_header
+      from: respHeader
+      name: X-Src-Resp
+    - key: src_ctx
+      from: ctx
+      name: src_ctx

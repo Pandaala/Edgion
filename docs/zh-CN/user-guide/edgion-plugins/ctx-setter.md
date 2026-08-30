@@ -47,8 +47,8 @@ CtxSet 支持从多种数据源（Header、Query、Cookie、Path、ClientIP、Me
 
 | `type` | 额外字段 | 读取来源 |
 |--------|----------|---------|
-| `clientIp` | — | 客户端 IP 地址（若存在 RealIp 则遵循其结果） |
-| `clientIpAndPath` | — | 客户端 IP 与请求路径的组合 |
+| `remoteIp` | — | 解析后的客户端 IP 地址 |
+| `remoteIpAndPath` | — | 解析后的客户端 IP 与请求路径的组合 |
 | `header` | `name` | 指定的请求头 |
 | `query` | `name` | 指定的 Query 参数 |
 | `cookie` | `name` | 指定的 Cookie |
@@ -56,7 +56,7 @@ CtxSet 支持从多种数据源（Header、Query、Cookie、Path、ClientIP、Me
 | `method` | — | HTTP 方法 |
 | `ctx` | `name` | 已有的上下文变量，由更早的规则或插件设置 |
 
-若要使用固定字面量，请使用顶层的 `value` 字段而不是 `from`。若要由多个来源构建组合字符串，请使用 `template`。
+若要使用固定字面量，请使用顶层的 `value` 字段而不是 `from`。若要由多个来源构建组合字符串，请使用 `template`。要从 LinkSys webhook 解析值，请使用 [WebhookKeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md)，而不是 CtxSet 的 `from` 来源。
 
 ### `template` 变量
 
@@ -73,7 +73,7 @@ CtxSet 支持从多种数据源（Header、Query、Cookie、Path、ClientIP、Me
 | `${requestPath}` | 请求入口时的原始路径（冻结，不受后续重写影响） |
 | `${requestUri}` | 请求入口时的原始完整 URI（冻结） |
 | `${method}` | HTTP 方法 |
-| `${clientIp}` | 客户端 IP 地址 |
+| `${remoteIp}` | 解析后的客户端 IP 地址 |
 
 用户可控的值中如果包含 `${...}` 会被当作字面量文本输出，因此模板不存在注入漏洞。
 
@@ -171,7 +171,7 @@ spec:
       config:
         vars:
           - name: "rate_key"
-            template: "${header:X-Tenant}_${clientIp}"
+            template: "${header:X-Tenant}_${remoteIp}"
 ```
 
 ### 2. 大小写转换
@@ -315,5 +315,6 @@ spec:
 ## 相关文档
 
 - [CtxSet（HTTPRoute 过滤器视角）](../http-route/filters/edgion-plugins/ctx-setter.md) - 在 HTTPRoute 过滤器中使用 CtxSet
+- [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) - 将 LinkSys webhook 的值解析进上下文
 - [RateLimit 插件](rate-limit.md) - 可使用 CtxSet 构造限流键
 - [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览

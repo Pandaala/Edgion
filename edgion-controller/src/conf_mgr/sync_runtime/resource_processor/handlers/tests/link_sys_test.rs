@@ -52,6 +52,7 @@ fn make_redis_link_sys(ns: &str, name: &str, secret_name: &str, secret_ns: Optio
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 auth: Some(RedisAuth {
@@ -88,6 +89,7 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                 endpoints: vec!["http://localhost:9200".to_string()],
                 auth: Some(ElasticsearchAuth::ApiKey {
@@ -110,6 +112,251 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
         },
         status: None,
     }
+}
+
+fn make_credential_source(ns: &str, name: &str, secret_name: &str) -> LinkSys {
+    let spec: LinkSysSpec = serde_yaml::from_str(&format!(
+        "type: credentialSource\nconfig:\n  provider:\n    type: oauth2ClientCredentials\n    tokenEndpoint: https://issuer.example.com/token\n    clientAuthentication:\n      activeSecretRef:\n        name: {secret_name}\n"
+    ))
+    .expect("credentialSource spec");
+    LinkSys {
+        metadata: ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(ns.to_string()),
+            uid: Some("source-uid".to_string()),
+            generation: Some(4),
+            ..Default::default()
+        },
+        spec,
+        status: None,
+    }
+}
+
+#[tokio::test]
+async fn credential_source_registers_only_non_secret_desired_state() {
+    let (key, mut secret) = make_secret(
+        "ops",
+        "oauth-bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    secret.metadata.uid = Some("bootstrap-uid".to_string());
+    secret.metadata.resource_version = Some("22".to_string());
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+
+    let result = LinkSysHandler::new()
+        .parse(make_credential_source("ops", "provider", "oauth-bootstrap"), &ctx)
+        .await;
+    let ProcessResult::Continue(link_sys) = result else {
+        panic!("credentialSource must continue");
+    };
+    let desired = runtime
+        .credential_source_registry
+        .source("ops/provider")
+        .expect("desired source");
+    assert_eq!(desired.uid, "source-uid");
+    assert_eq!(desired.secret_inputs.len(), 1);
+    assert_eq!(desired.secret_inputs[0].resource_version.as_deref(), Some("22"));
+    let SystemConfig::CredentialSource(source) = link_sys.spec.config else {
+        panic!("credentialSource expected");
+    };
+    let CredentialSourceProvider::OAuth2ClientCredentials(provider) = source.provider;
+    assert!(provider.tls.is_none());
+}
+
+#[test]
+fn credential_source_reports_unsupported_non_kubernetes_center_reason() {
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    runtime.set_managed_credentials_supported(false);
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "provider", "oauth-bootstrap");
+    let errors = handler.preparse(&mut link_sys, &ctx);
+    assert!(!errors.is_empty());
+    handler.update_status(&mut link_sys, &ctx, &errors);
+    let accepted = link_sys
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::ACCEPTED)
+        .unwrap();
+    assert_eq!(accepted.reason, "UnsupportedConfigurationCenter");
+}
+
+#[tokio::test]
+async fn persist_off_is_rejected_when_not_single_publisher() {
+    let (key, mut secret) = make_secret(
+        "ops",
+        "bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    secret.metadata.uid = Some("bootstrap-uid".to_string());
+    secret.metadata.resource_version = Some("22".to_string());
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    runtime.set_single_publisher(false);
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "src", "bootstrap");
+    if let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config {
+        source.publication.persist = false;
+    }
+    let errors = handler.preparse(&mut link_sys, &ctx);
+    assert!(!errors.is_empty());
+    handler.update_status(&mut link_sys, &ctx, &errors);
+    let accepted = link_sys
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::ACCEPTED)
+        .unwrap();
+    assert_eq!(accepted.status, "False");
+    assert_eq!(accepted.reason, "UnsupportedHaMode");
+
+    let result = handler.parse(link_sys, &ctx).await;
+    let ProcessResult::Continue(_) = result else {
+        panic!("credentialSource must continue");
+    };
+    assert!(
+        runtime.credential_source_registry.source("ops/src").is_none(),
+        "persist=false under all-serve must not register a desired source"
+    );
+}
+
+#[tokio::test]
+async fn invalid_publication_cap_never_registers_a_credential_source() {
+    for (persist, memory_max_keys) in [(false, 0), (false, 10_001), (true, 0)] {
+        let (key, mut secret) = make_secret(
+            "ops",
+            "bootstrap",
+            &[("clientId", b"client"), ("clientSecret", b"secret")],
+        );
+        secret.metadata.uid = Some("bootstrap-uid".to_string());
+        secret.metadata.resource_version = Some("22".to_string());
+        let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+        let handler = LinkSysHandler::new();
+        let mut link_sys = make_credential_source("ops", "src", "bootstrap");
+        let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config else {
+            panic!("credentialSource expected");
+        };
+        source.publication.persist = persist;
+        source.publication.memory_max_keys = memory_max_keys;
+
+        let errors = handler.preparse(&mut link_sys, &ctx);
+        assert!(
+            errors.iter().any(|error| error.contains("memoryMaxKeys")),
+            "invalid cap must fail admission: {errors:?}"
+        );
+        let result = handler.parse(link_sys, &ctx).await;
+        let ProcessResult::Continue(_) = result else {
+            panic!("lenient admission must continue");
+        };
+        assert!(
+            runtime.credential_source_registry.source("ops/src").is_none(),
+            "Accepted=False source must not register: persist={persist}, memoryMaxKeys={memory_max_keys}"
+        );
+    }
+}
+
+#[test]
+fn persist_off_is_allowed_on_non_kubernetes_single_publisher() {
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    runtime.set_managed_credentials_supported(false);
+    runtime.set_single_publisher(true);
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "src", "bootstrap");
+    if let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config {
+        source.publication.persist = false;
+    }
+    let errors = handler.preparse(&mut link_sys, &ctx);
+    assert!(
+        !errors
+            .iter()
+            .any(|error| error.contains("UnsupportedConfigurationCenter")),
+        "persist=false on a non-k8s single publisher must not be mapped as UnsupportedConfigurationCenter: {errors:?}"
+    );
+    assert!(
+        !errors.iter().any(|error| {
+            error.contains("credentialSource.publication.persist=false is unsupported when ha_mode is all-serve")
+        }),
+        "persist-off all-serve error must be absent: {errors:?}"
+    );
+    assert!(
+        !errors.iter().any(|error| {
+            error.contains("credentialSource.publication.persist=true requires the Kubernetes configuration center")
+        }),
+        "persist-on Kubernetes-only error must be absent: {errors:?}"
+    );
+    handler.update_status(&mut link_sys, &ctx, &errors);
+    let accepted = link_sys
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::ACCEPTED)
+        .unwrap();
+    assert_ne!(accepted.reason, "UnsupportedConfigurationCenter");
+}
+
+fn json_has_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => map.contains_key(key) || map.values().any(|v| json_has_key(v, key)),
+        serde_json::Value::Array(items) => items.iter().any(|v| json_has_key(v, key)),
+        _ => false,
+    }
+}
+
+#[tokio::test]
+async fn persist_off_link_sys_conf_sync_projection_has_no_generated_map() {
+    const TOKEN: &str = "ephemeral-generated-secret-must-not-serialize-xx";
+    let (key, mut secret) = make_secret(
+        "ops",
+        "oauth-bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    secret.metadata.uid = Some("bootstrap-uid".to_string());
+    secret.metadata.resource_version = Some("22".to_string());
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+
+    runtime
+        .credential_memory
+        .insert_oauth_publication(
+            "ops/provider/source-uid",
+            crate::services::credential_manager::memory::GeneratedSecretEntry {
+                key: "pub-1".to_string(),
+                value: zeroize::Zeroizing::new(TOKEN.as_bytes().to_vec()),
+                issued_at: "2026-08-27T00:00:00Z".to_string(),
+                valid_until: "2099-08-27T12:00:00Z".to_string(),
+                valid_until_mono: std::time::Instant::now() + std::time::Duration::from_secs(3_600),
+            },
+            10_000,
+        )
+        .expect("memory insert");
+
+    let handler = LinkSysHandler::new();
+    let mut link_sys = make_credential_source("ops", "provider", "oauth-bootstrap");
+    if let SystemConfig::CredentialSource(source) = &mut link_sys.spec.config {
+        source.publication.persist = false;
+    }
+    let result = handler.parse(link_sys, &ctx).await;
+    let ProcessResult::Continue(mut ls) = result else {
+        panic!("credentialSource must continue");
+    };
+    handler.update_status(&mut ls, &ctx, &[]);
+
+    let value = serde_json::to_value(&ls).expect("LinkSys must serialize");
+    let config = value.pointer("/spec/config").expect("spec.config");
+    assert!(
+        !json_has_key(config, "entries") && !json_has_key(config, "generated") && !json_has_key(config, "value"),
+        "spec.config must not carry a generated secret map: {config}"
+    );
+
+    let status = value.get("status").unwrap_or(&serde_json::Value::Null);
+    assert!(
+        !status.to_string().contains(TOKEN),
+        "status must not contain the memory token"
+    );
 }
 
 #[tokio::test]
@@ -146,10 +393,15 @@ async fn test_redis_auth_happy_path() {
 }
 
 #[tokio::test]
-async fn test_secret_not_found_returns_pending() {
+async fn test_secret_not_found_clears_injected_secret_and_returns_pending() {
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let handler = LinkSysHandler::new();
-    let ls = make_redis_link_sys("default", "my-redis", "missing-secret", None);
+    let mut ls = make_redis_link_sys("default", "my-redis", "missing-secret", None);
+    let (_, injected) = make_secret("default", "injected", &[("password", b"operator-value")]);
+    let SystemConfig::Redis(redis) = &mut ls.spec.config else {
+        panic!("expected Redis");
+    };
+    redis.auth.as_mut().expect("auth").slot.secret = Some(injected);
 
     let result = handler.parse(ls, &ctx).await;
 
@@ -159,7 +411,10 @@ async fn test_secret_not_found_returns_pending() {
                 SystemConfig::Redis(r) => r.auth.as_ref().expect("auth should be present"),
                 _ => panic!("expected Redis"),
             };
-            assert!(auth.slot.secret.is_none(), "secret should be None while pending");
+            assert!(
+                auth.slot.secret.is_none(),
+                "operator-injected or stale Secret must be cleared while resolution is pending"
+            );
             let refs = ctx.secret_ref_manager().get_refs("default/missing-secret");
             let owner = ResourceRef::new(
                 ResourceKind::LinkSys,
@@ -455,6 +710,7 @@ async fn test_no_auth_configured() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 auth: None,
@@ -534,7 +790,7 @@ fn test_update_status_sets_accepted_false_on_validation_errors() {
 #[tokio::test]
 async fn test_redis_tls_secret_ref_resolution() {
     use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
     let (key, mut secret) = make_secret(
         "default",
@@ -561,18 +817,21 @@ async fn test_redis_tls_secret_ref_resolution() {
         topology: None,
         tls: Some(TlsConfig {
             enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: Some(SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: "redis-tls".to_string(),
-                    namespace: None,
+            outbound: OutboundTlsLocal {
+                validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![
+                        edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
+                            kind: "Secret".to_string(),
+                            name: "redis-tls".to_string(),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
                 }),
-                secret: None,
-            }),
-            insecure_skip_verify: None,
+                ..Default::default()
+            },
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         }),
         observability: None,
     });
@@ -582,11 +841,15 @@ async fn test_redis_tls_secret_ref_resolution() {
         ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
     };
 
-    let certs = match &ls.spec.config {
-        SystemConfig::Redis(r) => r.tls.as_ref().unwrap().certs.as_ref().unwrap(),
+    let tls = match &ls.spec.config {
+        SystemConfig::Redis(r) => r.tls.as_ref().unwrap(),
         _ => panic!("expected Redis"),
     };
-    let secret = certs.secret.as_ref().expect("secret injected");
+    let secrets = tls
+        .resolved_ca_certificates
+        .as_ref()
+        .expect("resolved_ca_certificates injected");
+    let secret = secrets.first().expect("at least one resolved CA secret");
     let data = secret.data.as_ref().expect("data");
     assert_eq!(data.get(TLS_CA_KEY).unwrap().0, b"CA-PEM");
     assert_eq!(data.get(TLS_CERT_KEY).unwrap().0, b"CERT-PEM");
@@ -602,7 +865,7 @@ async fn test_redis_tls_secret_ref_resolution() {
 /// Setup:
 /// - auth.secretRef points to a non-existent Secret → `SecretNotFound`
 ///   (priority 5 in `pick_resolved_refs_reason`)
-/// - tls.certs.secretRef points to a Secret with a rejected `type`
+/// - tls.outbound.caSecretRef points to a Secret with a rejected `type`
 ///   (`kubernetes.io/ssh-auth`, which `TlsCertsResolver` does not allow)
 ///   → `InvalidSecretType` (priority 2 — higher severity)
 ///
@@ -613,7 +876,7 @@ async fn test_redis_tls_secret_ref_resolution() {
 #[tokio::test]
 async fn test_auth_and_tls_both_fail_collects_both_errors() {
     use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
     // tls Secret exists but with a rejected type — surfaces as
     // `InvalidSecretType` from the pipeline's type-check step.
@@ -653,18 +916,21 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
         topology: None,
         tls: Some(TlsConfig {
             enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: Some(SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: "redis-tls-bad-type".to_string(),
-                    namespace: None,
+            outbound: OutboundTlsLocal {
+                validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![
+                        edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
+                            kind: "Secret".to_string(),
+                            name: "redis-tls-bad-type".to_string(),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
                 }),
-                secret: None,
-            }),
-            insecure_skip_verify: None,
+                ..Default::default()
+            },
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         }),
         observability: None,
     });
@@ -674,8 +940,7 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
         ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
     };
 
-    // Spec must show both sides still at `secret: None`, proving neither
-    // side silently succeeded.
+    // Spec must show both sides still at `None`, proving neither side silently succeeded.
     match &ls.spec.config {
         SystemConfig::Redis(r) => {
             assert!(
@@ -683,8 +948,8 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
                 "auth.secret must remain None when auth resolution failed"
             );
             assert!(
-                r.tls.as_ref().unwrap().certs.as_ref().unwrap().secret.is_none(),
-                "tls.certs.secret must remain None when tls resolution failed"
+                r.tls.as_ref().unwrap().resolved_ca_certificates.is_none(),
+                "tls.resolved_ca_certificates must remain None when tls resolution failed"
             );
         }
         _ => panic!("expected Redis"),
@@ -749,21 +1014,23 @@ async fn test_spec_serde_round_trip_preserves_secret() {
 /// no longer embeds them or registers wakeup dependencies.
 #[tokio::test]
 async fn webhook_service_target_registers_no_service_ref() {
-    use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{
+        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
+    };
 
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
     let mut cfg = SystemConfig::Webhook(WebhookServiceConfig {
         conn: ExternalHttpConnection {
             target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
+                service: WebhookServiceRef {
                     kind: None,
-                    name: "websvc".into(),
+                    name: Some("websvc".into()),
                     namespace: Some("ns".into()),
                     port: Some(8080),
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -789,18 +1056,20 @@ async fn webhook_service_target_registers_no_service_ref() {
 
 /// Build a minimal valid webhook config with no shim fields set.
 fn make_webhook_config() -> edgion_resources::resources::link_sys::webhook::WebhookServiceConfig {
-    use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{
+        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
+    };
     WebhookServiceConfig {
         conn: ExternalHttpConnection {
             target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
+                service: WebhookServiceRef {
                     kind: None,
-                    name: "websvc".into(),
+                    name: Some("websvc".into()),
                     namespace: Some("ns".into()),
                     port: Some(8080),
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -890,10 +1159,9 @@ fn test_deprecation_warns_on_all_shim_fields_together() {
 /// populates `resolved_secrets` with the decoded value.
 #[tokio::test]
 async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
-    use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{
         CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookTarget,
+        WebhookServiceRef, WebhookTarget,
     };
 
     // Secret: namespace="edgion-default", name="wh-tok", key="token" -> "my-secret-token"
@@ -909,16 +1177,18 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
             ..Default::default()
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
                     target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
+                        service: WebhookServiceRef {
                             kind: None,
-                            name: "wh-svc".into(),
+                            name: Some("wh-svc".into()),
                             namespace: Some("edgion-default".into()),
                             port: Some(8080),
+                            ..Default::default()
                         },
+                        ..Default::default()
                     },
                     ..Default::default()
                 },
@@ -972,10 +1242,9 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
 /// resolved_secrets as None (fail-closed).
 #[tokio::test]
 async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
-    use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{
         CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookTarget,
+        WebhookServiceRef, WebhookTarget,
     };
 
     // No secrets in the store — the referenced secret does not exist.
@@ -990,16 +1259,18 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
             ..Default::default()
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            unknown_fields: Vec::new(),
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
                     target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
+                        service: WebhookServiceRef {
                             kind: None,
-                            name: "wh-svc".into(),
+                            name: Some("wh-svc".into()),
                             namespace: Some("edgion-default".into()),
                             port: Some(8080),
+                            ..Default::default()
                         },
+                        ..Default::default()
                     },
                     ..Default::default()
                 },
@@ -1045,4 +1316,199 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
         }
         ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
     }
+}
+
+// ── Phase 1 SAN guard tests ───────────────────────────────────────────────────
+
+/// Redis LinkSys with `tls.validation.subjectAltNames` must produce an
+/// Accepted=False preparse error in Phase 1.
+#[tokio::test]
+async fn redis_with_san_rejected_phase1() {
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    use edgion_resources::resources::link_sys::redis::RedisClientConfig;
+
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("redis-san".to_string()),
+            namespace: Some("default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
+            config: SystemConfig::Redis(RedisClientConfig {
+                endpoints: vec!["redis://localhost:6379".to_string()],
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            subject_alt_names: Some(vec![SubjectAltName {
+                                san_type: SubjectAltNameType::Hostname,
+                                hostname: Some("redis.example.com".to_string()),
+                                uri: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                auth: None,
+                db: None,
+                timeout: None,
+                pool: None,
+                retry: None,
+                topology: None,
+                observability: None,
+            }),
+        },
+        status: None,
+    };
+
+    let handler = LinkSysHandler::new();
+    let errors = handler.preparse(&mut ls, &ctx);
+
+    assert!(
+        !errors.is_empty(),
+        "expected preparse error for Redis subjectAltNames in Phase 1"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Redis")),
+        "error must identify the provider as Redis; got: {:?}",
+        errors
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("SAN pinning") || e.contains("subjectAltNames")),
+        "error must mention SAN pinning; got: {:?}",
+        errors
+    );
+}
+
+/// Etcd LinkSys with `tls.validation.hostname` must produce an
+/// Accepted=False preparse error in Phase 1 (spot-check for Etcd path).
+#[tokio::test]
+async fn etcd_with_hostname_rejected_phase1() {
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("etcd-san".to_string()),
+            namespace: Some("default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
+            config: SystemConfig::Etcd(EtcdClientConfig {
+                endpoints: vec!["https://etcd:2379".to_string()],
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            hostname: Some("etcd.example.com".to_string()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                auth: None,
+                timeout: None,
+                keep_alive: None,
+                namespace: None,
+                auto_sync_interval: None,
+                max_call_send_size: None,
+                max_call_recv_size: None,
+                user_agent: None,
+                reject_old_cluster: None,
+                observability: None,
+            }),
+        },
+        status: None,
+    };
+
+    let handler = LinkSysHandler::new();
+    let errors = handler.preparse(&mut ls, &ctx);
+
+    assert!(
+        !errors.is_empty(),
+        "expected preparse error for Etcd hostname in Phase 1"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Etcd")),
+        "error must identify the provider as Etcd; got: {:?}",
+        errors
+    );
+}
+
+/// Redis with only CA refs (no SAN fields) must NOT be rejected by the SAN guard.
+#[tokio::test]
+async fn redis_ca_only_no_san_accepted() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    use edgion_resources::resources::link_sys::redis::RedisClientConfig;
+
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("redis-ca".to_string()),
+            namespace: Some("default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            unknown_fields: Vec::new(),
+            config: SystemConfig::Redis(RedisClientConfig {
+                endpoints: vec!["redis://localhost:6379".to_string()],
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                kind: "Secret".to_string(),
+                                name: "redis-ca".to_string(),
+                                namespace: None,
+                                ..Default::default()
+                            }]),
+                            subject_alt_names: None,
+                            hostname: None,
+                            well_known_ca_certificates: None,
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                auth: None,
+                db: None,
+                timeout: None,
+                pool: None,
+                retry: None,
+                topology: None,
+                observability: None,
+            }),
+        },
+        status: None,
+    };
+
+    let handler = LinkSysHandler::new();
+    let errors = handler.preparse(&mut ls, &ctx);
+
+    let san_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| e.contains("SAN pinning") || e.contains("subjectAltNames"))
+        .collect();
+    assert!(
+        san_errors.is_empty(),
+        "CA-only TLS config must not trigger the SAN guard; got: {:?}",
+        errors
+    );
 }

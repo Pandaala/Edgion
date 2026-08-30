@@ -19,13 +19,14 @@ EdgionTls is Edgion's custom-extension resource that provides richer TLS certifi
 ### validate
 
 1. Check that `parent_refs` exists and is non-empty; if unset, warn that it will not take effect
-2. Check from GLOBAL_SECRET_STORE whether the Secret referenced by `secret_ref` exists; if not, warn (it may arrive later)
+2. Check the runtime-owned SecretStore for the Secret referenced by `secret_ref`; if absent, report a pending reference
 3. **Cert/private-key match check**: if the Secret is already present, extract `tls.crt` and `tls.key` and compare public-key bytes via `check_key_matches_cert()` (`x509-parser` + `rcgen`, pure Rust with no TLS-backend dependency); on mismatch, warn. When the Secret has not arrived, skip and rely on SecretRefManager requeue to retry.
 
 ### parse
 
 1. **Clear stale references**: clear records for this EdgionTls in SecretRefManager
-2. **Resolve server-side certificate Secret**: from `spec.secret_ref`, obtain the Secret reference, register in SecretRefManager, read Secret data from GLOBAL_SECRET_STORE, and populate `spec.secret`
+2. **Resolve server-side certificate Secret**: register `spec.secret_ref`, read through
+   `ctx.runtime().secret_store`, and populate the resolved transport slot
 3. **Resolve CA certificate Secret (mTLS)**: if `spec.client_auth.ca_secret_ref` is configured, similarly register and resolve the CA Secret, populating `client_auth.ca_secret`
 4. **Resolve resolved_listeners**: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`; logic is identical to route resources: always look up the Gateway to obtain address and protocol, validate consistency when sectionName+port are both present, subject to the allowedRoutes namespace policy
 
@@ -41,7 +42,7 @@ Clear SecretRefManager references and the GatewayRouteIndex registration.
 
 Produce an independent RouteParentStatus for each parentRef:
 - `Accepted`: True when there are no validation_errors; False (reason=Invalid) when errors exist; also validates whether the Gateway corresponding to parentRef exists
-- `ResolvedRefs`: checks whether the Secret referenced by secret_ref exists in GLOBAL_SECRET_STORE; if not, False (reason=SecretNotFound)
+- `ResolvedRefs`: checks the runtime-owned SecretStore; if absent, False (reason=SecretNotFound)
 - Sets only the Accepted and ResolvedRefs Conditions; does not set Programmed/Ready
 
 ## Gateway-side processing

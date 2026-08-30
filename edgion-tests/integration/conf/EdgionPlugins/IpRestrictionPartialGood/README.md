@@ -5,8 +5,8 @@ holds on the data plane: an `IpList` whose CIDR group mixes one VALID and one IN
 entry still enforces the valid entry — the invalid one is skipped, not fatal. There is no
 deny-all collapse and no dropped plugin.
 
-All cases set `ipSource: remoteAddr`, so the checked IP is the deterministic TCP peer of
-the test client (`127.0.0.1`), independent of RealIp / X-Forwarded-For processing. Both
+All cases set `ipSource: RemoteIp`, so the checked IP is the resolved address, which is
+the deterministic TCP peer when no forwarded address is supplied. Both
 referenced `IpList` `EdgionConfigData` objects contain a deliberately invalid CIDR sibling.
 
 This scenario covers two partial-good IpList paths:

@@ -1,7 +1,7 @@
 // HTTP-layer IpRestriction Plugin Test Suite
 //
-// All cases use ipSource: remoteAddr so the checked IP is the deterministic TCP
-// peer of the test client (127.0.0.1), independent of RealIp / XFF processing.
+// All cases use ipSource: RemoteIp so the checked IP is the resolved address,
+// which is the deterministic TCP peer when no forwarded address is supplied.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;

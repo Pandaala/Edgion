@@ -1,6 +1,6 @@
 use super::{DiscoveryDocument, IntrospectionCacheEntry, OidcSessionCookie, OpenidConnect};
-use crate::plugins::http::common::http_client::get_http_client_with_ssl_verify;
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::DyeOutcome;
 use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
 use edgion_resources::filters::PluginRunningResult;
@@ -19,6 +19,100 @@ fn base_config() -> OpenidConnectConfig {
         verification_mode: VerificationMode::JwksOnly,
         ..Default::default()
     }
+}
+
+#[test]
+fn path_redirect_uris_ignore_x_forwarded_host() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-host" => Some("attacker.example".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| Some(true));
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "https://api.example.com/oidc/callback"
+    );
+    assert_eq!(
+        plugin.resolve_post_logout_redirect_uri_for_idp(&session),
+        Some("https://api.example.com/after-logout".to_string())
+    );
+}
+
+#[test]
+fn path_redirect_uris_ignore_x_forwarded_proto() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    // Hostile downgrade attempt on a TLS listener: the scheme must come from
+    // the connection state, so the callback advertised to the IdP stays https.
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-proto" => Some("http".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| Some(true));
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "https://api.example.com/oidc/callback"
+    );
+    assert_eq!(
+        plugin.resolve_post_logout_redirect_uri_for_idp(&session),
+        Some("https://api.example.com/after-logout".to_string())
+    );
+}
+
+#[test]
+fn path_redirect_uris_fall_back_to_https_when_tls_state_unknown() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-proto" => Some("http".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| None);
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "https://api.example.com/oidc/callback"
+    );
+}
+
+#[test]
+fn path_redirect_uris_use_http_on_a_plaintext_listener() {
+    let mut cfg = base_config();
+    cfg.redirect_uri = Some("/oidc/callback".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+
+    // A forged `X-Forwarded-Proto: https` cannot upgrade the advertised scheme
+    // either; deployments terminating TLS upstream must configure an absolute URL.
+    session.expect_header_value().returning(|name| match name {
+        "host" => Some("api.example.com".to_string()),
+        "x-forwarded-proto" => Some("https".to_string()),
+        _ => None,
+    });
+    session.expect_downstream_is_tls().returning(|| Some(false));
+
+    assert_eq!(
+        plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
+        "http://api.example.com/oidc/callback"
+    );
 }
 
 #[test]
@@ -53,7 +147,7 @@ async fn test_unauth_action_pass_without_token_allows_request() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Pass;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -74,7 +168,7 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -100,11 +194,11 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
         "authorization" => None,
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(Some("x=1".to_string()));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -137,7 +231,7 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
     cfg.use_nonce = true;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -163,11 +257,11 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
         "authorization" => None,
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(Some("x=1".to_string()));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -187,7 +281,7 @@ async fn test_authorization_params_appends_non_reserved_params() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.authorization_params = Some(HashMap::from([
         ("foo".to_string(), "bar".to_string()),
@@ -217,11 +311,11 @@ async fn test_authorization_params_appends_non_reserved_params() {
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
         "authorization" => None,
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(None);
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -241,7 +335,7 @@ async fn test_callback_path_with_code_missing_state_returns_400() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -267,7 +361,7 @@ async fn test_logout_path_clears_cookies_and_redirects() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/".to_string());
@@ -278,10 +372,8 @@ async fn test_logout_path_clears_cookies_and_redirects() {
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
-        _ => None,
-    });
+    session.expect_header_value().returning(|_| None);
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -304,7 +396,7 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
@@ -330,11 +422,11 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
     session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -352,7 +444,7 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
@@ -397,11 +489,11 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
         }
     });
     session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
         "x-forwarded-host" => None,
         "host" => Some("api.example.com".to_string()),
         _ => None,
     });
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -420,7 +512,7 @@ async fn test_logout_with_revoke_enabled_and_no_session_cookie_still_redirects()
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
     cfg.revoke_tokens_on_logout = true;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/".to_string());
@@ -431,10 +523,8 @@ async fn test_logout_with_revoke_enabled_and_no_session_cookie_still_redirects()
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "x-forwarded-proto" => Some("https".to_string()),
-        _ => None,
-    });
+    session.expect_header_value().returning(|_| None);
+    session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -451,7 +541,7 @@ fn test_signed_cookie_roundtrip() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -477,7 +567,7 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -549,7 +639,7 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
     cfg.unauth_action = UnauthAction::Deny;
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -618,7 +708,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     cfg.unauth_action = UnauthAction::Deny;
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -807,7 +897,7 @@ fn test_should_preemptive_refresh() {
     cfg.bearer_only = false;
     cfg.renew_access_token_on_expiry = true;
     cfg.access_token_expires_leeway = 30;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -878,7 +968,47 @@ async fn test_introspection_cache_put_and_get() {
 }
 
 #[tokio::test]
-async fn test_introspection_cache_prunes_expired_entries_on_insert() {
+async fn inactive_introspection_result_is_never_cached() {
+    let mut cfg = base_config();
+    cfg.introspection_cache_ttl = 60;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+
+    plugin
+        .cache_introspection_claims("inactive-token", &json!({"active": false, "sub": "u1"}))
+        .await;
+
+    assert_eq!(plugin.get_cached_introspection_claims("inactive-token").await, None);
+}
+
+#[test]
+fn introspection_cache_ttl_never_exceeds_config_or_token_lifetime() {
+    use std::time::Duration as StdDuration;
+
+    let now = 1_000;
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now + 5}), 60, now),
+        StdDuration::from_secs(5)
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now + 120}), 60, now),
+        StdDuration::from_secs(60)
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({}), 60, now),
+        StdDuration::from_secs(60)
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now}), 60, now),
+        StdDuration::ZERO
+    );
+    assert_eq!(
+        OpenidConnect::bounded_introspection_cache_ttl(&json!({"exp": now - 1}), 60, now),
+        StdDuration::ZERO
+    );
+}
+
+#[tokio::test]
+async fn expired_introspection_result_remains_a_miss_after_another_insert() {
     use std::time::Duration as StdDuration;
     let mut cfg = base_config();
     cfg.introspection_cache_ttl = 60;
@@ -891,7 +1021,7 @@ async fn test_introspection_cache_prunes_expired_entries_on_insert() {
         IntrospectionCacheEntry {
             claims: json!({"active": true, "sub": "old"}),
         },
-        Some(StdDuration::from_millis(1)),
+        StdDuration::from_millis(1),
     );
     // Wait for it to expire
     tokio::time::sleep(StdDuration::from_millis(10)).await;
@@ -900,8 +1030,9 @@ async fn test_introspection_cache_prunes_expired_entries_on_insert() {
         .cache_introspection_claims("fresh-token", &json!({"active": true, "sub": "new"}))
         .await;
 
-    // Expired entry should not be retrievable
-    assert!(plugin.introspection_cache.get(&expired_key).is_none());
+    // Unchanged TinyUFO reclaims expired slots through normal eviction, but
+    // the wrapper must keep the expired record logically invisible.
+    assert!(plugin.introspection_cache.get(&expired_key).0.is_none());
 }
 
 #[tokio::test]
@@ -935,7 +1066,11 @@ async fn test_verify_token_auto_falls_back_to_introspection_cache_on_invalid_jwt
     });
     plugin.cache_introspection_claims(token, &claims).await;
 
-    let verified = plugin.verify_token(token).await.expect("verify via fallback");
+    let mut session = MockPluginSession::new();
+    let verified = plugin
+        .verify_token(&mut session, token)
+        .await
+        .expect("verify via fallback");
     assert_eq!(verified, claims);
 }
 
@@ -947,8 +1082,8 @@ async fn test_refresh_singleflight_wait_timeout() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
     let lock_key = "refresh-lock";
-    let lock = plugin.get_or_create_refresh_lock(lock_key).await;
-    let _held_guard = lock.lock().await;
+    let flight = plugin.refresh_singleflight.get_or_create(lock_key);
+    let _held_guard = flight.lock().lock().await;
 
     let now = OpenidConnect::now_unix_secs();
     let mut cookie = OidcSessionCookie {
@@ -989,8 +1124,8 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
         )
         .await;
 
-    let lock = plugin.get_or_create_refresh_lock(lock_key).await;
-    let _held_guard = lock.lock().await;
+    let flight = plugin.refresh_singleflight.get_or_create(lock_key);
+    let _held_guard = flight.lock().lock().await;
 
     let mut cookie = OidcSessionCookie {
         session_ref: "session-ref".to_string(),
@@ -1188,27 +1323,11 @@ async fn test_fetch_userinfo_json_returns_none_without_userinfo_endpoint() {
 }
 
 #[test]
-fn test_http_client_selection_respects_ssl_verify() {
-    let mut secure_cfg = base_config();
-    secure_cfg.ssl_verify = true;
-    let secure_plugin = OpenidConnect::new(&secure_cfg, "default".to_string());
-
-    let mut insecure_cfg = base_config();
-    insecure_cfg.ssl_verify = false;
-    let insecure_plugin = OpenidConnect::new(&insecure_cfg, "default".to_string());
-
-    assert!(std::ptr::eq(
-        secure_plugin.http_client(),
-        get_http_client_with_ssl_verify(true)
-    ));
-    assert!(std::ptr::eq(
-        insecure_plugin.http_client(),
-        get_http_client_with_ssl_verify(false)
-    ));
-    assert!(!std::ptr::eq(
-        secure_plugin.http_client(),
-        insecure_plugin.http_client()
-    ));
+fn test_two_openid_instances_get_distinct_clients() {
+    let a = OpenidConnect::new(&base_config(), "default".to_string());
+    let b = OpenidConnect::new(&base_config(), "default".to_string());
+    // Each instance builds its own reqwest::Client.
+    assert!(!std::sync::Arc::ptr_eq(&a.http_client(), &b.http_client()));
 }
 
 #[tokio::test]
@@ -1278,7 +1397,7 @@ fn callback_path_normalized_for_path_only_redirect_uri() {
         ..Default::default()
     };
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    // callback_path() normalizes on the fly — double-slashes must be collapsed.
+    // Double-slashes must be collapsed when the callback path is cached.
     assert_eq!(plugin.callback_path(), "/auth/oidc/callback");
 }
 
@@ -1293,6 +1412,285 @@ fn callback_path_normalized_for_absolute_url_redirect_uri() {
         ..Default::default()
     };
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    // The URL parser extracts the path; normalize_config_path then collapses it.
+    // Construction extracts the URL path and then normalizes it.
     assert_eq!(plugin.callback_path(), "/auth/callback");
+}
+
+#[test]
+fn oidc_san_pinning_config_builds_with_system_ca() {
+    use super::build_oidc_rustls_config_with_san;
+    use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+
+    let resolved = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: None,
+        san: None,
+    };
+    let san = vec![SubjectAltName {
+        san_type: SubjectAltNameType::Hostname,
+        hostname: Some("idp.example.com".to_string()),
+        uri: None,
+    }];
+    let cfg = build_oidc_rustls_config_with_san(&resolved, san).expect("build ok");
+    assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+}
+
+#[test]
+fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
+    use super::build_oidc_rustls_config_with_san;
+    use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+
+    let resolved = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![b"not-a-pem".to_vec()]),
+        client_identity: None,
+        san: None,
+    };
+    let san = vec![SubjectAltName {
+        san_type: SubjectAltNameType::Hostname,
+        hostname: Some("idp.example.com".to_string()),
+        uri: None,
+    }];
+    let r = build_oidc_rustls_config_with_san(&resolved, san);
+    assert!(r.is_err(), "invalid CA PEM should error");
+}
+
+#[test]
+fn oidc_construction_fails_closed_when_custom_ca_is_unresolved() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        ..Default::default()
+    });
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("unresolved custom CA must reject plugin construction");
+    assert_eq!(error, "openid_connect outbound HTTP client build failed");
+}
+
+#[test]
+fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        ..Default::default()
+    });
+    config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([(
+            "ca.crt".to_string(),
+            ByteString(b"not-a-pem".to_vec()),
+        )])),
+        ..Default::default()
+    }]);
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("custom CA without a certificate must reject plugin construction");
+    assert_eq!(error, "openid_connect outbound HTTP client build failed");
+}
+
+#[test]
+fn oidc_construction_fails_closed_when_mtls_secret_is_unresolved() {
+    use edgion_resources::resources::common::SecretObjectReference;
+
+    let mut config = base_config();
+    config.tls.client_certificate_ref = Some(SecretObjectReference {
+        group: None,
+        kind: None,
+        name: "idp-client".to_string(),
+        namespace: None,
+    });
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("unresolved mTLS Secret must reject plugin construction");
+    assert_eq!(error, "openid_connect outbound HTTP client build failed");
+}
+
+#[test]
+fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
+    };
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        subject_alt_names: Some(vec![SubjectAltName {
+            san_type: SubjectAltNameType::Hostname,
+            hostname: Some("idp.example.com".to_string()),
+            uri: None,
+        }]),
+        ..Default::default()
+    });
+    config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([(
+            "ca.crt".to_string(),
+            ByteString(b"not-a-pem".to_vec()),
+        )])),
+        ..Default::default()
+    }]);
+
+    let error = OpenidConnect::try_new(&config, "default".to_string())
+        .err()
+        .expect("invalid SAN-pinning CA must reject plugin construction");
+    assert_eq!(error, "openid_connect SAN-pinning TLS config build failed");
+}
+
+// -----------------------------------------------------------------------
+// Task 11: JWKS staleness -> dye records.
+//
+// `get_or_fetch_jwks` (discovery_jwks.rs) is the sole consumer of the
+// provider's `get_jwks`, which transparently serves a stale cached set on a
+// failed fetch. These tests pin the two outcomes it must record:
+// - stale serve (fetch failed, cache still populated) -> the token is still
+//   validated against the degraded set, so it's a fail-OPEN record:
+//   `jwks-stale-cache`.
+// - no cache at all (fetch failed, nothing to fall back to) -> the caller
+//   cannot validate the token, so it's a fail-CLOSE record:
+//   `jwks-unreachable`.
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_get_or_fetch_jwks_stale_serve_records_fail_open() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let jwks_ok = serde_json::json!({
+        "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
+    });
+    // First fetch succeeds (populates the cache); every fetch after that 503s.
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jwks_ok))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let mut cfg = base_config();
+    cfg.jwks_min_refresh_interval = 0; // force_refresh must not be throttled
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: server.uri(),
+            jwks_uri: format!("{}/jwks", server.uri()),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+
+    // Populate the cache. This is a fresh successful fetch, not a stale
+    // serve, so no record_outcome call is expected here (an unexpected call
+    // on a MockPluginSession with no expectation installed panics).
+    let mut populate_session = MockPluginSession::new();
+    plugin
+        .get_or_fetch_jwks(&mut populate_session, false)
+        .await
+        .expect("initial fetch populates cache");
+
+    // force_refresh=true bypasses the TTL fast-path, hits the now-failing
+    // endpoint, and falls back to the cache populated above.
+    let mut stale_session = MockPluginSession::new();
+    stale_session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "jwks-stale-cache")
+        .times(1)
+        .return_const(());
+    let lookup = plugin
+        .get_or_fetch_jwks(&mut stale_session, true)
+        .await
+        .expect("stale fallback must still succeed");
+    assert_eq!(
+        lookup.keys.len(),
+        1,
+        "stale cache must still be usable for verification"
+    );
+}
+
+#[tokio::test]
+async fn test_get_or_fetch_jwks_unreachable_no_cache_records_fail_close() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: server.uri(),
+            jwks_uri: format!("{}/jwks", server.uri()),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+
+    let mut session = MockPluginSession::new();
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "jwks-unreachable")
+        .times(1)
+        .return_const(());
+
+    let err = plugin
+        .get_or_fetch_jwks(&mut session, false)
+        .await
+        .expect_err("no cache + failed fetch must error");
+    assert!(
+        err.to_string().contains("503") || err.to_string().contains("status"),
+        "expected status error, got: {err}"
+    );
 }

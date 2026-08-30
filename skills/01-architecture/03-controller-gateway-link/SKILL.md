@@ -39,11 +39,18 @@ description: Bidirectional gRPC sync architecture between Controller and Gateway
 ## Core concepts
 
 - **ConfigSync protocol**: defines 4 RPC methods (GetServerInfo, List, Watch, WatchServerMeta) that Gateway uses to sync resource configuration with Controller.
-- **Version tracking**: `sync_version` (monotonically increasing) and `server_id` (UUID) are used together to enable incremental sync and Controller-restart detection.
-- **Non-synced resources**: `ReferenceGrant` and `Secret` are `no_sync_kinds`; they are used only on the Controller side and are not sent to the Gateway.
-- **Channel security (mTLS)**: optional `conf_sync_security` configuration enables mutual TLS authentication on the gRPC channel, supporting multiple named certificate sets (`[[conf_sync_security.certs]]`) selected by an `active` field, while remaining backward compatible with the legacy single-set `[conf_sync_security.tls]` format. Certificates are generated via `edgion-cli gen-certs --cert-name <name>`. See [00-overview.md § Channel security](00-overview.md) for details.
-- **Module distribution**: `common/conf_sync` (Proto + shared traits), `common/config` (TLS configuration structs), `controller/conf_sync` (server side), `gateway/conf_sync` (client side), `ctl/certs` (certificate generation).
+- **Version tracking**: `sync_version` (monotonically increasing) and `server_id` (a monotonic
+  millisecond string per published server instance) identify a per-kind List/Watch generation.
+- **Default non-synced resources**: `ReferenceGrant` and `Secret` are the default
+  `no_sync_kinds`; an explicit list replaces that default. ConfigMap is currently advertised by
+  the Controller unless excluded, but the Gateway intentionally has no ConfigMap cache.
+- **Channel security (mTLS)**: `conf_sync_security` is a **required** section — omitting it makes both binaries refuse to start (fail-close, 2026-07-14), because this channel carries resolved Secrets. The current YAML contract uses the `conf_sync_security.certs` list selected by `active`. The old singular `conf_sync_security.tls` field still accepted by code is pre-release removal debt; do not use or extend it. Certificates are generated via `edgion-cli gen-certs --cert-name <name>`. See [00-overview.md § Channel security](00-overview.md) for details.
+- **Module distribution**: `edgion-common/src/conf_sync` (Proto, traits, transport config),
+  `edgion-controller/src/conf_sync` (server), `edgion-gateway/src/conf_sync` (client), and
+  `edgion-cli/src/certs` (certificate generation).
 
 ## Testing infrastructure
 
-- **Wipe-all test path**: `POST controller /api/v1/admin/wipe-all` (testing-mode only) deletes all 20 kinds in tier order, used together with `cache_residue` to verify leaks. See [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md) for details.
+- **Wipe-all test path**: `POST controller /api/v1/admin/wipe-all` (testing-mode only) deletes
+  every current `ResourceKind` in tier order; the coverage test currently asserts all 22 concrete
+  kinds. See [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md).

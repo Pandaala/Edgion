@@ -7,10 +7,14 @@ description: Use when reviewing link_sys webhook call.rs "webhook_call retry-loo
 
 **Audit date**: 2026-05-25
 **Linked issue**: link-sys F-015 (extract-function / maintainability) — closed, not refactored.
+**Note (2026-07-08)**: the legacy `webhook_call` module was removed entirely as dead code
+(the production webhook path had moved to `resolver.rs` → `manager.rs::ManagedOutboundClient`
+well before this cleanup). Kept for historical design-rationale context; no longer applicable
+to any file on disk.
 
 ## Conclusion
 
-`webhook_call` (`edgion-gateway/src/link_sys/providers/webhook/call.rs`, ~139 LOC) has a
+`webhook_call` (formerly `edgion-gateway`'s `link_sys/providers/webhook/call.rs`, ~139 LOC) has a
 retry loop whose `Ok(resp)` arm (lines ~129–183) performs retry-on-status gating,
 passive health tracking, success classification, and size-capped body read in one block.
 The finding itself states **"No runtime bug exists in the current code"** — this is a
@@ -79,5 +83,5 @@ Re-open only if:
 ## Reference Cases
 
 - link-sys F-015 (`tasks/link/link-sys-F015-webhook-call-rs-extract-function.md`), audited 2026-05-25.
-- `edgion-gateway/src/link_sys/providers/webhook/call.rs` — `webhook_call`, the four `record_passive_result` sites.
+- Formerly `edgion-gateway`'s `link_sys/providers/webhook/call.rs` (removed 2026-07-08) — `webhook_call`, the four `record_passive_result` sites.
 - Sibling refactor-decline decisions: [link-sys-dispatch-extract-function.md](link-sys-dispatch-extract-function.md), [plugin-runtime-god-match.md](plugin-runtime-god-match.md), [style-consolidation-thresholds.md](style-consolidation-thresholds.md), [size-and-similarity-heuristics.md](size-and-similarity-heuristics.md).

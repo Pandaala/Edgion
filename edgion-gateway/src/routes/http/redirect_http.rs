@@ -18,8 +18,10 @@ use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 
 #[derive(Serialize)]
 struct RedirectRequestInfo<'a> {
-    #[serde(rename = "client-addr")]
-    client_addr: &'a str,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    direct_peer_ip: &'a str,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    remote_ip: &'a str,
     host: &'a str,
     path: &'a str,
     status: u16,
@@ -39,7 +41,8 @@ struct RedirectLogEntry<'a> {
 /// Context for HTTP redirect - tracks request metadata for access logging
 pub struct RedirectContext {
     pub start_time: Instant,
-    pub client_addr: String,
+    pub direct_peer_ip: String,
+    pub remote_ip: String,
     pub host: String,
     pub path: String,
     pub status: u16,
@@ -118,7 +121,8 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     fn new_ctx(&self) -> Self::CTX {
         RedirectContext {
             start_time: Instant::now(),
-            client_addr: String::new(),
+            direct_peer_ip: String::new(),
+            remote_ip: String::new(),
             host: String::new(),
             path: String::new(),
             status: 0,
@@ -137,7 +141,14 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     where
         Self::CTX: Send + Sync,
     {
-        ctx.client_addr = session.client_addr().map(|a| a.to_string()).unwrap_or_default();
+        let raw = session
+            .as_downstream()
+            .digest()
+            .and_then(|d| d.socket_digest.as_ref())
+            .and_then(|d| d.raw_peer_addr());
+        let addrs = crate::util::resolve_transport_client_addrs(session.client_addr(), raw, "");
+        ctx.remote_ip = addrs.remote_ip;
+        ctx.direct_peer_ip = addrs.direct_peer_ip;
 
         let req_header = session.req_header();
 
@@ -218,7 +229,8 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             ts: chrono::Utc::now().timestamp_millis(),
             log_type: "redirect",
             request_info: RedirectRequestInfo {
-                client_addr: &ctx.client_addr,
+                direct_peer_ip: &ctx.direct_peer_ip,
+                remote_ip: &ctx.remote_ip,
                 host: &ctx.host,
                 path: &ctx.path,
                 status: ctx.status,

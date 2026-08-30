@@ -3,9 +3,10 @@
 //! through the normal watch path.
 //!
 //! Tier 1 (consumers): HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute,
-//!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy
+//!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy,
+//!                     EdgionBackendTrafficPolicy
 //! Tier 2 (config):    Gateway, GatewayClass, EdgionGatewayConfig, EdgionTls, EdgionAcme,
-//!                     EdgionConfigData, LinkSys, ReferenceGrant
+//!                     EdgionConfigData, LinkSys, EdgionBackend, ReferenceGrant
 //! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
 
 use crate::api::types::AdminState;
@@ -41,6 +42,7 @@ const TIER_1: &[ResourceKind] = &[
     ResourceKind::EdgionPlugins,
     ResourceKind::EdgionStreamPlugins,
     ResourceKind::BackendTLSPolicy,
+    ResourceKind::EdgionBackendTrafficPolicy,
 ];
 
 const TIER_2: &[ResourceKind] = &[
@@ -51,6 +53,7 @@ const TIER_2: &[ResourceKind] = &[
     ResourceKind::EdgionAcme,
     ResourceKind::EdgionConfigData,
     ResourceKind::LinkSys,
+    ResourceKind::EdgionBackend,
     ResourceKind::ReferenceGrant,
 ];
 
@@ -295,15 +298,22 @@ mod tests {
 
     #[test]
     fn tiers_cover_all_kinds() {
+        use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
+
         let mut all: Vec<ResourceKind> = Vec::new();
         all.extend(TIER_1);
         all.extend(TIER_2);
         all.extend(TIER_3);
-        assert_eq!(all.len(), 20, "tiers must cover all 20 ResourceKind variants");
-        // Verify no duplicates
-        let mut seen = std::collections::HashSet::new();
-        for k in &all {
-            assert!(seen.insert(*k), "duplicate kind in tiers: {:?}", k);
-        }
+        let actual = all.into_iter().collect::<std::collections::HashSet<_>>();
+        let expected = ALL_RESOURCE_INFOS
+            .iter()
+            .map(|info| info.kind)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            actual.len(),
+            TIER_1.len() + TIER_2.len() + TIER_3.len(),
+            "duplicate kind in tiers"
+        );
+        assert_eq!(actual, expected, "wipe tiers must cover every registered resource kind");
     }
 }

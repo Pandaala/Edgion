@@ -14,24 +14,25 @@ Apply configuration resources from a file or directory; only supports the center
 ### Syntax
 
 ```bash
-edgion-cli apply -f <file|directory> [--dry-run]
+edgion-cli apply -f <file|directory> [-f <file|directory> ...] [--dry-run]
 ```
 
 ### Arguments
 
 | Argument | Description |
 |------|------|
-| `-f, --file` | YAML file path or a directory containing YAML files |
-| `--dry-run` | Validate the configuration only, do not actually write |
+| `-f, --file` | YAML file path or a directory containing YAML files; repeatable and processed in command-line order using one client |
+| `--dry-run` | Local preview: parse resource metadata and print the intended operation without contacting the Controller |
 
 ### Implementation logic
 
-1. Determine path type: file → single-file processing; directory → traverse all `.yaml`/`.yml` files in the directory
-2. Read YAML content, parse `kind`, `metadata.name`, `metadata.namespace`
-3. Determine whether the resource already exists:
+1. Process each `-f` path in command-line order using one CLI runtime and HTTP client
+2. Determine path type: file → single-file processing; directory → traverse all `.yaml`/`.yml` files in the directory
+3. Split multi-document YAML streams and parse `kind`, `metadata.name`, and `metadata.namespace` from each document
+4. In `--dry-run` mode, print `Would apply ...` and return without any network request; this is not schema validation
+5. Otherwise determine whether the resource already exists:
    - Does not exist → call `POST /api/v1/namespaced/{kind}/{ns}` to create
    - Already exists → call `PUT /api/v1/namespaced/{kind}/{ns}/{name}` to update
-4. In dry-run mode, append the query parameter `?dryRun=true` so only validation runs and nothing is written
 
 ### Examples
 
@@ -41,6 +42,9 @@ edgion-cli apply -f gateway.yaml
 
 # Apply all YAMLs in a directory
 edgion-cli apply -f manifests/
+
+# Apply an ordered batch while reusing one client
+edgion-cli apply -f gateway.yaml -f backend.yaml -f route.yaml
 
 # Dry-run validation
 edgion-cli apply -f gateway.yaml --dry-run
@@ -64,6 +68,10 @@ edgion-cli [-t <target>] get <kind> [name] [-n <namespace>] [-o <format>]
 | `name` | Resource name (optional; lists all when omitted) |
 | `-n, --namespace` | Namespace filter |
 | `-o, --output` | Output format: table (default), json, yaml, wide |
+| `--metadata-only` | Use the ConfCenter metadata-key endpoint; valid only with the center target |
+| `--limit` | Maximum items requested per page |
+| `--continue` | Continue token returned by the previous page; conflicts with `--all` |
+| `--all` | Auto-paginate and concatenate all pages |
 
 ### Query logic
 
@@ -150,7 +158,7 @@ Calls `POST /api/v1/reload`. After the Controller receives the request:
 
 1. Clear all ServerCaches (`reset_for_relink`)
 2. Generate a new `server_id`
-3. Re-read all resources from ConfCenter (File/K8s)
+3. Re-read all resources from ConfCenter (File/K8s/Etcd)
 4. Re-run the full processing pipeline
 5. Gateway detects the `server_id` change and automatically re-runs a full relist
 
@@ -315,13 +323,3 @@ Empty values are treated as absent at every level; the token is wrapped in `Zero
 ### `/api/v1/auth/status` is always reachable
 
 The public `GET /api/v1/auth/status` endpoint is mounted outside the authz `route_layer`, so it returns `200` even when the controller has no token configured (reporting `status: Initializing`). This lets `edgion-cli login` probe the controller for a friendly warning without ever blocking token persistence.
-
-### Configuration file auto-detection paths
-
-| Priority | Source |
-|--------|------|
-| 1 | `--controller-config` / `-C` argument |
-| 2 | `EDGION_CONTROLLER_CONFIG` environment variable |
-| 3 | `config/edgion-controller.yaml` (relative to CWD) |
-| 4 | `/usr/local/edgion/config/edgion-controller.yaml` |
-| 5 | `/etc/edgion/edgion-controller.yaml` |

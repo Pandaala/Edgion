@@ -61,11 +61,11 @@ use edgion_resources::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
-    EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
-    EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
-    LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler,
-    TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
+    EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
+    GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -333,27 +333,6 @@ pub struct KubernetesController {
 }
 
 impl KubernetesController {
-    /// Create a new KubernetesController
-    pub async fn new(
-        gateway_class_name: String,
-        controller_name: String,
-        gateway_address: Option<String>,
-        watch_namespaces: Vec<String>,
-        label_selector: Option<String>,
-    ) -> Result<Self> {
-        let client = Client::try_default().await?;
-        Self::with_metadata_filter(
-            client,
-            gateway_class_name,
-            controller_name,
-            gateway_address,
-            watch_namespaces,
-            label_selector,
-            MetadataFilterConfig::default(),
-            HashSet::new(),
-        )
-    }
-
     /// Create a new KubernetesController with metadata filter
     ///
     /// Accepts an external Client to enable Client reuse across components.
@@ -474,7 +453,9 @@ impl KubernetesController {
                 "EdgionStreamPlugins",
                 "EdgionConfigData",
                 "LinkSys",
+                "EdgionBackend",
                 "EdgionAcme",
+                "EdgionBackendTrafficPolicy",
                 "EdgionGatewayConfig",
             ]
             .into_iter()
@@ -523,6 +504,40 @@ impl KubernetesController {
             runtime: runtime.clone(),
         };
 
+        // Resolve every multi-version API before spawning any watcher. Returning
+        // after JoinHandles exist would detach the already-started tasks and a
+        // lifecycle retry could then create duplicate watchers.
+        use super::version_detection::{
+            probe_backend_tls_policy_version, probe_reference_grant_version, probe_tls_route_version,
+        };
+        let reference_grant_version = if self.should_watch("ReferenceGrant") {
+            Some(
+                probe_reference_grant_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("ReferenceGrant API disappeared after preflight"))?,
+            )
+        } else {
+            None
+        };
+        let tls_route_version = if self.should_watch("TLSRoute") {
+            Some(
+                probe_tls_route_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("TLSRoute API disappeared after preflight"))?,
+            )
+        } else {
+            None
+        };
+        let backend_tls_policy_version = if self.should_watch("BackendTLSPolicy") {
+            Some(
+                probe_backend_tls_policy_version(&self.client)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("BackendTLSPolicy API disappeared after preflight"))?,
+            )
+        } else {
+            None
+        };
+
         let mut h = Vec::new();
 
         // ==================== Phase 1: Foundation Resources ====================
@@ -565,11 +580,11 @@ impl KubernetesController {
         }
 
         // ReferenceGrant (cross-namespace reference validation)
-        // Detect v1 vs v1beta1 at runtime; default to v1 watcher, fall back to v1beta1
+        // Detect v1 vs v1beta1 at runtime without collapsing discovery failures.
         if self.should_watch("ReferenceGrant") {
-            use super::version_detection::{detect_reference_grant_version, ReferenceGrantVersion};
-            match detect_reference_grant_version(&self.client).await {
-                Some(ReferenceGrantVersion::V1) | None => {
+            use super::version_detection::ReferenceGrantVersion;
+            match reference_grant_version.expect("ReferenceGrant version is preflighted when watched") {
+                ReferenceGrantVersion::V1 => {
                     h.push(spawn::<ReferenceGrant, _>(
                         self,
                         "ReferenceGrant",
@@ -577,7 +592,7 @@ impl KubernetesController {
                         &ctx,
                     ));
                 }
-                Some(ReferenceGrantVersion::V1Beta1) => {
+                ReferenceGrantVersion::V1Beta1 => {
                     h.push(spawn::<ReferenceGrantBeta, _>(
                         self,
                         "ReferenceGrant",
@@ -680,9 +695,9 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("TLSRoute") {
-            use super::version_detection::{detect_tls_route_version, TLSRouteVersion};
-            match detect_tls_route_version(&self.client).await {
-                Some(TLSRouteVersion::V1) | None => {
+            use super::version_detection::TLSRouteVersion;
+            match tls_route_version.expect("TLSRoute version is preflighted when watched") {
+                TLSRouteVersion::V1 => {
                     h.push(spawn::<TLSRoute, _>(
                         self,
                         "TLSRoute",
@@ -690,7 +705,7 @@ impl KubernetesController {
                         &ctx,
                     ));
                 }
-                Some(TLSRouteVersion::V1Alpha3) => {
+                TLSRouteVersion::V1Alpha3 => {
                     h.push(spawn::<TLSRouteAlpha3, _>(
                         self,
                         "TLSRoute",
@@ -711,9 +726,9 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("BackendTLSPolicy") {
-            use super::version_detection::{detect_backend_tls_policy_version, BackendTLSPolicyVersion};
-            match detect_backend_tls_policy_version(&self.client).await {
-                Some(BackendTLSPolicyVersion::V1) | None => {
+            use super::version_detection::BackendTLSPolicyVersion;
+            match backend_tls_policy_version.expect("BackendTLSPolicy version is preflighted when watched") {
+                BackendTLSPolicyVersion::V1 => {
                     h.push(spawn::<BackendTLSPolicy, _>(
                         self,
                         "BackendTLSPolicy",
@@ -721,7 +736,7 @@ impl KubernetesController {
                         &ctx,
                     ));
                 }
-                Some(BackendTLSPolicyVersion::V1Alpha3) => {
+                BackendTLSPolicyVersion::V1Alpha3 => {
                     h.push(spawn::<BackendTLSPolicyAlpha3, _>(
                         self,
                         "BackendTLSPolicy",
@@ -760,6 +775,14 @@ impl KubernetesController {
         if self.should_watch("LinkSys") {
             h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
         }
+        if self.should_watch("EdgionBackend") {
+            h.push(spawn::<EdgionBackend, _>(
+                self,
+                "EdgionBackend",
+                EdgionBackendHandler::new(),
+                &ctx,
+            ));
+        }
 
         // ACME
         if self.should_watch("EdgionAcme") {
@@ -767,6 +790,16 @@ impl KubernetesController {
                 self,
                 "EdgionAcme",
                 EdgionAcmeHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Backend traffic policy
+        if self.should_watch("EdgionBackendTrafficPolicy") {
+            h.push(spawn::<EdgionBackendTrafficPolicy, _>(
+                self,
+                "EdgionBackendTrafficPolicy",
+                EdgionBackendTrafficPolicyHandler::new(self.controller_name.clone()),
                 &ctx,
             ));
         }

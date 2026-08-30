@@ -62,6 +62,7 @@ description: Use when reviewing dependency upgrades, new crate additions, MSRV b
 | File | Topic |
 |------|-------|
 | [maintenance-mode-crate-acceptance.md](maintenance-mode-crate-acceptance.md) | Criteria for accepting feature-complete / low-activity crates; based on `kstring` evaluation |
+| [pingora-fork-branch-lock-policy.md](pingora-fork-branch-lock-policy.md) | Edgion Pingora branch/tag selector, lockfile, and `--locked` build policy |
 
 ## Usage
 

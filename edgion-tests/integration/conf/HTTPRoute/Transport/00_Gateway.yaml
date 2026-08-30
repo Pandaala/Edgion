@@ -1,0 +1,25 @@
+# Transport-shape suite Gateway.
+#
+# Proves nothing on its own: it exists so the transport cases have a listener
+# that is not shared with any other suite, because several of them deliberately
+# poison an upstream connection or abort a downstream one and must not perturb
+# a neighbouring suite's pool.
+#
+# The listener is plain HTTP. `enableHttp2` defaults to true and plain HTTP
+# listeners are built with h2c enabled, so this single listener serves BOTH an
+# HTTP/1.1 and an h2c prior-knowledge downstream client. The downstream protocol
+# is therefore a client-side choice and needs no extra YAML.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: transport-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31944
+      allowedRoutes:
+        namespaces:
+          from: All

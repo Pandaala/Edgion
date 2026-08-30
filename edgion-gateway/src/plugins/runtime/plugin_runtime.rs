@@ -11,8 +11,8 @@ use crate::runtime::server::http_to_grpc_status;
 use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
-use edgion_resources::resources::edgion_plugins::CorsConfig;
-use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
+use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
+use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
@@ -20,20 +20,24 @@ use edgion_resources::resources::{
     RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry,
 };
 
+use super::body_gate::{BodyGatedRequestFilter, BodyGatedUpstreamResponse};
 use super::conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
     ConditionalUpstreamResponseFilter,
 };
-use super::log::{PluginLog, StageLogs};
+use super::log::PluginLog;
 use super::reject_filter::RejectFilter;
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
+use crate::plugins::http::ai_proxy::AiProxy;
 use crate::plugins::http::all_endpoint_status::AllEndpointStatus;
 use crate::plugins::http::bandwidth_limit::BandwidthLimit;
 use crate::plugins::http::basic_auth::BasicAuth;
+use crate::plugins::http::canary::Canary;
 use crate::plugins::http::cors::Cors;
+use crate::plugins::http::credential_injector::CredentialInjector;
 use crate::plugins::http::csrf::Csrf;
 use crate::plugins::http::ctx_set::CtxSet;
 use crate::plugins::http::direct_endpoint::DirectEndpoint;
@@ -42,11 +46,14 @@ use crate::plugins::http::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::plugins::http::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::plugins::http::ext_proc::ExtProc;
 use crate::plugins::http::fault_injection::FaultInjection;
+use crate::plugins::http::form_json_transform::FormJsonTransform;
 use crate::plugins::http::forward_auth::ForwardAuth;
-use crate::plugins::http::global_access_control::GlobalAccessControl;
+use crate::plugins::http::geoip_location::GeoIpLocation;
+use crate::plugins::http::guardrail::Guardrail;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
 use crate::plugins::http::ip_restriction::IpRestriction;
+use crate::plugins::http::json_schema_validation::JsonSchemaValidation;
 use crate::plugins::http::jwe_decrypt::JweDecrypt;
 use crate::plugins::http::jwt_auth::JwtAuth;
 use crate::plugins::http::key_auth::KeyAuth;
@@ -58,14 +65,42 @@ use crate::plugins::http::rate_limit::RateLimit;
 use crate::plugins::http::rate_limit_redis::RateLimitRedis;
 use crate::plugins::http::real_ip::RealIp;
 use crate::plugins::http::region_route::RegionRoute;
+use crate::plugins::http::request_access_policy::RequestAccessPolicy;
+use crate::plugins::http::request_body_buffer::RequestBodyBuffer;
 use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
 use crate::plugins::http::trace_context::TraceContext;
+use crate::plugins::http::waf::WafPlugin;
+use crate::plugins::http::wasm::WasmPlugin;
+use crate::plugins::http::webhook_key_get::WebhookKeyGet;
+use crate::plugins::http::AiGuard;
 use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
 };
+
+/// Immutable request-election metadata for one logical native WAF.
+#[derive(Clone)]
+pub(crate) struct WafCandidate {
+    owner: Arc<()>,
+    priority: u16,
+    mode: crate::ctx::WafLogMode,
+}
+
+impl WafCandidate {
+    pub(crate) fn owner(&self) -> Arc<()> {
+        Arc::clone(&self.owner)
+    }
+
+    pub(crate) const fn priority(&self) -> u16 {
+        self.priority
+    }
+
+    pub(crate) const fn mode(&self) -> crate::ctx::WafLogMode {
+        self.mode
+    }
+}
 
 pub struct PluginRuntime {
     /// Plugins for request stage (async)
@@ -80,14 +115,14 @@ pub struct PluginRuntime {
     /// Position == index assigned via `ExtensionRefFilter::set_index`. Empty
     /// when this runtime is built via the backend-scope path
     /// (`from_httproute_filters_for_backend` / `from_grpcroute_filters_for_backend`),
-    /// because backend-scope ExtensionRefFilters keep `index = None` and use
-    /// the legacy direct-store-lookup path.
+    /// because backend-scope ExtensionRefFilters keep `index = None`; their
+    /// first store result is pinned in the logical request context instead.
     ext_ref_keys: Vec<(String, String)>,
     /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
     /// `request_plugins`. Built once at preparse so the global CORS preflight
     /// handler (`pg_request_filter::extract_cors_config_from_route_filters`)
-    /// can return an Arc clone instead of deep-cloning the full `CorsConfig`
-    /// per OPTIONS preflight. Hot-reload semantics are preserved: every
+    /// can detect that the normal route plugin pipeline owns the preflight
+    /// response. Hot-reload semantics are preserved: every
     /// `EdgionPlugins` update rebuilds this runtime, producing a new Arc that
     /// the plugin store swaps in atomically.
     cors_config: Option<Arc<CorsConfig>>,
@@ -96,7 +131,15 @@ pub struct PluginRuntime {
     /// never run in the request path). `seal_fail_closed` consumes this list to
     /// prepend a single request-stage `RejectFilter`, so the whole route fails
     /// closed with 500 instead of silently dropping the misconfigured plugin.
-    invalid_plugins: Vec<&'static str>,
+    invalid_plugins: InvalidPlugins,
+    /// Qualified names + status of Block-stamped entries, in spec order across
+    /// all four stages (builders run request → urf → urbf → ur). The first
+    /// element's status is the one the gate returns.
+    policy_blocks: Vec<(String, u16)>,
+    /// Qualified names of Bypass-stamped entries.
+    policy_bypassed: Vec<String>,
+    /// Present only when this runtime owns one compiled logical WAF.
+    waf_candidate: Option<WafCandidate>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -115,6 +158,51 @@ enum CreateResult<T> {
     Ok(Option<T>),
     /// Plugin variant does not belong to this stage (config error).
     WrongStage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidUpdatePolicy {
+    ReplaceFailClosed,
+    RetainPrevious,
+}
+
+#[derive(Debug, Default)]
+struct InvalidPlugins {
+    names: Vec<&'static str>,
+    update_policy: Option<InvalidUpdatePolicy>,
+}
+
+impl InvalidPlugins {
+    fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    fn record(&mut self, plugin: &EdgionPlugin) {
+        let update_policy = match plugin {
+            EdgionPlugin::Dsl(_) => InvalidUpdatePolicy::RetainPrevious,
+            _ => InvalidUpdatePolicy::ReplaceFailClosed,
+        };
+        self.record_with_policy(PluginRuntime::get_plugin_name(plugin), update_policy);
+    }
+
+    fn record_non_retainable(&mut self, plugin_name: &'static str) {
+        self.record_with_policy(plugin_name, InvalidUpdatePolicy::ReplaceFailClosed);
+    }
+
+    fn record_with_policy(&mut self, plugin_name: &'static str, update_policy: InvalidUpdatePolicy) {
+        self.names.push(plugin_name);
+        self.update_policy = Some(match (self.update_policy, update_policy) {
+            (None, policy) => policy,
+            (Some(InvalidUpdatePolicy::RetainPrevious), InvalidUpdatePolicy::RetainPrevious) => {
+                InvalidUpdatePolicy::RetainPrevious
+            }
+            _ => InvalidUpdatePolicy::ReplaceFailClosed,
+        });
+    }
+
+    fn update_policy(&self) -> Option<InvalidUpdatePolicy> {
+        self.update_policy
+    }
 }
 
 // Intentionally no `impl Clone for PluginRuntime`: a Clone impl would have to
@@ -138,6 +226,7 @@ impl std::fmt::Debug for PluginRuntime {
                 &self.upstream_response_async_plugins.len(),
             )
             .field("invalid_plugins", &self.invalid_plugins)
+            .field("has_waf", &self.waf_candidate.is_some())
             .finish()
     }
 }
@@ -157,8 +246,71 @@ impl PluginRuntime {
             upstream_response_async_plugins: vec![],
             ext_ref_keys: Vec::new(),
             cors_config: None,
-            invalid_plugins: Vec::new(),
+            invalid_plugins: InvalidPlugins::default(),
+            policy_blocks: Vec::new(),
+            policy_bypassed: Vec::new(),
+            waf_candidate: None,
         }
+    }
+
+    /// Compile and attach one logical native WAF across the request-header,
+    /// request-body, response-header, response-window and logging phases.
+    /// Invalid updates retain the last known-good generation.
+    pub fn add_waf(&mut self, config: &WafConfig) -> Result<(), String> {
+        match WafPlugin::try_new(config) {
+            Ok(plugin) => {
+                self.waf_candidate = Some(WafCandidate {
+                    owner: plugin.owner(),
+                    priority: plugin.priority(),
+                    mode: match config.mode {
+                        edgion_resources::resources::edgion_plugins::WafMode::On => crate::ctx::WafLogMode::On,
+                        edgion_resources::resources::edgion_plugins::WafMode::DetectionOnly => {
+                            crate::ctx::WafLogMode::DetectionOnly
+                        }
+                    },
+                });
+                self.add_request_filter(Box::new(plugin.clone()));
+                self.add_upstream_response_filter(Box::new(plugin.clone()));
+                self.add_upstream_response(Box::new(plugin));
+                Ok(())
+            }
+            Err(error) => {
+                self.invalid_plugins
+                    .record_with_policy("Waf", InvalidUpdatePolicy::RetainPrevious);
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn waf_candidate(&self) -> Option<&WafCandidate> {
+        self.waf_candidate.as_ref()
+    }
+
+    pub(crate) fn has_waf(&self) -> bool {
+        self.waf_candidate.is_some()
+    }
+
+    /// Whether runtime construction found a plugin that cannot be activated.
+    ///
+    /// This is queried once by the EdgionPlugins store before
+    /// [`Self::seal_fail_closed`] consumes the list. It is not a request-path
+    /// check.
+    pub(crate) fn has_invalid_plugins(&self) -> bool {
+        !self.invalid_plugins.is_empty()
+    }
+
+    /// Record an active plugin entry whose condition references were not
+    /// resolved by the controller. The plugin store detects this transport
+    /// state before runtime construction; sealing then installs the canonical
+    /// fail-closed request gate.
+    pub(crate) fn record_unresolved_condition(&mut self, plugin: &EdgionPlugin) {
+        self.invalid_plugins
+            .record_non_retainable(Self::get_plugin_name(plugin));
+    }
+
+    /// Publication policy for an update that failed runtime construction.
+    pub(crate) fn invalid_update_policy(&self) -> Option<InvalidUpdatePolicy> {
+        self.invalid_plugins.update_policy()
     }
 
     /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
@@ -176,8 +328,23 @@ impl PluginRuntime {
         if self.invalid_plugins.is_empty() {
             return;
         }
-        let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins));
+        let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins.names));
         self.request_plugins.insert(0, Box::new(reject));
+    }
+
+    /// Prepend policy enforcement filters. MUST be called AFTER
+    /// `seal_fail_closed` so the block gate lands ahead of the fail-closed
+    /// RejectFilter (policy status code wins; spec §5 precedence).
+    pub fn seal_plugin_policy(&mut self) {
+        if !self.policy_bypassed.is_empty() {
+            let note = super::policy_filter::PolicyBypassNote::new(std::mem::take(&mut self.policy_bypassed));
+            self.request_plugins.insert(0, Box::new(note));
+        }
+        if let Some((plugin, status)) = self.policy_blocks.first().cloned() {
+            self.policy_blocks.clear();
+            let gate = super::policy_filter::PolicyBlockFilter::new(plugin, status);
+            self.request_plugins.insert(0, Box::new(gate));
+        }
     }
 
     /// Static list of (namespace, name) for every ExtensionRef in this runtime,
@@ -200,34 +367,40 @@ impl PluginRuntime {
 
     /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
     /// per-request resolve cache and records (ns, name) in `ext_ref_keys`.
-    pub fn from_httproute_filters_for_rule(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+    /// `mirror_tuning` carries the route-level `edgion.io/mirror-*` annotation
+    /// values (pre-parsed onto the rule) applied to every RequestMirror filter.
+    pub fn from_httproute_filters_for_rule(
+        filters: &[HTTPRouteFilter],
+        namespace: &str,
+        mirror_tuning: &MirrorTuning,
+    ) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters_inner(filters, namespace, true);
+        runtime.add_from_httproute_filters_inner(filters, namespace, true, mirror_tuning);
+        runtime.seal_fail_closed();
         runtime
     }
 
     /// Build a runtime for a backend reference. ExtensionRef filters retain
     /// `index = None` and fall back to direct global store lookup at exec time
     /// (no per-request resolve cache for backend scope yet).
-    pub fn from_httproute_filters_for_backend(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+    pub fn from_httproute_filters_for_backend(
+        filters: &[HTTPRouteFilter],
+        namespace: &str,
+        mirror_tuning: &MirrorTuning,
+    ) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters_inner(filters, namespace, false);
+        runtime.add_from_httproute_filters_inner(filters, namespace, false, mirror_tuning);
+        runtime.seal_fail_closed();
         runtime
     }
 
-    /// Deprecated: prefer `from_httproute_filters_for_rule` or `_for_backend`
-    /// to make the scope explicit. Defaults to rule-scope behavior.
-    #[deprecated(note = "use from_httproute_filters_for_rule or from_httproute_filters_for_backend")]
-    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
-        Self::from_httproute_filters_for_rule(filters, namespace)
-    }
-
-    #[deprecated(note = "use from_httproute_filters_for_rule or _for_backend wrappers")]
-    pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
-        self.add_from_httproute_filters_inner(filters, namespace, true);
-    }
-
-    fn add_from_httproute_filters_inner(&mut self, filters: &[HTTPRouteFilter], namespace: &str, assign_indices: bool) {
+    fn add_from_httproute_filters_inner(
+        &mut self,
+        filters: &[HTTPRouteFilter],
+        namespace: &str,
+        assign_indices: bool,
+        mirror_tuning: &MirrorTuning,
+    ) {
         for filter in filters {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
@@ -254,6 +427,7 @@ impl PluginRuntime {
                     if let Some(config) = &filter.request_mirror {
                         self.add_request_filter(Box::new(RequestMirrorPlugin::new(
                             config.clone(),
+                            mirror_tuning.clone(),
                             namespace.to_string(),
                         )));
                     }
@@ -276,24 +450,18 @@ impl PluginRuntime {
                     if let Some(config) = &filter.external_auth {
                         match ForwardAuth::new(config) {
                             Ok(fa) => self.add_request_filter(Box::new(fa)),
-                            Err(_) => self.invalid_plugins.push("ForwardAuth"),
+                            Err(_) => self.invalid_plugins.record_non_retainable("ForwardAuth"),
                         }
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
-                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
-                        // ExtensionRefFilter for them — skipping here means
-                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
-                        // sees genuinely-unsupported kinds.
-                        if is_lb_policy_kind(&ext_ref.kind) {
-                            continue;
-                        }
-                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
+                        let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
-                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            self.ext_ref_keys
+                                .push((extension_namespace.to_string(), ext_ref.name.clone()));
                             ext_filter.set_index(idx);
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
@@ -322,18 +490,6 @@ impl PluginRuntime {
         runtime
     }
 
-    /// Deprecated: prefer `from_grpcroute_filters_for_rule` or `_for_backend`
-    /// to make the scope explicit. Defaults to rule-scope behavior.
-    #[deprecated(note = "use from_grpcroute_filters_for_rule or from_grpcroute_filters_for_backend")]
-    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
-        Self::from_grpcroute_filters_for_rule(filters, namespace)
-    }
-
-    #[deprecated(note = "use from_grpcroute_filters_for_rule or _for_backend wrappers")]
-    pub fn add_from_grpcroute_filters(&mut self, filters: &[GRPCRouteFilter], namespace: &str) {
-        self.add_from_grpcroute_filters_inner(filters, namespace, true);
-    }
-
     fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
         for filter in filters {
             match filter.filter_type {
@@ -351,18 +507,12 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
-                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
-                        // ExtensionRefFilter for them — skipping here means
-                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
-                        // sees genuinely-unsupported kinds.
-                        if is_lb_policy_kind(&ext_ref.kind) {
-                            continue;
-                        }
-                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
+                        let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
-                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            self.ext_ref_keys
+                                .push((extension_namespace.to_string(), ext_ref.name.clone()));
                             ext_filter.set_index(idx);
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
@@ -387,30 +537,138 @@ impl PluginRuntime {
     ///
     /// # Returns
     /// A vector of validation error messages (empty if all plugins are valid)
-    pub fn add_from_request_filters(&mut self, entries: &[RequestFilterEntry], namespace: &str) -> Vec<String> {
+    pub fn add_from_request_filters(
+        &mut self,
+        entries: &[RequestFilterEntry],
+        namespace: &str,
+        resource_key: &str,
+    ) -> Vec<String> {
         let mut errors = Vec::new();
+        let mut invalid_bounded_structured_entries = vec![false; entries.len()];
+        // Freeze config validation before the bounded-body prepass. A config
+        // error owns the entry and suppresses later body-policy errors, matching
+        // `EdgionPlugins::validate_plugins` and avoiding Controller/Gateway
+        // error-set drift when both parts are invalid.
+        let config_validation_errors: Vec<Option<String>> = entries
+            .iter()
+            .map(|entry| {
+                if entry.is_enabled() && entry.policy_action.is_none() {
+                    Self::plugin_validation_error(&entry.plugin)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Mirror the schema-layer JsonSchemaValidation list/entry invariants
+        // before constructing any filters. The Gateway must remain fail-closed
+        // even if an invalid resource reaches it without Controller admission.
+        // Disabled and PluginPolicy-stamped entries are inert and do not
+        // participate.
+        let json_schema_count = entries
+            .iter()
+            .filter(|entry| {
+                entry.is_enabled()
+                    && entry.policy_action.is_none()
+                    && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_))
+            })
+            .count();
+        if json_schema_count > 1 {
+            errors.push(format!(
+                "requestPlugins: at most one JsonSchemaValidation plugin is allowed, found {json_schema_count}"
+            ));
+            self.invalid_plugins.record_non_retainable("JsonSchemaValidation");
+        }
 
         for (index, entry) in entries.iter().enumerate() {
+            if !entry.is_enabled()
+                || entry.policy_action.is_some()
+                || config_validation_errors[index].is_some()
+                || !matches!(
+                    entry.plugin,
+                    EdgionPlugin::FormJsonTransform(_)
+                        | EdgionPlugin::JsonSchemaValidation(_)
+                        | EdgionPlugin::ProxyRewrite(edgion_resources::resources::edgion_plugins::ProxyRewriteConfig {
+                            json_body: Some(_),
+                            ..
+                        })
+                )
+            {
+                continue;
+            }
+            let Some(body) = entry.body.as_ref() else {
+                continue;
+            };
+            let body_errors =
+                edgion_resources::resources::edgion_plugins::bounded_structured_body_validation_errors(body);
+            if body_errors.is_empty() {
+                continue;
+            }
+            invalid_bounded_structured_entries[index] = true;
+            let plugin_name = Self::get_plugin_name(&entry.plugin);
+            self.invalid_plugins.record(&entry.plugin);
+            errors.extend(
+                body_errors
+                    .into_iter()
+                    .map(|error| format!("requestPlugins[{}] ({}): {}", index, plugin_name, error)),
+            );
+        }
+
+        // Per-stage-array alias accumulator; see `duplicate_alias_error`.
+        let mut seen_aliases = std::collections::HashSet::new();
+        for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                if invalid_bounded_structured_entries[index] {
+                    continue;
+                }
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
                 // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                if let Some(error) = &config_validation_errors[index] {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
+                // A Deny restriction with any unresolved condition reference
+                // is invalid as a whole. Record it before entry conditions are
+                // wrapped so an outer skip can never bypass the generic 500.
+                if let EdgionPlugin::RequestRestriction(config) = &entry.plugin {
+                    if RequestRestriction::would_fail_construction(config) {
+                        errors.push(format!(
+                            "requestPlugins[{}] (RequestRestriction): restriction config invalid",
+                            index
+                        ));
+                        self.invalid_plugins.record_non_retainable("RequestRestriction");
+                        continue;
+                    }
+                }
+
                 // Cache the first enabled CORS config so the global preflight
-                // handler can fetch it without deep-cloning per request.
+                // handler can delegate to the normal route plugin pipeline.
                 // Initialize the `#[serde(skip)]` runtime fields (origins_cache /
                 // compiled_origins_regex / compiled_timing_regex) here: the
-                // preflight handler builds `Cors::from_arc` from this Arc and never
-                // re-initializes, so an uncompiled config would silently break
-                // regex / subdomain-wildcard / comma-separated origins on the
-                // preflight path. On failure keep the uncompiled (deny-safe) config.
+                // cached representation stays ready for any config inspection,
+                // even though the preflight handler currently uses only its
+                // presence. On failure keep the uncompiled (deny-safe) config.
                 if self.cors_config.is_none() {
                     if let EdgionPlugin::Cors(cfg) = &entry.plugin {
                         let mut cfg = cfg.clone();
@@ -429,7 +687,7 @@ impl PluginRuntime {
                 // Validate optional entry-level alias. On failure, surface
                 // the error and drop the alias so an unvalidated value never
                 // reaches the access log.
-                let entry_alias = match entry.validate_alias() {
+                let mut entry_alias = match entry.validate_alias() {
                     None => entry.alias.clone(),
                     Some(err) => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -438,11 +696,167 @@ impl PluginRuntime {
                     }
                 };
 
-                match Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
+                // Alias uniqueness within this stage array: the alias is the
+                // discriminator in the entry identity that namespaces state kept
+                // outside the plugin instance (RateLimitRedis buckets), so a
+                // duplicate must not survive into the runtime.
+                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                    &mut seen_aliases,
+                    entry_alias.as_deref(),
+                ) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                    // Drop it exactly like an invalid alias, so the entry falls back
+                    // to the `#index` form of its scope. Reporting alone would not be
+                    // enough: lenient admission keeps an `Accepted=False` resource
+                    // synced and serving, and the two entries would still share one
+                    // bucket namespace and one access-log label.
+                    entry_alias = None;
+                }
+
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        &format!("requestPlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
+                // Validate the optional operator body requirement. `body:` only
+                // applies to plugins that consume the body in their current config;
+                // reject it elsewhere so it is never a silent no-op. Non-fatal: the
+                // plugin still runs (ungated), but the error is surfaced.
+                if entry.body.is_some() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    if !entry
+                        .plugin
+                        .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Request)
+                    {
+                        errors.push(format!(
+                            "requestPlugins[{}] ({}): body: plugin does not consume a body",
+                            index, plugin_name
+                        ));
+                    } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
+                        errors.push(format!("requestPlugins[{}] ({}): body: {}", index, plugin_name, err));
+                    }
+                }
+
+                let body_req = Self::resolve_body_requirement(
+                    &entry.plugin,
+                    entry.body.clone(),
+                    edgion_resources::resources::edgion_plugins::BodyStage::Request,
+                );
+
+                let entry_scope = crate::plugins::common::entry_scope(resource_key, entry_alias.as_deref(), index);
+
+                if let EdgionPlugin::ExtProc(config) = &entry.plugin {
+                    let identity = format!(
+                        "{resource_key}/requestPlugins/{}",
+                        entry_alias
+                            .as_deref()
+                            .map_or_else(|| format!("#{index}"), str::to_string)
+                    );
+                    match ExtProc::create_attached(config, identity) {
+                        Some((request, response)) => {
+                            let gated: Box<dyn RequestFilter> = match body_req {
+                                Some(req) => Box::new(BodyGatedRequestFilter::new(request, req)),
+                                None => request,
+                            };
+                            self.add_request_filter(Box::new(ConditionalRequestFilter::with_alias_and_dye(
+                                gated,
+                                entry.conditions.clone(),
+                                entry_alias.clone(),
+                                dye_plan.clone(),
+                            )));
+                            // Conditions are request-owned. The companion only
+                            // observes the exact attached identity installed by
+                            // the matched request wrapper.
+                            self.add_upstream_response(Box::new(ConditionalUpstreamResponse::with_alias_and_dye(
+                                response,
+                                None,
+                                entry_alias,
+                                dye_plan,
+                            )));
+                        }
+                        None => {
+                            errors.push(format!(
+                                "requestPlugins[{}] (ExtProc): plugin construction failed",
+                                index
+                            ));
+                            self.invalid_plugins.record(&entry.plugin);
+                        }
+                    }
+                    continue;
+                }
+
+                if let EdgionPlugin::Guardrail(config) = &entry.plugin {
+                    let identity = format!(
+                        "{resource_key}/requestPlugins/{}",
+                        entry_alias
+                            .as_deref()
+                            .map_or_else(|| format!("#{index}"), str::to_string)
+                    );
+                    match Guardrail::create_attached(config, identity) {
+                        Some((request, response)) => {
+                            self.add_request_filter(Box::new(ConditionalRequestFilter::with_alias_and_dye(
+                                request,
+                                entry.conditions.clone(),
+                                entry_alias.clone(),
+                                dye_plan.clone(),
+                            )));
+                            self.add_upstream_response(Box::new(ConditionalUpstreamResponse::with_alias_and_dye(
+                                response,
+                                None,
+                                entry_alias,
+                                dye_plan,
+                            )));
+                        }
+                        None => {
+                            errors.push(format!(
+                                "requestPlugins[{}] (Guardrail): plugin construction failed",
+                                index
+                            ));
+                            self.invalid_plugins.record(&entry.plugin);
+                        }
+                    }
+                    continue;
+                }
+
+                match Self::create_request_filter_from_edgion(&entry.plugin, namespace, body_req.clone(), &entry_scope)
+                {
                     CreateResult::Ok(Some(filter)) => {
+                        // Condition-owned body HMAC on RequestRestriction and
+                        // RequestAccessPolicy uses the generic plugin-level gate,
+                        // so capture happens before Boolean branch evaluation.
+                        // The dedicated HmacAuth plugin remains the sole exception:
+                        // it performs cheap header authentication before capture.
+                        let generic_body_gate = Self::use_generic_body_gate(&entry.plugin);
+                        let gated: Box<dyn RequestFilter> = match body_req {
+                            Some(req) if generic_body_gate => Box::new(BodyGatedRequestFilter::new(filter, req)),
+                            None => filter,
+                            Some(_) => filter,
+                        };
                         // Wrap with ConditionalRequestFilter to support condition evaluation
-                        let conditional_filter =
-                            ConditionalRequestFilter::with_alias(filter, entry.conditions.clone(), entry_alias);
+                        let conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
+                            gated,
+                            entry.conditions.clone(),
+                            entry_alias,
+                            dye_plan,
+                        );
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -455,7 +869,7 @@ impl PluginRuntime {
                             "requestPlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -466,7 +880,7 @@ impl PluginRuntime {
                             "requestPlugins[{}] ({}): plugin is not valid for request stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -488,8 +902,26 @@ impl PluginRuntime {
     ) -> Vec<String> {
         let mut errors = Vec::new();
 
+        // Per-stage-array alias accumulator; see `duplicate_alias_error`.
+        let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -500,14 +932,14 @@ impl PluginRuntime {
                         "upstreamResponseFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
                 // Validate optional entry-level alias. On failure, surface
                 // the error and drop the alias so an unvalidated value never
                 // reaches the access log.
-                let entry_alias = match entry.validate_alias() {
+                let mut entry_alias = match entry.validate_alias() {
                     None => entry.alias.clone(),
                     Some(err) => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -519,13 +951,60 @@ impl PluginRuntime {
                     }
                 };
 
+                // Alias uniqueness within this stage array: the alias is the
+                // discriminator in the entry identity that namespaces state kept
+                // outside the plugin instance (RateLimitRedis buckets), so a
+                // duplicate must not survive into the runtime.
+                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                    &mut seen_aliases,
+                    entry_alias.as_deref(),
+                ) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, err
+                    ));
+                    // Drop it exactly like an invalid alias, so the entry falls back
+                    // to the `#index` form of its scope. Reporting alone would not be
+                    // enough: lenient admission keeps an `Accepted=False` resource
+                    // synced and serving, and the two entries would still share one
+                    // bucket namespace and one access-log label.
+                    entry_alias = None;
+                }
+
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, err
+                    ));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        &format!("upstreamResponseFilterPlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias(
+                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias_and_dye(
                             filter,
                             entry.conditions.clone(),
                             entry_alias,
+                            dye_plan,
                         );
                         self.add_upstream_response_filter(Box::new(conditional_filter));
                     }
@@ -539,7 +1018,7 @@ impl PluginRuntime {
                             "upstreamResponseFilterPlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -550,7 +1029,7 @@ impl PluginRuntime {
                             "upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -568,8 +1047,26 @@ impl PluginRuntime {
     pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) -> Vec<String> {
         let mut errors = Vec::new();
 
+        // Per-stage-array alias accumulator; see `duplicate_alias_error`.
+        let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -580,14 +1077,32 @@ impl PluginRuntime {
                         "upstreamResponsePlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
-                // Validate optional entry-level alias. On failure, surface
-                // the error and drop the alias so an unvalidated value never
-                // reaches the access log.
-                let entry_alias = match entry.validate_alias() {
+                // Validate the optional operator body requirement. `body:` only
+                // applies to plugins that consume the body in their current config;
+                // reject it elsewhere so it is never a silent no-op. Non-fatal.
+                if entry.body.is_some()
+                    && !entry
+                        .plugin
+                        .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Response)
+                {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponsePlugins[{}] ({}): body: plugin does not consume a body",
+                        index, plugin_name
+                    ));
+                } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponsePlugins[{}] ({}): body: {}",
+                        index, plugin_name, err
+                    ));
+                }
+
+                let mut entry_alias = match entry.validate_alias() {
                     None => entry.alias.clone(),
                     Some(err) => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -596,11 +1111,68 @@ impl PluginRuntime {
                     }
                 };
 
+                // Alias uniqueness within this stage array: the alias is the
+                // discriminator in the entry identity that namespaces state kept
+                // outside the plugin instance (RateLimitRedis buckets), so a
+                // duplicate must not survive into the runtime.
+                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                    &mut seen_aliases,
+                    entry_alias.as_deref(),
+                ) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                    // Drop it exactly like an invalid alias, so the entry falls back
+                    // to the `#index` form of its scope. Reporting alone would not be
+                    // enough: lenient admission keeps an `Accepted=False` resource
+                    // synced and serving, and the two entries would still share one
+                    // bucket namespace and one access-log label.
+                    entry_alias = None;
+                }
+
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        &format!("upstreamResponsePlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
+                        // Resolve the effective body requirement (operator tunes
+                        // size/conditions but cannot downgrade an intrinsic
+                        // fail-close) and wrap in a response body gate inside the
+                        // Conditional wrapper.
+                        let body_req = Self::resolve_body_requirement(
+                            &entry.plugin,
+                            entry.body.clone(),
+                            edgion_resources::resources::edgion_plugins::BodyStage::Response,
+                        );
+                        let gated: Box<dyn UpstreamResponse> = match body_req {
+                            Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),
+                            None => filter,
+                        };
                         // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                        let conditional_filter =
-                            ConditionalUpstreamResponse::with_alias(filter, entry.conditions.clone(), entry_alias);
+                        let conditional_filter = ConditionalUpstreamResponse::with_alias_and_dye(
+                            gated,
+                            entry.conditions.clone(),
+                            entry_alias,
+                            dye_plan,
+                        );
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -613,7 +1185,7 @@ impl PluginRuntime {
                             "upstreamResponsePlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -624,7 +1196,7 @@ impl PluginRuntime {
                             "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -646,8 +1218,26 @@ impl PluginRuntime {
     ) -> Vec<String> {
         let mut errors = Vec::new();
 
+        // Per-stage-array alias accumulator; see `duplicate_alias_error`.
+        let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -658,14 +1248,14 @@ impl PluginRuntime {
                         "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
-                    self.invalid_plugins.push(plugin_name);
+                    self.invalid_plugins.record(&entry.plugin);
                     continue;
                 }
 
                 // Validate optional entry-level alias. On failure, surface
                 // the error and drop the alias so an unvalidated value never
                 // reaches the access log.
-                let entry_alias = match entry.validate_alias() {
+                let mut entry_alias = match entry.validate_alias() {
                     None => entry.alias.clone(),
                     Some(err) => {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
@@ -677,13 +1267,60 @@ impl PluginRuntime {
                     }
                 };
 
+                // Alias uniqueness within this stage array: the alias is the
+                // discriminator in the entry identity that namespaces state kept
+                // outside the plugin instance (RateLimitRedis buckets), so a
+                // duplicate must not survive into the runtime.
+                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                    &mut seen_aliases,
+                    entry_alias.as_deref(),
+                ) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, err
+                    ));
+                    // Drop it exactly like an invalid alias, so the entry falls back
+                    // to the `#index` form of its scope. Reporting alone would not be
+                    // enough: lenient admission keeps an `Accepted=False` resource
+                    // synced and serving, and the two entries would still share one
+                    // bucket namespace and one access-log label.
+                    entry_alias = None;
+                }
+
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, err
+                    ));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        &format!("upstreamResponseBodyFilterPlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias(
+                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
                             filter,
                             entry.conditions.clone(),
                             entry_alias,
+                            dye_plan,
                         );
                         self.add_upstream_response_body_filter(Box::new(conditional_filter));
                     }
@@ -697,7 +1334,7 @@ impl PluginRuntime {
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin construction failed",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -708,7 +1345,7 @@ impl PluginRuntime {
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin is not valid for upstream response body filter stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.push(plugin_name);
+                        self.invalid_plugins.record(&entry.plugin);
                     }
                 }
             }
@@ -719,21 +1356,16 @@ impl PluginRuntime {
 
     /// Gateway-side plugin validation gate.
     ///
-    /// Runs the schema-layer light checks (`EdgionPlugin::validation_error`)
-    /// plus the heavy DSL checks (compiling `source` / decoding `bytecode` /
-    /// resolving `linkSysRefs` against redis links) that require the DSL VM.
-    /// The VM lives in this crate, so it cannot sit on the `types` schema
-    /// layer's `DslConfig::validation_error()`; running it here preserves the
-    /// specific compile-error message that `seal_fail_closed` surfaces into the
-    /// resource's K8s status condition (and the data-plane fail-closed 500).
+    /// Runs the schema-layer checks (`EdgionPlugin::validation_error`) — which
+    /// since the `edgion-dsl` extraction include the deep DSL static pipeline
+    /// (compile / bytecode validation / linkSysRefs / redis link-name scan),
+    /// so control plane and data plane literally share one code path — plus
+    /// gateway-only checks that need resolved runtime state (e.g. the CSRF
+    /// resolved-key guard below). DSL VM init remains covered by
+    /// `seal_fail_closed` at construction time.
     fn plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         if let Some(e) = plugin.validation_error() {
             return Some(e);
-        }
-        if let EdgionPlugin::Dsl(cfg) = plugin {
-            if let Err(e) = DslPlugin::validate_config(cfg) {
-                return Some(e);
-            }
         }
         if let EdgionPlugin::Csrf(cfg) = plugin {
             // A CSRF plugin cannot sign/verify without a key. If the secretRef
@@ -746,14 +1378,60 @@ impl PluginRuntime {
         None
     }
 
+    /// Resolve the effective body requirement for a plugin entry, shared by
+    /// the request and response wiring.
+    ///
+    /// For a plugin with an intrinsic declaration (`plugin.body_requirement()`
+    /// is `Some`), this defers to [`BodyRequirement::resolve`] unchanged: the
+    /// operator may tune `maxBodySize`/`conditions`, but a stricter intrinsic
+    /// fail-close always wins.
+    ///
+    /// `Wasm` is the one plugin that `accepts_body()` without an intrinsic
+    /// declaration (its guest hooks are only known after module load, so
+    /// nothing in its own config can express "needs body"). For such a
+    /// plugin, `BodyRequirement::resolve` would always return `None` — its
+    /// `intr = intrinsic?` short-circuit requires an intrinsic value to
+    /// exist, so passing `None` as intrinsic can never produce a gate no
+    /// matter what the operator sets. Since the operator's `body:` is the
+    /// SOLE source of truth here (there is nothing to "tune" against), it is
+    /// used as-is: no forced fail-close floor, no dropped conditions — those
+    /// merge rules exist to protect an intrinsic declaration this plugin does
+    /// not have.
+    fn resolve_body_requirement(
+        plugin: &EdgionPlugin,
+        operator: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+        stage: edgion_resources::resources::edgion_plugins::BodyStage,
+    ) -> Option<edgion_resources::resources::edgion_plugins::BodyRequirement> {
+        match plugin.body_requirement(stage) {
+            Some(intrinsic) => {
+                edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(operator, Some(intrinsic))
+            }
+            None if plugin.accepts_body(stage) => operator,
+            None => None,
+        }
+    }
+
+    fn use_generic_body_gate(plugin: &EdgionPlugin) -> bool {
+        match plugin {
+            EdgionPlugin::HmacAuth(_) => false,
+            EdgionPlugin::RequestRestriction(config) => !RequestRestriction::would_fail_construction(config),
+            _ => true,
+        }
+    }
+
     /// Create a RequestFilter instance from EdgionPlugin enum
     ///
     /// # Arguments
     /// * `plugin` - The EdgionPlugin configuration
     /// * `namespace` - The namespace of the EdgionPlugins resource
+    /// * `entry_scope` - `<namespace>/<name>/<alias or #index>` identity of this
+    ///   entry, used by plugins that must namespace state kept outside the
+    ///   process (RateLimitRedis Redis keys)
     fn create_request_filter_from_edgion(
         plugin: &EdgionPlugin,
         namespace: &str,
+        body_requirement: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+        entry_scope: &str,
     ) -> CreateResult<Box<dyn RequestFilter>> {
         match plugin {
             EdgionPlugin::RequestHeaderModifier(config) => {
@@ -764,35 +1442,51 @@ impl PluginRuntime {
             }
             EdgionPlugin::UrlRewrite(config) => CreateResult::Ok(Some(Box::new(URLRewriteFilter::new(config.clone())))),
             EdgionPlugin::RequestMirror(config) => CreateResult::Ok(Some(Box::new(RequestMirrorPlugin::new(
-                config.clone(),
+                config.filter.clone(),
+                config.tuning.clone(),
                 namespace.to_string(),
             )))),
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
+            EdgionPlugin::AiProxy(config) => CreateResult::Ok(AiProxy::create(config, namespace, entry_scope)),
+            EdgionPlugin::AiGuard(config) => CreateResult::Ok(AiGuard::create(config, entry_scope)),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
+            EdgionPlugin::CredentialInjector(config) => CreateResult::Ok(CredentialInjector::create(config)),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
-            EdgionPlugin::GlobalAccessControl(config) => {
-                CreateResult::Ok(Some(GlobalAccessControl::create(config, namespace)))
+            EdgionPlugin::RequestAccessPolicy(config) => {
+                CreateResult::Ok(Some(RequestAccessPolicy::create(config, namespace, body_requirement)))
             }
+            EdgionPlugin::GeoIpLocation(config) => CreateResult::Ok(Some(GeoIpLocation::create(config))),
+            EdgionPlugin::Canary(config) => CreateResult::Ok(Some(Canary::create(config, namespace))),
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
             }
             EdgionPlugin::JweDecrypt(config) => {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
-            EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config))),
+            EdgionPlugin::JsonSchemaValidation(config) => CreateResult::Ok(JsonSchemaValidation::create(config)),
+            EdgionPlugin::FormJsonTransform(config) => {
+                CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
+            }
+            EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config, body_requirement))),
             EdgionPlugin::HeaderCertAuth(config) => {
                 CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
             }
             EdgionPlugin::KeyAuth(config) => CreateResult::Ok(Some(KeyAuth::create(config))),
-            EdgionPlugin::LdapAuth(config) => CreateResult::Ok(Some(LdapAuth::create(config))),
+            EdgionPlugin::LdapAuth(config) => CreateResult::Ok(LdapAuth::create(config)),
             EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),
             EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
-            EdgionPlugin::ProxyRewrite(config) => CreateResult::Ok(Some(Box::new(ProxyRewrite::new(config)))),
-            EdgionPlugin::RequestRestriction(config) => CreateResult::Ok(Some(RequestRestriction::create(config))),
+            EdgionPlugin::ProxyRewrite(config) => {
+                CreateResult::Ok(ProxyRewrite::create(config, body_requirement).map(|plugin| Box::new(plugin) as _))
+            }
+            EdgionPlugin::RequestBodyBuffer(_) => CreateResult::Ok(Some(RequestBodyBuffer::create())),
+            EdgionPlugin::RequestRestriction(config) => {
+                CreateResult::Ok(Some(RequestRestriction::create_with_body(config, body_requirement)))
+            }
             EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create(config))),
-            EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config))),
+            EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config, entry_scope))),
             EdgionPlugin::CtxSet(config) => CreateResult::Ok(Some(CtxSet::create(config))),
+            EdgionPlugin::WebhookKeyGet(config) => CreateResult::Ok(Some(WebhookKeyGet::create(config))),
             EdgionPlugin::DirectEndpoint(config) => CreateResult::Ok(Some(Box::new(DirectEndpoint::new(config)))),
             EdgionPlugin::DynamicInternalUpstream(config) => {
                 CreateResult::Ok(Some(DynamicInternalUpstream::create(config)))
@@ -802,17 +1496,20 @@ impl PluginRuntime {
             }
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
             EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
-            EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_request(config)),
+            EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
+            EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             EdgionPlugin::ForwardAuth(config) => match ForwardAuth::new(config) {
                 Ok(fa) => CreateResult::Ok(Some(Box::new(fa))),
                 Err(_) => CreateResult::Ok(None),
             },
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
-            EdgionPlugin::OpenidConnect(config) => {
-                CreateResult::Ok(Some(Box::new(OpenidConnect::new(config, namespace.to_string()))))
-            }
+            EdgionPlugin::OpenidConnect(config) => match OpenidConnect::try_new(config, namespace.to_string()) {
+                Ok(plugin) => CreateResult::Ok(Some(Box::new(plugin))),
+                Err(_) => CreateResult::Ok(None),
+            },
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
+            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_request(config)),
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
@@ -835,27 +1532,34 @@ impl PluginRuntime {
             }
             EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
+            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_response_filter(config)),
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
             | EdgionPlugin::KeyAuth(_)
             | EdgionPlugin::LdapAuth(_)
             | EdgionPlugin::Mock(_)
             | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ForwardAuth(_)
@@ -867,8 +1571,12 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::GlobalAccessControl(_) => CreateResult::WrongStage,
+            | EdgionPlugin::RequestAccessPolicy(_)
+            | EdgionPlugin::GeoIpLocation(_)
+            | EdgionPlugin::Canary(_) => CreateResult::WrongStage,
         }
     }
 
@@ -878,9 +1586,60 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
         match plugin {
-            EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_response(config)),
-            // Every other variant belongs to a different stage.
-            _ => CreateResult::WrongStage,
+            EdgionPlugin::ExtProc(_) | EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
+            // Every other variant belongs to a different stage. Exhaustive
+            // (no `_`), matching the other three `create_*_from_edgion`
+            // constructors: these four matches are the runtime half of the
+            // stage table declared by `applicable_stages` in
+            // `edgion-resources/.../edgion_plugins/validate.rs`, and a `_` arm
+            // here would let a new async-stage plugin silently resolve to
+            // `WrongStage` instead of breaking the build.
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_)
+            | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
+            | EdgionPlugin::Cors(_)
+            | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::CredentialInjector(_)
+            | EdgionPlugin::IpRestriction(_)
+            | EdgionPlugin::JwtAuth(_)
+            | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::HmacAuth(_)
+            | EdgionPlugin::HeaderCertAuth(_)
+            | EdgionPlugin::KeyAuth(_)
+            | EdgionPlugin::LdapAuth(_)
+            | EdgionPlugin::Mock(_)
+            | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::DebugAccessLogToHeader(_)
+            | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
+            | EdgionPlugin::ResponseRewrite(_)
+            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitRedis(_)
+            | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
+            | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::ForwardAuth(_)
+            | EdgionPlugin::OpenidConnect(_)
+            | EdgionPlugin::BandwidthLimit(_)
+            | EdgionPlugin::DirectEndpoint(_)
+            | EdgionPlugin::AllEndpointStatus(_)
+            | EdgionPlugin::DynamicInternalUpstream(_)
+            | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::Dsl(_)
+            | EdgionPlugin::RegionRoute(_)
+            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
+            | EdgionPlugin::Canary(_)
+            | EdgionPlugin::AiGuard(_)
+            | EdgionPlugin::GeoIpLocation(_)
+            | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
         }
     }
 
@@ -891,6 +1650,7 @@ impl PluginRuntime {
     ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
             EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
+            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_body_filter(config)),
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
@@ -898,11 +1658,15 @@ impl PluginRuntime {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_)
             | EdgionPlugin::BasicAuth(_)
+            | EdgionPlugin::AiProxy(_)
             | EdgionPlugin::Cors(_)
             | EdgionPlugin::Csrf(_)
+            | EdgionPlugin::CredentialInjector(_)
             | EdgionPlugin::IpRestriction(_)
             | EdgionPlugin::JwtAuth(_)
             | EdgionPlugin::JweDecrypt(_)
+            | EdgionPlugin::JsonSchemaValidation(_)
+            | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::HmacAuth(_)
             | EdgionPlugin::HeaderCertAuth(_)
             | EdgionPlugin::KeyAuth(_)
@@ -910,11 +1674,13 @@ impl PluginRuntime {
             | EdgionPlugin::Mock(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
+            | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ForwardAuth(_)
@@ -925,8 +1691,12 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::Guardrail(_)
+            | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::RequestAccessPolicy(_)
+            | EdgionPlugin::Canary(_)
+            | EdgionPlugin::GeoIpLocation(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
     }
@@ -938,22 +1708,30 @@ impl PluginRuntime {
             EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
             EdgionPlugin::ResponseHeaderModifier(_) => "ResponseHeaderModifier",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
+            EdgionPlugin::AiProxy(_) => "AiProxy",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
+            EdgionPlugin::CredentialInjector(_) => "CredentialInjector",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
-            EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::RequestAccessPolicy(_) => "RequestAccessPolicy",
+            EdgionPlugin::GeoIpLocation(_) => "GeoIpLocation",
+            EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
+            EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",
             EdgionPlugin::HeaderCertAuth(_) => "HeaderCertAuth",
             EdgionPlugin::KeyAuth(_) => "KeyAuth",
             EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
+            EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
+            EdgionPlugin::WebhookKeyGet(_) => "WebhookKeyGet",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
             EdgionPlugin::TraceContext(_) => "TraceContext",
@@ -971,6 +1749,40 @@ impl PluginRuntime {
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::ExtProc(_) => "ExtProc",
+            EdgionPlugin::Guardrail(_) => "Guardrail",
+            EdgionPlugin::AiGuard(_) => "AiGuard",
+            EdgionPlugin::Wasm(_) => "Wasm",
+        }
+    }
+
+    /// Compile an entry's dye suite into a runtime plan.
+    ///
+    /// Only called when `entry.validate_dye()` found no schema-level error
+    /// (the caller checks that first) — the schema check already ran
+    /// `DyeSuite::validation_error`, which compiles every value template and
+    /// guarantees the suite is well-formed. A `CompiledDyePlan::compile`
+    /// failure here therefore means the runtime compiler and the schema
+    /// validator disagree — a bug, not an operator error — so unlike the
+    /// non-fatal schema-level dye error this fails closed
+    /// (`invalid_plugins`), the same as every other "should have run but did
+    /// not" compile error in this file.
+    fn compile_entry_dye_plan(
+        dye: Option<&edgion_resources::resources::edgion_plugins::DyeSuite>,
+        plugin: &EdgionPlugin,
+        context: &str,
+        errors: &mut Vec<String>,
+        invalid_plugins: &mut InvalidPlugins,
+    ) -> Option<Arc<super::dye_plan::CompiledDyePlan>> {
+        let suite = dye?;
+        match super::dye_plan::CompiledDyePlan::compile(suite, plugin.dye_type_prefix()) {
+            Ok(plan) => Some(plan),
+            Err(e) => {
+                errors.push(format!(
+                    "{context}: dye plan compile error (bug, already validated): {e}"
+                ));
+                invalid_plugins.record(plugin);
+                None
+            }
         }
     }
 
@@ -988,14 +1800,6 @@ impl PluginRuntime {
 
     fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
         self.upstream_response_async_plugins.push(filter);
-    }
-
-    /// Get total plugin count across all stages
-    pub fn total_plugin_count(&self) -> usize {
-        self.request_plugins.len()
-            + self.upstream_response_plugins.len()
-            + self.upstream_response_body_plugins.len()
-            + self.upstream_response_async_plugins.len()
     }
 
     /// Get request stage plugin count
@@ -1046,22 +1850,48 @@ impl PluginRuntime {
 
         // Snapshot before `ctx` is borrowed by `session_adapter`. Set in
         // `pg_request_filter` and not mutated during plugin execution.
-        let is_grpc_request = ctx.request_info.is_grpc_request;
-        let mut filter_logs = Vec::with_capacity(self.request_plugins.len());
+        let is_grpc_request = ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched;
+        let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
-            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
-            let start = std::time::Instant::now();
+            let previous_identity = session_adapter.replace_plugin_entry_identity(
+                crate::ctx::CurrentPluginEntryIdentity::new(filter.name(), filter.alias()),
+            );
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Request-direction
+            // anti-spoof strip runs here too, before the plugin's kill
+            // switch / gating / conditions, so a client-forged value of a
+            // name this entry declares can never survive into the plugin.
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+            session_adapter.strip_request_dye_once();
 
+            let suppress_log = filter.suppress_automatic_log();
+            let mut plugin_log = if suppress_log {
+                PluginLog::disabled()
+            } else {
+                PluginLog::with_alias(filter.name(), filter.alias())
+            };
+            let start = (!suppress_log).then(std::time::Instant::now);
+
+            // If this future is cancelled while the plugin is awaiting, the
+            // whole request-stage future and adapter are dropped; no later
+            // plugin can resume and register an observer under the stale
+            // identity. Every completed invocation restores before any result
+            // branch below.
             let result = filter.run_request(&mut session_adapter, &mut plugin_log).await;
+            session_adapter.restore_plugin_entry_identity(previous_identity);
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
-            if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost =
-                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
+            if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
-            filter_logs.push(plugin_log);
+            if !suppress_log {
+                if filter_logs.is_empty() {
+                    filter_logs.reserve(self.request_plugins.len());
+                }
+                filter_logs.push(plugin_log);
+            }
 
             if ErrTerminateRequest == result {
                 session_adapter.set_terminate();
@@ -1112,11 +1942,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.stage_logs.push(StageLogs {
-            stage: "request_filters",
-            filters: filter_logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("request_filters", filter_logs);
     }
 
     /// Run upstream_response_filter stage filters (sync)
@@ -1130,23 +1956,38 @@ impl PluginRuntime {
             return;
         }
 
-        let mut filter_logs = Vec::with_capacity(self.upstream_response_plugins.len());
+        let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
-            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
-            let start = std::time::Instant::now();
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Response-stage
+            // loops do not strip: request-direction rules are meaningless
+            // here (validation forbids them on non-request-stage entries).
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+
+            let suppress_log = filter.suppress_automatic_log();
+            let mut plugin_log = if suppress_log {
+                PluginLog::disabled()
+            } else {
+                PluginLog::with_alias(filter.name(), filter.alias())
+            };
+            let start = (!suppress_log).then(std::time::Instant::now);
 
             let result = filter.run_upstream_response_filter(&mut session_adapter, &mut plugin_log);
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
-            if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost =
-                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
+            if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
-            filter_logs.push(plugin_log);
+            if !suppress_log {
+                if filter_logs.is_empty() {
+                    filter_logs.reserve(self.upstream_response_plugins.len());
+                }
+                filter_logs.push(plugin_log);
+            }
 
             if should_terminate {
                 session_adapter.set_terminate();
@@ -1154,11 +1995,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.stage_logs.push(StageLogs {
-            stage: "upstream_response_filters",
-            filters: filter_logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("upstream_response_filters", filter_logs);
     }
 
     /// Run upstream_response_body_filter stage filters (sync)
@@ -1196,6 +2033,12 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.upstream_response_body_plugins {
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Body filters have no
+            // PluginLog anchor (see the trait's no-per-chunk-logging doc), so
+            // this is the loop-top install rather than the PluginLog line.
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+
             if let Some(d) = filter.run_upstream_response_body_filter(body, end_of_stream, &mut session_adapter) {
                 max_delay = Some(match max_delay {
                     Some(current) => current.max(d),
@@ -1218,25 +2061,40 @@ impl PluginRuntime {
             return;
         }
 
-        let mut filter_logs = Vec::with_capacity(self.upstream_response_async_plugins.len());
+        let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
-            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
-            let start = std::time::Instant::now();
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Response-stage
+            // loops do not strip: request-direction rules are meaningless
+            // here (validation forbids them on non-request-stage entries).
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+
+            let suppress_log = filter.suppress_automatic_log();
+            let mut plugin_log = if suppress_log {
+                PluginLog::disabled()
+            } else {
+                PluginLog::with_alias(filter.name(), filter.alias())
+            };
+            let start = (!suppress_log).then(std::time::Instant::now);
 
             let result = filter
                 .run_upstream_response(&mut session_adapter, &mut plugin_log)
                 .await;
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
-            if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost =
-                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
+            if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
+                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
-            filter_logs.push(plugin_log);
+            if !suppress_log {
+                if filter_logs.is_empty() {
+                    filter_logs.reserve(self.upstream_response_async_plugins.len());
+                }
+                filter_logs.push(plugin_log);
+            }
 
             if should_terminate {
                 session_adapter.set_terminate();
@@ -1244,11 +2102,7 @@ impl PluginRuntime {
             }
         }
 
-        ctx.stage_logs.push(StageLogs {
-            stage: "upstream_responses",
-            filters: filter_logs,
-            edgion_plugins: std::mem::take(&mut ctx.pending_edgion_plugins_logs),
-        });
+        ctx.finish_plugin_stage("upstream_responses", filter_logs);
     }
 }
 
@@ -1259,35 +2113,58 @@ impl PluginRuntime {
 /// Building the local reply is synchronous, so this is shared by both the sync
 /// (`run_upstream_response_plugins_sync`) and async
 /// (`run_upstream_response_plugins_async`) loops: it stashes the built reply in
-/// `ctx` (`local_reply_header`/`local_reply_body`). `response_filter` then writes
+/// the context's pending response override. `response_filter` then writes
 /// that reply to the downstream and returns a sentinel `Err` to abort the
 /// upstream forward — this is what makes a body-less upstream (where Pingora
 /// never calls the body filter) still emit the replacement body. gRPC routes
 /// are not supported: the response is terminated by status only (body not
 /// replaced) and a marker is recorded.
-fn check_response_stage_terminate(
+// `pub(crate)` for the regression tests in `session_adapter`, which owns the
+// only real `pingora_proxy::Session` fixture in the crate.
+pub(crate) fn check_response_stage_terminate(
     result: &PluginRunningResult,
     plugin_log: &mut PluginLog,
     adapter: &mut PingoraSessionAdapter<'_>,
 ) -> bool {
     match result {
-        PluginRunningResult::ErrTerminateRequest => true,
+        PluginRunningResult::ErrTerminateRequest => {
+            // The same silent-ALLOW shape as the refused `ErrResponse` below,
+            // but unconditional: no precondition is needed for it to leak,
+            // because returning `true` here only makes the runner call
+            // `set_terminate`, which writes a field no response-stage reader
+            // consults. Answer it the way the request stage does — 502 fallback
+            // plus the plugin-bug marker.
+            plugin_log.push("deny terminate; ");
+            adapter.set_response_terminate_without_reply();
+            true
+        }
         PluginRunningResult::ErrResponse { status, body } => {
             if adapter.apply_response_local_reply(*status, body.clone()) {
                 plugin_log.push_fmt("replace response {}", la![status.to_string().as_str()]);
             } else {
-                // Refused (gRPC route, Upgrade/1xx upstream, or no header bound):
-                // keep legacy log-and-terminate behavior. Only tag the gRPC marker
-                // for genuine gRPC routes so it does not mislabel Upgrade/1xx.
+                // Refused (gRPC route, real 101 / established CONNECT tunnel,
+                // interim 1xx, or no header bound): the exchange cannot carry a
+                // replacement response, so arm the response-stage abort. Logging
+                // alone would forward the upstream response unmodified — the
+                // runners' `set_terminate` writes the request plugin marker,
+                // which has no response-stage reader. Only tag the gRPC marker
+                // for genuine gRPC routes so it does not mislabel 101/1xx.
                 plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);
                 if adapter.is_grpc_request() {
                     adapter.note_response_local_reply_unsupported();
                 }
+                adapter.set_response_denied(*status);
             }
             true
         }
-        PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
+        PluginRunningResult::ErrGrpcError { grpc_status, message } => {
+            // Same shape as the refused `ErrResponse` above: the response-stage
+            // runners have no gRPC writer (the sync one cannot await
+            // `send_grpc_error_direct`, which is how the request stage answers
+            // this result), so without arming the abort the denial is a log line
+            // and the upstream response is forwarded.
             plugin_log.push_fmt("deny grpc {}", la![grpc_status.to_string().as_str()]);
+            adapter.set_response_denied_grpc(*grpc_status, message.clone());
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,
@@ -1297,7 +2174,783 @@ fn check_response_stage_terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observe::RequestDiagnostic;
+    use async_trait::async_trait;
+    use edgion_resources::resources::edgion_plugins::DslConfig;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+    use edgion_resources::EdgionErrorCode;
+    use std::sync::Mutex;
+    use tokio::io::AsyncWriteExt;
+
+    struct FixedResultFilter(PluginRunningResult);
+
+    #[async_trait]
+    impl RequestFilter for FixedResultFilter {
+        fn name(&self) -> &str {
+            "FixedResult"
+        }
+
+        async fn run_request(
+            &self,
+            _session: &mut dyn PluginSession,
+            _plugin_log: &mut PluginLog,
+        ) -> PluginRunningResult {
+            self.0.clone()
+        }
+    }
+
+    struct SelfWritingFilter {
+        client: Mutex<Option<tokio::io::DuplexStream>>,
+    }
+
+    #[async_trait]
+    impl RequestFilter for SelfWritingFilter {
+        fn name(&self) -> &str {
+            "SelfWriting"
+        }
+
+        async fn run_request(
+            &self,
+            session: &mut dyn PluginSession,
+            _plugin_log: &mut PluginLog,
+        ) -> PluginRunningResult {
+            let mut response = ResponseHeader::build(401, None).unwrap();
+            response.insert_header("content-length", "6").unwrap();
+            session
+                .write_response_header(Box::new(response), false)
+                .await
+                .expect("header should be delivered before the test closes the client");
+            drop(self.client.lock().unwrap().take());
+            let _ = session
+                .write_response_body(Some(bytes::Bytes::from_static(b"denied")), true)
+                .await;
+            PluginRunningResult::ErrTerminateRequest
+        }
+    }
+
+    async fn plugin_test_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"GET /plugin-test HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    fn client_closed_count(ctx: &EdgionHttpContext) -> usize {
+        ctx.diagnostics
+            .entries()
+            .iter()
+            .filter(|entry| **entry == RequestDiagnostic::Error(EdgionErrorCode::ClientClosed))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn err_response_writer_failures_record_client_closed_once() {
+        let (mut session, client) = plugin_test_session().await;
+        drop(client);
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some("denied".to_string()),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(403));
+        assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn err_grpc_error_writer_failure_preserves_both_statuses() {
+        let (mut session, client) = plugin_test_session().await;
+        drop(client);
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrGrpcError {
+            grpc_status: 7,
+            message: Some("denied".to_string()),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(200));
+        assert_eq!(ctx.request_info.grpc_status(), Some(7));
+        assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn self_written_writer_failure_records_client_closed() {
+        let (mut session, client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(SelfWritingFilter {
+            client: Mutex::new(Some(client)),
+        }));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(401));
+        assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn waf_request_runner_emits_only_the_dedicated_summary() {
+        let (mut session, _client) = plugin_test_session().await;
+        let mut runtime = PluginRuntime::new();
+        runtime
+            .add_waf(&WafConfig {
+                rules: "SecAction \"id:1,phase:1,pass,log\"\n".to_string(),
+                mode: edgion_resources::resources::edgion_plugins::WafMode::On,
+                priority: 12,
+            })
+            .unwrap();
+        let candidate = runtime.waf_candidate().unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.select_waf(Some(crate::ctx::WafSelection::new(
+            candidate.owner(),
+            crate::ctx::WafLogSource::Route,
+            candidate.priority(),
+            candidate.mode(),
+        ))));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert!(ctx.stage_logs().is_empty());
+        let waf = serde_json::to_value(ctx.waf_access_log().unwrap()).unwrap();
+        assert_eq!(waf["source"], "route");
+        assert_eq!(waf["priority"], 12);
+        assert_eq!(waf["phases"]["request_headers"]["findings"], 1);
+        assert_eq!(waf["findings"][0]["rule_id"], 1);
+    }
+
+    #[test]
+    fn invalid_update_policy_uses_plugin_variants_and_strictest_policy_wins() {
+        let dsl = EdgionPlugin::Dsl(DslConfig::default());
+        let key_auth = EdgionPlugin::KeyAuth(KeyAuthConfig::default());
+        let mut invalid = InvalidPlugins::default();
+
+        invalid.record(&dsl);
+        invalid.record(&dsl);
+        assert_eq!(invalid.update_policy(), Some(InvalidUpdatePolicy::RetainPrevious));
+
+        invalid.record(&key_auth);
+        invalid.record(&dsl);
+        assert_eq!(invalid.update_policy(), Some(InvalidUpdatePolicy::ReplaceFailClosed));
+    }
+
+    fn json_schema_entry(
+        body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+        enabled: bool,
+    ) -> RequestFilterEntry {
+        use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+        use serde_json::json;
+
+        let mut entry = RequestFilterEntry::with_enable(
+            EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+                schema: json!({"type": "object"}),
+            }),
+            enabled,
+        );
+        entry.body = body;
+        entry
+    }
+
+    fn form_json_entry(
+        direction: edgion_resources::resources::edgion_plugins::FormJsonDirection,
+        body: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+    ) -> RequestFilterEntry {
+        use edgion_resources::resources::edgion_plugins::FormJsonTransformConfig;
+
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::FormJsonTransform(FormJsonTransformConfig { direction }));
+        entry.body = body;
+        entry
+    }
+
+    fn assert_sealed_invalid(runtime: &mut PluginRuntime) {
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("RejectInvalidConfig")
+        );
+    }
+
+    #[test]
+    fn entry_scope_distinguishes_entries_and_resources() {
+        // Two entries of one resource, and the same entry position in another
+        // resource, must never share a scope.
+        assert_eq!(
+            crate::plugins::common::entry_scope("default/api-limiter", None, 0),
+            "default/api-limiter/#0"
+        );
+        assert_ne!(
+            crate::plugins::common::entry_scope("default/api-limiter", None, 0),
+            crate::plugins::common::entry_scope("default/api-limiter", None, 1)
+        );
+        assert_ne!(
+            crate::plugins::common::entry_scope("default/api-limiter", None, 0),
+            crate::plugins::common::entry_scope("other/api-limiter", None, 0)
+        );
+        // An alias pins the scope across entry reordering, and cannot collide
+        // with the index form of another entry.
+        assert_eq!(
+            crate::plugins::common::entry_scope("default/api-limiter", Some("tenant"), 3),
+            "default/api-limiter/tenant"
+        );
+        assert_ne!(
+            crate::plugins::common::entry_scope("default/api-limiter", Some("1"), 0),
+            crate::plugins::common::entry_scope("default/api-limiter", None, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn add_from_request_filters_defers_hmac_body_capture() {
+        // HMAC owns its resolved body requirement instead of using the generic
+        // eager gate. A malformed Authorization header must be rejected before
+        // any request-body capture is attempted.
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use edgion_resources::resources::HmacAuthConfig;
+
+        let cfg = HmacAuthConfig {
+            match_config: edgion_resources::resources::HmacMatchConfig {
+                validate_request_body: true,
+                ..Default::default()
+            },
+            anonymous: Some("anon".to_string()),
+            ..Default::default()
+        };
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(
+            &[RequestFilterEntry::new(EdgionPlugin::HmacAuth(cfg))],
+            "default",
+            "test-plugins",
+        );
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "HmacAuth", "gate must be transparent to name()");
+
+        let mut session = MockPluginSession::new();
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_header_value().returning(|name| match name {
+            "authorization" => Some("malformed".to_string()),
+            _ => None,
+        });
+        session.expect_ensure_request_body().times(0);
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let mut log = PluginLog::new("HmacAuth");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrTerminateRequest,
+            "HMAC must reject malformed authentication before capturing the body"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_schema_validation_gate_captures_without_materializing() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
+        use serde_json::json;
+
+        let entry = RequestFilterEntry::new(EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
+            schema: json!({"type": "object"}),
+        }));
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "JsonSchemaValidation");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_claim_json_schema_validation().return_const(true);
+        session.expect_declares_body().return_const(Some(false));
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_once(|_| Ok(0));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(true))
+            .return_const(Ok(0));
+
+        let mut log = PluginLog::new("JsonSchemaValidation");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 400,
+                body: Some("Invalid request body".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn form_json_runtime_builds_and_rejects_fail_open_without_controller() {
+        use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement, FormJsonDirection};
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(
+            &[form_json_entry(FormJsonDirection::FormToJson, None)],
+            "default",
+            "test-plugins",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("FormJsonTransform")
+        );
+
+        let body = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..BodyRequirement::default()
+        };
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(
+            &[form_json_entry(FormJsonDirection::JsonToForm, Some(body))],
+            "default",
+            "test-plugins",
+        );
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (FormJsonTransform): body.onReadFailure must be failClose"]
+        );
+        assert_eq!(runtime.request_plugins_count(), 0);
+        assert_sealed_invalid(&mut runtime);
+    }
+
+    #[tokio::test]
+    async fn form_json_stock_gate_fails_before_header_or_body_mutation() {
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::edgion_plugins::FormJsonDirection;
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(
+            &[form_json_entry(FormJsonDirection::FormToJson, None)],
+            "default",
+            "test-plugins",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_once(|_| Err(BodyReadError::Unimplemented));
+        session
+            .expect_record_error()
+            .with(mockall::predicate::eq(
+                edgion_resources::EdgionErrorCode::BodyReadUnimplemented,
+            ))
+            .return_const(());
+        session.expect_request_header_values().times(0);
+        session.expect_read_request_body().times(0);
+        session.expect_overwrite_request_body().times(0);
+        session.expect_set_request_header().times(0);
+        let mut log = PluginLog::new(filter.name());
+
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            }
+        );
+    }
+
+    #[test]
+    fn json_schema_invalid_body_rules_seal_fail_closed() {
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+
+        let cases = [
+            (
+                BodyRequirement {
+                    max_body_size: Some("invalid".to_string()),
+                    ..BodyRequirement::default()
+                },
+                "invalid body.maxBodySize",
+            ),
+            (
+                BodyRequirement {
+                    max_body_size: Some("0".to_string()),
+                    ..BodyRequirement::default()
+                },
+                "must be greater than 0",
+            ),
+            (
+                BodyRequirement {
+                    max_body_size: Some((1024 * 1024 + 1).to_string()),
+                    ..BodyRequirement::default()
+                },
+                "must not exceed 1MiB",
+            ),
+            (
+                BodyRequirement {
+                    conditions: Some(Default::default()),
+                    ..BodyRequirement::default()
+                },
+                "conditions are not supported",
+            ),
+        ];
+
+        for (body, expected_error) in cases {
+            let expected_errors: Vec<String> =
+                edgion_resources::resources::edgion_plugins::bounded_structured_body_validation_errors(&body)
+                    .into_iter()
+                    .map(|error| format!("requestPlugins[0] (JsonSchemaValidation): {error}"))
+                    .collect();
+            let mut runtime = PluginRuntime::new();
+            let errors =
+                runtime.add_from_request_filters(&[json_schema_entry(Some(body), true)], "default", "test-plugins");
+            assert_eq!(errors, expected_errors, "Gateway must mirror canonical body errors");
+            assert!(
+                errors.iter().any(|error| error.contains(expected_error)),
+                "expected {expected_error:?}, got {errors:?}"
+            );
+            assert_eq!(runtime.request_plugins_count(), 0);
+            assert_sealed_invalid(&mut runtime);
+        }
+    }
+
+    #[test]
+    fn proxy_rewrite_bounded_body_validation_matches_consumption() {
+        use edgion_resources::resources::edgion_plugins::{
+            BodyRequirement, JsonBodyRewrite, JsonPatchOperation, ProxyRewriteConfig,
+        };
+
+        let invalid_body = BodyRequirement {
+            conditions: Some(Default::default()),
+            ..BodyRequirement::default()
+        };
+        let mut consuming = RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig {
+            json_body: Some(JsonBodyRewrite {
+                operations: vec![JsonPatchOperation::Remove {
+                    path: "/obsolete".to_string(),
+                }],
+            }),
+            ..Default::default()
+        }));
+        consuming.body = Some(invalid_body.clone());
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[consuming], "default", "test-plugins");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (ProxyRewrite): body: conditions are not supported"]
+        );
+        assert_eq!(runtime.request_plugins_count(), 0);
+        assert_sealed_invalid(&mut runtime);
+
+        let mut uri_only = RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig {
+            uri: Some("/rewritten".to_string()),
+            ..Default::default()
+        }));
+        uri_only.body = Some(invalid_body);
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[uri_only], "default", "test-plugins");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (ProxyRewrite): body: plugin does not consume a body"]
+        );
+        assert!(runtime.invalid_plugins.is_empty());
+        assert_eq!(runtime.request_plugins_count(), 1);
+    }
+
+    #[test]
+    fn multiple_enabled_json_schema_validators_seal_fail_closed() {
+        let entries = [json_schema_entry(None, true), json_schema_entry(None, true)];
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&entries, "default", "test-plugins");
+        assert_eq!(
+            errors,
+            vec!["requestPlugins: at most one JsonSchemaValidation plugin is allowed, found 2"]
+        );
+        assert_sealed_invalid(&mut runtime);
+    }
+
+    #[test]
+    fn disabled_json_schema_validator_is_inert_for_cardinality() {
+        let entries = [json_schema_entry(None, true), json_schema_entry(None, false)];
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&entries, "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 1);
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("JsonSchemaValidation")
+        );
+    }
+
+    #[test]
+    fn bypassed_json_schema_is_inert_for_body_validation_and_cardinality() {
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut bypassed = json_schema_entry(
+            Some(BodyRequirement {
+                max_body_size: Some("invalid".to_string()),
+                ..BodyRequirement::default()
+            }),
+            true,
+        );
+        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
+        let normal = json_schema_entry(None, true);
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[bypassed, normal], "default", "test-plugins");
+        assert!(errors.is_empty(), "policy-stamped entries are inert: {errors:?}");
+        assert!(runtime.invalid_plugins.is_empty());
+
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 1);
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("JsonSchemaValidation")
+        );
+    }
+
+    #[test]
+    fn blocked_json_schema_is_inert_for_body_validation_and_cardinality() {
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut blocked = json_schema_entry(
+            Some(BodyRequirement {
+                conditions: Some(Default::default()),
+                ..BodyRequirement::default()
+            }),
+            true,
+        );
+        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let normal = json_schema_entry(None, true);
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[blocked, normal], "default", "test-plugins");
+        assert!(errors.is_empty(), "policy-stamped entries are inert: {errors:?}");
+        assert!(runtime.invalid_plugins.is_empty());
+
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("PluginPolicyBlock")
+        );
+    }
+
+    #[tokio::test]
+    async fn json_schema_default_limit_accepts_exactly_64_kib() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::EdgionHttpContext;
+        use bytes::Bytes;
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[json_schema_entry(None, true)], "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+
+        let mut body = vec![b' '; 64 * 1024];
+        body[0] = b'{';
+        body[1] = b'}';
+        let body = Bytes::from(body);
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_claim_json_schema_validation().return_const(true);
+        session.expect_declares_body().return_const(Some(true));
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_const(Ok(64 * 1024));
+        session
+            .expect_request_body_available_len()
+            .with(mockall::predicate::eq(false))
+            .return_const(Ok(64 * 1024));
+        session
+            .expect_request_header_values()
+            .times(2)
+            .returning(|name| match name {
+                "content-type" => Some(vec!["application/json".to_string()]),
+                "content-encoding" => Some(Vec::new()),
+                _ => unreachable!("unexpected header name"),
+            });
+        session
+            .expect_read_request_body()
+            .with(mockall::predicate::eq(None))
+            .return_once(move |_| Ok(body));
+
+        let mut log = PluginLog::new("JsonSchemaValidation");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::Nothing
+        );
+    }
+
+    #[tokio::test]
+    async fn json_schema_default_limit_rejects_64_kib_plus_one_before_materialization() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::EdgionHttpContext;
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[json_schema_entry(None, true)], "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_ensure_request_body()
+            .with(mockall::predicate::eq(Some(32 * 1024 * 1024)))
+            .return_const(Ok(64 * 1024 + 1));
+        session
+            .expect_record_error()
+            .with(mockall::predicate::eq(
+                edgion_resources::EdgionErrorCode::BodyReadTooLarge,
+            ))
+            .return_once(|_| ());
+
+        let mut log = PluginLog::new("JsonSchemaValidation");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 413,
+                body: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn request_body_buffer_fails_closed_when_capture_is_unimplemented() {
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+
+        let entry = RequestFilterEntry::new(EdgionPlugin::RequestBodyBuffer(Default::default()));
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "RequestBodyBuffer");
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_ensure_request_body()
+            .withf(|max_bytes| *max_bytes == Some(32 * 1024 * 1024))
+            .returning(|_| Err(BodyReadError::Unimplemented));
+        session
+            .expect_record_error()
+            .withf(|status| *status == edgion_resources::EdgionErrorCode::BodyReadUnimplemented)
+            .times(1)
+            .returning(|_| ());
+
+        let mut log = PluginLog::new("RequestBodyBuffer");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn add_from_request_filters_wraps_wasm_with_operator_body() {
+        // Wasm has no INTRINSIC body_requirement() (the guest's hooks are only
+        // known after module load), so it opts into request buffer mode purely
+        // through an operator `body:` block on the entry. Proof, mirroring the
+        // HMAC case above: with `body:` set, the built filter must force-read
+        // the body (the mock returns Unimplemented) and fail-close 500 BEFORE ever
+        // reaching WasmPlugin's own logic (which would otherwise try to load
+        // the module and fail differently). If the gate were not wired for
+        // Wasm, `read_request_body` would never be called by the gate at all
+        // and this assertion would not observe a 500 from the gate.
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig;
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+
+        let mut cfg = WasmConfig::default();
+        cfg.source.file = Some("plugin.wasm".to_string());
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::Wasm(cfg));
+        entry.body = Some(BodyRequirement::fail_close());
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        assert!(
+            errors.is_empty(),
+            "operator body: on a Wasm entry must be accepted at admission, got: {errors:?}"
+        );
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "Wasm", "gate must be transparent to name()");
+
+        let mut session = MockPluginSession::new();
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_header_value().returning(|_| None);
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_record_error().returning(|_| ());
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+
+        let mut log = PluginLog::new("Wasm");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            },
+            "operator body: on Wasm must actually wrap the plugin in the body gate"
+        );
+    }
+
+    #[test]
+    fn add_from_request_filters_drops_a_duplicate_alias() {
+        let mut runtime = PluginRuntime::new();
+
+        let mut first = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        first.alias = Some("dup".to_string());
+        let mut second = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        second.alias = Some("dup".to_string());
+
+        let entries = vec![first, second];
+        let errors = runtime.add_from_request_filters(&entries, "default", "test-plugins");
+
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("requestPlugins[1]") && e.contains("duplicate alias 'dup'")),
+            "expected a duplicate-alias error for index 1, got: {:?}",
+            errors
+        );
+
+        // Reporting alone is not enough: lenient admission keeps an
+        // `Accepted=False` resource serving, so the duplicate must also be
+        // dropped. The second entry then falls back to its `#index` scope
+        // instead of sharing the first entry's bucket namespace.
+        let mut iter = runtime.request_plugins_iter();
+        assert_eq!(iter.next().expect("first wrapper").alias(), Some("dup"));
+        assert_eq!(
+            iter.next().expect("second wrapper").alias(),
+            None,
+            "duplicate alias must be dropped, like an invalid one"
+        );
+    }
 
     #[test]
     fn add_from_request_filters_reports_alias_validation_error_and_threads_alias() {
@@ -1310,7 +2963,7 @@ mod tests {
         good_entry.alias = Some("auth-internal".to_string());
 
         let entries = vec![bad_entry, good_entry];
-        let errors = runtime.add_from_request_filters(&entries, "default");
+        let errors = runtime.add_from_request_filters(&entries, "default", "test-plugins");
 
         // The bad alias surfaces as a validation error referencing the index and the alias rule.
         assert!(
@@ -1328,6 +2981,67 @@ mod tests {
         assert_eq!(first.alias(), None, "bad alias must be dropped (validation refused)");
         let second = iter.next().expect("second wrapper");
         assert_eq!(second.alias(), Some("auth-internal"));
+    }
+
+    /// Minimal valid `CanaryConfig` (all fields operator-required, no `Default`).
+    /// Canary is a request-stage plugin whose `dye_capabilities()` include
+    /// `Success`, so it can carry a request-direction dye rule.
+    fn canary_config_for_dye_test() -> edgion_resources::resources::edgion_plugins::plugin_configs::CanaryConfig {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            CanaryConfig, DynUpstreamTarget, UpstreamFallback,
+        };
+        use std::collections::HashMap;
+        CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([(
+                "stable".to_string(),
+                DynUpstreamTarget {
+                    name: "app-v1".to_string(),
+                    namespace: None,
+                },
+            )]),
+            active_profile_ref: None,
+            on_invalid: UpstreamFallback::Reject,
+        }
+    }
+
+    #[test]
+    fn add_from_request_filters_compiles_and_threads_dye_plan() {
+        use edgion_resources::resources::edgion_plugins::{DyeRule, DyeSuite};
+
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::Canary(canary_config_for_dye_test()));
+        entry.dye = Some(DyeSuite {
+            request: vec![DyeRule {
+                name: "X-Canary-Profile".to_string(),
+                on: vec![edgion_resources::resources::edgion_plugins::DyeOutcome::Success],
+                value: None,
+                conditions: None,
+            }],
+            response: vec![],
+        });
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        let plan = filter.dye_plan().expect("dye plan threaded through the wrapper");
+        assert_eq!(plan.type_prefix, "canary");
+        assert_eq!(plan.request.len(), 1);
+        assert_eq!(plan.request[0].name, "X-Canary-Profile");
+        assert!(plan.response.is_empty());
+    }
+
+    #[test]
+    fn add_from_request_filters_has_no_dye_plan_when_entry_has_none() {
+        let entry = RequestFilterEntry::new(EdgionPlugin::Canary(canary_config_for_dye_test()));
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default", "test-plugins");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert!(filter.dye_plan().is_none());
     }
 
     #[test]
@@ -1362,7 +3076,7 @@ mod tests {
         let valid = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
 
         let entries = vec![invalid, valid];
-        let errors = runtime.add_from_request_filters(&entries, "default");
+        let errors = runtime.add_from_request_filters(&entries, "default", "test-plugins");
 
         // The invalid plugin is reported against its index.
         assert!(
@@ -1391,7 +3105,7 @@ mod tests {
     fn seal_fail_closed_is_noop_when_all_plugins_valid() {
         let mut runtime = PluginRuntime::new();
         let entries = vec![RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()))];
-        runtime.add_from_request_filters(&entries, "default");
+        runtime.add_from_request_filters(&entries, "default", "test-plugins");
 
         runtime.seal_fail_closed();
         assert_eq!(
@@ -1399,6 +3113,63 @@ mod tests {
             1,
             "no RejectFilter when every plugin config is valid"
         );
+    }
+
+    #[test]
+    fn policy_stamped_entries_are_not_instantiated_and_not_invalid() {
+        use edgion_resources::resources::edgion_plugins::{CorsConfig, MockConfig};
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut blocked = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let mut bypassed = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
+        let normal = RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()));
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[blocked, bypassed, normal], "default", "test-plugins");
+        assert!(errors.is_empty(), "policy stamps are not validation errors: {errors:?}");
+
+        // Only the normal plugin was instantiated.
+        assert_eq!(runtime.request_plugins.len(), 1);
+        // Stamped entries never enter invalid_plugins (Bypass must not 500).
+        assert!(runtime.invalid_plugins.is_empty());
+
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        // Block gate + bypass note prepended; block gate is FIRST.
+        assert_eq!(runtime.request_plugins.len(), 3);
+        assert_eq!(runtime.request_plugins[0].name(), "PluginPolicyBlock");
+        assert_eq!(runtime.request_plugins[1].name(), "PluginPolicyBypass");
+    }
+
+    #[test]
+    fn policy_block_gate_precedes_fail_closed_reject() {
+        // A chain with BOTH an invalid plugin and a policy block: policy wins.
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut blocked = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let mut invalid_alias = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        invalid_alias.alias = Some("bad alias with spaces".to_string());
+
+        let mut runtime = PluginRuntime::new();
+        let _ = runtime.add_from_request_filters(&[blocked, invalid_alias], "default", "test-plugins");
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        assert_eq!(runtime.request_plugins[0].name(), "PluginPolicyBlock");
+    }
+
+    #[test]
+    fn no_stamps_means_no_policy_filters() {
+        use edgion_resources::resources::edgion_plugins::MockConfig;
+
+        let normal = RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()));
+        let mut runtime = PluginRuntime::new();
+        let _ = runtime.add_from_request_filters(&[normal], "default", "test-plugins");
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        assert_eq!(runtime.request_plugins.len(), 1); // just Mock, zero overhead
     }
 
     #[test]
@@ -1452,7 +3223,7 @@ mod tests {
             ..Default::default()
         }));
 
-        runtime.add_from_request_filters(&[bad_dsl], "default");
+        runtime.add_from_request_filters(&[bad_dsl], "default", "test-plugins");
 
         // A DSL config that fails to build (whether caught by `validation_error()`
         // or by the `Ok(None)` constructor-declined arm) must leave the route
@@ -1466,12 +3237,199 @@ mod tests {
         let first = runtime.request_plugins_iter().next().expect("reject filter");
         assert_eq!(first.name(), "RejectInvalidConfig");
     }
+
+    #[test]
+    fn canary_plugin_construction() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            CanaryConfig, DynUpstreamTarget, UpstreamFallback,
+        };
+        use std::collections::HashMap;
+
+        // Create a minimal valid CanaryConfig (must have at least one profile).
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "base".to_string(),
+            DynUpstreamTarget {
+                name: "backend1".to_string(),
+                namespace: None,
+            },
+        );
+
+        let config = CanaryConfig {
+            enable: true,
+            active_profile: "base".to_string(),
+            profiles,
+            active_profile_ref: None,
+            on_invalid: UpstreamFallback::Reject,
+        };
+
+        let plugin = EdgionPlugin::Canary(config);
+
+        // Verify request stage returns Ok(Some(...)).
+        let result =
+            PluginRuntime::create_request_filter_from_edgion(&plugin, "default", None, "default/test-plugins/#0");
+        assert!(
+            matches!(result, CreateResult::Ok(Some(_))),
+            "Canary should construct in request stage"
+        );
+
+        // Verify upstream response stage returns WrongStage.
+        let result_response = PluginRuntime::create_upstream_response_filter_from_edgion(&plugin, "default");
+        assert!(
+            matches!(result_response, CreateResult::WrongStage),
+            "Canary should not apply to upstream response stage"
+        );
+
+        // Verify get_plugin_name works.
+        assert_eq!(PluginRuntime::get_plugin_name(&plugin), "Canary");
+    }
+
+    #[test]
+    fn ai_proxy_is_constructed_only_for_request_stage() {
+        use edgion_resources::resources::edgion_plugins::{
+            AiBackendSelection, AiBackendSelectionConfig, AiProxyConfig, OnUnknownModel,
+        };
+
+        let plugin = EdgionPlugin::AiProxy(AiProxyConfig {
+            backend_selection: AiBackendSelectionConfig {
+                selection_type: AiBackendSelection::Weighted,
+            },
+            inject_usage_tracking: true,
+            on_unknown_model: OnUnknownModel::Reject,
+            model_routes: Vec::new(),
+            token_quota: None,
+        });
+
+        let request = PluginRuntime::create_request_filter_from_edgion(
+            &plugin,
+            "tenant-a",
+            plugin.body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Request),
+            "tenant-a/plugins/#0",
+        );
+        let CreateResult::Ok(Some(filter)) = request else {
+            panic!("AiProxy must construct in request stage");
+        };
+        assert_eq!(filter.name(), "AiProxy");
+
+        assert!(matches!(
+            PluginRuntime::create_upstream_response_filter_from_edgion(&plugin, "tenant-a"),
+            CreateResult::WrongStage
+        ));
+        assert!(matches!(
+            PluginRuntime::create_upstream_response_body_filter_from_edgion(&plugin, "tenant-a"),
+            CreateResult::WrongStage
+        ));
+        assert!(matches!(
+            PluginRuntime::create_upstream_response_from_edgion(&plugin, "tenant-a"),
+            CreateResult::WrongStage
+        ));
+        assert_eq!(PluginRuntime::get_plugin_name(&plugin), "AiProxy");
+    }
+}
+
+#[cfg(test)]
+mod condition_body_requirement_tests {
+    use super::*;
+    use edgion_resources::common::KeyGet;
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, KeyExistCondition, PluginConditions,
+    };
+    use edgion_resources::resources::edgion_plugins::{
+        BodyStage, HmacCredential, HmacMatchConfig, RequestRestrictionConfig, RestrictionMode,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn nested_request_restriction_body_hmac_declares_plugin_level_requirement() {
+        let plugin = EdgionPlugin::RequestRestriction(RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Allow),
+            conditions: ConditionSet::all_of(vec![Condition::HmacAuth(HmacMatchConfig {
+                validate_request_body: true,
+                resolved_credentials: Some(HashMap::from([(
+                    "alice".to_string(),
+                    HmacCredential {
+                        secret: b"body-hmac-secret-at-least-32-bytes".to_vec(),
+                        headers: HashMap::new(),
+                        group: "default".to_string(),
+                    },
+                )])),
+                ..Default::default()
+            })]),
+            ..Default::default()
+        });
+
+        let requirement = PluginRuntime::resolve_body_requirement(&plugin, None, BodyStage::Request);
+        assert!(requirement.is_some());
+        assert!(PluginRuntime::use_generic_body_gate(&plugin));
+    }
+
+    #[test]
+    fn invalid_deny_restriction_bypasses_body_gate_for_generic_500() {
+        let unresolved = Condition::SecretMatch(
+            edgion_resources::resources::edgion_plugins::conditions::SecretMatchCondition {
+                key: KeyGet::Header {
+                    name: "X-Secret".to_string(),
+                },
+                secret_key: "token".to_string(),
+                secret_ref: edgion_resources::resources::common::SecretObjectReference {
+                    name: "missing".to_string(),
+                    group: None,
+                    kind: None,
+                    namespace: None,
+                },
+                negate: false,
+                resolved_values: None,
+                descriptor: Box::from(""),
+            },
+        );
+        let body_hmac = Condition::HmacAuth(HmacMatchConfig {
+            validate_request_body: true,
+            resolved_credentials: Some(HashMap::from([(
+                "alice".to_string(),
+                HmacCredential {
+                    secret: b"body-hmac-secret-at-least-32-bytes".to_vec(),
+                    headers: HashMap::new(),
+                    group: "default".to_string(),
+                },
+            )])),
+            ..Default::default()
+        });
+        let plugin = EdgionPlugin::RequestRestriction(RequestRestrictionConfig {
+            mode: Some(RestrictionMode::Deny),
+            conditions: ConditionSet::all_of(vec![unresolved, body_hmac]),
+            ..Default::default()
+        });
+
+        assert!(PluginRuntime::resolve_body_requirement(&plugin, None, BodyStage::Request).is_some());
+        assert!(!PluginRuntime::use_generic_body_gate(&plugin));
+
+        let mut entry = RequestFilterEntry::new(plugin);
+        entry.conditions = Some(PluginConditions {
+            skip: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
+                key: KeyGet::Header {
+                    name: "X-Bypass".to_string(),
+                },
+                negate: false,
+                descriptor: Box::from(""),
+            })])),
+            run: None,
+        });
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default", "default/policy");
+        assert!(errors.iter().any(|error| error.contains("restriction config invalid")));
+        assert!(runtime.has_invalid_plugins());
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("RejectInvalidConfig")
+        );
+    }
 }
 
 #[cfg(test)]
 mod ext_ref_index_tests {
     use super::*;
-    use edgion_resources::resources::LocalObjectReference;
+    use edgion_resources::resources::{ForwardAuthConfig, GRPCRouteFilter, LocalObjectReference};
 
     fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
         make_ext_ref_filter_with_kind("EdgionPlugins", name)
@@ -1491,14 +3449,49 @@ mod ext_ref_index_tests {
                 group: "edgion.io".into(),
                 kind: kind.into(),
                 name: name.into(),
+                resolved_namespace: None,
             }),
+        }
+    }
+
+    fn make_external_auth_filter(config: ForwardAuthConfig) -> HTTPRouteFilter {
+        HTTPRouteFilter {
+            filter_type: HTTPRouteFilterType::ExternalAuth,
+            request_header_modifier: None,
+            response_header_modifier: None,
+            request_redirect: None,
+            url_rewrite: None,
+            request_mirror: None,
+            cors: None,
+            external_auth: Some(config),
+            extension_ref: None,
+        }
+    }
+
+    #[test]
+    fn invalid_external_auth_seals_rule_and_backend_runtimes() {
+        // The default ForwardAuth target is intentionally invalid: neither a URL
+        // nor a Service name is configured, so ForwardAuth::new must fail.
+        let filters = vec![make_external_auth_filter(ForwardAuthConfig::default())];
+
+        let runtimes = [
+            PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1", &MirrorTuning::default()),
+            PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default()),
+        ];
+
+        for runtime in runtimes {
+            assert_eq!(runtime.request_plugins_count(), 1);
+            assert_eq!(
+                runtime.request_plugins_iter().next().map(|filter| filter.name()),
+                Some("RejectInvalidConfig")
+            );
         }
     }
 
     #[test]
     fn rule_scope_assigns_sequential_indices() {
         let filters = vec![make_ext_ref_filter("p1"), make_ext_ref_filter("p2")];
-        let rt = PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1");
+        let rt = PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1", &MirrorTuning::default());
         let keys = rt.ext_ref_keys();
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0], ("ns1".to_string(), "p1".to_string()));
@@ -1508,25 +3501,49 @@ mod ext_ref_index_tests {
     #[test]
     fn backend_scope_does_not_collect_keys() {
         let filters = vec![make_ext_ref_filter("p1")];
-        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default());
         assert!(rt.ext_ref_keys().is_empty());
     }
 
     #[test]
-    fn lb_policy_extension_ref_does_not_build_a_filter() {
-        // An LBPolicy ExtensionRef is not a plugin reference — it is consumed by
-        // BackendExtensionInfo / parse_lb_policy. The plugin runtime must NOT
-        // build an ExtensionRefFilter for it; otherwise every request through
-        // the backend hits prepare_execution's `Err(())` and 500s.
+    fn grpc_rule_scope_uses_controller_resolved_namespace() {
+        let filter: GRPCRouteFilter = serde_json::from_value(serde_json::json!({
+            "type": "ExtensionRef",
+            "extensionRef": {
+                "group": "edgion.io",
+                "kind": "EdgionPlugins",
+                "name": "child-plugin",
+                "resolvedNamespace": "child"
+            }
+        }))
+        .expect("gRPC ExtensionRef fixture must deserialize");
+        let runtime = PluginRuntime::from_grpcroute_filters_for_rule(&[filter], "parent");
+        assert_eq!(
+            runtime.ext_ref_keys(),
+            &[("child".to_string(), "child-plugin".to_string())]
+        );
+    }
+
+    #[test]
+    fn lb_policy_kind_extension_ref_now_builds_a_filter_like_any_other_kind() {
+        // The route-level extensionRef LB mechanism was removed: `LBPolicy*`
+        // kinds are no longer special-cased by the plugin runtime. A
+        // `LBPolicyConsistentHash` ExtensionRef is now treated exactly like any
+        // other ExtensionRef filter, so it builds an ExtensionRefFilter.
+        // (Routes using this kind are excluded from the data-plane route table
+        // upstream at the controller's extensionRef-kind validation gate, so
+        // this filter would never actually execute in production — but the
+        // gateway-side runtime construction no longer knows or cares about the
+        // kind.)
         let filters = vec![make_ext_ref_filter_with_kind(
             "LBPolicyConsistentHash",
             "header.x-user-id",
         )];
-        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default());
         assert_eq!(
             rt.request_plugins_count(),
-            0,
-            "LBPolicy ExtensionRef must not build an ExtensionRefFilter"
+            1,
+            "LBPolicy* kinds are no longer special-cased; an ExtensionRefFilter is built like any other kind"
         );
     }
 }

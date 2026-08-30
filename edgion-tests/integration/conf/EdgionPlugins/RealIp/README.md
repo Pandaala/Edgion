@@ -38,13 +38,14 @@ recursive: true
 ## Verification
 
 The plugin will:
-1. Check if client_addr is in trusted_ips
+1. Check if the current downstream peer is in trusted_ips
 2. If trusted, extract real IP from X-Forwarded-For header
 3. Traverse from right to left to find first non-trusted IP
-4. Update ctx.request_info.remote_addr (Note: current implementation logs but doesn't update yet)
+4. Update the request's resolved RemoteIp (the `remote_ip` access-log field)
 
 ## Backend Response
 
 The test backend should echo headers including:
-- X-Real-IP: The extracted real IP address
+- X-Real-IP: The default upstream header carrying the extracted RemoteIp value
+- `spec.forwardedHeaders.remoteIpHeader`: Optional custom upstream header name for RemoteIp
 - X-Forwarded-For: Updated with client IP appended

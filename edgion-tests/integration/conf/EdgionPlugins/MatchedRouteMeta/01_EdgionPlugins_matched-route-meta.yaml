@@ -8,6 +8,11 @@ metadata:
   name: matched-route-meta-plugin
   namespace: edgion-it
 spec:
+  # Opt-in: project the composed route_meta ctx var into the access log.
+  accessLogExtern:
+    - key: route_meta
+      from: ctx
+      name: route_meta
   requestPlugins:
     - enable: true
       type: CtxSet

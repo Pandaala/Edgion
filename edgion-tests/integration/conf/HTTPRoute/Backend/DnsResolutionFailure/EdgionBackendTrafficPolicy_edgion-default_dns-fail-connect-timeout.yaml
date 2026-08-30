@@ -1,0 +1,28 @@
+# Per-backend connect-timeout override for the unreachable backend.
+#
+# The gateway's connection-establishment deadline is resolved independently of
+# the route's backendRequest timeout (see the Option-B decouple in
+# configure_peer_timeouts / docs/superpowers/specs/2026-07-22-per-backend-connect-timeout-design.md):
+# connect is bounded by BTP connection.connectTimeout (per-backend) else the
+# global defaultConnectTimeout (5s), NOT by backendRequest. Without this policy
+# the connect attempt to 192.0.2.1 would hang for the full 5s global default,
+# and with the connect-failure retry (2 attempts x 5s ~= 10s) the request would
+# exceed the test's 10s client budget.
+#
+# Setting a 1s per-backend connect timeout makes each connect attempt to the
+# unreachable IP fail fast at ~1s (restoring the scenario's original ~2-3s total
+# for 2 attempts), so the gateway returns 504 (ConnectTimedout) well within
+# budget. This also exercises the intended real-world use of the field: an
+# operator uses BTP connectTimeout to make a specific unreachable/slow backend
+# fail fast independently of the route timeouts.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: dns-fail-connect-timeout
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: nonexistent-backend
+  connection:
+    connectTimeout: 1s

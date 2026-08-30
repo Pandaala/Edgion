@@ -1,0 +1,22 @@
+# ExtProc attached streamed test: one Process stream spans request and response
+# transport windows. The fake processor replaces request and response chunks;
+# test mode `body-block` answers the first request chunk with an immediate 403.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-streamed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: STREAMED
+          responseHeaderMode: SEND
+          responseBodyMode: STREAMED
+        failureModeAllow: false

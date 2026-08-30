@@ -49,7 +49,12 @@
 | `edgion.io/tcp-keepalive-interval` | `TCPRoute` / `TLSRoute` | 相邻 keepalive 探针之间的间隔秒数（1–75）。仅在设置了 `tcp-keepalive-time` 时生效；缺失或非法值 = 75（操作系统默认值） |
 | `edgion.io/tcp-keepalive-probes` | `TCPRoute` / `TLSRoute` | 连续探测失败多少次后判定连接已断开（1–20）。仅在设置了 `tcp-keepalive-time` 时生效；缺失或非法值 = 9（操作系统默认值） |
 | `edgion.io/expose-client-cert` | `EdgionTls` | 把 mTLS 客户端证书信息暴露给插件层 |
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | 主动健康检查 YAML 配置（type: http/tcp/grpc） |
+
+Service 级别的后端行为（主动健康检查、异常点检测/熔断、panic 阈值、负载均衡算法）**不再是** annotation，而是通过 `EdgionBackendTrafficPolicy` CRD 配置，经由 `spec.targetRefs` 关联到 Service。详见
+[`skills/02-features/03-resources/20-edgion-backend-traffic-policy.md`](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md)（英文，面向 AI Agent/开发者的完整 schema 参考），或用户指南：
+[后端主动健康检查](../user-guide/http-route/backends/health-check.md)、
+[熔断器](../user-guide/http-route/backends/circuit-breaker.md)、
+[负载均衡算法](../user-guide/http-route/lb-algorithms.md)。
 
 ## 不是 annotations 的高频键
 
@@ -58,7 +63,7 @@
 | `edgion.io/cert-provider` | `Gateway.spec.listeners[*].tls.options` | Listener TLS 证书来源扩展 |
 | `edgion.io/client-certificate-ref` | `BackendTLSPolicy.spec.options` | 上游 mTLS 客户端证书引用 |
 | `edgion.io/leader` | `metadata.labels` | K8s HA 领导者标签 |
-| `edgion.io/managed-by` | `metadata.labels` | ACME 等系统生成资源的归属标签 |
+| `edgion.io/managed-by` | `metadata.labels` | ACME 等系统生成资源的来源标记；系统不读取该标签 |
 | `edgion.io/acme-resource` | `metadata.labels` | ACME 关联资源标签 |
 
 ## 系统保留与测试专用键

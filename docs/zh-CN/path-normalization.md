@@ -61,6 +61,8 @@ access_log_options:
 
 启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path + raw query）。详见 [Access Log](ops-guide/observability/access-log.md)。
 
+**注意**：`access_log_sensitive.mode` 默认值为 `replace`，因此 `request_uri` 与 `path` 一样，在未修改该模式的情况下会渲染为 `***`。仅开启 `include_raw_uri` 不再能得到可读的原始入口视图；详见 [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive)。
+
 ---
 
 ## 安全承诺范围
@@ -122,18 +124,18 @@ path:
   value: "/admin"
 ```
 
-### 3. `RestrictionSource::Path` 配置
+### 3. `keyMatch` + `key: { type: path }` 配置
 
-`Path` source 规则的 `values` 加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`——INFO 日志会记录此转换，不静默。
+path 键的 `keyMatch` 条件的 `values` 加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`。
 
-若需要按字面 raw 拒绝，改用 `RestrictionSource::RequestPath`。
+若需要按字面 raw 拒绝，改用 `keyMatch` + `key: { type: requestPath }`。
 
-### 4. `;param` 对白名单规则的副作用
+### 4. `;param` 对拒绝/允许模式规则的副作用
 
 path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类绕过）。
 
-- 影响 **黑名单分组**（`mode: Blacklist`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `Path` 规则的 `values: ["/secret"]` ✓
-- 影响 **白名单分组**（`mode: Whitelist`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `Path` 规则 `values: ["/api/users"]` exact，**不命中**
+- 影响 **拒绝模式分组**（`mode: Deny`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 path `keyMatch` 的 `values: ["/secret"]` ✓
+- 影响 **允许模式分组**（`mode: Allow`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 path `keyMatch` `values: ["/api/users"]` exact，**不命中**
 
 上游仍收到含 `;param` 的 raw path，依赖 `;jsessionid` 的应用不受影响。
 
@@ -146,18 +148,21 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 ```yaml
 - type: RequestRestriction
   config:
-    mode: Blacklist
-    ruleGroups:
-      - rules:
-          - name: block-admin
-            source: Path             # current 视图，覆盖所有编码变体
-            values:
-              - "/admin"
-              - "/internal"
-            onMissing: NoMatch
+    mode: Deny
+    conditions:
+      anyOf:
+        - allOf:
+            - type: keyMatch
+              key:
+                type: path             # current 视图，覆盖所有编码变体
+              values:
+                - "/admin"
+                - "/internal"
 ```
 
 ### 审计日志记录客户端原始 URI
+
+先用 `CtxSet` 计算出该值，再用 `AccessLogExtern from: ctx` 声明记录这个 ctx 变量——`AccessLogExtern` 是唯一能把 ctx 变量投影进 access log 的载体；仅靠 `CtxSet` 并不会使其出现在日志中。详见 [Access Log — 扩展日志：AccessLogExtern](ops-guide/observability/access-log.md#扩展日志accesslogextern)。
 
 ```yaml
 - type: CtxSet
@@ -165,6 +170,16 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
     rules:
       - name: entry_uri
         template: "${requestUri}"  # 客户端入口 raw URI，冻结
+---
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: audit-fields
+spec:
+  accessLogExtern:
+    - key: entry_uri
+      from: ctx
+      name: entry_uri
 ```
 
 ---
@@ -213,4 +228,4 @@ path_normalization:
   preserve_path_parameters: true
 ```
 
-注意：开启后 `..;/` 类绕过攻击不再被默认拦截（参见 spec §14.4）。建议同时用 `RestrictionSource::RequestPath` regex 拦截 `;` 字符的可疑模式。
+注意：开启后 `..;/` 类绕过攻击不再被默认拦截（参见 spec §14.4）。建议同时用 `keyMatch` + `key: { type: requestPath }` 的 regex 拦截 `;` 字符的可疑模式。

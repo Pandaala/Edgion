@@ -28,9 +28,6 @@ tmp/
 # Temporary conformance test files (copied from upstream, not tracked)
 .tmp-conformance-tests/
 
-# Generated conf_sync mTLS certificates (never commit private keys)
-edgion-tests/certs/conf-sync-grpc/
-
 # Cross-compilation config (personal dev workflow)
 Cross.toml
 Dockerfile.cross
@@ -59,3 +56,6 @@ docs/.vitepress/cache/
 
 # Claude Code agent worktrees (transient)
 .claude/worktrees/
+# Local-only cargo path overrides for verifying unpushed pingora fork changes.
+# Anchored and narrowed so a shared .cargo/config.toml stays possible later.
+/.cargo/config.toml

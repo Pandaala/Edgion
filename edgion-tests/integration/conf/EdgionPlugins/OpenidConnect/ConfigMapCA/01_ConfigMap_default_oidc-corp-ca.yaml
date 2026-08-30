@@ -1,0 +1,19 @@
+# ConfigMap holding a CA bundle for OIDC provider TLS verification.
+# Used by the ConfigMapCA scenario to test that caCertificateRefs accepts a
+# ConfigMap (in addition to Secret) as a CA trust anchor.
+#
+# NOTE: The PEM below is a self-signed dummy certificate generated only for
+# fixture purposes. In a real deployment you would place your actual CA PEM here.
+# Integration tests that need a live OIDC TLS endpoint must replace this with
+# the real CA and stand up a TLS-enabled mock OIDC server on 127.0.0.1.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oidc-corp-ca
+  namespace: edgion-default
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIICpDCCAYwCCQDummy0ConfigMA0CA0+fixture+only+not+a+real+cert+MIICpDCC
+    AYwCCQDummyConfigMapCAFixture0NotARealCert0NotARealCert0NotARealCert0AA
+    -----END CERTIFICATE-----

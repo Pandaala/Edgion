@@ -10,6 +10,7 @@
 use crate::backends::discovery::get_roundrobin_store;
 use crate::conf_sync::conf_client::ConfigClient;
 use crate::lb::compiled_selector;
+use edgion_resources::HTTPBackendRefKind;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -17,11 +18,11 @@ use std::sync::Arc;
 pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     let mut service_keys: HashSet<String> = HashSet::new();
 
-    // Collect backend service keys from every route type. All five Gateway API
-    // route kinds share the same `metadata.namespace` / `spec.rules` /
-    // `rule.backend_refs` / `br.{namespace,name}` shape but are distinct concrete
-    // types with no shared trait, so a local macro (mirroring `apply_change!` in
-    // `config_client.rs`) is the idiomatic way to avoid five identical bodies.
+    // Collect backend service keys from every route type. TCP/UDP/TLS routes
+    // have no delegation mechanism, so they keep sweeping `spec.rules` /
+    // `rule.backend_refs` / `br.{namespace,name}` directly via this macro
+    // (mirroring `apply_change!` in `config_client.rs` to avoid three
+    // identical bodies with no shared trait).
     macro_rules! collect_routes {
         ($list_method:ident) => {
             for route in &config_client.$list_method().data {
@@ -42,8 +43,51 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
         };
     }
 
-    collect_routes!(list_routes);
-    collect_routes!(list_grpc_routes);
+    // HTTPRoute and GRPCRoute support delegation: a delegating rule's
+    // backendRef points at a child Route (not a Service), and the flattened
+    // child Services live only in `resolved_rules`. Read `effective_rules()`
+    // (resolved_rules else spec.rules) and skip delegation-kind backendRefs
+    // so the LB warm-up neither treats a route-kind ref as a Service key nor
+    // misses the flattened child Services (which would otherwise pay the
+    // cold-cell first-request cost).
+    for route in &config_client.list_routes().data {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let Some(rules) = route.effective_rules() else {
+            continue;
+        };
+        for rule in rules {
+            let Some(backend_refs) = rule.backend_refs.as_ref() else {
+                continue;
+            };
+            for br in backend_refs {
+                if br.backend_kind() != HTTPBackendRefKind::Service {
+                    continue;
+                }
+                let ns = br.namespace.as_deref().unwrap_or(route_ns);
+                service_keys.insert(format!("{}/{}", ns, br.name));
+            }
+        }
+    }
+
+    for route in &config_client.list_grpc_routes().data {
+        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+        let Some(rules) = route.effective_rules() else {
+            continue;
+        };
+        for rule in rules {
+            let Some(backend_refs) = rule.backend_refs.as_ref() else {
+                continue;
+            };
+            for br in backend_refs {
+                if br.is_route_delegation_ref() {
+                    continue;
+                }
+                let ns = br.namespace.as_deref().unwrap_or(route_ns);
+                service_keys.insert(format!("{}/{}", ns, br.name));
+            }
+        }
+    }
+
     collect_routes!(list_tcp_routes);
     collect_routes!(list_udp_routes);
     collect_routes!(list_tls_routes);

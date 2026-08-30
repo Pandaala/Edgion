@@ -55,7 +55,8 @@ An operator who needs to confirm "is Stage 1 compat active for store_key X?"
 greps `tls.log` for `(compat)` — bounded, per-connection, no extra hot-path
 allocation, no EnvFilter dependency. This is the project's standing design
 for data-plane observability (Iron Rule 3 alternatives table:
-"Per-connection error/event → `ctx.err_log` / `ctx.add_error()`").
+"Per-connection or per-request error/event → `ctx.err_log` /
+`ctx.record_error(EdgionErrorCode::...)`").
 
 **3. Symmetry with the TCP / TLS rejection precedent.**
 The 2026-05-24 fix recorded in `tcp-stream-plugin-no-tracing.md` removed

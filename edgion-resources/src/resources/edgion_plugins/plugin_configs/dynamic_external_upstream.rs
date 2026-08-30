@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::common::KeyGet;
 use crate::resources::edgion_plugins::PluginValidation;
 
+use super::upstream_fallback::{default_upstream_fallback, UpstreamFallback};
+
 /// DynamicExternalUpstream plugin configuration
 ///
 /// Routes the request to an external domain based on a routing key
@@ -47,24 +49,17 @@ pub struct DynamicExternalUpstreamConfig {
 
     /// Behavior when the routing key is missing from the request.
     ///
-    /// - `skip` (default): proceed with normal backend selection (no jump)
+    /// - `fallback` (default): proceed with normal backend selection (no jump)
     /// - `reject`: return 400 Bad Request
-    #[serde(default)]
-    pub on_missing: ExtUpstreamOnMissing,
+    #[serde(default = "default_upstream_fallback")]
+    pub on_missing: UpstreamFallback,
 
     /// Behavior when the routing key doesn't match any entry in domainMap.
     ///
-    /// - `skip` (default): proceed with normal backend selection (no jump)
+    /// - `fallback` (default): proceed with normal backend selection (no jump)
     /// - `reject`: return 400 Bad Request
-    #[serde(default)]
-    pub on_no_match: ExtUpstreamOnNoMatch,
-
-    /// Whether to set `X-Dynamic-External-Upstream` request header (sent to upstream)
-    /// indicating which domain was targeted. Useful for end-to-end debugging.
-    ///
-    /// Default: false
-    #[serde(default)]
-    pub debug_header: bool,
+    #[serde(default = "default_upstream_fallback")]
+    pub on_no_match: UpstreamFallback,
 
     // === Compiled regex cache ===
     #[serde(skip)]
@@ -86,6 +81,7 @@ pub struct DomainTarget {
     ///
     /// Default: 443 if tls=true, 80 if tls=false
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<u16>,
 
     /// Whether to use TLS for the connection.
@@ -134,28 +130,6 @@ pub struct ExtUpstreamExtract {
     pub group: usize,
 }
 
-/// Behavior when routing key value is missing
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum ExtUpstreamOnMissing {
-    /// Proceed with normal backend selection (default)
-    #[default]
-    Skip,
-    /// Return 400 Bad Request
-    Reject,
-}
-
-/// Behavior when no domain matches the routing key
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum ExtUpstreamOnNoMatch {
-    /// Proceed with normal backend selection (default)
-    #[default]
-    Skip,
-    /// Return 400 Bad Request
-    Reject,
-}
-
 fn default_true() -> bool {
     true
 }
@@ -183,9 +157,8 @@ impl Default for DynamicExternalUpstreamConfig {
             },
             extract: None,
             domain_map: HashMap::new(),
-            on_missing: ExtUpstreamOnMissing::default(),
-            on_no_match: ExtUpstreamOnNoMatch::default(),
-            debug_header: false,
+            on_missing: default_upstream_fallback(),
+            on_no_match: default_upstream_fallback(),
             compiled_regex: None,
         }
     }

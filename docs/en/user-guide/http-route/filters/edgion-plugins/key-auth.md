@@ -203,7 +203,7 @@ Failure branches (`Deny bad key`, `Deny no key`) and anonymous pass-through (`Al
 ## Behavior Details
 
 - Multiple `keySources` are checked in order; the first non-empty value is used for authentication
-- With `hideCredentials: true`, the source used for authentication is removed from the request before it is forwarded upstream. This covers the `header`, `query`, and `cookie` sources (for `query`, the matched parameter is stripped from the request URI; for `cookie`, the matched cookie is removed from the `Cookie` header). The `webhook` source is resolved server-side and never travels in the forwarded request, so nothing is stripped for it.
+- With `hideCredentials: true`, the source used for authentication is removed from the request before it is forwarded upstream. This covers the `header`, `query`, and `cookie` sources (for `query`, the matched parameter is stripped from the request URI; for `cookie`, the matched cookie is removed from the `Cookie` header). A `ctx` source (including a value written by [WebhookKeyGet](./webhook-key-get.md)) is already server-side and never travels in the forwarded request, so nothing is stripped for it. WebhookKeyGet must run **before** KeyAuth; a reversed `requestPlugins` list is a silent auth bypass.
 - In `anonymous` mode, requests without a key still pass through with `X-Anonymous-Consumer: true`
 - Keys are stored in the `keys.yaml` field of Kubernetes Secrets as a YAML array
 - When the same raw key appears in multiple groups, the first group wins; a warning is logged with both group names

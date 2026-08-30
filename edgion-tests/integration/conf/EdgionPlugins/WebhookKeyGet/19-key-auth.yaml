@@ -1,0 +1,147 @@
+# Scenario 19: WebhookKeyGet then KeyAuth
+# ---------------------------------------------------------------------------
+# WebhookKeyGet resolves a key into ctx, then KeyAuth authenticates that ctx
+# var. Order is load-bearing: WebhookKeyGet MUST run first.
+#
+# A reversed requestPlugins list (KeyAuth before WebhookKeyGet) is a silent
+# auth bypass — the ctx var is empty, KeyAuth sees no key, and (without an
+# anonymous fallback) would 401; if KeyAuth also had a header/query source, or
+# if an operator expected the webhook value to be required, a misordered list
+# can fail open relative to the intended composition. W-1 declined a
+# cross-plugin ordering check; this fixture documents the hazard instead.
+#
+# The LinkSys webhook origin-forwards X-Wh-Key and the backend echoes it.
+# WebhookKeyGet extracts data.echo_headers.x-wh-key into ctx `wh19_key`.
+# KeyAuth reads only `{ type: ctx, name: wh19_key }` against Secret
+# `wh19-api-keys`.
+#
+# Flow: HTTPRoute -> WebhookKeyGet -> KeyAuth -> backend
+# Backend via Service + EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh19-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh19-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh19-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wh19-api-keys
+  namespace: edgion-default
+type: Opaque
+stringData:
+  keys.yaml: |
+    - key: "test-key-wh19-valid"
+      X-Consumer-Username: "wh19-user"
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh19-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh19-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        origin:
+          - name: X-Wh-Key
+    timeoutMs: 5000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh19-webhook-key-auth
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: wh19_key
+      from: ctx
+      name: wh19_key
+  requestPlugins:
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh19_key
+            webhookRef: "edgion-default/wh19-resolver"
+            extract:
+              source: body
+              path: "data.echo_headers.x-wh-key"
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: ctx
+            name: wh19_key
+        hideCredentials: false
+        realm: "Wh19 API"
+        keyField: "key"
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: wh19-api-keys
+                namespace: edgion-default
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh19-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh19.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh19
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh19-webhook-key-auth
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

@@ -1,12 +1,12 @@
 ---
 name: redis-link-check-positional-heuristic
-description: Use when a reviewer flags `check_redis_link_names` (DSL plugin.rs) bytecode `i-argc` link-name guess as misaligning / false-positive-rejecting valid configs / fail-closing the route — covers why the check is now fail-open and which fixes are not accepted.
+description: Use when a reviewer flags `check_redis_link_names` (edgion-dsl script.rs) bytecode `i-argc` link-name guess as misaligning / false-positive-rejecting valid configs / fail-closing the route — covers why the check is now fail-open and which fixes are not accepted.
 ---
 
 # `check_redis_link_names` Positional Heuristic — FIXED (fail-open), PIN-IN-PLACE
 
-**Status**: Resolved (plugins-http-dsl-F015, 2026-05-26) — see `check_redis_link_names` + `is_single_push_op` in `edgion-gateway/src/plugins/http/dsl/plugin.rs`.
-**Tests**: `plugin.rs::tests::validate_config_accepts_redis_with_multi_instruction_sibling_arg` (regression for the false-positive 500) and `validate_config_skips_check_when_layout_is_ambiguous` (documents fail-open); `validate_config_rejects_unknown_redis_link` still locks the all-literal reject path.
+**Status**: Resolved (plugins-http-dsl-F015, 2026-05-26) — see `check_redis_link_names` + `is_single_push_op` in `edgion-dsl/src/script.rs`.
+**Tests**: `edgion-dsl/src/script.rs::tests::check_accepts_declared_link_with_multi_instruction_sibling_arg` (regression for the false-positive 500) and `check_fails_open_when_layout_is_ambiguous` (documents fail-open); `check_rejects_unknown_redis_link` still locks the all-literal reject path.
 
 ## Conclusion
 
@@ -18,7 +18,7 @@ Findings of the form "`i - argc` can land mid-expression and wrongly reject a va
 
 **1. Why the old heuristic fail-closed valid configs**
 
-`check_redis_link_names` runs inside `DslPlugin::validate_config`, which `DslConfig::validation_error()` calls. A non-`None` validation error pushes the plugin into `invalid_plugins`; `seal_fail_closed` then prepends a `RejectFilter` that returns **500 on 100% of traffic** through the route. So a misaligned heuristic match converted a valid DSL plugin into a full-route outage at config-reload time.
+`check_redis_link_names` runs inside `DslConfig::compile_and_validate`, which `DslConfig::validation_error()` calls. A non-`None` validation error pushes the plugin into `invalid_plugins`; `seal_fail_closed` then prepends a `RejectFilter` that returns **500 on 100% of traffic** through the route. So a misaligned heuristic match converted a valid DSL plugin into a full-route outage at config-reload time.
 
 The misalignment: the compiler compiles arguments with plain `compile_expr` in source order, so any argument can emit multiple instructions. For `redis.get("cache", req.header("X-Key"))`:
 

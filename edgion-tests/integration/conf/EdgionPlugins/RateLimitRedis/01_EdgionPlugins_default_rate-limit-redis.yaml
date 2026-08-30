@@ -6,18 +6,40 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
+      alias: direct-peer-host-header
       type: RateLimitRedis
+      conditions:
+        run:
+          allOf:
+            - type: keyMatch
+              key:
+                type: host
+              values:
+                - "rate-limit-redis.example.com"
+            - type: keyMatch
+              key:
+                type: path
+              regex:
+                - "^/test/rate-limit-redis/allow(?:/|$)"
+            - type: keyMatch
+              key:
+                type: header
+                name: "X-Rate-Apply"
+              values:
+                - "yes"
       config:
         redisRef: "default/redis-test"
         policies:
           - rate: 3
-            interval: "10s"
-            algorithm: SlidingWindow
+            interval: "60s"
+            algorithm: FixedWindow
         key:
+          - type: directPeerIp
+          - type: host
           - type: header
             name: "X-Rate-Key"
-        onMissingKey: Allow
-        onRedisFailure: Allow
+        onKeyMiss: Allow
+        onRedisFailure: Deny
         rejectStatus: 429
         rejectMessage: "Redis rate limit exceeded"
         showLimitHeaders: true

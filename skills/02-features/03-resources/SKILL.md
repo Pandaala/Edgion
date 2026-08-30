@@ -6,7 +6,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 # 03 Resource Feature Reference
 
 > **External contracts** for all Gateway API standard resources and Edgion extension resources: full YAML schema, field types and default values, configuration examples.
-> The **internal implementation** of resources (Handler flow, requeue associations, source locations) is in [01-architecture/05-resources/](../../01-architecture/05-resources/SKILL.md) — both sides share the same numbering one-to-one; you typically need to look at both when modifying code.
+> The **internal implementation** of resources (Handler flow, requeue associations, source locations) is in [01-architecture/05-resources/](../../01-architecture/05-resources/SKILL.md). Stable resource numbers align where both pages exist; Controller-only ConfigMap and other explicit exceptions are listed by the architecture index.
 
 ## Numbering Alignment
 
@@ -26,12 +26,16 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | 13 | EdgionPlugins | `05-resources/13-edgion-plugins.md` | [13-edgion-plugins.md](13-edgion-plugins.md) |
 | 14 | EdgionStreamPlugins | `05-resources/14-edgion-stream-plugins.md` | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
 | 15 | EdgionConfigData | `05-resources/15-edgion-config-data.md` | Plugin metadata, including the RegionRoute state-management variant |
-| 16 | Service/Endpoints | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
+| 16 | Service/EndpointSlice | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
 | 17 | EdgionAcme | `05-resources/17-edgion-acme.md` | [17-acme.md](17-acme.md) |
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
+| 20 | EdgionBackendTrafficPolicy | `05-resources/20-edgion-backend-traffic-policy.md` | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
+| 22 | EdgionBackend | `05-resources/22-edgion-backend.md` | [22-edgion-backend.md](22-edgion-backend.md) |
 
 > The feature documentation for #03 (EdgionGatewayConfig) lives under `02-config/` because it is essentially a configuration-layer resource.
 > #10 (Secret), #11 (ReferenceGrant), and #15 (EdgionConfigData) currently have no standalone feature documentation; see the architecture documentation.
+> ConfigMap is Controller-only and is documented at
+> [01-architecture/05-resources/21-configmap.md](../../01-architecture/05-resources/21-configmap.md).
 
 ## Browse by Category
 
@@ -65,15 +69,21 @@ description: Feature and configuration schema reference for all Kubernetes resou
 
 | Resource | Description |
 |----------|-------------|
-| [13-edgion-plugins.md](13-edgion-plugins.md) | Catalog and configuration of 33 HTTP plugins |
+| [13-edgion-plugins.md](13-edgion-plugins.md) | HTTP plugin catalog; `EdgionPlugin` enum is authoritative |
 | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | Stream plugin two-stage model |
 
 ### Backends and External Systems
 
 | Resource | Description |
 |----------|-------------|
-| [16-service-backends.md](16-service-backends.md) | Service discovery, health checks, load balancing policies |
-| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka connectors |
+| [16-service-backends.md](16-service-backends.md) | Service discovery |
+| [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | Direct-backend policy for Service or EdgionBackend; target kind controls valid sections |
+| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka/HttpDns connector and Controller-managed credential-source configuration |
+### AI Gateway
+
+| Resource | Description |
+|----------|-------------|
+| [22-edgion-backend.md](22-edgion-backend.md) | AI provider backends, HTTPRoute binding, status, and policy attachment |
 
 ## Quick Lookup
 
@@ -86,6 +96,8 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | Configure automatic certificates | [17-acme.md](17-acme.md) |
 | Look up HTTP plugins | [13-edgion-plugins.md](13-edgion-plugins.md) |
 | Configure TCP-layer plugins | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
-| Configure health checks/load balancing | [16-service-backends.md](16-service-backends.md) |
+| Configure Service discovery | [16-service-backends.md](16-service-backends.md) |
+| Configure health checks/circuit breaking/load balancing | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
 | Integrate with external systems | [18-link-sys.md](18-link-sys.md) |
 | Configure upstream TLS | [12-backend-tls-policy.md](12-backend-tls-policy.md) |
+| Configure an AI provider backend | [22-edgion-backend.md](22-edgion-backend.md) |

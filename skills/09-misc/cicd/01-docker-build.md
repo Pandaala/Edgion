@@ -21,6 +21,27 @@ Other variants in `cicd/docker/` (not detailed here):
 
 - `cicd/docker/Dockerfile.controller-gateway` (+ `cicd/docker/controller-gateway-entrypoint.sh`) — packages pre-built binaries (controller + gateway + cli) into one standalone backend image (no dashboard/nginx). Driven by `build-image.sh --controller-gateway`
 
+## Gateway images
+
+`cicd/build-image.sh` builds the Gateway against the Edgion Pingora fork
+(the only Pingora source):
+
+| Gateway binary | Standard image | Controller-Gateway image |
+|----------------|----------------|--------------------------|
+| `edgion-gateway` | `edgion-gateway` | `edgion-controller-gateway` |
+
+The Controller image is `edgion-controller` (the Controller does not link
+Pingora).
+
+All source-building image paths use Cargo's `--locked` mode, so images use the
+exact Edgion Pingora commit recorded in `Cargo.lock`, even though the
+workspace manifest follows the fork's `edgion_v3` branch.
+
+```bash
+# Default images
+cicd/build-image.sh
+```
+
 ## The 4 stages of `cicd/docker/Dockerfile`
 
 ### 1. `chef`
@@ -31,7 +52,7 @@ Other variants in `cicd/docker/` (not detailed here):
 
 ### 2. `planner`
 
-- Copies `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/bin`
+- Copies the workspace tree because cargo-chef must see every member manifest in the virtual workspace
 - Runs `cargo chef prepare --recipe-path recipe.json`
 - Generates the dependency recipe; does not compile business code
 
@@ -45,7 +66,8 @@ Other variants in `cicd/docker/` (not detailed here):
   - `perl`
   - `pkg-config`
   - `protobuf-compiler`
-- Runs `cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json` first
+- Maps `PROFILE` to `--release` / no flag / `--profile <name>`, then runs
+  package-qualified `cargo chef cook -p <package>` (feature args only for product crates)
 - Then copies the full source and runs the actual `cargo build`
 
 Caching meaning:
@@ -56,7 +78,7 @@ Caching meaning:
 ### 4. `runtime`
 
 - Runtime image: `debian:trixie-slim`
-- Installs only `ca-certificates` and `libssl3`
+- Installs `ca-certificates`, `libssl3`, and `procps`
 - Creates a non-root user `edgion`
 - Copies the final binary and default configuration
 
@@ -64,10 +86,11 @@ Caching meaning:
 
 | Argument | Default | Purpose |
 |----------|---------|---------|
-| `RUST_VERSION` | `1.92` | Rust toolchain version |
+| `RUST_VERSION` | `1.96.1` | Rust toolchain version |
 | `BINARY` | `edgion-gateway` | Name of the bin or example to build |
 | `BUILD_TYPE` | `bin` | `bin` or `example` |
 | `FEATURES` | `default` | Cargo features passed to `cargo build` / `cargo chef cook` |
+| `PROFILE` | `release` | `dev`/`debug`, `release`, or a named profile such as `production` |
 
 ## Common commands
 
@@ -105,15 +128,47 @@ docker build \
   -f cicd/docker/Dockerfile .
 ```
 
-### Switch features
+### Switch supported features
 
 ```bash
 docker build \
   --build-arg BINARY=edgion-gateway \
-  --build-arg FEATURES="allocator-jemalloc,rustls" \
-  -t edgion/edgion-gateway:rustls \
+  --build-arg FEATURES="allocator-mimalloc,boringssl" \
+  -t edgion/edgion-gateway:mimalloc \
   -f cicd/docker/Dockerfile .
 ```
+
+Do not build Gateway images with the dormant rustls backend feature; it is not
+a supported build or deployment target.
+
+### Build and verify a FIPS Gateway
+
+Use the multi-architecture build script rather than a host-local Cargo build.
+It supplies the Linux build environment Boring 5 needs and, whenever the exact
+`fips` feature is selected, automatically runs the isolated FIPS module and TLS
+profile test before packaging an image:
+
+```bash
+FEATURES="allocator-jemalloc,fips" \
+  ./cicd/build-image.sh --arch amd64,arm64 --compile-only
+```
+
+The canonical source FIPS build supports amd64 and arm64. Boring 5.2.0's bundled
+BoringSSL revision has an arm64 integrity-hash relocation defect, so the
+FIPS-only builder pins that revision and applies the exact upstream fix from
+commit `4d6b2f971e456962b70e4e91768caffdb36fe016`; its patch bytes are checksum
+verified. Ordinary builders do not fetch or use the override, and the ordinary
+release workflow plus a default invocation of `build-image.sh` stay non-FIPS.
+The upstream `BORING_BSSL_FIPS_PATH` prebuilt-tree escape hatch is outside the
+canonical script contract.
+
+The verification reuses
+`edgion-tests/integration/scripts/integration/test_fips_policy.sh` in its real
+module mode. It starts the built Gateway with `EDGION_REQUIRE_FIPS=1`, requires
+`edgion_gateway_fips_module_enabled` to equal `1`, rejects a ChaCha20-only TLS
+1.2 client, and accepts an approved AES-GCM client. It deliberately does not run
+the full compatibility suite under the FIPS binary, so weak-cipher support tests
+remain ordinary-BoringSSL coverage rather than becoming a growing skip list.
 
 ## When to use `cicd/docker/Dockerfile.runtime`
 
@@ -129,7 +184,7 @@ Key arguments:
 
 | Argument | Purpose |
 |----------|---------|
-| `BINARY` | `gateway` / `controller` or example name |
+| `BINARY` | `gateway` / `controller` or test-harness name |
 | `BUILD_TYPE` | `bin` or `example` |
 | `BINARY_PATH` | Pre-built artifact directory |
 | `RUNTIME_BASE` | Runtime base image, defaults to `debian:bookworm-slim` |

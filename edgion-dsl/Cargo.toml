@@ -1,0 +1,27 @@
+[package]
+name = "edgion-dsl"
+version.workspace = true
+edition.workspace = true
+publish = false
+authors.workspace = true
+
+[lib]
+name = "edgion_dsl"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Parser combinators
+nom.workspace = true
+# CompiledScript serde model + base64-JSON bytecode transport
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+# Compile-time regex-literal validation (compiler/emit.rs)
+regex.workspace = true
+# Streaming DFA compatibility validation for `.matches()` patterns
+regex-automata.workspace = true
+# Value::Map ordering (value.rs)
+indexmap.workspace = true

@@ -6,7 +6,7 @@ description: Full HTTPRoute schema and features: match conditions, filters, back
 # HTTPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core resource
+> Gateway API v1.5.0 Core resource
 
 HTTPRoute is the most complex routing resource in Edgion, defining routing rules at the HTTP/HTTPS layer.
 
@@ -80,19 +80,13 @@ spec:
               replacePrefixMatch: /v2
 
         - type: RequestMirror
-          requestMirror:
-            backendRef:
-              name: mirror-service
-              port: 8080
+          requestMirror:                           # Standard fields only: backendRef / fraction / percent.
+            backendRef:                            # Tuning knobs use edgion.io/mirror-* route annotations
+              name: mirror-service                 # (the vendored Gateway API CRD prunes non-standard
+              port: 8080                           # filter fields in K8s mode).
             fraction:
               numerator: 10
               denominator: 100                     # Mirror 10%
-            connectTimeoutMs: 1000                 # Connect timeout (ms)
-            writeTimeoutMs: 1000                   # Write timeout (ms)
-            maxBufferedChunks: 5                   # Max buffered body chunks
-            mirrorLog: true                        # Whether mirror keeps a separate access log
-            maxConcurrent: 1024                    # Max concurrent mirror tasks
-            channelFullTimeoutMs: 0                # Wait when channel is full (ms)
 
         - type: ExtensionRef                       # Reference an EdgionPlugins resource
           extensionRef:
@@ -242,7 +236,9 @@ A rule that violates the constraint is marked `PartiallyInvalid`; that rule does
 - **Aggregate mode**: combine multiple plugins into one `EdgionPlugins` resource; the route only needs a single `ExtensionRef`.
 - **Side-by-side mode**: write multiple `ExtensionRef` entries side-by-side in `rules[].filters`, each pointing to a different `EdgionPlugins`.
 
-See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
+See `docs/en/user-guide/http-route/filters/plugin-composition.md` and
+`docs/en/migrations/<version>-extension-ref.md` for details; paired Chinese
+pages live under `docs/zh-CN/`.
 
 ## Timeouts and Retries
 
@@ -267,9 +263,8 @@ See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/z
 
 > **Per-try timeout**: with a retry policy present, `timeouts.backendRequest`
 > bounds each attempt and a timed-out attempt is retried while nothing has
-> been sent downstream yet (recorded as
-> `EdgionStatus::BackendRequestTimeoutRetry`, 504_03, in the access-log error
-> chain). Deadline-sourced timeouts (`request` / client `grpc-timeout`) are
+> been sent downstream yet (recorded as the access-log error diagnostic
+> `BackendRequestTimeoutRetry`). Deadline-sourced timeouts (`request` / client `grpc-timeout`) are
 > never retried. Implemented in `configure_peer_timeouts`
 > (`pg_upstream_peer.rs`, `fold_peer_timeouts`) + `error_while_proxy` Case
 > 1.5. Integration scenario: `HTTPRoute/Backend/PerTryTimeout`.
@@ -279,7 +274,7 @@ See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/z
 ```yaml
 sessionPersistence:
   sessionName: String?               # Session token name (default edgion-session-affinity)
-  absoluteTimeout: Duration?         # Absolute timeout (mapped to Max-Age for Permanent Cookies)
+  absoluteTimeout: Duration?         # Gateway-enforced lifetime (GEP-2257), embedded in the token; also Max-Age for Permanent Cookies
   idleTimeout: Duration?             # Idle timeout (not supported in the current version, reserved for Redis mode)
   type: Cookie | Header              # Persistence type (default Cookie)
   cookieConfig:
@@ -289,11 +284,12 @@ sessionPersistence:
 
 ### Runtime Behavior
 
-- **Token generation**: CRC32 hash of the backend's `ip:port` (8-character hex), does not expose the backend topology.
-- **Cookie mode**: the first response injects `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax` (Permanent adds `Max-Age`).
+- **Token generation**: truncated SHA-256 hash of the backend's `ip:port` (16-character hex, 64-bit identity), does not expose the backend topology. When `absoluteTimeout` is set, the token is `<hash>.<expiry_epoch>` (absolute expiry frozen at issuance).
+- **Absolute lifetime**: `absoluteTimeout` (GEP-2257 `h|m|s|ms`, 1–4 segments; ceil to seconds, min 1s) is **gateway-enforced via the embedded expiry** in BOTH Cookie and Header modes and for BOTH `Session` and `Permanent` cookies. A replayed token past its expiry is treated like a missing token: normal LB selects a backend and a fresh token is issued. `Permanent` requires `absoluteTimeout`; an invalid `sessionPersistence` block drops that rule (`PartiallyInvalid` in K8s; dropped with an ERROR log in FileSystem/Etcd), never a silent never-expiring token.
+- **Cookie mode**: the first response injects `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax` (Permanent adds `Max-Age`, matching the embedded expiry).
 - **Header mode**: the first response injects `<name>: <token>`; the client must include it in subsequent requests.
-- **Backend selection**: the token is used as a consistent-hashing key, ensuring the same token is routed to the same backend.
-- **Fallback** (default): when the bound backend is unavailable, fall back to normal load balancing and update the token.
+- **Backend selection**: the token is resolved to its exact backend BEFORE weighted backendRef selection, across ALL of the matched rule's backendRefs in declaration order (GEP-1619: weights govern only sessions without a token; a bound backendRef whose weight drops to 0 keeps its established sessions). Resolution is scoped to the matched rule, so default-named sessions on rules with disjoint backends never leak across rules.
+- **Fallback** (default): when the bound backend is unavailable, fall back to normal (weighted) load balancing and update the token.
 - **Strict mode**: when `strict: true`, do not fall back; return 503.
 
 ### Priority with Plugins
@@ -313,6 +309,48 @@ backendRefs:
     port: 8080
     weight: 10    # 10% of traffic (canary)
 ```
+
+## Route Delegation (Multi-Tenancy)
+
+A rule delegates its path prefix to child HTTPRoutes (possibly in other
+namespaces) by pointing its **single** `backendRef` at
+`group: gateway.networking.k8s.io, kind: HTTPRoute` (`name: "*"` = every route
+in the target namespace). The controller flattens the tree at parse time into
+the controller-resolved `resolved_rules` field; the data plane never sees the
+nesting.
+
+```yaml
+rules:
+  - matches:
+      - path: { type: PathPrefix, value: /api/v1/billing }   # PathPrefix only
+    filters:              # mandatory, inherited by all child rules
+      - type: RequestHeaderModifier
+        requestHeaderModifier: { set: [{ name: x-tenant, value: billing }] }
+    backendRefs:
+      - group: gateway.networking.k8s.io
+        kind: HTTPRoute
+        name: "*"
+        namespace: billing
+```
+
+Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); architecture: [`../../01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md)):
+
+- Child paths are absolute and must fall inside the delegated prefix (segment
+  boundary); out-of-prefix child rules are dropped + reported (`PartiallyInvalid`).
+- Children must not set `hostnames`; children may delegate further (cycle
+  detection, depth cap 8); children may reverse-lock parents via
+  `parentRefs {kind: HTTPRoute}`.
+- Parent standard filters are mandatory (same-type child filter ⇒ rule
+  dropped); ExtensionRef chains concatenate (parent first). `timeouts` /
+  `retry` / `sessionPersistence`: child-first-else-inherit.
+- Parent and child ExtensionRefs resolve EdgionPlugins in the Namespace of the
+  HTTPRoute that declares each filter; flattening never changes that locality.
+- Child backendRef namespace defaults to the child's namespace; cross-ns
+  Service refs are ReferenceGrant-checked with the child as referrer.
+- Additive: `backendRef {kind: HTTPRoute}` was previously invalid config;
+  `allowedRoutes` semantics are untouched.
+
+Internal processing: [`01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md).
 
 ## Edgion Extension Annotations
 

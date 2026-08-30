@@ -60,8 +60,12 @@ pub struct TlsContext {
     #[serde(skip_serializing)]
     pub start_at: Instant,
     pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    pub direct_peer_ip: String,
+    pub direct_peer_port: u16,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    pub remote_ip: String,
+    pub remote_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,7 +85,13 @@ pub struct TlsContext {
 }
 
 impl TlsContext {
-    pub(super) fn new(listener_port: u16, client_addr: String, client_port: u16) -> Self {
+    pub(super) fn new(
+        listener_port: u16,
+        direct_peer_ip: String,
+        direct_peer_port: u16,
+        remote_ip: String,
+        remote_port: u16,
+    ) -> Self {
         Self {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -89,8 +99,10 @@ impl TlsContext {
                 .as_millis() as i64,
             start_at: Instant::now(),
             listener_port,
-            client_addr,
-            client_port,
+            direct_peer_ip,
+            direct_peer_port,
+            remote_ip,
+            remote_port,
             tls_id: None,
             sni: None,
             matched: None,
@@ -128,13 +140,20 @@ pub struct EdgionTlsTcpProxy {
 #[async_trait]
 impl ServerApp for EdgionTlsTcpProxy {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
-        let (client_addr, client_port) = downstream
-            .get_socket_digest()
-            .and_then(|d| d.peer_addr().cloned())
-            .and_then(|addr| addr.as_inet().map(|inet| (inet.ip().to_string(), inet.port())))
-            .unwrap_or_else(|| ("unknown".to_string(), 0));
+        let digest = downstream.get_socket_digest();
+        let addrs = crate::util::resolve_transport_client_addrs(
+            digest.as_deref().and_then(|d| d.peer_addr()),
+            digest.as_deref().and_then(|d| d.raw_peer_addr()),
+            "unknown",
+        );
 
-        let mut ctx = TlsContext::new(self.listener_port, client_addr, client_port);
+        let mut ctx = TlsContext::new(
+            self.listener_port,
+            addrs.direct_peer_ip,
+            addrs.direct_peer_port,
+            addrs.remote_ip,
+            addrs.remote_port,
+        );
 
         if *shutdown.borrow() {
             ctx.err_log = Some("shutdown".to_string());
@@ -294,7 +313,10 @@ impl EdgionTlsTcpProxy {
 
             // 4c. TCP connect
             let mut peer = BasicPeer::new(&upstream_addr_str);
-            peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+            peer.options.tcp_keepalive = unit
+                .tcp_keepalive
+                .as_ref()
+                .map(crate::routes::common::to_pingora_tcp_keepalive);
             // Bound the upstream TCP connect so an unreachable backend fails
             // fast instead of stranding the downstream connection until the OS
             // TCP retransmit timeout; mirrors the HTTP path. The upstream connect
@@ -317,13 +339,13 @@ impl EdgionTlsTcpProxy {
                     }
                     // A successful connect is the L4 "backend reachable" success
                     // signal; it resets the endpoint's outlier-detection counters.
-                    crate::backends::get_circuit_breaker_store().record_success_by_addr(&service_key, &upstream_addr);
+                    crate::backends::get_outlier_detection_store().record_success_by_addr(&service_key, &upstream_addr);
                     upstream = Some((stream, upstream_addr_str));
                     break;
                 }
                 Err(e) => {
                     // TLS upstream connect failure — local-origin failure.
-                    crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                    crate::backends::get_outlier_detection_store().record_failure_by_addr(
                         &service_key,
                         &upstream_addr,
                         crate::backends::FailureClass::LocalOrigin,
@@ -376,11 +398,11 @@ impl EdgionTlsTcpProxy {
         let Some(2) = proxy_protocol_version else {
             return true;
         };
-        let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() else {
+        let Ok(src_ip) = ctx.remote_ip.parse::<IpAddr>() else {
             return true;
         };
 
-        let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
+        let src_addr = std::net::SocketAddr::new(src_ip, ctx.remote_port);
         let dst_addr: std::net::SocketAddr = upstream_addr_str
             .parse()
             .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
@@ -447,11 +469,15 @@ impl EdgionTlsTcpProxy {
         log_tls(ctx).await;
 
         // Also emit to the per-listener access logger
+        let direct_peer_ip = edgion_resources::sensitive::apply_sensitive(&ctx.direct_peer_ip, str::to_owned);
+        let remote_ip = edgion_resources::sensitive::apply_sensitive(&ctx.remote_ip, str::to_owned);
         let log_entry = serde_json::json!({
             "ts": ctx.ts,
             "listener_port": ctx.listener_port,
-            "client_addr": &ctx.client_addr,
-            "client_port": ctx.client_port,
+            "direct_peer_ip": direct_peer_ip,
+            "direct_peer_port": ctx.direct_peer_port,
+            "remote_ip": remote_ip,
+            "remote_port": ctx.remote_port,
             "tls_id": &ctx.tls_id,
             "sni": &ctx.sni,
             "end_time": ctx.end_time,

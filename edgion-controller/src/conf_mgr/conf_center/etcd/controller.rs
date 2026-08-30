@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
+use super::leadership_gate::LeadershipGate;
 use super::resource_controller::EtcdResourceController;
 use super::status::EtcdStatusHandler;
 use super::watcher::{EtcdWatcher, KindEventReceiver};
@@ -29,6 +30,7 @@ use edgion_resources::ResourceMeta;
 struct EtcdControllerBackend {
     watcher: Arc<EtcdWatcher>,
     status_handler: Arc<EtcdStatusHandler>,
+    conf_prefix: Arc<str>,
 }
 
 #[async_trait]
@@ -37,6 +39,14 @@ impl LocalControllerBackend for EtcdControllerBackend {
 
     async fn subscribe(&self, kind: &'static str) -> KindEventReceiver {
         self.watcher.subscribe(kind).await
+    }
+
+    async fn prime(&self) -> Result<()> {
+        self.watcher.prime().await
+    }
+
+    async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
+        self.watcher.dispatch_init(kinds).await
     }
 
     fn launch<K>(
@@ -49,8 +59,14 @@ impl LocalControllerBackend for EtcdControllerBackend {
     where
         K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     {
-        let ctrl = EtcdResourceController::new(kind, processor, self.status_handler.clone(), event_rx)
-            .with_shutdown(shutdown_signal);
+        let ctrl = EtcdResourceController::new(
+            kind,
+            processor,
+            self.status_handler.clone(),
+            event_rx,
+            self.conf_prefix.clone(),
+        )
+        .with_shutdown(shutdown_signal);
         tokio::spawn(async move { ctrl.run().await })
     }
 }
@@ -59,16 +75,23 @@ impl LocalControllerBackend for EtcdControllerBackend {
 pub struct EtcdController {
     client: Arc<EtcdLinkClient>,
     key_prefix: String,
+    /// Optional leadership fence threaded into the status handler so a
+    /// non-leader controller cannot write resource status to etcd (spec §4.6b).
+    gate: Option<LeadershipGate>,
 }
 
 impl EtcdController {
-    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String) -> Self {
+    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String, gate: Option<LeadershipGate>) -> Self {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %key_prefix,
             "Creating EtcdController"
         );
-        Self { client, key_prefix }
+        Self {
+            client,
+            key_prefix,
+            gate,
+        }
     }
 
     /// Run the controller.
@@ -81,11 +104,19 @@ impl EtcdController {
 
         // Create shared components
         let watcher = Arc::new(EtcdWatcher::new(self.client.clone(), &self.key_prefix));
-        let status_handler = Arc::new(EtcdStatusHandler::new(self.client.clone(), self.key_prefix.clone()));
+        let status_handler = match &self.gate {
+            Some(gate) => Arc::new(EtcdStatusHandler::new_gated(
+                self.client.clone(),
+                self.key_prefix.clone(),
+                gate.clone(),
+            )),
+            None => Arc::new(EtcdStatusHandler::new(self.client.clone(), self.key_prefix.clone())),
+        };
 
         let backend = EtcdControllerBackend {
             watcher: watcher.clone(),
             status_handler,
+            conf_prefix: format!("{}/conf/", self.key_prefix).into(),
         };
 
         // Spawn all resource controllers
@@ -97,8 +128,8 @@ impl EtcdController {
             "All ResourceControllers spawned"
         );
 
-        // Run the watcher (init phase + runtime phase)
-        watcher.run(shutdown_signal).await?;
+        // Run the watcher runtime phase (prime + init already happened in spawn_all_controllers)
+        watcher.run_runtime(shutdown_signal).await?;
 
         // Abort all controllers
         for handle in handles {

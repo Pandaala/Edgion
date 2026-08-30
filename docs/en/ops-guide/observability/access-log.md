@@ -154,19 +154,24 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
 ```json
 {
   "ts": 1767089146376,
-  "client-addr": "192.168.1.20",
-  "host": "api.example.com",
-  "path": "/health",
-  "status": 200,
+  "request_info": {
+    "direct_peer_ip": "192.168.1.20",
+    "host": "api.example.com",
+    "path": "/health",
+    "status": 200
+  },
   "match_info": { },
   "backend_context": { },
-  "plugin_logs": [ ],
-  "info": [ ],
-  "errors": [ ]
+  "genai": { },
+  "stage_logs": [ ],
+  "diagnostics": [
+    { "kind": "info", "code": "AcmeChallengeServed" },
+    { "kind": "error", "code": "BackendRequestTimeoutRetry" }
+  ]
 }
 ```
 
-Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) are flattened directly into the top-level object; routing, backend, and plugin information are nested.
+Request-scoped fields (`direct_peer_ip`, `host`, `path`, `status`, etc.) nest one level deep under `request_info`; routing, backend, and plugin information sit alongside it at the top level.
 
 ## Field reference
 
@@ -175,25 +180,28 @@ Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) are flatte
 | Field | Type | Description |
 |-------|------|-------------|
 | `ts` | Integer | Entry timestamp, epoch milliseconds |
+| `request_info` | Object | Request-scoped fields — see [Request fields](#request-fields) below |
 | `match_info` | Object | Matched route identity (omitted when no route matched) |
 | `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
-| `plugin_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
-| `info` | Array\<String\> | Gateway-internal informational events (omitted when empty) |
-| `errors` | Array\<String\> | Error reasons captured during processing (omitted when empty) |
+| `genai` | Object | Final GenAI usage and bounded per-attempt accounting (omitted for non-AI requests) |
+| `stage_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
+| `diagnostics` | Array\<Object\> | Ordered request diagnostics as `{kind, code}` entries; `kind` is `info` or `error` (omitted when empty) |
+| `diagnostics_full` | Boolean | `true` when the bounded diagnostics buffer dropped one or more tail entries (omitted otherwise) |
+| `ext` | Object | Operator-declared fields from [`AccessLogExtern`](#extending-the-log-accesslogextern) (omitted when nothing was collected) |
 
 ### Request fields
 
-Flattened into the top-level object. Every field is omitted when not present.
+Nested one level deep under the top-level `request_info` object (see [Top-level fields](#top-level-fields) above) — not flattened into the entry's top level. Optional fields are omitted when absent; `status` is always present and uses `0` for an unknown final outcome.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `client-addr` | String | Client TCP connection address |
+| `direct_peer_ip` | String | Physical downstream transport peer (`DirectPeerIp`) |
 | `client-port` | Integer | Client TCP port |
-| `remote-addr` | String | Real client IP after proxy resolution (e.g. from `X-Forwarded-For`) |
+| `remote_ip` | String | Resolved client IP (`RemoteIp`) after the applicable proxy/RealIp resolution |
 | `x-trace-id` | String | Per-request trace ID; propagate the same value from clients to correlate |
 | `host` | String | Request `Host` header |
 | `path` | String | Normalized request path |
-| `status` | Integer | Response status code |
+| `status` | Integer | Final downstream HTTP status, equivalent to Nginx/OpenResty `$status`; `0` means no final status was observable |
 | `x-forwarded-for` | String | `X-Forwarded-For` header value (when present) |
 | `discover_protocol` | String | Auto-detected protocol. Example values: `grpc`, `websocket` |
 | `grpc_service` | String | gRPC service name (gRPC requests only) |
@@ -237,12 +245,41 @@ When no route matches, the entire `match_info` object is omitted.
 
 When no backend was used (route not matched, or the request was short-circuited by a plugin), `backend_context` is `null` or omitted.
 
-### `plugin_logs` fields
+### `genai` fields
 
-`plugin_logs` is an array of stage groups; each group holds the per-plugin logs for one execution stage.
+The final request summary contains `provider`, `model`, `input_tokens`, `output_tokens`, optional
+cache-token counts and `estimated_cost_usd`, `streaming`, `usage_estimated`, optional `quota_status`
+and `ttft_ms`, plus the per-attempt fields below. `attempts` contains at most eight dispatched
+attempts and its serialized section is capped at 8 KiB. `attempts_truncated` is present and `true`
+when later summaries were omitted to preserve either bound.
+
+| `attempts[]` field | Type | Description |
+|--------------------|------|-------------|
+| `number` | Integer | One-based dispatched-attempt number |
+| `service` | String | Bounded namespaced EdgionBackend key (`namespace/name`) |
+| `provider` | String | Fixed provider enum |
+| `credential` | String | Non-secret configured credential alias; never provider credential or Secret data |
+| `status` | Integer | Provider HTTP status, when received |
+| `failure` | String | Fixed class: `retryable_status`, `ambiguous_transport`, `backend_request_timeout`, or `incomplete_response`. `incomplete_response` means the *provider* stopped early; a stream the gateway itself ended (over quota, or quota no longer enforceable) is not a provider failure and carries no `failure` — read its error diagnostic instead |
+| `retry_after_seconds` | Integer | Accepted bounded Retry-After cooldown, in seconds |
+| `ttft_ms` | Integer | Time to the first non-empty response body chunk for the successful final attempt |
+| `usage_source` | String | `reported` or `estimated` |
+| `input_tokens` | Integer | Reported or bounded estimated input tokens for this attempt |
+| `output_tokens` | Integer | Reported or bounded estimated output tokens for this attempt |
+| `estimated_cost_usd` | String | Estimated attempt cost when pricing is configured |
+
+The ledger never stores provider URLs, resolved addresses, Secret values, request/response bodies,
+provider error text, prompts, completions, or tool arguments. For an ambiguous post-dispatch result,
+Redis may conservatively retain the full input-plus-maximum-output reservation until its window
+expires. That reservation protects the rate limit; it is distinct from the durable observed or
+estimated usage recorded here and is not a claim that all reserved tokens were consumed.
+
+### `stage_logs` fields
+
+`stage_logs` is an array of stage groups; each group holds the per-plugin logs for one execution stage.
 
 ```json
-"plugin_logs": [
+"stage_logs": [
   {
     "stage": "request_filters",
     "logs": [
@@ -258,7 +295,8 @@ When no backend was used (route not matched, or the request was short-circuited 
 | `stage` | String | Execution stage. Examples: `request_filters`, `upstream_response_filters` |
 | `logs[].name` | String | Plugin name |
 | `logs[].time_cost` | Integer | Plugin execution time in **microseconds** |
-| `logs[].log` | Array\<String\> | Log lines emitted by the plugin |
+| `logs[].cond_skip` | String | Why the plugin was skipped (`skip:<type>,<detail>` or `!run:<type>,<detail>`). Unchanged; omitted when the plugin ran. |
+| `logs[].log` | Array\<String\> | Log lines emitted by the plugin. A composite condition scope (more than one atomic leaf) also pushes value-free descriptors for matched leaves, including their stable set location. Zero/one-leaf scopes suppress this redundant match-only signal. `cond_skip`, named-group attribution, final policy outcomes, and errors are unaffected. Body/dye evaluation stays silent. |
 | `logs[].log_full` | Boolean | Present and `true` only when the plugin's log buffer overflowed and entries were dropped |
 
 Common plugin log lines:
@@ -273,14 +311,204 @@ Common plugin log lines:
 
 `log_full: true` means the plugin emitted more log data than the per-plugin buffer holds, so later lines were dropped. Treat it as a hint to trim the plugin's log output rather than as an error.
 
-### `errors` values
+### `diagnostics` values
 
-| Value | Description |
-|-------|-------------|
-| `RouteNotFound` | No matching route for the request |
-| `XffHeaderTooLong` | `X-Forwarded-For` header exceeded the allowed length |
-| `BackendNotFound` | Backend service could not be resolved |
-| `UpstreamConnectError` | Connection to the upstream failed |
+Diagnostics preserve encounter order and repeated entries. An `error` diagnostic records an
+encountered failure, rejection, or degradation; it is not automatically an alert because a later
+retry may recover. Alerting should be code-specific and may also consider the final status and
+aggregate rate. Diagnostic codes have no numeric representation and do not imply an HTTP status.
+
+| Kind | Code | Description |
+|------|------|-------------|
+| `error` | `RouteNotFound` | No matching route for the request |
+| `error` | `XffHeaderTooLong` | `X-Forwarded-For` header exceeded the allowed length |
+| `error` | `BackendRequestTimeoutRetry` | An upstream attempt hit its per-try timeout and was retried |
+| `info` | `AcmeChallengeServed` | The gateway served an ACME HTTP-01 challenge locally |
+
+## Extending the log: AccessLogExtern
+
+The access log ships a fixed field set. To add route metadata, request/response
+fields, or plugin-derived values, declare them with `AccessLogExtern` — the
+single supported extension mechanism. It replaced five older, unrelated
+carriers (route-annotation label projection, a JSON allowlist annotation, a
+comma-separated ctx-key annotation, and an implicit CtxSet-to-annotation
+coupling), all of which are gone with no aliases.
+
+### It is a declaration, not a plugin
+
+`AccessLogExtern` entries never execute as a request filter. They live at
+`EdgionPlugins.spec.accessLogExtern` — a dedicated array, not one of the
+request/response plugin stages — and are read only when the log line is
+written. This is why `AccessLogExtern` fields still appear on responses that
+never reach a plugin at all: a 404 with no matching route, a 421 SNI
+mismatch, the 400 family, an ACME challenge response, or a CORS preflight
+short-circuit.
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: audit-fields
+  namespace: default
+spec:
+  accessLogExtern:
+    - key: tenant        # field name inside the log entry's `ext` block
+      from: ctx           # source type
+      name: tenant_id     # key within that source
+    - key: ua
+      from: header
+      name: user-agent
+```
+
+Each entry names exactly one source for exactly one field — there is no
+template syntax for composing multiple values into one field. If you need a
+composed value (e.g. `"{tenant}:{tier}"`), compute it once with the `CtxSet`
+plugin and log the resulting ctx variable with `from: ctx`. Composing at the
+`AccessLogExtern` layer was considered and rejected: a composed string has no
+single provenance, so per-field masking could not apply to it correctly.
+
+### Sources
+
+| `from` | Reads | Masked? |
+|---|---|---|
+| `routeLabel` | A `metadata.labels` key on the matched HTTPRoute/GRPCRoute | Never |
+| `routeAnnotation` | A `metadata.annotations` key on the matched HTTPRoute/GRPCRoute (`kubectl.kubernetes.io/*` and `edgion.io/*` keys are reported on `Accepted=False` at ingest and dropped when the gateway loads the resource — see the hard blocklist below) | Never |
+| `header` | A request header (first value wins on repeats; non-UTF-8 values are absent) | Yes, unless whitelisted |
+| `query` | The query string **as the client sent it**, frozen at request entry — unaffected by any later rewrite | Yes, unless whitelisted |
+| `cookie` | A request cookie (`set-cookie`/response cookies are unreachable — see the hard blocklist) | Yes, unless whitelisted |
+| `respHeader` | The response header actually written; absent when the upstream never responded (connect failure, timeout) | Yes, unless whitelisted |
+| `ctx` | A plugin-set context variable (`CtxSet`, DSL `ctx.set`, a webhook `KeyGet` result, ...) — read after every producer at every stage | Yes, unless whitelisted |
+
+A handful of names can never be named as a source, at any masking setting.
+Naming one is reported on the `EdgionPlugins` resource's `Accepted=False`
+status condition, and — independently of that report — the gateway drops the
+field when it loads the resource, so it is never actually projected into a
+log line:
+
+| Source | Blocked names |
+|---|---|
+| `header` / `respHeader` | `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `api-key`, `apikey`, `x-auth-token`, `authentication`, `x-amz-security-token`, `www-authenticate`, `proxy-authenticate` |
+| `ctx` | `jwt_claims`, `oidc_claims`, `jwe_payload` |
+| `routeAnnotation` | anything under `kubectl.kubernetes.io/` or `edgion.io/` |
+
+### Where fields land
+
+All collected fields go into one nested `ext` object, one level deep, values
+always rendered as strings:
+
+```json
+{"ts": 1752633600000, "request_info": {"host": "api.example.com", "path": "/users"}, "ext": {"tenant": "acme", "ua": "***"}}
+```
+
+`ext` is omitted from the line entirely when no field was collected for that
+request.
+
+### Attachment tiers
+
+`AccessLogExtern` can be declared at up to three layers, applied in this
+order — a later tier overwrites an earlier one's field on a key collision:
+
+| Order | Tier | Where it's declared |
+|---|---|---|
+| 1 | GatewayClass-global | `EdgionGatewayConfig.spec.globalPluginsRef` |
+| 2 | Gateway | `edgion.io/edgion-plugins` annotation on the `Gateway` |
+| 3 | Route | An `ExtensionRef` filter on the HTTPRoute / GRPCRoute, pointing at an `EdgionPlugins` |
+
+**Put fleet-wide audit fields on tier 1.** Tier 2 (the Gateway annotation) is
+empty on any response that never matched a route — 404, 421, the 400 family,
+ACME, gRPC `UNIMPLEMENTED` — because the Gateway a request would have used is
+only known *after* route matching resolves it. Tier 1 resolves from the proxy
+service directly and is present on every response, including those. This is
+accepted behavior, not a bug: assigning a Gateway before matching would mean
+guessing among the several Gateways a listener may serve.
+
+**Give global-tier keys a distinct prefix** (e.g. `gw_tenant` instead of
+`tenant`), because collision resolution is silent: if a route-level field
+happens to share a key with a global field, the route's value wins and the
+log gives no indication that a global field was overridden.
+
+### Masking
+
+`routeLabel` and `routeAnnotation` values are never masked — they are
+operator-authored route configuration, not request data. Every other source
+is masked unless the specific key is whitelisted in
+`EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` (keyed by source
+type — `header`, `respHeader`, `query`, `cookie`, `ctx`). See
+[EdgionGatewayConfig](../configuration/edgion-gateway-config.md) for the
+whitelist schema and default entries.
+
+A whitelist **miss still emits the field** — masked, not dropped — so an
+operator sees `"ext":{"session":"***"}` and knows the value resolved but is
+unwhitelisted, rather than staring at an absent field wondering whether the
+source had no value, whether the field name was misspelled, or whether it was
+a blocked name reported on `Accepted=False` and dropped when the gateway
+loaded the resource.
+
+Masked rendering follows the same global `access_log_sensitive.mode` switch
+as the log's built-in sensitive fields (see [gateway configuration →
+access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)).
+**As of this release `access_log_sensitive.mode` defaults to `replace`**, so
+out of the box, with no configuration required: `ext` fields render `***`
+unless whitelisted, and `path`, `direct_peer_ip`, `remote_ip`,
+`x-forwarded-for`, `sni`, and `request_uri` render `***` unconditionally —
+the whitelist has no effect on these six built-in fields; they are masked
+by `masked::serialize` regardless of `unmaskedKeys`.
+
+**There is no configuration that gives readable `path` alongside a masked
+`ext` cookie.** `mode: off` makes the whitelist inert (everything renders
+clear, `ext` included); `mode: wrap` writes the raw value into the gateway's
+own local log file/stdout, tagged `<E>value</E>` for a downstream pipeline to
+strip before indexing — the raw value is still on local disk. Choose one of
+these two trade-offs deliberately if you need readable paths; there is no
+third option that keeps built-ins clear while masking `ext`.
+
+### Known gaps (by design, not bugs)
+
+- **`redirect_http` listeners (the plain HTTP→HTTPS redirect service) never
+  emit `ext`.** They use a separate, minimal log schema with no `ext` field
+  at all — there is no plugin chain on that path to attach a declaration to.
+- **A second access-log line for gRPC-web/WebSocket connection establishment
+  carries no `ext`** — only the request's final log line does. This is
+  correct: the final line is the one the collector runs against.
+- **The `X-Debug-Access-Log` response header (from the `debug-access-log`
+  plugin) never carries `ext`, on purpose.** Populating it would ship
+  operator-declared field values back to the client that sent the request.
+
+### Full example
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: default-config
+spec:
+  accessLogExtern:
+    unmaskedKeys:
+      header: [user-agent, origin, content-type, content-length, accept, x-request-id]
+      ctx: [tenant_id]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-route
+  namespace: production
+spec:
+  rules:
+    - backendRefs: [{ name: api-service, port: 8080 }]
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: audit-fields
+```
+
+```json
+{"ts": 1752633600000, "request_info": {"host": "api.example.com", "path": "/users", "status": 200},
+ "ext": {"tenant": "acme", "ua": "Mozilla/5.0"}}
+```
+
+Both fields declared by the `audit-fields` resource [above](#it-is-a-declaration-not-a-plugin) render clear here: `ua` (`from: header, name: user-agent`) is whitelisted by `unmaskedKeys.header`, and `tenant` (`from: ctx, name: tenant_id`) is whitelisted by `unmaskedKeys.ctx`.
 
 ## Special fields
 
@@ -353,13 +581,15 @@ access_log_options:
 ```json
 {
   "ts": 1767089146376,
-  "client-addr": "192.168.1.20",
-  "client-port": 54882,
-  "remote-addr": "192.168.1.20",
-  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-  "host": "test.example.com",
-  "path": "/health",
-  "status": 200,
+  "request_info": {
+    "direct_peer_ip": "192.168.1.20",
+    "client-port": 54882,
+    "remote_ip": "192.168.1.20",
+    "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
+    "host": "test.example.com",
+    "path": "/health",
+    "status": 200
+  },
   "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
   "backend_context": {
     "name": "api-service",
@@ -376,9 +606,11 @@ access_log_options:
 ```json
 {
   "ts": 1767089146377,
-  "host": "api.example.com",
-  "path": "/api/data",
-  "status": 200,
+  "request_info": {
+    "host": "api.example.com",
+    "path": "/api/data",
+    "status": 200
+  },
   "backend_context": {
     "name": "api-service",
     "namespace": "production",
@@ -393,11 +625,11 @@ access_log_options:
 ### Client disconnected before delivery
 
 When the response cannot be delivered because the client already disconnected,
-the request-level `errors` array carries `ClientClosed` (499_01). The status
+the request-level `diagnostics` array carries the error code `ClientClosed`. The status
 is 499 when the disconnect itself ended the proxying; when the disconnect is
 only discovered while writing the final error response, the record keeps the
 original error status (e.g. 504, or 200 for gRPC trailers-only responses).
-Filter on `errors` containing `ClientClosed`, not on `status == 499`. On
+Filter on the `ClientClosed` diagnostic, not on `status == 499`. On
 HTTP/1.1 the gateway notices the disconnect while an
 upstream attempt is in flight and aborts within milliseconds, so the typical
 record shows a single canceled attempt; a disconnect that lands in the retry
@@ -407,8 +639,8 @@ that had already given up:
 
 ```json
 {
-  "status": 499,
-  "errors": ["ClientClosed"],
+  "request_info": { "status": 499 },
+  "diagnostics": [{ "kind": "error", "code": "ClientClosed" }],
   "backend_context": {
     "upstreams": [
       { "ip": "10.0.0.5", "port": 8080, "status": 499, "ct": 0, "et": 512 }
@@ -422,10 +654,12 @@ that had already given up:
 ```json
 {
   "ts": 1767089149015,
-  "host": "wrong-hostname.example.com",
-  "path": "/test",
-  "status": 404,
-  "errors": ["RouteNotFound"],
+  "request_info": {
+    "host": "wrong-hostname.example.com",
+    "path": "/test",
+    "status": 404
+  },
+  "diagnostics": [{ "kind": "error", "code": "RouteNotFound" }],
   "backend_context": null
 }
 ```
@@ -435,12 +669,14 @@ that had already given up:
 ```json
 {
   "ts": 1767089148470,
-  "host": "grpc.example.com",
-  "path": "/test.TestService/SayHello",
-  "status": 200,
-  "discover_protocol": "grpc",
-  "grpc_service": "test.TestService",
-  "grpc_method": "SayHello",
+  "request_info": {
+    "host": "grpc.example.com",
+    "path": "/test.TestService/SayHello",
+    "status": 200,
+    "discover_protocol": "grpc",
+    "grpc_service": "test.TestService",
+    "grpc_method": "SayHello"
+  },
   "backend_context": {
     "name": "grpc-service",
     "namespace": "production",
@@ -455,16 +691,16 @@ that had already given up:
 
 ```bash
 # All 4xx responses
-cat logs/edgion_access.log | jq 'select(.status >= 400 and .status < 500)'
+cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
 
 # Slowest requests by upstream header time
-cat logs/edgion_access.log | jq -r '[.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
+cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
 # Plugin executions over 100 microseconds
-cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
+cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # Trace one request end to end
-cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
+cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
 ```
 
 Key fields to watch:
@@ -472,7 +708,7 @@ Key fields to watch:
 - `ht` (header time): backend time-to-first-byte; high values point to backend latency.
 - `ct` (connect time): high values point to network or connection-pool issues.
 - `et` (elapsed): total per-attempt time, including retries.
-- `plugin_logs[].time_cost`: plugin overhead in microseconds.
+- `stage_logs[].time_cost`: plugin overhead in microseconds.
 - `log_full: true`: a plugin's log buffer overflowed.
 
 ## FAQ
@@ -491,7 +727,7 @@ Key fields to watch:
 
 ### Q4: A request was rejected by a plugin — where do I look?
 
-**A**: Check `plugin_logs`. The rejecting plugin's `log` array typically carries the reason (for example `Auth failed` for BasicAuth or `Origin rejected` for Cors). When a plugin short-circuits the request, `backend_context` is usually `null`.
+**A**: Check `stage_logs`. The rejecting plugin's `log` array typically carries the reason (for example `Auth failed` for BasicAuth or `Origin rejected` for Cors). When a plugin short-circuits the request, `backend_context` is usually `null`.
 
 ### Q5: How do I get more detailed plugin diagnostics for one route?
 

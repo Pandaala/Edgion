@@ -19,8 +19,12 @@ use crate::resources::gateway::SecretObjectReference;
 #[serde(rename_all = "camelCase")]
 pub struct KeyAuthSecretGroup {
     /// Group name. Charset: Kubernetes label-value
-    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// ([`crate::gwapi_types::GROUP_NAME_PATTERN`], <=63 chars).
     /// Surfaces in PluginLog as `group=<name>`.
+    #[schemars(
+        length(max = crate::gwapi_types::GROUP_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::GROUP_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Human-readable description (not used by runtime).
@@ -179,15 +183,16 @@ impl KeyAuthConfig {
                         return Err(format!("key_sources[{}]: name cannot be empty", i));
                     }
                 }
-                KeyGet::Webhook { webhook_ref, .. } => {
-                    if webhook_ref.is_empty() {
-                        return Err(format!("key_sources[{}]: webhookRef cannot be empty", i));
-                    }
-                }
                 // Unsupported sources for API key extraction
-                KeyGet::ClientIp | KeyGet::Path | KeyGet::Method | KeyGet::ClientIpAndPath => {
+                KeyGet::RemoteIp
+                | KeyGet::DirectPeerIp
+                | KeyGet::Host
+                | KeyGet::Path
+                | KeyGet::Method
+                | KeyGet::RemoteIpAndPath
+                | KeyGet::RequestPath => {
                     return Err(format!(
-                        "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, ctx, or webhook",
+                        "key_sources[{}]: unsupported source type '{}' for API key extraction. Use header, query, cookie, or ctx",
                         i,
                         source.source_type()
                     ));
@@ -359,12 +364,37 @@ realm: "Production API"
     #[test]
     fn test_validate_unsupported_key_source() {
         let config = KeyAuthConfig {
-            key_sources: vec![KeyGet::ClientIp],
+            key_sources: vec![KeyGet::RemoteIp],
             ..Default::default()
         };
         let error = config.validate().unwrap_err();
         assert!(error.contains("unsupported source type"));
-        assert!(error.contains("clientIp"));
+        assert!(error.contains("remoteIp"));
+    }
+
+    #[test]
+    fn test_validate_unsupported_request_path_key_source() {
+        let config = KeyAuthConfig {
+            key_sources: vec![KeyGet::RequestPath],
+            ..Default::default()
+        };
+        let error = config.validate().unwrap_err();
+        assert!(error.contains("unsupported source type"));
+        assert!(error.contains("requestPath"));
+    }
+
+    #[test]
+    fn test_validate_unsupported_request_identity_key_sources() {
+        for source in [KeyGet::DirectPeerIp, KeyGet::Host] {
+            let expected_type = source.source_type();
+            let config = KeyAuthConfig {
+                key_sources: vec![source],
+                ..Default::default()
+            };
+            let error = config.validate().unwrap_err();
+            assert!(error.contains("unsupported source type"));
+            assert!(error.contains(expected_type));
+        }
     }
 
     #[test]

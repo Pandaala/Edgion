@@ -72,37 +72,36 @@ impl RequestFilter for RealIp {
             _ => plugin_log.push("header custom"),
         };
 
-        let client_addr_str = session.client_addr();
-        let client_ip: IpAddr = client_addr_str
+        let downstream_peer_ip = session.downstream_peer_ip();
+        let parsed_downstream_peer_ip: IpAddr = downstream_peer_ip
             .parse::<SocketAddr>()
             .map(|sa| sa.ip())
-            .or_else(|_| client_addr_str.parse::<IpAddr>())
+            .or_else(|_| downstream_peer_ip.parse::<IpAddr>())
             .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
-        if extractor.is_trusted_proxy(&client_ip) {
+        if extractor.is_trusted_proxy(&parsed_downstream_peer_ip) {
             plugin_log.push("trusted proxy:match");
         } else {
             plugin_log.push("trusted proxy:miss");
         }
 
-        // Get current remote_addr (clone to avoid borrow conflicts)
-        let old_remote_addr = session.remote_addr().to_string();
+        // Clone the current RemoteIp to avoid borrow conflicts.
+        let old_remote_ip = session.remote_ip().to_string();
 
         // Extract new real IP using RealIpExtractor
-        let new_remote_addr = if let Some(header_value) = session.header_value(extractor.real_ip_header()) {
-            extractor.extract_from_header_value(session.client_addr(), &header_value)
+        let new_remote_ip = if let Some(header_value) = session.header_value(extractor.real_ip_header()) {
+            extractor.extract_from_header_value(downstream_peer_ip, &header_value)
         } else {
-            session.client_addr().to_string()
+            downstream_peer_ip.to_string()
         };
 
-        // Update remote_addr if it changed
-        if new_remote_addr != old_remote_addr {
-            if let Err(_e) = session.set_remote_addr(&new_remote_addr) {
-                plugin_log.push_err("set remote addr failed");
+        if new_remote_ip != old_remote_ip {
+            if let Err(_e) = session.set_remote_ip(&new_remote_ip) {
+                plugin_log.push_err("set remote IP failed");
                 return PluginRunningResult::GoodNext;
             }
 
-            plugin_log.push_fmt("ip updated: {}", la![sensitive(&new_remote_addr)]);
+            plugin_log.push_fmt("ip updated: {}", la![sensitive(&new_remote_ip)]);
         } else {
             plugin_log.push("ip unchanged");
         }
@@ -164,7 +163,7 @@ mod tests {
         )
         .unwrap();
 
-        // Client IP not in trusted list - should use client_addr directly
+        // An untrusted downstream peer remains the RemoteIp.
         let result = extractor.extract_from_header_value("8.8.8.8", "203.0.113.1");
         assert_eq!(result, "8.8.8.8");
     }

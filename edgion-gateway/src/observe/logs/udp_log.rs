@@ -16,8 +16,9 @@ static UDP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 pub struct UdpLogEntry {
     pub ts: i64,
     pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    pub direct_peer_ip: String,
+    pub direct_peer_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_addr: Option<String>,
     pub session_duration_ms: u64,
@@ -32,8 +33,8 @@ pub struct UdpLogEntry {
 impl UdpLogEntry {
     pub fn new(
         listener_port: u16,
-        client_addr: String,
-        client_port: u16,
+        direct_peer_ip: String,
+        direct_peer_port: u16,
         upstream_addr: Option<String>,
         session_start: Instant,
     ) -> Self {
@@ -42,8 +43,8 @@ impl UdpLogEntry {
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port,
-            client_addr,
-            client_port,
+            direct_peer_ip,
+            direct_peer_port,
             upstream_addr,
             session_duration_ms,
             packets_sent: 0,
@@ -55,12 +56,12 @@ impl UdpLogEntry {
     }
 
     /// Create a failure log entry for packets that couldn't establish a session.
-    pub fn failure(listener_port: u16, client_addr: String, client_port: u16, status: &str) -> Self {
+    pub fn failure(listener_port: u16, direct_peer_ip: String, direct_peer_port: u16, status: &str) -> Self {
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port,
-            client_addr,
-            client_port,
+            direct_peer_ip,
+            direct_peer_port,
             upstream_addr: None,
             session_duration_ms: 0,
             packets_sent: 0,
@@ -101,11 +102,6 @@ pub async fn init_udp_logger(config: &edgion_resources::LogConfig) -> Result<()>
         tracing::info!("UdpLogger disabled");
     }
     Ok(())
-}
-
-/// Get global UDP logger instance
-pub fn get_udp_logger() -> Option<&'static Arc<AccessLogger>> {
-    UDP_LOGGER.get()
 }
 
 /// Log a UDP session entry (async)

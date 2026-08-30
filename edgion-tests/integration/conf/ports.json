@@ -1,5 +1,5 @@
 {
-  "current_max": 31931,
+  "current_max": 31953,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -62,6 +62,9 @@
     "HTTPRoute/Protocol/H2TrailerMalformed": {
       "http": 31082
     },
+    "HTTPRoute/Transport": {
+      "http": 31944
+    },
     "GRPCRoute/Basic": {
       "grpc": 31050
     },
@@ -97,14 +100,23 @@
     "EdgionPlugins": {
       "http": 31180
     },
+    "EdgionPlugins/AccessLogExtern": {
+      "http": 31395
+    },
     "EdgionTls/https": {
       "https": 31190
     },
     "EdgionTls/grpctls": {
       "grpc_tls": 31200
     },
+    "EdgionTls/LastKnownGood": {
+      "https": 31201
+    },
     "EdgionTls/mTLS": {
       "https": 31110
+    },
+    "EdgionTls/mtls_failclose": {
+      "https": 31199
     },
     "EdgionTls/cipher": {
       "https": 31195,
@@ -151,6 +163,21 @@
     },
     "Gateway/AllowedRoutes/Selector": {
       "http": 31276
+    },
+    "Gateway/AllowedRoutes/All": {
+      "http": 31211
+    },
+    "Gateway/AllowedRoutes/Kinds": {
+      "http": 31213
+    },
+    "Gateway/AllowedRoutes/Same": {
+      "http": 31210
+    },
+    "Gateway/Combined": {
+      "http": 31230
+    },
+    "Gateway/ListenerHostname": {
+      "http": 31240
     },
     "TLSRoute/Basic": {
       "tls": 31280
@@ -224,6 +251,12 @@
     "HTTPRoute/Backend/DnsResolutionFailure": {
       "http": 31339
     },
+    "HTTPRoute/Backend/DnsResolution": {
+      "http": 31360
+    },
+    "HTTPRoute/Backend/DnsResolutionFlap": {
+      "http": 31361
+    },
     "Status/RefGrant/TCPRouteCrossNsSvc": {
       "tcp": 31341
     },
@@ -270,6 +303,65 @@
     },
     "LinkSys/Kafka": {
       "http": 31931
+    },
+    "HTTPRoute/Delegation": {
+      "http": 31932
+    },
+    "HTTPRoute/Delegation/DynamicTest": {
+      "http": 31933
+    },
+    "GRPCRoute/Delegation": {
+      "grpc": 31934
+    },
+    "GRPCRoute/Delegation/DynamicTest": {
+      "grpc": 31935
+    },
+    "EdgionBackendTrafficPolicy/UpstreamAuthority": {
+      "http": 31936
+    },
+    "GRPCRoute/Backend/SessionPersistence": {
+      "grpc": 31937
+    },
+    "GRPCRoute/Backend/SessionPersistenceWeighted": {
+      "grpc": 31938
+    },
+    "HTTPRoute/Backend/SessionPersistenceWeighted": {
+      "http": 31939
+    },
+    "Status/EdgionBackendTrafficPolicy": {
+      "http_gw_a": 31940,
+      "http_gw_b": 31941
+    },
+    "EdgionBackendTrafficPolicy/RetryBudget": {
+      "http": 31942
+    },
+    "EdgionBackendTrafficPolicy/ConnectTimeout": {
+      "http": 31943
+    },
+    "HTTPRoute/SseStreaming": {
+      "http": 31947
+    },
+    "EdgionBackend/SingleProvider": {
+      "http": 31945
+    },
+    "EdgionBackend/AnthropicProvider": {
+      "http": 31946
+    },
+    "EdgionBackend/Resilience": {
+      "http": 31949
+    },
+    "EdgionBackend/CredentialExhaustion": {
+      "http": 31948
+    },
+    "EdgionPlugins/GeoRestriction": {
+      "http": 31950
+    },
+    "TCPRoute/GeoRestriction": {
+      "tcp": 31951,
+      "tcp_bare": 31952
+    },
+    "TLSRoute/GeoRestriction": {
+      "tls": 31953
     }
   }
 }

@@ -166,10 +166,22 @@ The direction of BackendTrafficPolicy is to unify management of backend
 traffic behaviors (such as retry budget; later possibly extending to
 connection pool, circuit breaker, health check, retry policy).
 
-Edgion has implemented these features in a distributed manner via annotations (`edgion.io/circuit-breaker`, `health_check.rs`, `edgion_gateway_config.rs`); features are complete, but they are not exposed via the standard BTP CRD.
+Edgion has unified these features behind its own namespaced CRD,
+`EdgionBackendTrafficPolicy` (`edgion.io/v1`, short name `ebtp`,
+Gateway-API-policy-attachment style via `targetRefs` — same `DirectSameNs`
+attachment model the standard BackendTLSPolicy uses), covering load balancing
+(incl. consistent hash and panic threshold), active health check, and outlier
+detection (passive ejection), retry budgets, concurrency circuit breaking, and
+connection-establishment timeout. Homogeneous same-namespace targets may be
+core Services or `edgion.io/EdgionBackend`; the AI kind accepts only the
+resilience sections and is never a Route attachment. See
+[03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md).
+This is functionally equivalent in spirit to the standard BTP direction but is
+not the standard `XBackendTrafficPolicy` CRD itself. Connection-pool tuning,
+cross-namespace targets, and Route targets remain out of scope.
 
-- Will reconsider unifying behind the standard CRD only after BTP graduates from Experimental to Standard/GA
-- The current annotation-based approach is usable by users and does not affect actual functionality
+- Will reconsider migrating onto the standard CRD only after BTP graduates from Experimental to Standard/GA
+- The current Edgion-native CRD is usable by users today and does not affect actual functionality
 - A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
 
 ## GatewayFrontendClientCertificateValidation (frontendValidation)
@@ -205,14 +217,12 @@ Current behavior: when the Controller parses a GRPCRoute, if `retry.codes` is no
 - Workaround: configure a retry policy in the client gRPC SDK (such as `retryPolicy.retryableStatusCodes` in the gRPC service config); the client can read trailers in full and retry by status code
 - Related code: `edgion-resources/src/resources/grpc_route.rs` lines 526–541
 
-## GATEWAY-TLS ConformanceProfile
+## Conformance profile boundaries
 
-**Decision: not yet declared**
+`GATEWAY-TLS` is declared and its committed split-profile report passes. It is
+therefore not an unimplemented item. Keep HTTP/gRPC and TLS profile runs
+separate because their upstream manifests both reserve port 443; see
+[02-conformance-testing.md](02-conformance-testing.md).
 
-TLS Passthrough is implemented; TLS Terminate also has the data-plane main path, but TLSRoute conformance tests have not yet been driven through systematically. Status-condition-related logic (ResolvedRefs, Accepted, supportedKinds for TLSRoute) is expected to need fixes, and terminate tests need to be filled in, before the profile can be declared.
-
-- Need to declare `SupportTLSRoute` in SupportedFeatures and pass core passthrough tests before declaring the profile
-- `TLSRouteModeTerminate` can continue to be pursued as a follow-up enhancement
-- `TLSRouteModeMixed` is explicitly not implemented
-- MESH-HTTP / MESH-GRPC: Edgion is not a service mesh; not applicable
-- A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
+- `TLSRouteModeMixed` is explicitly not implemented.
+- MESH-HTTP / MESH-GRPC are not applicable because Edgion is not a service mesh.

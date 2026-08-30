@@ -23,15 +23,16 @@ Controller 通过评估从实际匹配路由派生出的 `(verb, kind)` 对，�
 | `get`、`list`、`watch`、`list-keys` | `Secret` | **否**——凭据安全 |
 | `create`、`update`、`delete` | `EdgionConfigData` | 是 |
 | `create`、`update`、`delete` | 任何其他 kind | 否 |
-| `get`、`list`、`failover` | `RegionRoute`（合成标签，非资源 kind） | 是 |
-| `reload`、`server-info`、`diagnostics` 及其他 | 任何 | 否 |
+| `list`、`failover` | `RegionRoute`（合成标签，非资源 kind） | 是 |
+| `server-info`、`reload` | `NonResource`（合成标签，非资源 kind） | 是 |
+| `diagnostics` 及其他 | 任何 | 否 |
 
 关键说明：
 
 - `EdgionTls` 在默认策略下**可读**（TLS 配置，非通过 Secret 暴露的原始密钥材料），只有 `Secret` kind 被排除。
 - `EdgionConfigData` 写入授权覆盖**所有**插件元数据，而非仅限 region-route 或 IP-restriction 记录。这是 kind 级粒度的已知限制。
-- `RegionRoute` 是合成分类标签（非 `ResourceKind` 变体）。`get` 和 `list` 覆盖聚合读取端点（`GET /api/v1/cluster-region-routes`、`GET /api/v1/service-region-routes`）；`failover` 覆盖 POST failover 端点。这三个 verb 与 ResourceKind 读取规则分开，因为 `RegionRoute` 不参与穷举性验证。
-- `reload` **不包含**在默认策略中。若 Center 必须触发配置重载，请提供显式 `rbac` 块。
+- `RegionRoute` 是合成分类标签（非 `ResourceKind` 变体）。`list` 覆盖 effective 读取端点（`GET /api/v1/region-routes/effective`）；`failover` 覆盖 POST failover 端点。`get` **故意不授予**：没有任何分类器路由产生 `(get, RegionRoute)`，授予它只会是一条死权限。这两个 verb 与 ResourceKind 读取规则分开，因为 `RegionRoute` 不参与穷举性验证。
+- `reload` **包含**在默认策略中，作用于合成的 `NonResource` 标签：Center 的重载按钮以代理的 `POST /api/v1/reload` 到达，由产生 `(server-info, NonResource)` 的同一路由分类器归类为 `(reload, NonResource)`。它不会授予任何资源 kind。
 
 存在显式 `rbac` 块时，它**完全覆盖**内置默认。不进行合并。
 
@@ -277,7 +278,7 @@ edgion-cli get httproute -n production
 ### 安全说明
 
 **1. 宽泛的 verb 授权等于完整管理员权限。**
-`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
+`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`conf-sync-rotate`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
 
 **2. 通配符读取会暴露凭据材料。**
 CLI Token 路径上没有服务端 `Secret` 兜底。对读取 verb 使用 `kinds: ["*"]` 允许 Token 通过盲代理读取 `Secret` 和 `EdgionTls` 的私钥材料。对所有读取授权始终枚举具体 kind。见上方[通配符读取会暴露凭据材料](#通配符读取会暴露凭据材料)。

@@ -1,0 +1,19 @@
+[package]
+name = "edgion-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+wasmparser.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+wat.workspace = true
+
+[lints]
+workspace = true

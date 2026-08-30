@@ -41,6 +41,26 @@ impl AdminState {
         self.conf_mgr.runtime()
     }
 
+    /// Return a complete processed runtime snapshot for effective-state APIs.
+    /// Raw storage is intentionally not used because it lacks Controller-derived
+    /// fields and internal reference authorization results.
+    ///
+    /// The snapshot is **unredacted** and may contain controller-resolved
+    /// credentials — project the specific non-secret fields you need out of it
+    /// and never return it to a client as-is. See `ProcessorObj::list_cached_json`
+    /// for the full secret-boundary rationale.
+    pub fn runtime_list_resources(&self, kind: ResourceKind) -> Result<Vec<serde_json::Value>, StatusCode> {
+        let runtime = self.runtime();
+        let processor = runtime
+            .processor_registry
+            .get(kind.as_str())
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        if !processor.is_ready() {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        Ok(processor.list_cached_json())
+    }
+
     pub fn is_ready(&self) -> bool {
         self.conf_mgr.is_ready()
     }
@@ -284,7 +304,7 @@ impl AdminState {
         })?;
 
         // Parse JSON data to Vec<Value>
-        let values: Vec<serde_json::Value> = serde_json::from_str(&result.data).map_err(|e| {
+        let values: Vec<serde_json::Value> = serde_json::from_slice(&result.data).map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
@@ -349,6 +369,12 @@ pub struct ApiResponse<T> {
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Non-fatal advisories about the request (e.g. unrecognized config keys
+    /// the schema does not know about). Empty on every
+    /// existing call site, so it never appears in the serialized payload
+    /// (`skip_serializing_if`) and existing consumers see an unchanged shape.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl<T> ApiResponse<T> {
@@ -357,6 +383,19 @@ impl<T> ApiResponse<T> {
             success: true,
             data: Some(data),
             error: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Same as [`Self::ok_body`], but attaches non-fatal warnings for the
+    /// caller to surface. The write itself already succeeded — this never
+    /// changes `success` or the status code (warn-not-reject policy).
+    pub fn ok_body_with_warnings(data: T, warnings: Vec<String>) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+            warnings,
         }
     }
 
@@ -365,6 +404,7 @@ impl<T> ApiResponse<T> {
             success: false,
             data: None,
             error: Some(message),
+            warnings: Vec::new(),
         }
     }
 }
@@ -398,15 +438,37 @@ impl<T> ListResponse<T> {
             error: None,
         }
     }
+}
 
-    pub fn error(message: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            count: 0,
-            continue_token: None,
-            error: Some(message),
-        }
+#[cfg(test)]
+mod api_response_warnings_tests {
+    use super::ApiResponse;
+
+    #[test]
+    fn empty_warnings_are_absent_from_serialized_payload() {
+        let body = ApiResponse::ok_body("HTTPRoute created".to_string());
+        let serialized = serde_json::to_value(&body).expect("ApiResponse must serialize");
+        assert!(
+            serialized.get("warnings").is_none(),
+            "an empty warnings list must not appear in the JSON at all, matching every pre-existing ok_body call site"
+        );
+    }
+
+    #[test]
+    fn non_empty_warnings_are_present_and_ordered() {
+        let body = ApiResponse::ok_body_with_warnings(
+            "EdgionPlugins created".to_string(),
+            vec!["requestPlugins[0].config.denys".to_string()],
+        );
+        let serialized = serde_json::to_value(&body).expect("ApiResponse must serialize");
+        assert_eq!(serialized["warnings"][0], "requestPlugins[0].config.denys");
+    }
+
+    #[test]
+    fn err_body_never_carries_warnings() {
+        let body: ApiResponse<()> = ApiResponse::err_body("bad request".to_string());
+        let serialized = serde_json::to_value(&body).expect("ApiResponse must serialize");
+        assert!(serialized.get("warnings").is_none());
     }
 }
 
@@ -438,6 +500,7 @@ mod cache_redact_tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(webhook_config),
             },
             status: None,
@@ -445,6 +508,11 @@ mod cache_redact_tests {
 
         cache.apply_change(ResourceChange::InitAdd, link_sys, Some(1));
         cache
+    }
+
+    /// `ListDataSimple.data` is `Bytes` now; tests assert on its UTF-8 view.
+    fn data_str(d: &bytes::Bytes) -> &str {
+        std::str::from_utf8(d).expect("list payload is serde_json output, always valid UTF-8")
     }
 
     /// Prove that holding `AdminRedactGuard` across `ConfigSyncServer::list()` causes
@@ -467,14 +535,14 @@ mod cache_redact_tests {
         // Without guard: real value must be present (confirms the adapter IS the gate).
         let no_guard = server.list("LinkSys").expect("list without guard");
         assert!(
-            no_guard.data.contains("supersecret"),
+            data_str(&no_guard.data).contains("supersecret"),
             "without guard: real value must appear — got: {}",
-            no_guard.data
+            data_str(&no_guard.data)
         );
         assert!(
-            !no_guard.data.contains("[redacted]"),
+            !data_str(&no_guard.data).contains("[redacted]"),
             "without guard: must not redact — got: {}",
-            no_guard.data
+            data_str(&no_guard.data)
         );
 
         // With guard: secret must be redacted and real value must not appear.
@@ -483,14 +551,49 @@ mod cache_redact_tests {
             server.list("LinkSys").expect("list with guard")
         };
         assert!(
-            with_guard.data.contains("[redacted]"),
+            data_str(&with_guard.data).contains("[redacted]"),
             "with guard: must redact — got: {}",
-            with_guard.data
+            data_str(&with_guard.data)
         );
         assert!(
-            !with_guard.data.contains("supersecret"),
+            !data_str(&with_guard.data).contains("supersecret"),
             "with guard: real value must not leak — got: {}",
-            with_guard.data
+            data_str(&with_guard.data)
         );
+    }
+
+    /// The cached transport path ships real secrets; the admin path stays
+    /// redacted; neither poisons the other, in either call order.
+    #[tokio::test]
+    async fn sync_cached_path_ships_real_secrets_and_stays_unpoisoned() {
+        // AdminRedactGuard is a thread-local. This test relies on the
+        // current-thread runtime (#[tokio::test] default): every poll of
+        // list_sync_cached runs on the guard's thread, so redact_active() is
+        // observable across the .await. On a multi-thread runtime this test
+        // would silently assert nothing.
+        let cache = make_link_sys_cache();
+        let server = ConfigSyncServer::new();
+        server.register_watch_obj("LinkSys", Arc::new(cache));
+
+        // conf_sync transport (cached): real value.
+        let synced = server.list_sync_cached("LinkSys").await.expect("cached list");
+        assert!(data_str(&synced.data).contains("supersecret"));
+
+        {
+            let _redact = AdminRedactGuard::new();
+            // Admin path: redacted.
+            let admin = server.list("LinkSys").expect("admin list");
+            assert!(!data_str(&admin.data).contains("supersecret"));
+            assert!(data_str(&admin.data).contains("[redacted]"));
+            // Even through the cached method, a redacting caller never sees the
+            // warm real-bytes entry.
+            let guarded = server.list_sync_cached("LinkSys").await.expect("guarded list");
+            assert!(!data_str(&guarded.data).contains("supersecret"));
+            assert!(data_str(&guarded.data).contains("[redacted]"));
+        }
+
+        // The cache still serves real bytes afterwards (not poisoned).
+        let again = server.list_sync_cached("LinkSys").await.expect("cached list again");
+        assert!(data_str(&again.data).contains("supersecret"));
     }
 }

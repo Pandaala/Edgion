@@ -11,8 +11,8 @@ The `ha_mode` configuration option supports two multi-replica modes for differen
 
 | Mode | Name | Description | Use case |
 |------|------|-------------|----------|
-| `leader-only` | Leader-Only (default) | Only the Leader runs watchers + gRPC; non-leader replicas are entirely idle | Small deployments, resource-sensitive |
-| `all-serve` | All Replicas Serve | All replicas independently run watchers + gRPC; the Leader additionally handles status + ACME | High availability, gRPC load balancing required |
+| `leader-only` | Leader-Only (default) | Only the Leader builds resource watchers/caches and publishes ConfigSyncServer | Small deployments, resource-sensitive |
+| `all-serve` | All Replicas Serve | All replicas build watchers/caches and publish ConfigSyncServer; the Leader also runs leader-only services | High availability, gRPC load balancing required |
 
 ### Configuration
 
@@ -36,16 +36,17 @@ conf_center:
 |  Pod A (leader)                           |  Pod A (leader)       Pod B (non-leader)   |
 |  +-------------------------+              |  +------------------+ +------------------+ |
 |  | K8s watchers          Y |              |  | K8s watchers   Y | | K8s watchers   Y | |
-|  | PROCESSOR_REGISTRY    Y |              |  | PROC_REGISTRY  Y | | PROC_REGISTRY  Y | |
+|  | runtime registry      Y |              |  | runtime registry Y| | runtime registry Y| |
 |  | ConfigSyncServer     Y |              |  | ConfigSyncSrv  Y | | ConfigSyncSrv  Y | |
 |  | gRPC List/Watch      Y |              |  | gRPC List/Watch Y | | gRPC List/Watch Y | |
 |  | Status -> K8s API    Y |              |  | Status -> K8s  Y | | Status -> K8s  N | |
-|  | ACME                 Y |              |  | ACME           Y | | ACME           N | |
+|  | leader services      Y |              |  | leader services Y| | leader services N| |
 |  +-------------------------+              |  +------------------+ +------------------+ |
 |                                           |                                            |
 |  Pod B (standby)                          |  Gateway -> any replica                    |
 |  +-------------------------+              |  (edgion-controller Service)               |
-|  | (completely idle)       |              |                                            |
+|  | election + listeners    |              |                                            |
+|  | no resource cache/watch |              |                                            |
 |  +-------------------------+              |                                            |
 |                                           |                                            |
 |  Gateway -> leader only                   |                                            |
@@ -61,12 +62,30 @@ conf_center:
 | gRPC availability | After the Leader is ready | After any replica is ready |
 | `set_config_sync_server(Some)` | Leader + CachesReady | CachesReady (any replica) |
 | Status writeback to K8s | Leader (`leader_handle` guard) | Leader (`leader_handle` guard) |
-| ACME certificate automation | Leader (implicit; the entire main_flow runs only on leader) | Leader (explicit guard, `start_leader_services()`) |
+| Leader-only services (ACME, conf-sync CA rotation, DNS resolver, status reconciliation) | Leader (implicit; main flow starts only on leader) | Leader (explicit `start_leader_services()`) |
+| Federation client (`center.enabled`) | Leader | Leader — a follower keeps serving reads but does **not** federate |
 | Leadership-loss handling | Exit `run_main_flow`, clear everything, return to `wait_until_leader` | Only `stop_leader_services()`; keep serving gRPC |
 | Gateway connection target | `edgion-controller-leader` Service | `edgion-controller` (all-pods) Service |
 | gRPC interruption on leader switchover | Yes (cache rebuild ~5–15s) | No (other replicas keep serving) |
 | K8s API server load | 1x watcher connection | Nx watcher connections (N = replica count) |
 | Memory footprint | Only the Leader uses cache memory | All replicas use cache memory |
+
+## Federation Client Is Leader-Only in Both Modes
+
+The federation session at Center is keyed by `controller_id` (`cluster/name`), which is
+identical on every replica; registering a second session for the same `controller_id`
+displaces and cancels the first. The federation supervisor's run predicate is therefore
+`center.enabled && is_leader` (`fed_sync::supervisor::should_run`), fed by
+`CenterLifeCycle::leader_signal()`.
+
+This is the one behavior in `all-serve` where a follower does less than the leader while
+still serving gRPC reads normally. The leadership signal used here is deliberately NOT
+`leadership_status()`, which stays `NotApplicable` in Kubernetes so the Admin API
+not-leader 409 gate remains disabled.
+
+Metrics: `edgion_fed_kill_switch_state` reports only the operator's `center.enabled`
+intent, and `edgion_fed_client_running` reports whether the client is actually running.
+A follower reporting `kill_switch_state=1, client_running=0` is the healthy steady state.
 
 ## Status-Write Leader Guard
 
@@ -85,7 +104,7 @@ This guard is applied consistently at three checkpoints:
 2. **Init-phase edge case** — when `Event::Apply` arrives before `init_done`
 3. **Runtime worker** — for work items processed in `spawn_worker`
 
-When `leader_handle` is `None` (FileSystem mode or no HA), `is_none_or` returns `true` and writes are always allowed.
+Kubernetes controllers always receive a `LeaderHandle`; non-Kubernetes centers do not call this K8s status-write path.
 
 ### Why Not All Replicas Should Write Status
 
@@ -108,21 +127,27 @@ Multiple replicas requesting at the same time would cause challenge conflicts an
 ```rust
 start_leader_services():
 ├── start_acme_service(client)
-└── PROCESSOR_REGISTRY.requeue_all()    // full-status reconciliation
+├── start_conf_sync_rotation(client)
+├── start_credential_manager_service(client, runtime, leader)
+├── start_dns_resolver_service(client)
+└── runtime.processor_registry.requeue_all()    // full-status reconciliation
 
 stop_leader_services():
-└── stop_acme_service()
+├── stop_acme_service()
+├── stop_conf_sync_rotation()
+├── stop_credential_manager_service()
+└── stop_dns_resolver_service()
 ```
 
 ## Leader-Switchover Reconciliation (requeue_all)
 
-After a new Leader takes over, it calls `PROCESSOR_REGISTRY.requeue_all()` to trigger a full status recomputation and writeback.
+After a new Leader takes over, it calls `runtime.processor_registry.requeue_all()` to trigger a full status recomputation and writeback.
 
 **Why reconciliation is needed**: the previous Leader may have left stale status before losing leadership;
 the new Leader's cache may differ from the status currently in the K8s API.
 A full requeue ensures all resources' status is consistent with the new Leader's cache.
 
-`requeue_all()` walks every registered processor in `PROCESSOR_REGISTRY`,
+`requeue_all()` walks every processor in that center's runtime-owned registry,
 fetches all keys from each `ServerCache`, and asynchronously enqueues them into the workqueue.
 The Workqueue's dedup mechanism prevents duplicate processing.
 
@@ -141,8 +166,8 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 
 | HA mode | Gateway configuration | Description |
 |---------|----------------------|-------------|
-| leader-only | `server_addr = "http://edgion-controller-leader.edgion-system.svc:12151"` | Connect only to the leader |
-| all-serve | `server_addr = "http://edgion-controller.edgion-system.svc:12151"` | Any replica |
+| leader-only | `server_addrs = ["http://edgion-controller-leader.edgion-system.svc:12151"]` | Connect only to the leader |
+| all-serve | `server_addrs = ["http://edgion-controller.edgion-system.svc:12151"]` | Any replica |
 
 ## K8s Service Topology
 
@@ -162,9 +187,9 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 
 ## /ready Endpoint Semantics
 
-`is_ready()` checks `PROCESSOR_REGISTRY.is_all_ready() && config_sync_server.is_some()`:
+`is_ready()` checks `runtime.processor_registry.is_all_ready() && config_sync_server.is_some()`:
 
-- **leader-only**: non-leaders return not ready (no services started); they are not added to Service endpoints
+- **leader-only**: non-leaders return not ready because they have no published ConfigSyncServer; process-level listeners still run
 - **all-serve**: every ready replica returns ready and can receive Gateway traffic
 
 ## Migration Paths
@@ -172,19 +197,19 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 ### Single replica → HA (leader-only)
 
 1. Deploy `leader-service.yaml` (with the `edgion.io/leader: "true"` selector) and RBAC (Pod patch permissions)
-2. Point Gateway `server_addr` at `edgion-controller-leader`
+2. Point Gateway `server_addrs` at `edgion-controller-leader`
 3. Set `replicas: 2`
 
 ### leader-only → all-serve
 
 1. Change `ha_mode = "all-serve"`
-2. Point Gateway `server_addr` at `edgion-controller` (all-pods Service)
+2. Point Gateway `server_addrs` at `edgion-controller` (all-pods Service)
 3. Rolling restart
 
 ### Rollback all-serve → leader-only
 
 1. Change `ha_mode = "leader-only"`
-2. Point Gateway `server_addr` at `edgion-controller-leader`
+2. Point Gateway `server_addrs` at `edgion-controller-leader`
 3. Rolling restart
 
 ### RBAC Requirements
@@ -202,4 +227,5 @@ rules:
 
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — `run_leader_only_lifecycle`, `run_all_serve_lifecycle`, `run_main_flow`, `run_serving_flow`
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs` — `LeaderElection`, `LeaderHandle`
+- `edgion-controller/src/fed_sync/supervisor.rs` — `should_run`, `run_supervisor` (federation leadership gate)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs` — `HaMode` enum

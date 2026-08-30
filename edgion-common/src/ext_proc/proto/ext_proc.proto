@@ -12,8 +12,9 @@ syntax = "proto3";
 // THIS package (with matching field numbers) instead of pulling in the full
 // envoy/udpa/xds/validate proto trees. This keeps codegen self-contained.
 //
-// MVP scope: request-header and response-header phases only. Body and trailer
-// messages are defined for faithful decoding but are never sent by this client.
+// Edgion sends request headers/body and final response headers/body on one
+// request-scoped logical stream. Response bodies remain bounded transport
+// windows; full-response buffering and semantic SSE windows are out of scope.
 package envoy.service.ext_proc.v3;
 
 // The external processing service. A single bidirectional stream carries one
@@ -46,6 +47,30 @@ message ProcessingResponse {
     TrailersResponse response_trailers = 6;
     ImmediateResponse immediate_response = 7;
   }
+  ProcessingMode mode_override = 9;
+}
+
+// Wire-equivalent subset of envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.
+message ProcessingMode {
+  enum HeaderSendMode {
+    DEFAULT = 0;
+    SEND = 1;
+    SKIP = 2;
+  }
+  enum BodySendMode {
+    NONE = 0;
+    STREAMED = 1;
+    BUFFERED = 2;
+    BUFFERED_PARTIAL = 3;
+    FULL_DUPLEX_STREAMED = 4;
+    GRPC = 5;
+  }
+  HeaderSendMode request_header_mode = 1;
+  HeaderSendMode response_header_mode = 2;
+  BodySendMode request_body_mode = 3;
+  BodySendMode response_body_mode = 4;
+  HeaderSendMode request_trailer_mode = 5;
+  HeaderSendMode response_trailer_mode = 6;
 }
 
 // Headers of a request or response phase.
@@ -93,8 +118,13 @@ message ImmediateResponse {
   HttpStatus status = 1;
   HeaderMutation headers = 2;
   bytes body = 3;
-  // field 4 (grpc_status) intentionally omitted for MVP
+  GrpcStatus grpc_status = 4;
   string details = 5;
+}
+
+// Mirrors envoy.service.ext_proc.v3.GrpcStatus.
+message GrpcStatus {
+  uint32 status = 1;
 }
 
 // ext_proc's own header mutation (distinct from config.core.v3.HeaderMutation).

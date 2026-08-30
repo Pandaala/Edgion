@@ -18,17 +18,37 @@ Read this page first to get the main workflow; for specific mappings read these 
 
 `run_integration.sh` performs a preflight check at startup. If the alias is missing it exits and prints the `sudo ifconfig lo0 alias …` command — run it manually once as instructed. The alias is lost after a reboot and must be re-added; for permanent effect use a launchd plist (instructions in the prompt).
 
+## Bash portability: never `((x++))` under `set -e`
+
+In any script with `set -e`, never use bare `((x++))` to bump a counter — use `x=$((x + 1))`. `((expr))` returns exit status **1** when `expr` evaluates to **0**, and `x++` is a *post*-increment that evaluates to the OLD value, so the first increment of a counter initialised to 0 returns 1 and `set -e` silently kills the script — with no error output and a healthy-looking stack. This is bash-version-dependent: bash 3.2 (shipped by macOS) does not enforce `-e` for arithmetic commands, so the bug is invisible on dev Macs and fires immediately on bash 5 (Debian bookworm / GitHub `ubuntu-latest`). Pre-increment `((++x))` happens to work but relies on the same subtlety — prefer the assignment, which has no failure mode. The integration preflight runs `cicd/checks/check_bash_set_e_increment.sh` to enforce this rule; its focused regression test is `cicd/checks/tests/check_bash_set_e_increment_test.sh`.
+
+## Shell portability baseline
+
+Integration scripts must run with both macOS Bash 3.2 and Linux Bash 5. Keep syntax within the Bash 3.2 feature set: indexed arrays are available, but associative arrays, `mapfile`/`readarray`, `declare -g`, `${var@Q}`, and `printf '%(...)T'` are not. Prefer the common BSD/GNU utility subset; when a command differs (`sed -i`, `date`, `readlink`, or `base64` flags), detect the capability and provide both forms instead of branching on an assumed OS name.
+
+Do not depend on ambient interactive variables such as `USER`; query the required fact directly (`id -u`). Preserve data semantics across tool implementations—for example, do not parse a 64-bit JSON identifier through a representation that rounds it. For asynchronous services, poll an observable readiness or state transition with a bounded timeout instead of increasing a fixed `sleep`. Validation should combine `bash -n` for every script, focused static guards, and real execution on both macOS and a Linux Bash 5 container.
+
+Under `set -e`, also audit command substitutions containing pipelines. An assignment inherits the substitution's status, and commands such as `grep -c` return 1 for zero matches even while printing `0`. If zero is valid assertion input, contain the status inside the substitution (for example, `count=$(... | grep -c . || true)`) so the following assertion can emit a useful failure.
+
+Shared cross-platform operations live in `edgion-tests/integration/scripts/utils/shell_compat.sh`. It detects Darwin or Linux once, exports `EDGION_SHELL_PLATFORM`, and routes OS-specific behavior through `edgion_platform_call`; callers must not repeat `uname` branches. Use `edgion_count_nonempty_lines`, `edgion_json_integer`, `edgion_live_pids_by_name`, `edgion_missing_loopback_aliases`, and `edgion_wait_until` instead of reimplementing their edge cases. Prefer an OS-neutral implementation when the command contract is truly common, and add paired `_edgion_<operation>_darwin` / `_edgion_<operation>_linux` adapters when BSD and GNU behavior differs.
+
+The standard `run_all_integration.sh` and `run_integration.sh` entry points source this library and export it through `BASH_ENV`, so every descendant Bash script receives the helpers automatically. A standalone script that must also work when invoked directly should source the library explicitly. Run `cicd/checks/tests/shell_compat_test.sh` after changing the shared behavior.
+
 ## Preflight quality gates
 
-Integration is the project's key control point, so `run_integration.sh` enforces three repo-wide quality gates at the very top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates).
+Integration is the project's key control point, so `run_integration.sh` enforces four repo-wide quality gates at the very top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates).
 
 | Gate | Entry point | Enforces |
 |------|-------------|----------|
 | English-Only Lint | `cicd/checks/check_english_only.sh` | no non-English letter scripts outside `docs/` and `tasks/` |
 | Agent-doc Validation | `python3 cicd/checks/validate_agent_docs.py` | `AGENTS.md` / `skills/` links, frontmatter, indexes, stale `src/` refs |
 | Types Purity | `cicd/checks/check_types_purity.sh` | `edgion-resources` stays a clean leaf crate (no `crate::core::` edges) |
+| Bash Portability | `cicd/checks/check_bash_set_e_increment.sh` + `cicd/checks/tests/shell_compat_test.sh` | no bare arithmetic increment/decrement can trip `set -e`; shared OS adapters work on the current platform and propagate through `BASH_ENV` |
 
-These are the same `cicd/checks/*` entry points CI uses — there is no `Makefile` (the former `make check-*` targets were dissolved into standalone `cicd/` scripts). To reproduce a gate failure standalone, run its entry point directly, e.g. `python3 cicd/checks/validate_agent_docs.py`. A common cause is doc-vs-code drift after a refactor (e.g. a `skills/` file referencing a moved/deleted `src/` path) — fix the reference, not the gate.
+These are a subset of repository quality gates, not a replacement for pre-commit or all
+GitHub workflows. The runner does not run fmt, workspace check/clippy, SSA-force,
+Gateway no-tracing, or every independent CI guard. To reproduce one of these four
+preflights, run its `cicd/checks/*` entry point directly.
 
 ## Quick start
 
@@ -45,19 +65,35 @@ These are the same `cicd/checks/*` entry points CI uses — there is no `Makefil
 # Already built, skip prepare
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i KeyAuth
 
+# Bound parallel standalone scenarios in a default full sweep (default: 4)
+./edgion-tests/integration/scripts/integration/run_integration.sh --jobs 2
+
 # Keep the scene after the run for manual investigation
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
 ```
 
+### Gateway capability gating
+
+The runner builds and starts `edgion-gateway` against Edgion's pinned Pingora
+fork and probes the binary through `--print-build-capabilities`; it does not
+infer capability support from an environment variable or filename.
+
+Capability-dependent suites and dynamic scenarios are registered in
+`edgion-tests/integration/capabilities.tsv` (currently the `body-buffering`
+capability, which every build now reports). An exact unsupported
+`-r <Resource> -i <Item>` request fails instead of succeeding as a no-op.
+
 ### Run every integration test in one shot
 
-`run_integration.sh` only covers the suites that share its single controller/gateway topology. Several other tests live in standalone scripts (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E, FileWatcher) — each with its own service lifecycle and port layout. To exercise *everything* end-to-end use the sequential orchestrator:
+`run_integration.sh` covers suites sharing one Controller/Gateway topology. The in-repo
+orchestrator also runs the declared standalone LinkSys, ACME, CLI, and FileWatcher jobs.
+It does not cover tests owned by the separate EdgionCenter repository.
 
 ```bash
 # Run every job in fast mode, continue on failure, unified report at the end
 ./edgion-tests/integration/scripts/integration/run_all_integration.sh
 
-# Skip the top-level cargo build (children may still rebuild incrementally)
+# Skip the top-level build; fail fast if required artifacts are absent
 ./edgion-tests/integration/scripts/integration/run_all_integration.sh --no-prepare
 
 # Propagate --full-test to the main runner (LdapAuth, slow timeouts, etc.)
@@ -65,19 +101,44 @@ These are the same `cicd/checks/*` entry points CI uses — there is no `Makefil
 
 # Limit the run
 ./edgion-tests/integration/scripts/integration/run_all_integration.sh --only main,linksys_etcd
-./edgion-tests/integration/scripts/integration/run_all_integration.sh --skip acme,center
+./edgion-tests/integration/scripts/integration/run_all_integration.sh --skip acme,file_watcher
+
+# Override the default one-hour job and six-hour whole-run deadlines
+./edgion-tests/integration/scripts/integration/run_all_integration.sh \
+  --job-timeout-secs 3600 --run-timeout-secs 21600
 ```
 
-Each job's stdout/stderr is captured to `tmp/integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (12101/12001) so they run sequentially even when their topologies differ.
+Each job's stdout/stderr is captured under the run directory with a machine-readable
+summary. Current names are `main`, `linksys_etcd`, `linksys_es`, `linksys_otlp`,
+`linksys_kafka`, `acme`, `cli`, and `file_watcher`. Treat
+`run_all_integration.sh::JOB_NAMES` as authoritative.
+
+The aggregate runner gives every complete job a deadline and also enforces one whole-run budget,
+including the top-level build. The defaults are 3600 seconds per job and 21600 seconds overall;
+override them with the CLI flags above or `EDGION_RUN_ALL_JOB_TIMEOUT_SECONDS` /
+`EDGION_RUN_ALL_TIMEOUT_SECONDS`. A timeout is reported separately as `TIMEOUT`; the owned process
+group receives TERM, then KILL after `EDGION_DEADLINE_GRACE_SECONDS` (default 10), and the remaining
+jobs still reach the aggregate summary.
+
+`prepare.sh` is the canonical build phase. In addition to product and helper binaries, it builds
+`cache_residue` and precompiles the ignored `credential_reservation_redis` integration test, copying
+the hashed Cargo test executable to `target/debug/credential_reservation_redis` (or the coverage
+target equivalent). Non-coverage preparation normalizes `CARGO_TARGET_DIR` to the project-local
+`target/` directory so every child resolves the same paths. Execution phases invoke those stable
+paths directly. `--no-prepare` is therefore
+strictly build-free: a missing artifact is an immediate infrastructure failure, never a late Cargo
+invocation. The aggregate ACME child uses `--no-build`; a directly invoked ACME script may build
+the canonical artifact set through `prepare.sh`, but only before starting Pebble or any test fixture.
 
 ## Memorize the actual directory layout
 
 - `edgion-tests/integration/conf/`: test YAML, organized by resource/item
 - `edgion-tests/src/client/`: Rust test client and suite implementations
 - `edgion-tests/src/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
+- `edgion-tests/src/server/transport/`: raw HTTP/1.1 + HTTP/2 transport-shape backends and the transport event recorder
 - `edgion-tests/src/validator/`: `resource_diff`, `config_load_validator`
 - `edgion-tests/integration/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
-- `edgion-tests/integration/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
+- `edgion-tests/integration/scripts/integration/run_all_integration.sh`: in-repo orchestrator for the stable job list above
 - `edgion-tests/integration/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
 - `edgion-tests/integration/scripts/gen_certs/`: test certificate generation scripts
 - `tmp/integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
@@ -88,7 +149,7 @@ Do not search for code or cert scripts using older test-directory conventions. C
 
 The actual responsibilities of `run_integration.sh` are:
 
-1. Call `prepare.sh` to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`
+1. Call `prepare.sh` once to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, and `config_load_validator` in one Cargo invocation
 2. Call `start_all_with_conf.sh` to clean the scene and create `tmp/integration_testing/testing_<timestamp>/`
 3. Generate runtime Secrets under `${WORK_DIR}/generated-secrets/` and load them once after the suite YAML
 4. Start `test_server`, controller, gateway, and wait for health checks
@@ -99,9 +160,30 @@ The actual responsibilities of `run_integration.sh` are:
 
 A few key facts:
 
-- `--full-test` additionally includes slow tests and requires Docker to be available
+- `--full-test` additionally includes slow tests and requires Docker to be available. For a
+  targeted `EdgionPlugins/ExtProc` run, it builds and starts the pinned independent Go processor,
+  renders its full-only resources into the work directory, and forwards the flag to `test_client`.
+  The added cases cover official Envoy v3 protobuf interoperability, header and body mutation,
+  `ImmediateResponse`, clean terminal half-close, and a wall-clock long-idle stream. The default
+  targeted run remains Go-free and fast.
 - `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
 - `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
+- The default full sweep runs its isolated standalone scenarios through a bounded parallel queue.
+  They use separate ports and work directories; `--jobs N` or `EDGION_INTEGRATION_JOBS=N`
+  controls the limit. Each scenario defaults to a 900-second deadline and the entire isolated phase
+  to 1800 seconds; configure them with `--isolated-timeout-secs`,
+  `--isolated-phase-timeout-secs`, or their `EDGION_ISOLATED_*_TIMEOUT_SECONDS` environment forms.
+  Shared-topology suites remain serial because several mutate resources or assert cumulative
+  access-log and metric state.
+- Each suite's sorted YAML list is submitted with repeated `edgion-cli apply -f` flags. This reuses
+  one CLI runtime and HTTP client while preserving the existing resource submission order.
+- Base configuration is loaded once, and inferred dependency suites are de-duplicated in first-seen
+  order. Any batch failure aborts startup before tests run; the runner no longer continues with a
+  partially loaded topology.
+- conf_sync mTLS certs live at `${WORK_DIR}/certs/grpc/{primary,secondary}/`, generated in place
+  by `conf_sync_distribute_certs "$WORK_DIR"` (the script that creates a work directory owns its
+  certs — standalone scripts generate into their own `WORK_DIR`/`mktemp` dir; nothing is written
+  to the repo root or any shared cache; `prepare.sh` is build-only)
 - `load_conf.sh` skips template Secrets; the generated version in the working directory takes precedence at the end
 
 ## Categorize first, then write the test
@@ -120,6 +202,22 @@ The current `test_client` local integration tests are mainly grouped into these 
 The corresponding YAML directory, Rust suite, and whether `--gateway` is required are in [references/integration-suite-map.md](references/integration-suite-map.md).
 
 ## Adding or modifying a local integration test
+
+The Rust runner treats suite lifecycle as part of the test result. A failed `setup` or `teardown`
+hook is an infrastructure failure even when every executed case passed. A selection that executes
+zero cases also fails by default; callers must use `TestRunner::allow_empty_selection` explicitly
+when an empty result is the intended assertion. Console and JSON reports expose these errors, and
+the test-client process exits non-zero for them.
+
+Gateway-mode listener selection is fail-closed. `ports.json` must load, the selected suite key must
+exist, and its primary protocol field (`http`, `grpc`, `https`, `grpc_tls`, `tcp`, `tls`, or `udp`)
+must be present. A suite-level listener contract must resolve its declared protocol or the suite is
+skipped and the run fails as an infrastructure error. Only explicitly classified
+control-plane/status suites may run without a data-plane listener mapping. Direct mode continues to
+use its CLI ports. Aggregate selections attach a key and protocol kind to every child suite, so
+mixed HTTP, gRPC, TLS, TCP, and UDP children do not inherit one listener. K8s creates the
+`edgion-test-ports` ConfigMap from this canonical file and mounts it as `conf/ports.json`; do not
+embed a second registry in Kubernetes YAML.
 
 ### 1. Pick the closest existing suite
 
@@ -148,6 +246,8 @@ For most HTTP, gRPC, WebSocket, TCP, UDP, ForwardAuth, OIDC, mirror, delay, and 
 
 The backend ports and endpoints already supported by `test_server` are in [references/test-server-capabilities.md](references/test-server-capabilities.md).
 
+For **transport-level** needs — an upstream that responds before the request body is complete, half-closes mid-request, resets at a chosen byte offset, never responds, or answers with deliberately malformed framing — do not add another mock. `test_server` already exposes two raw listeners for exactly this (`--transport-h1-port 30030`, `--transport-h2-port 30031`), steered per request by `x-up-*` headers, plus a transport event recorder at `/transport/query/{trace_id}` that reports what the gateway actually put on the wire toward the upstream (including upstream connection identity and reuse, which no echoed response header can show). See the "Transport-shape backends" section of the capability reference.
+
 ### 4. Suite registration touchpoints must be complete
 
 When adding a new suite, you typically need to update at least:
@@ -163,6 +263,11 @@ If you only add an item under an existing family, the most commonly missed place
 - `suite_to_port_key()`
 - `add_suites_for_suite()`
 
+Dynamic scenarios have an additional fail-closed inventory contract. Add the scenario to
+`dynamic::registry::all`, update `EXPECTED_DYNAMIC_SCENARIO_IDS`, declare its listener contract, and add
+any required Gateway capability entry. `test_client --list-dynamic-scenarios` validates all of these before
+printing; a command failure or empty list is an integration infrastructure failure, never “no scenarios”.
+
 ### 5. Choose the validation method
 
 The usual priority is:
@@ -177,6 +282,11 @@ Rules of thumb:
 - Plugin chains, conditional execution, header/body rewrite — access log is more reliable
 - LB, retry, hash, consistency — metrics are more reliable
 - `TLSRoute` / `EdgionTls` often require looking at handshake result, gateway log, and access log together
+
+For cumulative metrics, take a baseline before generating test traffic and assert the post-test delta.
+An LB distribution test must also fail on request errors and unexpected status codes, use sequential
+requests when claiming strict RoundRobin order, and assert the exact endpoint set, request count, and
+documented balance tolerance. A descriptive `is_balanced` value in a success message is not an assertion.
 
 > **Metrics-assertion scope limit**: metrics assertions are only used for existing counter/gauge (e.g., `edgion_backend_requests_total`, `edgion_conn_ip_restriction_events_total`); **do not add a plugin-specific counter just to verify plugin behavior** (e.g., `edgion_rate_limit_rejected_total`). Response assertions + access log already verify auth, rate limit, rewrite, etc. correctly. See [`03-coding/observability/01-metrics.md`](../03-coding/observability/01-metrics.md) "Prohibitions: each plugin registers its own metrics".
 
@@ -220,18 +330,24 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Current scenario set
 
-> Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run `--list-dynamic-scenarios` for the live list. As of this writing it registers 10 scenarios:
+> Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run
+> `--list-dynamic-scenarios` for the validated live list. As of this writing it registers 26 scenarios. The
+> table below highlights the common and protocol-lifecycle scenarios rather than duplicating the
+> complete registry.
 
 | Scenario id | conf directory (`conf_path`) | Verifies |
 |-------------|----------|---------|
 | `GatewayDynamic` | `Gateway/DynamicTest` | Gateway/HTTPRoute config changes (migrated case) |
+| `AiBackendPolicyIntegration` | `EdgionBackend/PolicyIntegration/DynamicTest` | Kubernetes-backed AI backend custom CA, SNI/SAN, mTLS, Secret rotation, processor status, multi-target traffic policy publication, hot reload, stable in-flight capture, and stream termination boundaries |
 | `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest` | DSL plugin source switch v1→v2 |
 | `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest` | `secretRefs` list shrinks; bob credentials removed → 401 |
 | `BasicAuthDynamicGrouped` | `EdgionPlugins/BasicAuth/DynamicTest` | Grouped BasicAuth variant (`updates_grouped/`) |
-| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest` | `onMissingKey` switched from Allow to Deny |
+| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest` | `onKeyMiss` switched from Allow to Deny |
+| `RequestAccessPolicyHmacDynamic` | `EdgionPlugins/RequestAccessPolicy/DynamicTest` | Nested HMAC credentials rotate through a Secret update; old signatures stop matching and new signatures start matching without a restart |
 | `ObservedGenHighFreq` | `Status/ObservedGeneration/HighFrequency/DynamicTest` | 10 rapid Gateway spec changes; `observedGeneration` catches up to the final generation |
 | `BtlspRefFlap` | `Status/BackendTLSPolicy/RefFlap/DynamicTest` | BackendTLSPolicy CA ConfigMap ref flaps good→missing→good; `Accepted`/`ResolvedRefs` track it |
-| `PmdRefFlap` | `EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest` | EdgionPlugins `serviceRegionRouteRef` flaps good→missing→good; `Accepted` tracks it |
+| `PmdRefFlap` | `EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest` | EdgionPlugins `overrideRef` flaps good→missing→good; `ResolvedRefs` tracks it (`False`/`InvalidEdgionConfigDataRef` while missing) |
+| `RouteDelegationDynamic` | `HTTPRoute/Delegation/DynamicTest` | Delegation child rule moves /pay → /pay2; parent re-flattens and gateway hot-swaps routing |
 | `SpBackendChange` | `HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest` | SessionPersistence cookie re-routes to a healthy backend after backend-a is drained |
 | `TcpEspReload` | `TCPRoute/StreamPlugins/DynamicTest` | Hot-reload of EdgionStreamPlugins allow-list on a TCPRoute listener (allow→deny→allow) |
 
@@ -247,18 +363,21 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Adding a dynamic scenario
 
-1. Write `initial/` + `updates/` YAML under `edgion-tests/integration/conf/<Resource>/<Item>/DynamicTest/` (`load_conf.sh` automatically skips `updates/` and `delete/`)
-2. Write two phase suites in `edgion-tests/src/client/suites/<family>/dynamic.rs` (`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`); re-export them via the family `mod.rs` to `suites::*`
-3. Add branches to the three dispatch tables in `test_client.rs`: `resolve_suite` (for aliases if needed), `suite_to_port_key`, `add_suites_for_suite` (selects a suite by `--phase`)
-4. Write the scenario in `edgion-tests/src/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases in order: `assert_phase` (initial) → `apply_dir` / `delete_resources` (changes) → `wait_phase` (with timeout, until the final-state business assertions all pass). **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
+1. Write phase YAML under `edgion-tests/integration/conf/<Resource>/<Item>/DynamicTest/`. Remember that the static loader may preload dynamic fixture files; use unique resource names and make the scenario clean up and poll for absence before applying its initial generation.
+2. Define phase suites either in `edgion-tests/src/client/suites/<family>/dynamic.rs` for reusable traffic suites, or directly in the scenario for focused Controller/Gateway state assertions.
+3. Add `test_client.rs` dispatch entries only when the phase suites must also be selectable through `-r/-i --phase`; a self-contained registered scenario does not need those aliases.
+4. Write the scenario in `edgion-tests/src/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases with `apply_dir` / `delete_resources` and `wait_phase` (with timeout, until the final-state business assertions all pass). Always clean up on success and failure. **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
 5. Add `pub mod <id>;` to `dynamic/scenarios/mod.rs`
 6. Append `crate::dynamic::scenarios::<id>::SCENARIO` to `all()` in `dynamic/registry.rs`
+7. Add the exact ID to `EXPECTED_DYNAMIC_SCENARIO_IDS` and declare its `dynamic_port_contract`; add a
+   `dynamic` row to `integration/capabilities.tsv` if it requires a build capability
 
-After that `--list-dynamic-scenarios` lists it automatically, and `run_integration.sh` (default) includes it under the full run or the `-r Gateway` path.
+After all registration contracts agree, `--list-dynamic-scenarios` lists it, and `run_integration.sh`
+(default) includes it under the full run or the `-r Gateway` path. Any drift fails enumeration.
 
 ### Manual phase-by-phase debugging
 
-A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"|"update")`. To bypass the orchestration manually, the legacy path is still available (after preserving the scene):
+A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"|"update")`. For low-level debugging, you can bypass orchestration and invoke the current phase flags directly after preserving the scene:
 
 ```bash
 # Run only the initial-phase assertions
@@ -281,6 +400,21 @@ The `--phase` argument is still effective (each dynamic dispatch routes to the c
 3. For plugin or routing-match issues, check the access log / `tls_access.log`
 4. If you suspect the configuration was not loaded, use `edgion-cli` or the admin API to query the controller/gateway's current resources
 5. If you suspect the test backend behaves wrong, go back to `test_server` ports and endpoint capabilities
+
+`report.log` is a run-level report: it includes ordinary preflights, isolated scenarios, the main
+suites, and the final metrics, unknown-field, requeue-loop, and cache-residue gates. A pending report
+is created under `tmp/integration_testing/` before preflights and moved to the shared work directory
+after startup. `Status: INCOMPLETE` means the process stopped before normal finalization; its
+`Run_Aborted` entry identifies the last phase and exit code. Only `Status: PASS` is a completed
+successful run. The report is atomically replaced after each recorded result, so readers never
+observe a partially written summary. If an isolated scenario fails before the shared stack creates
+its work directory, an incomplete report is also stored beside that scenario's logs.
+
+Mandatory final gates fail closed when their prerequisites are unavailable. Metrics and diagnostics
+endpoints must be reachable, the Controller admin token must exist, `controller.log` must be
+readable, and the cache-residue validator must be executable. Only explicit policies produce a
+recorded skip: `--skip-residue-check` / `SKIP_RESIDUE_CHECK=true` disables the gate, while
+`RESIDUE_MODE=warn` records detected residue without failing the run.
 
 For detailed commands and log entry points see [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md).
 
@@ -317,13 +451,12 @@ Only when a **completely different process-level configuration** is needed shoul
 |---|---|
 | `test_file_watcher.sh` | Controller FileSystem source (mutually exclusive with K8s mode) |
 | `test_resource_abnormal_metrics.sh` | Slow-test-only Controller `tick_secs=30` |
-| `test_center_no_auth.sh` | Center fail-close validation without auth (no Controller/Gateway) |
-| `run_center_test.sh` | 1 Center + 2 Controllers federation validation |
-| `run_center_mtls_test.sh` | Center federation mTLS + SPIFFE peer-identity binding (cert SAN ↔ controller_id), wrong-identity rejection, plaintext fail-close |
 | `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
 | `run_acme_test.sh` | Standalone ACME topology |
 
 A new standalone script must include a header comment explaining "why the main environment cannot be reused"; otherwise the PR cannot be merged.
+
+Center/federation topology tests are maintained in the separate EdgionCenter repository.
 
 ### Antipatterns (signals that block reviewer approval)
 

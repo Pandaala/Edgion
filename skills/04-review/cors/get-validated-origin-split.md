@@ -52,8 +52,8 @@ Verify before closing such a re-report:
 ## Background Notes
 
 - Decision date: 2026-05-21
-- Source finding: `tasks/todo/rfc-review/rfc-refactor-cookie-auth-02-*` (closed)
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a5.md → NC-A5-03` (CONFIRM)
+- Historical source finding (source queue removed): `tasks/todo/rfc-review/rfc-refactor-cookie-auth-02-*` (closed)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a5.md → NC-A5-03` (CONFIRM)
 - The finding's stale snapshot claimed the signature was
   `get_validated_origin(&self, origin: &str)`; the real signature takes
   `session: &mut dyn PluginSession`. The "two concerns mixed" observation was

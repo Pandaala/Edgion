@@ -52,8 +52,8 @@ The defaults are security-first:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `allowOrigins` | String | `""` (empty) | Comma-separated allowed origins. Supports `*`, `**`, and `*.domain`. Example: `"https://app.example.com,https://admin.example.com"` |
-| `allowMethods` | String | `GET,HEAD,OPTIONS` | Comma-separated allowed HTTP methods. Supports `*` / `**` |
-| `allowHeaders` | String | `Accept,Accept-Language,Content-Language,Content-Type,Range` | Comma-separated allowed request headers. Supports `*` / `**` |
+| `allowMethods` | String | `GET,HEAD,OPTIONS` | Comma-separated allowed HTTP methods. Supports `*` / `**`. Emitted as `Access-Control-Allow-Methods` on preflight responses only |
+| `allowHeaders` | String | `Accept,Accept-Language,Content-Language,Content-Type,Range` | Comma-separated allowed request headers. Supports `*` / `**`. Emitted as `Access-Control-Allow-Headers` on preflight responses only |
 | `exposeHeaders` | String | `""` (empty) | Comma-separated response headers exposed to the browser |
 | `allowCredentials` | Boolean | `false` | Whether to allow credentials (cookies, authorization headers) |
 | `maxAge` | Integer | none | Preflight cache duration in seconds. When unset, no `Access-Control-Max-Age` header is sent |

@@ -10,9 +10,10 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
 use k8s_openapi::chrono::Utc;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::Client;
-use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 use super::controller_metrics;
 
@@ -25,6 +26,26 @@ const DEFAULT_RENEW_DEADLINE_SECS: u64 = 10;
 /// Default retry period in seconds: sleep between every renew/acquire
 /// attempt. Mirrors client-go's `RetryPeriod`.
 const DEFAULT_RETRY_PERIOD_SECS: u64 = 2;
+/// Bound on the best-effort lease release during shutdown. The election task
+/// is detached (nothing joins it), so a release still in flight when the
+/// process exits is silently cut off — this bound does not gate process exit;
+/// it keeps the shutdown arm from stalling the pod-label patch behind the kube
+/// client's much longer default request timeout. Any failure mode degrades to
+/// natural lease expiry, i.e. the pre-release behavior.
+const RELEASE_LEASE_TIMEOUT_SECS: u64 = 3;
+pub(crate) const LEADER_TERM_ANNOTATION: &str = "edgion.io/leader-term";
+
+/// Stable identity for one successful local leadership acquisition.
+///
+/// Lease renewals preserve this value. Credential publication validates it
+/// against the live Lease immediately before every external side effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderFence {
+    pub lease_uid: String,
+    pub holder_identity: String,
+    pub term: String,
+    pub lease_transitions: i32,
+}
 
 /// Leader election configuration
 #[derive(Clone, Debug)]
@@ -82,12 +103,6 @@ impl LeaderElectionConfig {
             renew_deadline_secs: DEFAULT_RENEW_DEADLINE_SECS,
             retry_period_secs: DEFAULT_RETRY_PERIOD_SECS,
         })
-    }
-
-    /// Set the identity for this instance
-    pub fn with_identity(mut self, identity: impl Into<String>) -> Self {
-        self.identity = identity.into();
-        self
     }
 
     /// Set the lease duration
@@ -152,28 +167,43 @@ impl LeaderElectionConfig {
 pub struct LeaderElection {
     client: Client,
     config: LeaderElectionConfig,
-    is_leader: Arc<AtomicBool>,
+    /// Current leadership flag, published as a `watch` channel so process-wide
+    /// singleton components (the federation client supervisor) can subscribe to
+    /// edges instead of polling. The sender is the authoritative storage; there
+    /// is no separate atomic. `send_replace` returns the previous value, exactly
+    /// like the `AtomicBool::swap` it replaced.
+    is_leader: Arc<watch::Sender<bool>>,
+    current_fence: Arc<RwLock<Option<LeaderFence>>>,
 }
 
 impl LeaderElection {
-    /// Create a new leader election instance
-    pub fn new(client: Client, config: LeaderElectionConfig) -> Self {
+    /// Create a new leader election instance.
+    ///
+    /// `is_leader` is supplied by the owning center so the same sender can be
+    /// created before `start()` and subscribed to via
+    /// `CenterLifeCycle::leader_signal`.
+    pub fn new(client: Client, config: LeaderElectionConfig, is_leader: Arc<watch::Sender<bool>>) -> Self {
         Self {
             client,
             config,
-            is_leader: Arc::new(AtomicBool::new(false)),
+            is_leader,
+            current_fence: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Acquire)
+        *self.is_leader.borrow()
     }
 
     /// Get a handle that can be cloned and used to check leader status
     pub fn handle(&self) -> LeaderHandle {
         LeaderHandle {
             is_leader: self.is_leader.clone(),
+            client: self.client.clone(),
+            lease_name: self.config.lease_name.clone(),
+            lease_namespace: self.config.lease_namespace.clone(),
+            current_fence: self.current_fence.clone(),
         }
     }
 
@@ -239,14 +269,41 @@ impl LeaderElection {
                             identity = %self.config.identity,
                             "Shutdown signal received, stopping leader election"
                         );
-                        if self.is_leader.swap(false, Ordering::Release) {
+                        if self.is_leader.send_replace(false) {
                             controller_metrics().set_leader(false);
+                            // Release the lease so a successor can take over on
+                            // its next tick instead of waiting out
+                            // lease_duration_secs (~17s of leaderless time on
+                            // every rolling upgrade). Best-effort and bounded:
+                            // on failure the lease simply expires naturally,
+                            // which is the pre-release behavior.
+                            match tokio::time::timeout(
+                                Duration::from_secs(RELEASE_LEASE_TIMEOUT_SECS),
+                                self.release_lease(&lease_api),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => tracing::warn!(
+                                    component = "leader_election",
+                                    identity = %self.config.identity,
+                                    error = %e,
+                                    "Failed to release lease on shutdown; successor takeover falls back to lease expiry (or recreate)"
+                                ),
+                                Err(_) => tracing::warn!(
+                                    component = "leader_election",
+                                    identity = %self.config.identity,
+                                    timeout_secs = RELEASE_LEASE_TIMEOUT_SECS,
+                                    "Timed out releasing lease on shutdown; successor takeover falls back to lease expiry"
+                                ),
+                            }
                             // Best-effort: the loop exits here, so there is no
                             // tick left to retry on. A restarting pod resets the
                             // label in preflight, and a terminating pod drops
                             // out of Service endpoints anyway.
                             self.update_pod_leader_label(false).await;
                         }
+                        *self.current_fence.write() = None;
                         return Ok(());
                     }
                 }
@@ -265,7 +322,7 @@ impl LeaderElection {
             match self.try_acquire_or_renew(&lease_api).await {
                 Ok(true) => {
                     last_renewed = Some(Instant::now());
-                    if !self.is_leader.swap(true, Ordering::Release) {
+                    if !self.is_leader.send_replace(true) {
                         tracing::info!(
                             component = "leader_election",
                             identity = %self.config.identity,
@@ -280,7 +337,8 @@ impl LeaderElection {
                     // someone else (or we lost a CAS race). Reset deadline
                     // tracking so a future re-acquire starts a fresh window.
                     last_renewed = None;
-                    if self.is_leader.swap(false, Ordering::Release) {
+                    *self.current_fence.write() = None;
+                    if self.is_leader.send_replace(false) {
                         tracing::info!(
                             component = "leader_election",
                             identity = %self.config.identity,
@@ -314,7 +372,7 @@ impl LeaderElection {
                             lease_namespace = %self.config.lease_namespace,
                             "Lease resource missing (404); forcing step-down and attempting recreate"
                         );
-                        if self.is_leader.swap(false, Ordering::Release) {
+                        if self.is_leader.send_replace(false) {
                             tracing::info!(
                                 component = "leader_election",
                                 identity = %self.config.identity,
@@ -323,6 +381,7 @@ impl LeaderElection {
                             controller_metrics().set_leader(false);
                             label_synced = self.update_pod_leader_label(false).await;
                         }
+                        *self.current_fence.write() = None;
                         last_renewed = None;
                         if let Err(recreate_err) = self.ensure_lease_exists(&lease_api).await {
                             tracing::warn!(
@@ -338,7 +397,7 @@ impl LeaderElection {
                         continue;
                     }
 
-                    let was_leader = self.is_leader.load(Ordering::Acquire);
+                    let was_leader = self.is_leader();
                     let within_deadline = was_leader
                         && last_renewed
                             .map(|t| Instant::now().saturating_duration_since(t) < renew_deadline)
@@ -366,7 +425,7 @@ impl LeaderElection {
                             error = %e,
                             "Failed to acquire/renew lease"
                         );
-                        if self.is_leader.swap(false, Ordering::Release) {
+                        if self.is_leader.send_replace(false) {
                             tracing::info!(
                                 component = "leader_election",
                                 identity = %self.config.identity,
@@ -375,6 +434,7 @@ impl LeaderElection {
                             controller_metrics().set_leader(false);
                             label_synced = self.update_pod_leader_label(false).await;
                         }
+                        *self.current_fence.write() = None;
                         // Reset unconditionally for symmetry with the 404 branch:
                         // any future re-acquire should start a fresh deadline
                         // window, regardless of whether we held leadership when
@@ -548,7 +608,24 @@ impl LeaderElection {
         // by K8s coordinated leader election) would be wiped if a third party
         // ever wrote them. Switch to SSA with explicit field ownership if that
         // changes.
+        let new_local_acquisition = !self.is_leader();
+        let term = if new_local_acquisition {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            lease
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(LEADER_TERM_ANNOTATION))
+                .cloned()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        };
         let mut updated = lease.clone();
+        updated
+            .metadata
+            .annotations
+            .get_or_insert_with(Default::default)
+            .insert(LEADER_TERM_ANNOTATION.to_string(), term.clone());
         updated.spec = Some(k8s_openapi::api::coordination::v1::LeaseSpec {
             holder_identity: Some(self.config.identity.clone()),
             lease_duration_seconds: Some(self.config.lease_duration_secs),
@@ -562,7 +639,20 @@ impl LeaderElection {
             .replace(&self.config.lease_name, &PostParams::default(), &updated)
             .await
         {
-            Ok(_) => Ok(true),
+            Ok(applied) => {
+                let lease_uid = applied.metadata.uid.unwrap_or_default();
+                if lease_uid.is_empty() {
+                    *self.current_fence.write() = None;
+                    return Ok(false);
+                }
+                *self.current_fence.write() = Some(LeaderFence {
+                    lease_uid,
+                    holder_identity: self.config.identity.clone(),
+                    term,
+                    lease_transitions: transitions,
+                });
+                Ok(true)
+            }
             // 409 Conflict: another writer modified the Lease between our get
             // and replace. Lost the race — return Ok(false) so the run loop
             // steps down and re-reads on the next tick. (We deliberately do
@@ -580,27 +670,106 @@ impl LeaderElection {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// Release the lease held by this instance (client-go `ReleaseOnCancel`
+    /// equivalent): clear `holder_identity` and `renew_time` so the next
+    /// `try_acquire_or_renew` on any replica sees the lease as expired
+    /// ("no renew time means expired") and acquires it on its next tick,
+    /// instead of waiting out `lease_duration_secs`. Clearing the holder
+    /// alone would NOT unblock a successor — the acquire path only checks
+    /// `is_current_holder || is_expired`, never holder vacancy.
+    ///
+    /// Only writes if this instance is still the recorded holder; the
+    /// `resourceVersion` CAS on `replace()` protects against racing a
+    /// successor that acquired in between.
+    async fn release_lease(&self, api: &Api<Lease>) -> Result<()> {
+        let lease = api.get(&self.config.lease_name).await?;
+        let spec = lease.spec.as_ref();
+
+        let current_holder = spec.and_then(|s| s.holder_identity.as_deref()).unwrap_or("");
+        if current_holder != self.config.identity {
+            // Another replica already holds (or the lease is vacant) —
+            // nothing to release.
+            return Ok(());
+        }
+
+        let transitions = spec.and_then(|s| s.lease_transitions).unwrap_or(0);
+        let mut updated = lease.clone();
+        updated.spec = Some(k8s_openapi::api::coordination::v1::LeaseSpec {
+            holder_identity: None,
+            lease_duration_seconds: Some(self.config.lease_duration_secs),
+            acquire_time: None,
+            renew_time: None,
+            lease_transitions: Some(transitions),
+            ..Default::default()
+        });
+
+        match api
+            .replace(&self.config.lease_name, &PostParams::default(), &updated)
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    component = "leader_election",
+                    identity = %self.config.identity,
+                    lease_name = %self.config.lease_name,
+                    "Released leader lease on shutdown"
+                );
+                Ok(())
+            }
+            // 409 Conflict: another writer modified the Lease between our get
+            // and replace. Usually a successor acquiring (release goal met);
+            // in the worst case a delayed renew of our own landed server-side,
+            // which degrades to natural expiry — the pre-release behavior.
+            // Either way there is nothing worth retrying on an exit path.
+            Err(kube::Error::Api(e)) if e.code == 409 => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 /// Handle to check leader status from anywhere
 #[derive(Clone)]
 pub struct LeaderHandle {
-    is_leader: Arc<AtomicBool>,
+    is_leader: Arc<watch::Sender<bool>>,
+    client: Client,
+    lease_name: String,
+    lease_namespace: String,
+    current_fence: Arc<RwLock<Option<LeaderFence>>>,
 }
 
 impl LeaderHandle {
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Acquire)
+        *self.is_leader.borrow()
     }
 
-    /// Wait until this instance becomes leader
-    ///
-    /// This will block indefinitely until leadership is acquired.
-    pub async fn wait_until_leader(&self) {
-        while !self.is_leader() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+    pub fn current_fence(&self) -> Option<LeaderFence> {
+        if !self.is_leader() {
+            return None;
         }
+        self.current_fence.read().clone()
+    }
+
+    /// Re-read the Lease and require an exact current leadership fence.
+    pub async fn validate_fence(&self, expected: &LeaderFence) -> bool {
+        if !self.is_leader() || self.current_fence().as_ref() != Some(expected) {
+            return false;
+        }
+        let api: Api<Lease> = Api::namespaced(self.client.clone(), &self.lease_namespace);
+        let Ok(lease) = api.get(&self.lease_name).await else {
+            return false;
+        };
+        let spec = lease.spec.as_ref();
+        lease.metadata.uid.as_deref() == Some(expected.lease_uid.as_str())
+            && spec.and_then(|value| value.holder_identity.as_deref()) == Some(expected.holder_identity.as_str())
+            && spec.and_then(|value| value.lease_transitions) == Some(expected.lease_transitions)
+            && lease
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(LEADER_TERM_ANNOTATION))
+                .is_some_and(|term| term == &expected.term)
     }
 
     /// Wait until this instance becomes leader, with cancellation support

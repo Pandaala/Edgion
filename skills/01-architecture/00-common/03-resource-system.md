@@ -25,7 +25,16 @@ define_resources! {
 }
 ```
 
-The macro auto-generates the `ResourceKind` enum, the `from_kind_name()` method, the `from_content()` method, and registry metadata.
+The macro generates the `ResourceKindInfo` struct, the `ALL_RESOURCE_INFOS` table, and lookup
+helpers such as `resource_kind_from_name()`.
+
+**It does NOT generate the `ResourceKind` enum.** That enum is hand-written in
+[`edgion-resources/src/resource/kind.rs`](../../../edgion-resources/src/resource/kind.rs) with
+explicit discriminants (it derives `::prost::Enumeration`, so the numbers are wire contract), and
+the macro only *references* `ResourceKind::$variant`. Adding a resource therefore means editing
+**both** `kind.rs` and `defs.rs` — forgetting `kind.rs` is the most common mistake, which is why
+[`09-add-new-resource/00-guide.md`](../01-controller/09-add-new-resource/00-guide.md) calls it out
+separately.
 
 ## ResourceMeta trait
 

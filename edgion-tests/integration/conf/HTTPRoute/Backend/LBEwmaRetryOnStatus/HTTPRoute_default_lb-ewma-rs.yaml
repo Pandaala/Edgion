@@ -1,7 +1,6 @@
 # EWMA LB + retry-on-503 — 2 endpoints, retry=3.
-# Exercises finalize_attempt(Discard) on LbCommit::Ewma: the abandoned attempt's
-# latency sample must NOT be folded into the backend's EWMA. After retry exhausts,
-# healthy traffic must still reach both endpoints (no EWMA score collapse to single point).
+# The integration assertion verifies the four-attempt access-log chain. Exact
+# Discard state mutation is covered directly by the LB unit tests.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -27,9 +26,3 @@ spec:
       backendRefs:
         - name: lb-ewma-rs-service
           port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyEwma
-                name: default

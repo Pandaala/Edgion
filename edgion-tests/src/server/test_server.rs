@@ -3,13 +3,14 @@
 
 use anyhow::{Context, Result};
 use axum::{
-    body::Body,
-    extract::{ConnectInfo, Extension, Path, Request as AxumRequest},
+    body::{Body, Bytes},
+    extract::{ConnectInfo, Extension, Path, Query, Request as AxumRequest},
     http::Version,
     response::IntoResponse,
     routing::get,
     Router,
 };
+use base64::Engine as _;
 use clap::Parser;
 use h2::server as h2s;
 use parking_lot::Mutex;
@@ -18,6 +19,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info};
+
+// Transport-shape backends + the transport event recorder. Lives in its own
+// module tree because it is a self-contained protocol harness (raw H1, raw H2,
+// a global event log) rather than another axum endpoint.
+#[path = "transport/mod.rs"]
+mod transport;
 
 // ============================================================================
 // Mirror Capture Store  (global, for test validation)
@@ -52,6 +59,88 @@ static RETRY_SEQUENCE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashM
 /// Circuit-breaker test counter: tracks calls per test-id
 static CB_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// HTTP DNS resolve counter: tracks how many times the fake HTTP DNS endpoint
+/// resolved each host. Lets tests assert caching behaviour (a `gateway`-mode
+/// resolution should NOT re-hit the endpoint within its TTL).
+static DNS_RESOLVE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Total requests that reached the native Anthropic fixture. The integration
+/// client samples this around a locally rejected request to prove the provider
+/// was not contacted; no request data is retained.
+static ANTHROPIC_REQUEST_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+const OAUTH2_ACTIVE_CLIENT_ID: &str = "oauth2-active-client";
+const OAUTH2_ACTIVE_CLIENT_SECRET: &str = "active-secret";
+const OAUTH2_PREVIOUS_CLIENT_ID: &str = "oauth2-previous-client";
+const OAUTH2_PREVIOUS_CLIENT_SECRET: &str = "previous-secret";
+
+/// Per-scenario, fixed-label state for AI resilience integration tests. Only
+/// an opaque fixture ID, bounded server-owned modes, and counters are kept.
+static AI_RESILIENCE_STATE: std::sync::LazyLock<Mutex<std::collections::HashMap<String, AiResilienceFixtureState>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Clone, Copy, Debug, Default)]
+enum AiResiliencePrimaryMode {
+    #[default]
+    Healthy,
+    Fail,
+    ProbeSuccess,
+    ProbeFail,
+}
+
+#[derive(Debug, Default)]
+struct AiResilienceFixtureState {
+    counts: [u64; 6],
+    half_open_primary_mode: AiResiliencePrimaryMode,
+    half_open_probe_release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+/// Per-trace provider observations for the credential-exhaustion scenario.
+/// Only fixture-owned service labels and non-secret credential generations are
+/// retained; request bodies and authorization values never enter this store.
+static AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, Vec<AiCredentialExhaustionObservation>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Per-trace lifecycle of the paced AI stream used to verify that a downstream
+/// client disconnect cancels the gateway's upstream body consumption.
+static AI_LONG_STREAM_OBSERVATIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, AiLongStreamObservation>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Bounded, content-free observations for Guardrail integration assertions.
+/// The fixture retains only counters and structural validation booleans, never
+/// semantic window text or configured authentication headers.
+static GUARDRAIL_OBSERVATIONS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<String, GuardrailFixtureObservation>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuardrailFixtureObservation {
+    calls: u64,
+    total_windows: u64,
+    last_window_count: usize,
+    version_v1: bool,
+    minimal_envelope: bool,
+    sorted_unique_keys: bool,
+    canonical_content_window: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AiCredentialExhaustionObservation {
+    backend: &'static str,
+    credential_generation: &'static str,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+struct AiLongStreamObservation {
+    chunks_queued: u64,
+    upstream_cancelled: bool,
+    provider_completed: bool,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "test-server")]
@@ -89,6 +178,23 @@ struct Cli {
     #[arg(long)]
     ext_proc_port: Option<u16>,
 
+    /// Fake ext_proc gRPC server TLS port (for ExtProc-over-TLS testing).
+    /// Serves the same processor over HTTPS/h2; needs --ext-proc-tls-cert/key.
+    #[arg(long)]
+    ext_proc_tls_port: Option<u16>,
+
+    /// Fake ext_proc gRPC server mTLS port (requires a client certificate).
+    #[arg(long)]
+    ext_proc_mtls_port: Option<u16>,
+
+    /// TLS certificate file for the ext_proc TLS server (SAN must cover 127.0.0.1).
+    #[arg(long)]
+    ext_proc_tls_cert: Option<String>,
+
+    /// TLS private key file for the ext_proc TLS server.
+    #[arg(long)]
+    ext_proc_tls_key: Option<String>,
+
     /// HTTPS backend server port (for Backend TLS testing)
     #[arg(long)]
     https_backend_port: Option<u16>,
@@ -113,6 +219,19 @@ struct Cli {
     #[arg(long)]
     h2_trailer_malformed_port: Option<u16>,
 
+    /// Raw HTTP/1.1 transport-shape backend port (default 30030 in the launch
+    /// scripts). Steered per request by the `x-up-*` control headers; every
+    /// wire-level fact it observes lands in the transport event recorder,
+    /// queryable at `/transport/query/{trace_id}` on the HTTP router.
+    #[arg(long)]
+    transport_h1_port: Option<u16>,
+
+    /// Raw HTTP/2 (h2c prior-knowledge) transport-shape backend port
+    /// (default 30031 in the launch scripts). Same `x-up-*` vocabulary as the
+    /// H1 backend, plus RST_STREAM/GOAWAY with a chosen error code.
+    #[arg(long)]
+    transport_h2_port: Option<u16>,
+
     /// HTTPS backend multi-SNI port (for BackendTLSSNIHostOverride testing)
     /// The server uses a per-SNI cert resolver: hostname-a.example.com -> cert-a,
     /// hostname-b.example.com -> cert-b, any other SNI -> handshake rejected.
@@ -134,6 +253,23 @@ struct Cli {
     /// TLS private key file for multi-SNI backend (key B)
     #[arg(long)]
     multi_sni_key_b: Option<String>,
+
+    /// HTTPS backend wildcard port (for the EdgionBackendTrafficPolicy/UpstreamAuthority
+    /// integration scenario). Serves a genuine `*.sandbox.internal` wildcard certificate;
+    /// the TLS resolver accepts any SNI inside that pattern (rejecting the bare parent
+    /// domain and anything outside it), so a successful handshake already proves the
+    /// gateway sent an in-pattern SNI. The exact composed authority is then verified at
+    /// the HTTP layer via the `Host` header the shared `/echo` handler echoes back.
+    #[arg(long)]
+    https_backend_wildcard_port: Option<u16>,
+
+    /// TLS certificate file for the wildcard backend (SAN: *.sandbox.internal)
+    #[arg(long)]
+    wildcard_cert: Option<String>,
+
+    /// TLS private key file for the wildcard backend
+    #[arg(long)]
+    wildcard_key: Option<String>,
 
     /// Log level
     #[arg(long, default_value = "info")]
@@ -220,6 +356,41 @@ async fn main() -> Result<()> {
         handles.push(handle);
     }
 
+    // Start Fake ext_proc TLS server (if configured)
+    if let Some(ext_proc_tls_port) = cli.ext_proc_tls_port {
+        match (cli.ext_proc_tls_cert.clone(), cli.ext_proc_tls_key.clone()) {
+            (Some(cert), Some(key)) => {
+                let handle = tokio::spawn(ext_proc_server::start_tls(ext_proc_tls_port, cert, key, None));
+                handles.push(handle);
+            }
+            _ => error!(
+                "--ext-proc-tls-port set but --ext-proc-tls-cert/--ext-proc-tls-key missing; skipping TLS ext_proc"
+            ),
+        }
+    }
+
+    // Start Fake ext_proc mTLS server (if configured)
+    if let Some(ext_proc_mtls_port) = cli.ext_proc_mtls_port {
+        match (
+            cli.ext_proc_tls_cert.clone(),
+            cli.ext_proc_tls_key.clone(),
+            cli.client_ca_file.clone(),
+        ) {
+            (Some(cert), Some(key), Some(client_ca)) => {
+                let handle = tokio::spawn(ext_proc_server::start_tls(
+                    ext_proc_mtls_port,
+                    cert,
+                    key,
+                    Some(client_ca),
+                ));
+                handles.push(handle);
+            }
+            _ => error!(
+                "--ext-proc-mtls-port set but ext_proc TLS identity or --client-ca-file missing; skipping mTLS ext_proc"
+            ),
+        }
+    }
+
     // Start HTTPS backend server (if configured)
     if let Some(https_port) = cli.https_backend_port {
         if let (Some(cert), Some(key)) = (cli.cert_file.as_ref(), cli.key_file.as_ref()) {
@@ -255,6 +426,18 @@ async fn main() -> Result<()> {
         handles.push(handle);
     }
 
+    // Start the raw HTTP/1.1 transport-shape backend (if configured)
+    if let Some(port) = cli.transport_h1_port {
+        let handle = tokio::spawn(transport::h1::start_transport_h1_server(port));
+        handles.push(handle);
+    }
+
+    // Start the raw HTTP/2 transport-shape backend (if configured)
+    if let Some(port) = cli.transport_h2_port {
+        let handle = tokio::spawn(transport::h2::start_transport_h2_server(port));
+        handles.push(handle);
+    }
+
     // Start HTTPS multi-SNI backend server (if configured)
     if let Some(multi_sni_port) = cli.https_backend_multi_sni_port {
         match (
@@ -283,6 +466,23 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Start HTTPS wildcard backend server (if configured)
+    if let Some(wildcard_port) = cli.https_backend_wildcard_port {
+        match (cli.wildcard_cert.as_ref(), cli.wildcard_key.as_ref()) {
+            (Some(cert), Some(key)) => {
+                let handle = tokio::spawn(start_https_backend_wildcard_server(
+                    wildcard_port,
+                    cert.clone(),
+                    key.clone(),
+                ));
+                handles.push(handle);
+            }
+            _ => {
+                error!("https-backend-wildcard-port specified but wildcard-cert / wildcard-key is missing");
+            }
+        }
+    }
+
     info!("");
     info!("========================================");
     info!("All servers started, press Ctrl+C to stop");
@@ -299,6 +499,29 @@ async fn main() -> Result<()> {
 // ============================================================================
 
 async fn start_http_server(port: u16) -> Result<()> {
+    // Best-effort IPv6 loopback listener on the same port. A backend that
+    // resolves `localhost` to `::1` (dual-stack hosts, e.g. the DnsResolution
+    // system-resolver scenarios) must still reach the test server. Bound
+    // separately from 0.0.0.0 (distinct address family) so there is no conflict;
+    // non-fatal if IPv6 is unavailable.
+    tokio::spawn(async move {
+        let v6_addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port));
+        match TcpListener::bind(v6_addr).await {
+            Ok(listener) => {
+                info!("✓ HTTP server also listening on http://{}", v6_addr);
+                let app =
+                    create_echo_router(format!("[::1]:{}", port)).into_make_service_with_connect_info::<SocketAddr>();
+                if let Err(e) = axum::serve(listener, app).await {
+                    error!("IPv6 HTTP server error on port {}: {}", port, e);
+                }
+            }
+            // Warn (not info): the system-resolver DNS scenarios resolve
+            // `localhost` to ::1 on dual-stack hosts and depend on this listener,
+            // so an unexpected bind failure must be visible.
+            Err(e) => tracing::warn!("IPv6 loopback bind skipped on port {}: {}", port, e),
+        }
+    });
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let server_addr_str = format!("0.0.0.0:{}", port);
     let app = create_echo_router(server_addr_str.clone());
@@ -317,14 +540,19 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/health", get(health_handler))
         .route("/version", get(version_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
+        .route("/body-digest", get(body_digest_handler).post(body_digest_handler))
+        .route("/body-redirect", get(body_redirect_handler).post(body_redirect_handler))
+        .route("/body-slow", get(body_slow_handler).post(body_slow_handler))
         .route("/request-header-test", get(header_echo_handler))
         .route("/both-headers-test", get(header_echo_handler))
         .route("/multi-request-headers", get(header_echo_handler))
         .route("/multi-value-append-test", get(header_echo_handler))
         .route("/response-header-test", get(header_echo_handler))
         .route("/headers", get(headers_handler))
+        .route("/vhost-health", get(vhost_health_handler))
         .route("/multi-set-cookie", get(multi_set_cookie_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
+        .route("/oauth2/token", axum::routing::post(oauth2_token_handler))
         .route(
             "/webhook/resolve",
             get(webhook_resolve_handler).post(webhook_resolve_handler),
@@ -355,6 +583,43 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/status/{code}", get(status_handler))
         .route("/status-empty/{code}", get(status_empty_handler))
         .route("/delay/{seconds}", get(delay_handler))
+        // GET /sse?events=N&interval_ms=T: paced SSE stream for streaming tests.
+        .route("/sse", get(sse_handler))
+        // OpenAI-compatible deterministic provider used by the AI Gateway
+        // integration suite. It reports only booleans and fixed fixture IDs;
+        // credentials and arbitrary request values are never echoed.
+        .route("/ai/{*path}", get(ai_provider_handler).post(ai_provider_handler))
+        // Bounded deterministic unary policy fixture for the Guardrail plugin.
+        // It shares this server with the AI provider so integration coverage
+        // does not add another process or network topology.
+        .route(
+            "/guardrail/decision/{action}",
+            axum::routing::post(guardrail_decision_handler),
+        )
+        .route("/guardrail/observation/{action}", get(guardrail_observation_handler))
+        .route("/guardrail/reset", axum::routing::post(guardrail_reset_handler))
+        .route("/ai-resilience/count/{trace_id}", get(ai_resilience_count_handler))
+        .route("/ai-resilience/counts/{fixture_id}", get(ai_resilience_counts_handler))
+        .route(
+            "/ai-resilience/mode/{fixture_id}/{backend}/{mode}",
+            axum::routing::post(ai_resilience_mode_handler),
+        )
+        .route(
+            "/ai-resilience/release/{fixture_id}/half-open-primary",
+            axum::routing::post(ai_resilience_release_handler),
+        )
+        .route(
+            "/ai-credential-exhaustion/observations/{trace_id}",
+            get(ai_credential_exhaustion_observations_handler),
+        )
+        .route(
+            "/ai-long-stream/observation/{trace_id}",
+            get(ai_long_stream_observation_handler),
+        )
+        // Native Anthropic Messages fixture. Its observation endpoint exposes
+        // only a monotonically increasing count, never headers or bodies.
+        .route("/anthropic/{*path}", axum::routing::post(anthropic_provider_handler))
+        .route("/anthropic-fixture/count", get(anthropic_request_count_handler))
         // --- Mirror endpoints (for RequestMirror plugin integration tests) ---
         // POST/GET to /mirror/capture: gateway mirrors requests here; stored by x-trace-id
         .route(
@@ -367,8 +632,23 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/mirror/slow/{ms}", get(mirror_slow_handler).post(mirror_slow_handler))
         // GET /mirror/reset: clear all stored mirror captures (between test cases)
         .route("/mirror/reset", get(mirror_reset_handler))
+        // --- Transport event recorder (for the raw transport-shape backends) ---
+        // GET /transport/query/{trace_id}: the trace's own events, plus the
+        // connection-scoped events of every connection that carried it, plus a
+        // connections[] summary and the global conn_accepted_total.
+        .route(
+            "/transport/query/{trace_id}",
+            get(transport::recorder::transport_query_handler),
+        )
+        // GET /transport/reset: clear the per-case transport log (call first in every case)
+        .route("/transport/reset", get(transport::recorder::transport_reset_handler))
+        // GET /transport/dump: everything the recorder holds, for failure dumps
+        .route("/transport/dump", get(transport::recorder::transport_dump_handler))
         // --- Retry-sequence endpoints (for retry-on-status integration tests) ---
-        .route("/retry-sequence/{test_id}/{status_list}", get(retry_sequence_handler))
+        .route(
+            "/retry-sequence/{test_id}/{status_list}",
+            get(retry_sequence_handler).post(retry_sequence_handler),
+        )
         .route("/retry-sequence-reset", get(retry_sequence_reset_handler))
         // --- Streaming-body endpoints (for per-try-timeout mid-body tests) ---
         // GET /stream-stall/{test_id}: 200 + one body chunk, then hang the body forever
@@ -382,6 +662,14 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/cb-fail/{test_id}/{fail_count}", get(cb_fail_handler))
         .route("/cb-fail/{test_id}/{fail_count}/{status}", get(cb_fail_status_handler))
         .route("/cb-reset", get(cb_reset_handler))
+        // --- Fake HTTP DNS endpoint (for httpdns resolver integration tests) ---
+        // GET /dns/resolve?host=<domain>[&ip=<ip>[,<ip>...]]: returns the generic
+        // httpdns JSON body {"ips":[...]} and counts one resolution for <host>.
+        .route("/dns/resolve", get(dns_resolve_handler))
+        // GET /dns/hits/{host}: how many times <host> has been resolved (caching assertions).
+        .route("/dns/hits/{host}", get(dns_hits_handler))
+        // GET /dns/reset: clear all HTTP DNS resolve counters (between test cases).
+        .route("/dns/reset", get(dns_reset_handler))
         .route("/{*path}", get(catch_all_handler))
         .layer(Extension(server_addr_str))
 }
@@ -421,6 +709,35 @@ async fn header_echo_handler(
 
 async fn health_handler() -> impl IntoResponse {
     "OK"
+}
+
+/// Health endpoint for the EdgionBackendTrafficPolicy/UpstreamAuthority
+/// integration scenario (Task 8: probe authority for health checks). Returns
+/// 200 only when the received `Host` header falls inside the
+/// `*.sandbox.internal` wildcard the scenario's `upstreamAuthority` policy
+/// declares; any other Host — notably the raw socket-address Host a probe
+/// sends when it has no `healthCheckHost` override — gets 421. This makes a
+/// passing probe genuine evidence that the override reached this endpoint,
+/// rather than a check that always passes regardless of Host.
+async fn vhost_health_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if host.ends_with(".sandbox.internal") {
+        (StatusCode::OK, "OK").into_response()
+    } else {
+        (
+            StatusCode::MISDIRECTED_REQUEST,
+            format!("unexpected Host for vhost-health: {host}"),
+        )
+            .into_response()
+    }
 }
 
 fn format_http_version(version: Version) -> &'static str {
@@ -468,6 +785,49 @@ async fn echo_handler(
 
 async fn echo_post_handler(Extension(server_addr): Extension<String>, body: String) -> impl IntoResponse {
     format!("Server: {}\nEcho: {}", server_addr, body)
+}
+
+async fn body_digest_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use sha2::{Digest, Sha256};
+
+    let content_length = req
+        .headers()
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("absent")
+        .to_string();
+    let transfer_encoding = req
+        .headers()
+        .get("transfer-encoding")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("absent")
+        .to_string();
+    let body = to_bytes(req.into_body(), 32 * 1024 * 1024).await.unwrap_or_default();
+    let digest = hex::encode(Sha256::digest(&body));
+
+    (
+        [
+            ("x-body-sha256", digest),
+            ("x-body-len", body.len().to_string()),
+            ("x-content-length", content_length),
+            ("x-transfer-encoding", transfer_encoding),
+        ],
+        "body-digest",
+    )
+}
+
+async fn body_redirect_handler() -> impl IntoResponse {
+    (
+        axum::http::StatusCode::TEMPORARY_REDIRECT,
+        [("location", "/body-digest")],
+        "redirect-not-followed",
+    )
+}
+
+async fn body_slow_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    body_digest_handler(req).await
 }
 
 async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {
@@ -538,6 +898,57 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
         .unwrap()
 }
 
+fn oauth2_fixture_client(authorization: Option<&str>, form: &[u8]) -> Option<&'static str> {
+    if form != b"grant_type=client_credentials&scope=inference.invoke" {
+        return None;
+    }
+    let encoded = authorization?.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let decoded = std::str::from_utf8(&decoded).ok()?;
+    match decoded.split_once(':') {
+        Some((OAUTH2_ACTIVE_CLIENT_ID, OAUTH2_ACTIVE_CLIENT_SECRET)) => Some("active"),
+        Some((OAUTH2_PREVIOUS_CLIENT_ID, OAUTH2_PREVIOUS_CLIENT_SECRET)) => Some("previous"),
+        _ => None,
+    }
+}
+
+/// Deterministic OAuth2 Client Credentials issuer used by the Controller-side
+/// credential lifecycle integration test. The five-second generation changes
+/// independently of Kubernetes resources, allowing the test to prove that the
+/// Controller performs expiry-aware refresh instead of merely reacting to
+/// bootstrap Secret updates.
+async fn oauth2_token_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let authorization = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let Ok(form) = to_bytes(req.into_body(), 4 * 1024).await else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request"})));
+    };
+    let Some(client) = oauth2_fixture_client(authorization.as_deref(), &form) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid_client"})));
+    };
+    let generation = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 5;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "access_token": format!("{client}-oauth2-token-{generation}"),
+            "token_type": "Bearer",
+            "expires_in": 60
+        })),
+    )
+}
+
 // ============================================================================
 // Mirror handlers (for RequestMirror plugin integration tests)
 // ============================================================================
@@ -549,6 +960,7 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
 async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
+    use sha2::{Digest, Sha256};
 
     let received_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -573,6 +985,7 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
 
     // Read body (truncate at 4KB)
     let body_bytes = to_bytes(req.into_body(), 4096).await.unwrap_or_default();
+    let body_sha256 = hex::encode(Sha256::digest(&body_bytes));
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
     let capture = MirrorCapture {
@@ -589,7 +1002,11 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         info!("mirror/capture: stored request for trace_id={}", trace_id);
     }
 
-    (StatusCode::OK, "mirror-captured")
+    (
+        StatusCode::OK,
+        [("x-captured-body-sha256", body_sha256)],
+        "mirror-captured",
+    )
 }
 
 /// /mirror/query/{trace_id} — return all captured mirror requests for a trace_id.
@@ -686,8 +1103,33 @@ async fn mirror_reset_handler() -> impl IntoResponse {
 /// status_list format: "502,503,200" — returns 502 on 1st call, 503 on 2nd, 200 on 3rd+.
 /// An entry may carry a delay: "200d3000" — sleep 3000ms then return 200
 /// (delay capped at 10s); out-of-range calls reuse the last entry including its delay.
-async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, String)>) -> impl IntoResponse {
+async fn retry_sequence_handler(
+    Path((test_id, status_list)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
     use axum::http::StatusCode;
+    use sha2::{Digest, Sha256};
+
+    if let Some(expected) = headers
+        .get("x-expected-body-sha256")
+        .and_then(|value| value.to_str().ok())
+    {
+        let actual = hex::encode(Sha256::digest(&body));
+        if actual != expected {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                [
+                    ("x-error".to_string(), "request body digest mismatch".to_string()),
+                    ("x-attempt-number".to_string(), "0".to_string()),
+                    ("x-attempt-history".to_string(), String::new()),
+                    ("x-test-id".to_string(), test_id),
+                ],
+                format!("request body digest mismatch: expected={expected}, actual={actual}"),
+            )
+                .into_response();
+        }
+    }
 
     // Entry syntax: "STATUS" or "STATUSdDELAY_MS" (e.g. "200d3000" = sleep
     // 3000ms then return 200). Delay is capped at 10s for safety.
@@ -841,6 +1283,1126 @@ async fn stream_trickle_handler(Path((test_id, chunks, interval_ms)): Path<(Stri
         .unwrap()
 }
 
+#[derive(serde::Deserialize)]
+struct SseQuery {
+    events: Option<u32>,
+    interval_ms: Option<u64>,
+}
+
+/// `/sse?events=N&interval_ms=T`
+///
+/// Sends one SSE event immediately, then sends the remaining events at the
+/// requested interval. Each channel item is yielded independently to Hyper,
+/// which makes the event observable downstream without waiting for the stream
+/// to finish. Bounds keep malformed test input from creating a long-lived or
+/// unbounded test-server task.
+async fn sse_handler(Query(query): Query<SseQuery>) -> impl IntoResponse {
+    use axum::body::{Body, Bytes};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    let events = query.events.unwrap_or(5).clamp(1, 50);
+    let interval_ms = query.interval_ms.unwrap_or(200).min(5_000);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for seq in 0..events {
+            let ts_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let event = format!("data: {{\"seq\":{seq},\"ts_ms\":{ts_ms}}}\n\n");
+            if tx.send(Ok(Bytes::from(event))).await.is_err() {
+                break;
+            }
+            if seq + 1 < events && interval_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+            }
+        }
+    });
+
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .body(body)
+        .unwrap()
+}
+
+const AI_PROVIDER_KEY_A: &str = "ai-provider-test-key";
+const AI_PROVIDER_KEY_B: &str = "ai-provider-rotated-test-key";
+const AI_PROVIDER_EXPECTED_HOSTS: &[&str] = &[
+    "127.0.0.1:30001",
+    "127.0.0.1:30026",
+    "127.0.0.1:30051",
+    "127.0.0.1:30052",
+    "edgion-test-server.edgion-test.svc.cluster.local:30001",
+    "edgion-test-server.edgion-test.svc.cluster.local:30026",
+    "edgion-test-server.edgion-test.svc.cluster.local:30051",
+    "edgion-test-server.edgion-test.svc.cluster.local:30052",
+];
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AiProviderQuery {
+    mock_mode: Option<String>,
+    fixture_query: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AiProviderObservation {
+    fixture_id: &'static str,
+    auth_is_provider_key: bool,
+    credential_generation: &'static str,
+    auth_is_client_key: bool,
+    host_is_expected: bool,
+    path_has_prefix: bool,
+    query_is_preserved: bool,
+    model_is_canonical: bool,
+    model_is_economy: bool,
+    model_is_unknown: bool,
+    stream_requested: bool,
+    include_usage: bool,
+}
+
+fn ai_provider_observation(
+    path: &str,
+    query: &AiProviderQuery,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> AiProviderObservation {
+    let json: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let model = json.get("model").and_then(serde_json::Value::as_str);
+    let credential_generation = if auth == format!("Bearer {AI_PROVIDER_KEY_A}") {
+        "a"
+    } else if auth == format!("Bearer {AI_PROVIDER_KEY_B}") {
+        "b"
+    } else {
+        "unknown"
+    };
+    AiProviderObservation {
+        fixture_id: "openai-compatible-v1",
+        auth_is_provider_key: credential_generation != "unknown",
+        credential_generation,
+        auth_is_client_key: auth == "Bearer client-key-must-be-stripped",
+        host_is_expected: headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|host| AI_PROVIDER_EXPECTED_HOSTS.contains(&host)),
+        path_has_prefix: path == "prefix/v1/chat/completions",
+        query_is_preserved: query.fixture_query.as_deref() == Some("preserved"),
+        model_is_canonical: model == Some("fixture-model"),
+        model_is_economy: model == Some("economy-model"),
+        model_is_unknown: model == Some("unknown-fixture-model"),
+        stream_requested: json.get("stream").and_then(serde_json::Value::as_bool) == Some(true),
+        include_usage: json
+            .pointer("/stream_options/include_usage")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AiStreamPlan {
+    chunks: Vec<Bytes>,
+    interval: Duration,
+    abort_after_chunks: bool,
+}
+
+/// Payload size for the `oversized` fixture modes, chosen so the surrounding
+/// event exceeds the gateway decoder's incomplete-event cap by a clear margin.
+/// Bound to the gateway constant on purpose: these fixtures exist to cross that
+/// limit, and a hardcoded literal would quietly stop doing so the next time the
+/// cap is raised.
+fn oversized_event_payload_bytes() -> usize {
+    edgion_gateway::sse::DEFAULT_MAX_PENDING_EVENT_BYTES + 4096
+}
+
+fn ai_stream_plan(mode: &str, observation: &str) -> AiStreamPlan {
+    let first = format!(
+        "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"fixed \"}}}}],\"mock\":{observation}}}\n\n"
+    );
+    let middle = "data: {\"id\":\"stream-fixture\",\"choices\":[{\"delta\":{\"content\":\"completion\"}}]}\n\n";
+    let usage = "data: {\"id\":\"stream-fixture\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}\n\n";
+    let done = "data: [DONE]\n\n";
+
+    match mode {
+        "guardrail_split" => {
+            let first = format!(
+                "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"fixed \"}}}}],\"mock\":{observation}}}\n\n"
+            );
+            AiStreamPlan {
+                chunks: format!("{first}{usage}{done}")
+                    .as_bytes()
+                    .chunks(7)
+                    .map(Bytes::copy_from_slice)
+                    .collect(),
+                interval: Duration::ZERO,
+                abort_after_chunks: false,
+            }
+        }
+        "guardrail_two_windows" => {
+            let first = format!(
+                "data: {{\"id\":\"stream-fixture\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"first\"}}}}],\"mock\":{observation}}}\n\n"
+            );
+            let second = "data: {\"id\":\"stream-fixture\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"second\"}}]}\n\n";
+            AiStreamPlan {
+                chunks: vec![
+                    Bytes::from(first),
+                    Bytes::from_static(second.as_bytes()),
+                    Bytes::from_static(usage.as_bytes()),
+                    Bytes::from_static(done.as_bytes()),
+                ],
+                interval: Duration::ZERO,
+                abort_after_chunks: false,
+            }
+        }
+        "split" => AiStreamPlan {
+            chunks: format!("{first}{usage}{done}")
+                .as_bytes()
+                .chunks(7)
+                .map(Bytes::copy_from_slice)
+                .collect(),
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        },
+        "missing_usage" => AiStreamPlan {
+            chunks: vec![Bytes::from(first), Bytes::from_static(done.as_bytes())],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        },
+        // One event remains incomplete until the delimiter well past the
+        // decoder's bounded inspection limit, deliberately crossing it. Sized
+        // from the constant rather than a literal so raising the cap cannot
+        // silently turn this fixture into an ordinary large event.
+        "oversized" => AiStreamPlan {
+            chunks: vec![
+                Bytes::from(format!(
+                    "data: {{\"id\":\"oversized-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\n",
+                    "x".repeat(oversized_event_payload_bytes())
+                )),
+                Bytes::from_static(usage.as_bytes()),
+                Bytes::from_static(done.as_bytes()),
+            ],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        },
+        "resilience_abort" => AiStreamPlan {
+            chunks: vec![
+                Bytes::from(first),
+                Bytes::from_static(middle.as_bytes()),
+                Bytes::from_static(
+                    b"data: {\"id\":\"stream-fixture\",\"choices\":[{\"delta\":{\"content\":\" before-abort\"}}]}\n\n",
+                ),
+            ],
+            interval: Duration::from_millis(50),
+            abort_after_chunks: true,
+        },
+        // Two completed poisoned events with one valid event between them.
+        // Invalid bytes are built directly so no UTF-8 text API can replace
+        // or reject them. The one-second cadence makes the client observe the
+        // valid middle event before the cumulative threshold terminates, while
+        // leaving a deterministic tail that would complete naturally later.
+        "quota_malformed" => AiStreamPlan {
+            chunks: vec![
+                Bytes::from_static(b"data: \xff\n\n"),
+                Bytes::from_static(
+                    b"data: {\"id\":\"quota-malformed-fixture\",\"choices\":[{\"delta\":{\"content\":\"valid-middle\"}}]}\n\n",
+                ),
+                // Leave the boundary probe incomplete in the same transport
+                // chunk as the second completed poisoned event. The gateway's
+                // injected error must supply its own leading blank-line
+                // boundary so this fragment cannot swallow the error event.
+                Bytes::from_static(b"data: \xfe\n\ndata: quota-malformed-boundary-probe"),
+                Bytes::from_static(
+                    b"data: {\"unreachable_marker\":\"quota-malformed-must-not-reach-client\"}\n\ndata: [DONE]\n\n",
+                ),
+            ],
+            interval: Duration::from_secs(1),
+            abort_after_chunks: false,
+        },
+        // Five real content deltas (one quota output unit each), spaced far
+        // apart (150ms) relative to the 10ms quota flush interval the
+        // `ai-proxy-quota-terminate` fixture plugin uses, so a real
+        // Redis-backed over-limit flip is always observed with a wide safety
+        // margin before the fixture's tail. The tail (usage + [DONE]) carries
+        // an `unreachable_marker` field so a test can assert its exact
+        // absence without needing to pin exactly which content chunk the
+        // gateway terminates on.
+        "quota_terminate" => {
+            let delta = |label: &str| {
+                Bytes::from(format!(
+                    "data: {{\"id\":\"quota-terminate-fixture\",\"choices\":[{{\"delta\":{{\"content\":\"{label}\"}}}}]}}\n\n"
+                ))
+            };
+            AiStreamPlan {
+                chunks: vec![
+                    delta("chunk-a"),
+                    delta("chunk-b"),
+                    delta("chunk-c"),
+                    delta("chunk-d"),
+                    delta("chunk-e"),
+                    Bytes::from_static(
+                        b"data: {\"id\":\"quota-terminate-fixture\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18},\"unreachable_marker\":\"quota-terminate-must-not-reach-client\"}\n\n",
+                    ),
+                    Bytes::from_static(b"data: [DONE]\n\n"),
+                ],
+                interval: Duration::from_millis(150),
+                abort_after_chunks: false,
+            }
+        }
+        // The same `quota_terminate` wire bytes, delivered one byte per write.
+        // A provider is free to segment wherever it likes, so the gateway's
+        // injected error event lands at an arbitrary offset -- one byte per
+        // write is simply the worst case stated explicitly, and it guarantees
+        // the mid-stream cut falls inside an SSE event rather than on a
+        // boundary. It also maximizes filter invocations and per-batch
+        // boundaries, which stresses the response-body sink's per-batch
+        // lifecycle far harder than any whole-event fixture.
+        //
+        // 2ms per byte keeps one ~90-byte event around 180ms, still an order
+        // of magnitude above the fixture plugin's 10ms quota flush interval,
+        // so the over-limit flip is observed with the same wide margin the
+        // paced fixture relies on. Unlike `quota_terminate` this mode declares
+        // no `content-length` (see `full_length` below): stale-length
+        // stripping is already covered there, and leaving it out keeps this
+        // fixture focused on the byte-boundary property.
+        "quota_terminate_byte_at_a_time" => {
+            let paced = ai_stream_plan("quota_terminate", observation);
+            AiStreamPlan {
+                chunks: paced
+                    .chunks
+                    .into_iter()
+                    .flat_map(|chunk| (0..chunk.len()).map(move |index| chunk.slice(index..index + 1)))
+                    .collect(),
+                interval: Duration::from_millis(2),
+                abort_after_chunks: false,
+            }
+        }
+        // Long enough for Task 9 to drop the downstream client before the
+        // provider reaches its final usage event.
+        "long" => {
+            let mut chunks = vec![Bytes::from(first)];
+            chunks.extend((0..100).map(|_| {
+                Bytes::from_static(
+                    b"data: {\"id\":\"long-fixture\",\"choices\":[{\"delta\":{\"content\":\"tick\"}}]}\n\n",
+                )
+            }));
+            chunks.push(Bytes::from_static(usage.as_bytes()));
+            chunks.push(Bytes::from_static(done.as_bytes()));
+            AiStreamPlan {
+                chunks,
+                interval: Duration::from_millis(100),
+                abort_after_chunks: false,
+            }
+        }
+        _ => AiStreamPlan {
+            chunks: vec![
+                Bytes::from(first),
+                Bytes::from_static(middle.as_bytes()),
+                Bytes::from_static(usage.as_bytes()),
+                Bytes::from_static(done.as_bytes()),
+            ],
+            interval: Duration::from_millis(250),
+            abort_after_chunks: false,
+        },
+    }
+}
+
+async fn guardrail_decision_handler(
+    Path(action): Path<String>,
+    request: AxumRequest<Body>,
+) -> axum::response::Response {
+    use axum::body::to_bytes;
+    use axum::http::{header::CONTENT_TYPE, StatusCode};
+    use axum::response::Response;
+
+    let Ok(body) = to_bytes(request.into_body(), 1024 * 1024).await else {
+        return Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"error":"request_too_large"}"#))
+            .unwrap();
+    };
+    let input: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    record_guardrail_observation(&action, &input);
+
+    let response = match action.as_str() {
+        "pass" => serde_json::json!({"version": "v1", "action": "pass"}).to_string(),
+        "reject" => serde_json::json!({
+            "version": "v1",
+            "action": "reject",
+            "code": "fixture_policy",
+            "reason": "Rejected by the integration fixture"
+        })
+        .to_string(),
+        "replace" => {
+            let replacements = input
+                .get("windows")
+                .and_then(serde_json::Value::as_array)
+                .map(|windows| {
+                    windows
+                        .iter()
+                        .map(|window| {
+                            serde_json::json!({
+                                "choiceIndex": window.get("choiceIndex").cloned().unwrap_or_default(),
+                                "field": window.get("field").cloned().unwrap_or_default(),
+                                "current": "reviewed"
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "version": "v1",
+                "action": "replace",
+                "replacements": replacements
+            })
+            .to_string()
+        }
+        // Deliberately valid UTF-8 but invalid JSON. The Guardrail fail-open
+        // route must release the held original window byte-identically.
+        "malformed" => "{not-json".to_string(),
+        "timeout" => {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            serde_json::json!({"version": "v1", "action": "pass"}).to_string()
+        }
+        _ => serde_json::json!({"error": "unknown_fixture_action"}).to_string(),
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(response))
+        .unwrap()
+}
+
+fn record_guardrail_observation(action: &str, input: &serde_json::Value) {
+    let object = input.as_object();
+    let windows = input
+        .get("windows")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut keys = windows
+        .iter()
+        .map(|window| {
+            let choice = window.get("choiceIndex").and_then(serde_json::Value::as_u64);
+            let field = window.pointer("/field/type").and_then(serde_json::Value::as_str);
+            let tool = window
+                .pointer("/field/toolCallIndex")
+                .and_then(serde_json::Value::as_u64);
+            (choice, field.map(str::to_owned), tool)
+        })
+        .collect::<Vec<_>>();
+    let original_keys = keys.clone();
+    keys.sort();
+    let sorted_unique_keys = original_keys == keys && keys.windows(2).all(|pair| pair[0] != pair[1]);
+    let canonical_content_window = windows.len() == 1
+        && windows[0].get("choiceIndex").and_then(serde_json::Value::as_u64) == Some(0)
+        && windows[0].pointer("/field/type").and_then(serde_json::Value::as_str) == Some("content")
+        && windows[0].get("context").is_some_and(serde_json::Value::is_string)
+        && windows[0].get("current").is_some_and(serde_json::Value::is_string)
+        && windows[0].as_object().is_some_and(|window| window.len() == 4);
+
+    let mut observations = GUARDRAIL_OBSERVATIONS.lock();
+    let observation = observations.entry(action.to_string()).or_default();
+    observation.calls = observation.calls.saturating_add(1);
+    observation.total_windows = observation.total_windows.saturating_add(windows.len() as u64);
+    observation.last_window_count = windows.len();
+    observation.version_v1 = input.get("version").and_then(serde_json::Value::as_str) == Some("v1");
+    observation.minimal_envelope = object
+        .is_some_and(|object| object.len() == 2 && object.contains_key("version") && object.contains_key("windows"));
+    observation.sorted_unique_keys = sorted_unique_keys;
+    observation.canonical_content_window = canonical_content_window;
+}
+
+async fn guardrail_observation_handler(Path(action): Path<String>) -> impl IntoResponse {
+    let observation = GUARDRAIL_OBSERVATIONS.lock().get(&action).cloned().unwrap_or_default();
+    axum::Json(observation)
+}
+
+async fn guardrail_reset_handler() -> axum::http::StatusCode {
+    GUARDRAIL_OBSERVATIONS.lock().clear();
+    axum::http::StatusCode::NO_CONTENT
+}
+
+async fn ai_provider_handler(
+    Path(path): Path<String>,
+    Query(query): Query<AiProviderQuery>,
+    request: AxumRequest<Body>,
+) -> axum::response::Response {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    let (parts, body) = request.into_parts();
+    let Ok(body) = to_bytes(body, 1024 * 1024).await else {
+        return Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .body(Body::empty())
+            .unwrap();
+    };
+    let observation = ai_provider_observation(&path, &query, &parts.headers, &body);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let trace_id = parts
+        .headers
+        .get("x-trace-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    // `quota_terminate_force_sse` deliberately ignores the client's declared
+    // `stream` field: it simulates a provider that answers with an SSE body
+    // even though the caller asked for a plain JSON completion, which is the
+    // only way to observe the `requested_streaming` gate from outside the
+    // process (Edgion's own `requested_streaming` comes from the client
+    // request, not from the wire shape of the provider's answer).
+    let force_sse = query.mock_mode.as_deref() == Some("quota_terminate_force_sse");
+    let streaming = force_sse || json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
+
+    if let Some(trace_id) = trace_id.as_deref() {
+        let exhaustion_backend = if path.starts_with("credential-exhaustion-primary/") {
+            Some("primary")
+        } else if path.starts_with("credential-exhaustion-secondary/") {
+            Some("secondary")
+        } else {
+            None
+        };
+        if let Some(backend) = exhaustion_backend {
+            AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS
+                .lock()
+                .entry(trace_id.to_string())
+                .or_default()
+                .push(AiCredentialExhaustionObservation {
+                    backend,
+                    credential_generation: observation.credential_generation,
+                });
+        }
+        let slot = if path.starts_with("resilience-429/") {
+            Some(0)
+        } else if path.starts_with("resilience-stream/") {
+            Some(2)
+        } else if path.starts_with("resilience-stream-fallback/") {
+            Some(3)
+        } else if path.starts_with("resilience-half-open-primary/") {
+            Some(4)
+        } else if path.starts_with("resilience-half-open-fallback/") {
+            Some(5)
+        } else {
+            None
+        };
+        if let Some(slot) = slot {
+            let fixture_id = parts
+                .headers
+                .get("x-resilience-fixture-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(trace_id);
+            AI_RESILIENCE_STATE
+                .lock()
+                .entry(fixture_id.to_string())
+                .or_default()
+                .counts[slot] += 1;
+        }
+    }
+
+    if path.starts_with("resilience-429/") {
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("content-type", "application/json")
+            .header("x-ratelimit-reset-requests", "1500ms")
+            .body(Body::from(
+                r#"{"error":{"message":"private resilience fixture detail"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if path.starts_with("resilience-half-open-primary/") {
+        let fixture_id = parts
+            .headers
+            .get("x-resilience-fixture-id")
+            .and_then(|value| value.to_str().ok())
+            .or_else(|| parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()));
+        let state = fixture_id
+            .and_then(|fixture_id| {
+                AI_RESILIENCE_STATE.lock().get(fixture_id).map(|state| {
+                    (
+                        state.half_open_primary_mode,
+                        std::sync::Arc::clone(&state.half_open_probe_release),
+                    )
+                })
+            })
+            .unwrap_or_else(|| {
+                (
+                    AiResiliencePrimaryMode::default(),
+                    std::sync::Arc::new(tokio::sync::Notify::new()),
+                )
+            });
+        let (mode, probe_release) = state;
+        match mode {
+            AiResiliencePrimaryMode::Fail => {
+                return Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"error":{"message":"private half-open fixture detail"}}"#,
+                    ))
+                    .unwrap();
+            }
+            AiResiliencePrimaryMode::ProbeSuccess | AiResiliencePrimaryMode::ProbeFail => {
+                let gate_timeout = if matches!(mode, AiResiliencePrimaryMode::ProbeFail) {
+                    Duration::from_secs(120)
+                } else {
+                    Duration::from_secs(10)
+                };
+                let _ = tokio::time::timeout(gate_timeout, probe_release.notified()).await;
+                if matches!(mode, AiResiliencePrimaryMode::ProbeFail) {
+                    return Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"error":{"message":"fixed gated retry failure"}}"#))
+                        .unwrap();
+                }
+            }
+            AiResiliencePrimaryMode::Healthy => {}
+        }
+    }
+
+    if path.starts_with("fail-503/") {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"error":{"message":"fixed retryable provider failure"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if path.starts_with("credential-exhaustion-") {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"error":{"message":"fixed retryable provider failure"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if !streaming {
+        let response = serde_json::json!({
+            "id": "completion-fixture",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "fixed completion"}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            "mock": observation,
+        });
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(response.to_string()))
+            .unwrap();
+    }
+
+    let observation = serde_json::to_string(&observation).unwrap();
+    let mode = if path.starts_with("resilience-stream/") {
+        "resilience_abort"
+    } else {
+        match query.mock_mode.as_deref().unwrap_or("paced") {
+            // The force-sse marker only changes admission (`streaming` above);
+            // the wire fixture itself is the same `quota_terminate` plan a
+            // normal streaming request would get.
+            "quota_terminate_force_sse" => "quota_terminate",
+            other => other,
+        }
+    };
+    let long_trace_id = (mode == "long").then_some(trace_id).flatten();
+    if let Some(trace_id) = long_trace_id.as_ref() {
+        AI_LONG_STREAM_OBSERVATIONS
+            .lock()
+            .insert(trace_id.clone(), AiLongStreamObservation::default());
+    }
+    let plan = ai_stream_plan(mode, &observation);
+    // Simulates a provider that pre-declares `Content-Length` for its full,
+    // untruncated SSE body (unusual, but legal) so the fixture can prove
+    // Edgion actually strips a stale length rather than merely never having
+    // one to strip in the first place — every other streaming fixture here
+    // is naturally unbounded and would pass a framing check trivially.
+    let full_length = (mode == "quota_terminate").then(|| plan.chunks.iter().map(Bytes::len).sum::<usize>());
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for chunk in plan.chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                if let Some(trace_id) = long_trace_id.as_ref() {
+                    if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace_id) {
+                        state.upstream_cancelled = true;
+                    }
+                }
+                return;
+            }
+            if let Some(trace_id) = long_trace_id.as_ref() {
+                if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace_id) {
+                    state.chunks_queued = state.chunks_queued.saturating_add(1);
+                }
+            }
+            if !plan.interval.is_zero() {
+                tokio::time::sleep(plan.interval).await;
+            }
+        }
+        if plan.abort_after_chunks {
+            let _ = tx
+                .send(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "intentional AI provider fixture abort",
+                )))
+                .await;
+        }
+        if let Some(trace_id) = long_trace_id.as_ref() {
+            if let Some(state) = AI_LONG_STREAM_OBSERVATIONS.lock().get_mut(trace_id) {
+                state.provider_completed = true;
+            }
+        }
+    });
+
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache");
+    if let Some(full_length) = full_length {
+        builder = builder.header("content-length", full_length.to_string());
+    }
+    builder
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
+}
+
+async fn ai_long_stream_observation_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    let observation = {
+        let mut observations = AI_LONG_STREAM_OBSERVATIONS.lock();
+        let observation = observations.get(&trace_id).cloned();
+        if observation
+            .as_ref()
+            .is_some_and(|state| state.upstream_cancelled || state.provider_completed)
+        {
+            observations.remove(&trace_id);
+        }
+        observation
+    };
+    axum::Json(serde_json::json!({
+        "found": observation.is_some(),
+        "observation": observation,
+    }))
+}
+
+async fn ai_resilience_count_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    let counts = AI_RESILIENCE_STATE
+        .lock()
+        .remove(&trace_id)
+        .map(|state| state.counts)
+        .unwrap_or_default();
+    axum::Json(ai_resilience_counts_json(counts))
+}
+
+async fn ai_resilience_counts_handler(Path(fixture_id): Path<String>) -> impl IntoResponse {
+    let counts = AI_RESILIENCE_STATE
+        .lock()
+        .get(&fixture_id)
+        .map(|state| state.counts)
+        .unwrap_or_default();
+    axum::Json(ai_resilience_counts_json(counts))
+}
+
+fn ai_resilience_counts_json(counts: [u64; 6]) -> serde_json::Value {
+    serde_json::json!({
+        "rate_limited": counts[0],
+        "healthy": counts[1],
+        "stream_primary": counts[2],
+        "stream_fallback": counts[3],
+        "half_open_primary": counts[4],
+        "half_open_fallback": counts[5],
+    })
+}
+
+async fn ai_resilience_mode_handler(
+    Path((fixture_id, backend, mode)): Path<(String, String, String)>,
+) -> axum::http::StatusCode {
+    if fixture_id.len() > 128 || backend != "half-open-primary" {
+        return axum::http::StatusCode::BAD_REQUEST;
+    }
+    let mode = match mode.as_str() {
+        "healthy" => AiResiliencePrimaryMode::Healthy,
+        "fail" => AiResiliencePrimaryMode::Fail,
+        "probe-success" => AiResiliencePrimaryMode::ProbeSuccess,
+        "probe-fail" => AiResiliencePrimaryMode::ProbeFail,
+        _ => return axum::http::StatusCode::BAD_REQUEST,
+    };
+    let mut fixtures = AI_RESILIENCE_STATE.lock();
+    let state = fixtures.entry(fixture_id).or_default();
+    state.half_open_primary_mode = mode;
+    if matches!(
+        mode,
+        AiResiliencePrimaryMode::ProbeSuccess | AiResiliencePrimaryMode::ProbeFail
+    ) {
+        state.half_open_probe_release = std::sync::Arc::new(tokio::sync::Notify::new());
+    }
+    axum::http::StatusCode::NO_CONTENT
+}
+
+async fn ai_resilience_release_handler(Path(fixture_id): Path<String>) -> axum::http::StatusCode {
+    let Some(release) = AI_RESILIENCE_STATE
+        .lock()
+        .get(&fixture_id)
+        .map(|state| std::sync::Arc::clone(&state.half_open_probe_release))
+    else {
+        return axum::http::StatusCode::NOT_FOUND;
+    };
+    release.notify_one();
+    axum::http::StatusCode::NO_CONTENT
+}
+
+async fn ai_credential_exhaustion_observations_handler(Path(trace_id): Path<String>) -> impl IntoResponse {
+    let observations = AI_CREDENTIAL_EXHAUSTION_OBSERVATIONS
+        .lock()
+        .remove(&trace_id)
+        .unwrap_or_default();
+    axum::Json(serde_json::json!({ "observations": observations }))
+}
+
+const ANTHROPIC_PROVIDER_KEY: &str = "anthropic-provider-test-key";
+
+#[derive(Debug, serde::Serialize)]
+struct AnthropicProviderObservation {
+    fixture_id: &'static str,
+    credential_valid: bool,
+    authorization_absent: bool,
+    version_valid: bool,
+    beta_absent: bool,
+    accept_encoding_absent: bool,
+    host_valid: bool,
+    path_valid: bool,
+    query_absent: bool,
+    model_canonical: bool,
+    max_tokens_valid: bool,
+    messages_valid: bool,
+    system_valid: bool,
+    openai_fields_absent: bool,
+}
+
+fn anthropic_provider_observation(
+    path: &str,
+    uri: &axum::http::Uri,
+    headers: &axum::http::HeaderMap,
+    body: &serde_json::Value,
+) -> AnthropicProviderObservation {
+    let messages_valid = body
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|messages| {
+            !messages.is_empty()
+                && messages.iter().all(|message| {
+                    message
+                        .get("role")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|role| matches!(role, "user" | "assistant"))
+                })
+        });
+    AnthropicProviderObservation {
+        fixture_id: "anthropic-native-v1",
+        credential_valid: headers.get("x-api-key").and_then(|value| value.to_str().ok())
+            == Some(ANTHROPIC_PROVIDER_KEY),
+        authorization_absent: !headers.contains_key(axum::http::header::AUTHORIZATION),
+        version_valid: headers.get("anthropic-version").and_then(|value| value.to_str().ok()) == Some("2023-06-01"),
+        beta_absent: !headers.contains_key("anthropic-beta"),
+        accept_encoding_absent: !headers.contains_key(axum::http::header::ACCEPT_ENCODING),
+        host_valid: headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|host| host == "127.0.0.1:30001"),
+        path_valid: path == "prefix/v1/messages",
+        query_absent: uri.query().is_none(),
+        model_canonical: body.get("model").and_then(serde_json::Value::as_str) == Some("claude-fixture"),
+        max_tokens_valid: body.get("max_tokens").and_then(serde_json::Value::as_u64) == Some(64),
+        messages_valid,
+        system_valid: body
+            .get("system")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blocks| {
+                !blocks.is_empty()
+                    && blocks.iter().all(|block| {
+                        block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                            && block.get("text").and_then(serde_json::Value::as_str).is_some()
+                    })
+            }),
+        openai_fields_absent: !body.as_object().is_some_and(|object| {
+            object.contains_key("max_completion_tokens") || object.contains_key("stream_options")
+        }),
+    }
+}
+
+fn anthropic_message_response(content: serde_json::Value, stop_reason: &str) -> axum::response::Response {
+    let response = serde_json::json!({
+        "id": "msg_fixture",
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "model": "claude-provider-alias",
+        "stop_reason": stop_reason,
+        "stop_sequence": null,
+        "usage": {
+            "input_tokens": 5,
+            "cache_creation_input_tokens": 3,
+            "cache_read_input_tokens": 2,
+            "output_tokens": 7
+        }
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .header("request-id", "provider-request-id-must-be-stripped")
+        .body(Body::from(response.to_string()))
+        .unwrap()
+}
+
+fn anthropic_event(name: &str, value: serde_json::Value) -> Bytes {
+    Bytes::from(format!("event: {name}\ndata: {}\n\n", value))
+}
+
+fn anthropic_stream_plan(mode: &str, observation: &AnthropicProviderObservation) -> AiStreamPlan {
+    if mode == "malformed" {
+        return AiStreamPlan {
+            chunks: vec![Bytes::from_static(b"event: message_start\ndata: {not-json}\n\n")],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        };
+    }
+    if mode == "oversized" {
+        return AiStreamPlan {
+            chunks: vec![Bytes::from(format!(
+                "event: future_event\ndata: {{\"type\":\"future_event\",\"payload\":\"{}\"}}\n\n",
+                "x".repeat(oversized_event_payload_bytes())
+            ))],
+            interval: Duration::ZERO,
+            abort_after_chunks: false,
+        };
+    }
+
+    let start = anthropic_event(
+        "message_start",
+        serde_json::json!({
+            "type":"message_start",
+            "message":{
+                "id":"msg_stream_fixture",
+                "type":"message",
+                "role":"assistant",
+                "content":[],
+                "model":"claude-provider-alias",
+                "stop_reason":null,
+                "stop_sequence":null,
+                "usage":{
+                    "input_tokens":5,
+                    "cache_creation_input_tokens":3,
+                    "cache_read_input_tokens":2,
+                    "output_tokens":0
+                }
+            }
+        }),
+    );
+    let (block_start, deltas, stop_reason) = if mode == "stream_tool" {
+        (
+            anthropic_event(
+                "content_block_start",
+                serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_fixture","name":"weather","input":{}}}),
+            ),
+            vec![
+                anthropic_event(
+                    "content_block_delta",
+                    serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}),
+                ),
+                anthropic_event(
+                    "content_block_delta",
+                    serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}),
+                ),
+            ],
+            "tool_use",
+        )
+    } else {
+        let observation = serde_json::to_string(observation).unwrap_or_else(|_| "{}".to_string());
+        (
+            anthropic_event(
+                "content_block_start",
+                serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            ),
+            vec![anthropic_event(
+                "content_block_delta",
+                serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":observation}}),
+            )],
+            "end_turn",
+        )
+    };
+    let mut chunks = vec![start, block_start];
+    chunks.extend(deltas);
+    chunks.extend([
+        anthropic_event(
+            "content_block_stop",
+            serde_json::json!({"type":"content_block_stop","index":0}),
+        ),
+        anthropic_event(
+            "message_delta",
+            serde_json::json!({
+                "type":"message_delta",
+                "delta":{"stop_reason":stop_reason,"stop_sequence":null},
+                "usage":{"output_tokens":7}
+            }),
+        ),
+        anthropic_event("message_stop", serde_json::json!({"type":"message_stop"})),
+    ]);
+    AiStreamPlan {
+        chunks,
+        interval: if mode == "paced" {
+            Duration::from_millis(175)
+        } else {
+            Duration::ZERO
+        },
+        abort_after_chunks: false,
+    }
+}
+
+async fn anthropic_provider_handler(Path(path): Path<String>, request: AxumRequest<Body>) -> axum::response::Response {
+    ANTHROPIC_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (parts, body) = request.into_parts();
+    if parts
+        .headers
+        .get("x-resilience-case")
+        .and_then(|value| value.to_str().ok())
+        == Some("cross-provider")
+    {
+        if let Some(trace_id) = parts.headers.get("x-trace-id").and_then(|value| value.to_str().ok()) {
+            let fixture_id = parts
+                .headers
+                .get("x-resilience-fixture-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(trace_id);
+            AI_RESILIENCE_STATE
+                .lock()
+                .entry(fixture_id.to_string())
+                .or_default()
+                .counts[1] += 1;
+        }
+    }
+    let mode = parts
+        .headers
+        .get("x-anthropic-fixture-mode")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("default")
+        .to_string();
+    let Ok(body) = axum::body::to_bytes(body, 1024 * 1024).await else {
+        return axum::response::Response::builder()
+            .status(axum::http::StatusCode::PAYLOAD_TOO_LARGE)
+            .body(Body::empty())
+            .unwrap();
+    };
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let observation = anthropic_provider_observation(&path, &parts.uri, &parts.headers, &json);
+
+    let bodyless_status = match mode.as_str() {
+        "bodyless_200" => Some(axum::http::StatusCode::OK),
+        "bodyless_sse_200" => Some(axum::http::StatusCode::OK),
+        "bodyless_503" => Some(axum::http::StatusCode::SERVICE_UNAVAILABLE),
+        _ => None,
+    };
+    if let Some(status) = bodyless_status {
+        let content_type = if mode == "bodyless_sse_200" {
+            "text/event-stream"
+        } else {
+            "application/json"
+        };
+        return axum::response::Response::builder()
+            .status(status)
+            .header("content-type", content_type)
+            .header("request-id", "bodyless-provider-id-must-be-stripped")
+            .header("x-provider-private", "bodyless-private-detail")
+            .body(Body::empty())
+            .unwrap();
+    }
+
+    let fixed_status = match mode.as_str() {
+        "status_400" => Some(axum::http::StatusCode::BAD_REQUEST),
+        "status_401" => Some(axum::http::StatusCode::UNAUTHORIZED),
+        "status_429" => Some(axum::http::StatusCode::TOO_MANY_REQUESTS),
+        _ => None,
+    };
+    if let Some(status) = fixed_status {
+        return axum::response::Response::builder()
+            .status(status)
+            .header("content-type", "application/json")
+            .header("request-id", "provider-request-id-must-be-stripped")
+            .header("location", "http://provider.internal/private")
+            .header("set-cookie", "provider_session=must-not-pass")
+            .header("retry-after", "3")
+            .body(Body::from(
+                r#"{"type":"error","error":{"type":"provider_private","message":"provider private detail"}}"#,
+            ))
+            .unwrap();
+    }
+
+    if mode == "nonstream_tool" {
+        let tools_valid = json
+            .get("tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tools| {
+                tools.len() == 2
+                    && tools.iter().all(|tool| {
+                        tool.get("name").and_then(serde_json::Value::as_str).is_some()
+                            && tool.get("input_schema").is_some_and(serde_json::Value::is_object)
+                    })
+            });
+        if !tools_valid {
+            return axum::response::Response::builder()
+                .status(axum::http::StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .unwrap();
+        }
+        return anthropic_message_response(
+            serde_json::json!([
+                {"type":"tool_use","id":"toolu_one","name":"weather","input":{"city":"Paris"}},
+                {"type":"tool_use","id":"toolu_two","name":"clock","input":{"zone":"UTC"}}
+            ]),
+            "tool_use",
+        );
+    }
+
+    let streaming = json.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
+    if !streaming {
+        let observation = serde_json::to_string(&observation).unwrap_or_else(|_| "{}".to_string());
+        return anthropic_message_response(serde_json::json!([{"type":"text","text":observation}]), "end_turn");
+    }
+
+    let plan = anthropic_stream_plan(&mode, &observation);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for chunk in plan.chunks {
+            if tx.send(Ok(chunk)).await.is_err() {
+                return;
+            }
+            if !plan.interval.is_zero() {
+                tokio::time::sleep(plan.interval).await;
+            }
+        }
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("request-id", "provider-request-id-must-be-stripped")
+        .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .unwrap()
+}
+
+async fn anthropic_request_count_handler() -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "count": ANTHROPIC_REQUEST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+    }))
+}
+
 /// /cb-fail/{test_id}/{fail_count}
 /// Returns 502 for the first `fail_count` calls per test_id, then 200.
 async fn cb_fail_handler(Path((test_id, fail_count)): Path<(String, u32)>) -> impl IntoResponse {
@@ -886,6 +2448,83 @@ async fn cb_reset_handler() -> impl IntoResponse {
     (StatusCode::OK, "cb-reset-ok")
 }
 
+// ============================================================================
+// Fake HTTP DNS endpoint (for httpdns resolver integration tests)
+// ============================================================================
+
+/// Parse the `/dns/resolve` query string into `(host, ips)`.
+///
+/// - `host` is the domain being resolved (empty when absent).
+/// - `ips` come from an optional `ip=<a>[,<b>...]` param; when absent the
+///   endpoint defaults to `127.0.0.1` (the local test backend), so a scenario
+///   can point an ExternalName at the loopback backend without a real DNS.
+///
+/// Values are used verbatim (no percent-decoding) — tests pass plain IP literals.
+fn parse_dns_query(query: &str) -> (String, Vec<String>) {
+    let mut host = String::new();
+    let mut ips: Vec<String> = Vec::new();
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let mut it = pair.splitn(2, '=');
+        let key = it.next().unwrap_or("");
+        let val = it.next().unwrap_or("");
+        match key {
+            "host" => host = val.to_string(),
+            "ip" => {
+                for ip in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    ips.push(ip.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if ips.is_empty() {
+        ips.push("127.0.0.1".to_string());
+    }
+    (host, ips)
+}
+
+/// `/dns/resolve?host=<domain>[&ip=<ip>...]` — the fake HTTP DNS endpoint.
+///
+/// Returns the generic httpdns response body `{"ips":[...]}` (matching the
+/// default `HttpDnsResponseFormat` `ipPath: ips`) and records one resolution for
+/// `host` so caching tests can assert the endpoint was (or was not) re-hit.
+async fn dns_resolve_handler(axum::extract::RawQuery(query): axum::extract::RawQuery) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let raw = query.unwrap_or_default();
+    let (host, ips) = parse_dns_query(&raw);
+
+    {
+        let mut store = DNS_RESOLVE_COUNTER.lock();
+        *store.entry(host.clone()).or_insert(0) += 1;
+        info!("dns/resolve: host={} ips={:?}", host, ips);
+    }
+
+    (StatusCode::OK, Json(json!({ "ips": ips })))
+}
+
+/// `/dns/hits/{host}` — resolution count for `host` (0 when never resolved).
+async fn dns_hits_handler(Path(host): Path<String>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let hits = DNS_RESOLVE_COUNTER.lock().get(&host).copied().unwrap_or(0);
+    (StatusCode::OK, Json(json!({ "host": host, "hits": hits })))
+}
+
+/// `/dns/reset` — clear all HTTP DNS resolve counters.
+async fn dns_reset_handler() -> impl IntoResponse {
+    use axum::http::StatusCode;
+    let mut store = DNS_RESOLVE_COUNTER.lock();
+    let count = store.len();
+    store.clear();
+    info!("dns/reset: cleared {} host entries", count);
+    (StatusCode::OK, format!("dns-reset-ok: cleared {}", count))
+}
+
 /// Webhook resolve handler — returns resolved key value AND echoes the inbound
 /// request so integration tests can verify outbound-request construction.
 ///
@@ -901,7 +2540,8 @@ async fn cb_reset_handler() -> impl IntoResponse {
 ///     "method":"GET","path":"/webhook/resolve","query":"a=b",
 ///     "echo_headers":{"<lowercased-name>":"<value>", ...},
 ///     "echo_args":{"<name>":"<value>", ...},
-///     "echo_cookies":{"<name>":"<value>", ...}
+///     "echo_cookies":{"<name>":"<value>", ...},
+///     "echo_body": <parsed JSON of the received request body, or null>
 ///   }}
 ///   ```
 ///
@@ -909,6 +2549,9 @@ async fn cb_reset_handler() -> impl IntoResponse {
 /// webhook `extract` of e.g. `data.echo_headers.x-source` surfaces the outbound
 /// header value into a ctx var (and thus the access log) for assertion. The
 /// `data.path` field lets path-override tests prove which path was called.
+/// `echo_body` mirrors the same idea for the request body: it is the request
+/// body parsed as JSON (so `extract` can walk into fields like
+/// `data.echo_body.userId`), or `Null` when the body is empty or not valid JSON.
 ///
 /// If `X-Tenant-Id` is missing, returns a default resolution. The legacy
 /// `user_id`/`tenant` body keys and response headers are preserved so existing
@@ -917,6 +2560,7 @@ async fn cb_reset_handler() -> impl IntoResponse {
 /// Note: query/cookie values are echoed verbatim (no percent-decoding); tests
 /// that assert on them use plain alphanumeric values.
 async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::Json;
     use serde_json::json;
@@ -926,7 +2570,13 @@ async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
 
-    let headers = req.headers();
+    let (parts, body) = req.into_parts();
+    let body_bytes = to_bytes(body, 8 * 1024).await.unwrap_or_default();
+    // Echo the received request body: parsed JSON when possible (lets fixtures
+    // extract data.echo_body.<field>), else Null.
+    let echo_body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
+
+    let headers = &parts.headers;
     let tenant = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
@@ -978,6 +2628,7 @@ async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             "echo_headers": echo_headers,
             "echo_args": echo_args,
             "echo_cookies": echo_cookies,
+            "echo_body": echo_body,
         }
     });
 
@@ -1131,10 +2782,40 @@ impl TestServiceImpl {
 #[tonic::async_trait]
 impl TestService for TestServiceImpl {
     async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloResponse>, Status> {
+        // Echo any `x-*` request metadata into the response message. gRPC has
+        // no generic header-echo endpoint the way the HTTP catch-all handler
+        // does (`echo_handler`/`echo_post_handler` above); this is the
+        // minimal extension needed to prove GRPCRoute filter inheritance
+        // (e.g. a delegation parent's RequestHeaderModifier) reaches the
+        // backend, mirroring what the HTTP echo handlers already do for
+        // HTTPRoute filter tests. Only `x-*` names are echoed to keep the
+        // dump small and avoid leaking internal gRPC metadata.
+        let echoed: Vec<String> = request
+            .metadata()
+            .iter()
+            .filter_map(|kv| match kv {
+                tonic::metadata::KeyAndValueRef::Ascii(key, value) => {
+                    let key = key.as_str();
+                    if key.starts_with("x-") {
+                        value.to_str().ok().map(|v| format!("{key}={v}"))
+                    } else {
+                        None
+                    }
+                }
+                tonic::metadata::KeyAndValueRef::Binary(_, _) => None,
+            })
+            .collect();
+
         let name = request.into_inner().name;
 
+        let message = if echoed.is_empty() {
+            format!("Hello, {}!", name)
+        } else {
+            format!("Hello, {}! metadata=({})", name, echoed.join(","))
+        };
+
         let response = HelloResponse {
-            message: format!("Hello, {}!", name),
+            message,
             server_addr: self.server_addr.clone(),
         };
 
@@ -1299,9 +2980,9 @@ mod ext_proc_server {
     use anyhow::Result;
     use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
     use edgion_common::ext_proc::proto::{
-        common_response::ResponseStatus, processing_request, processing_response, CommonResponse, HeaderAppendAction,
-        HeaderMutation, HeaderValue as EpHeaderValue, HeaderValueOption, HeadersResponse, HttpStatus,
-        ImmediateResponse, ProcessingRequest, ProcessingResponse,
+        body_mutation, common_response::ResponseStatus, processing_request, processing_response, BodyMutation,
+        BodyResponse, CommonResponse, HeaderAppendAction, HeaderMutation, HeaderValue as EpHeaderValue,
+        HeaderValueOption, HeadersResponse, HttpStatus, ImmediateResponse, ProcessingRequest, ProcessingResponse,
     };
     use futures::Stream;
     use tonic::{transport::Server, Request, Response, Status};
@@ -1311,6 +2992,7 @@ mod ext_proc_server {
     /// Trigger: make the processor emit a malformed (empty) verdict, to exercise
     /// the gateway's fail-mode handling of an unusable answer.
     const BAD_VERDICT_HEADER: &str = "x-ext-proc-badverdict";
+    const TEST_MODE_HEADER: &str = "x-ext-proc-test-mode";
 
     #[derive(Default)]
     struct FakeProcessor;
@@ -1347,6 +3029,7 @@ mod ext_proc_server {
         };
         ProcessingResponse {
             response: Some(response),
+            mode_override: None,
         }
     }
 
@@ -1359,14 +3042,93 @@ mod ext_proc_server {
                     remove_headers: Vec::new(),
                 }),
                 body: b"blocked by ext_proc".to_vec(),
+                grpc_status: None,
                 details: String::new(),
             })),
+            mode_override: None,
         }
     }
 
-    fn handle(req: ProcessingRequest) -> Option<ProcessingResponse> {
-        match req.request? {
+    fn request_body_verdict_with(body: &'static [u8]) -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::RequestBody(BodyResponse {
+                response: Some(CommonResponse {
+                    status: ResponseStatus::Continue as i32,
+                    header_mutation: None,
+                    body_mutation: Some(BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(body.to_vec())),
+                    }),
+                    trailers: None,
+                    clear_route_cache: false,
+                }),
+            })),
+            mode_override: None,
+        }
+    }
+
+    fn response_body_verdict_with(body: &'static [u8]) -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::ResponseBody(BodyResponse {
+                response: Some(CommonResponse {
+                    status: ResponseStatus::Continue as i32,
+                    header_mutation: None,
+                    body_mutation: Some(BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(body.to_vec())),
+                    }),
+                    trailers: None,
+                    clear_route_cache: false,
+                }),
+            })),
+            mode_override: None,
+        }
+    }
+
+    fn request_headers_verdict(status: ResponseStatus, body: Option<&'static [u8]>) -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::RequestHeaders(HeadersResponse {
+                response: Some(CommonResponse {
+                    status: status as i32,
+                    header_mutation: None,
+                    body_mutation: body.map(|body| BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(body.to_vec())),
+                    }),
+                    trailers: None,
+                    clear_route_cache: false,
+                }),
+            })),
+            mode_override: None,
+        }
+    }
+
+    fn header_value(headers: &edgion_common::ext_proc::proto::HeaderMap, name: &str) -> Option<String> {
+        headers
+            .headers
+            .iter()
+            .find(|header| header.key.eq_ignore_ascii_case(name))
+            .map(|header| {
+                if header.raw_value.is_empty() {
+                    header.value.clone()
+                } else {
+                    String::from_utf8_lossy(&header.raw_value).into_owned()
+                }
+            })
+    }
+
+    fn handle(
+        req: ProcessingRequest,
+        mode: &mut Option<String>,
+        request_phase_seen: &mut bool,
+    ) -> (Option<ProcessingResponse>, bool) {
+        let Some(request) = req.request else {
+            return (None, false);
+        };
+        match request {
             processing_request::Request::RequestHeaders(h) => {
+                *request_phase_seen = true;
+                *mode = h
+                    .headers
+                    .as_ref()
+                    .and_then(|headers| header_value(headers, TEST_MODE_HEADER));
                 let has = |name: &str| {
                     h.headers
                         .as_ref()
@@ -1375,16 +3137,55 @@ mod ext_proc_server {
                 };
                 if has(BAD_VERDICT_HEADER) {
                     // Malformed verdict: an empty ProcessingResponse (no oneof).
-                    return Some(ProcessingResponse { response: None });
+                    return (
+                        Some(ProcessingResponse {
+                            response: None,
+                            mode_override: None,
+                        }),
+                        false,
+                    );
                 }
-                Some(if has(BLOCK_HEADER) {
-                    immediate_403()
-                } else {
-                    headers_verdict(true, "x-ext-proc-req")
-                })
+                match mode.as_deref() {
+                    Some("wrong-order") => (Some(request_body_verdict_with(b"wrong-phase-body")), false),
+                    Some("missing-body") => (Some(headers_verdict(true, "x-ext-proc-req")), true),
+                    Some("close-before-verdict") => (None, true),
+                    Some("continue-and-replace") => (
+                        Some(request_headers_verdict(
+                            ResponseStatus::ContinueAndReplace,
+                            Some(b"replaced-at-headers"),
+                        )),
+                        false,
+                    ),
+                    _ => (
+                        Some(if has(BLOCK_HEADER) {
+                            immediate_403()
+                        } else {
+                            headers_verdict(true, "x-ext-proc-req")
+                        }),
+                        false,
+                    ),
+                }
             }
-            processing_request::Request::ResponseHeaders(_) => Some(headers_verdict(false, "x-ext-proc-resp")),
-            _ => None,
+            processing_request::Request::ResponseHeaders(_) if *request_phase_seen => match mode.as_deref() {
+                Some("close-on-response-headers") => (None, true),
+                _ => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
+            },
+            processing_request::Request::RequestBody(_) => {
+                let response = match mode.as_deref() {
+                    Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
+                    Some("bodyless-create") => request_body_verdict_with(b"created-by-ext-proc"),
+                    // Streamed mid-body rejection: the first body chunk draws an
+                    // ImmediateResponse instead of a body verdict.
+                    Some("body-block") => immediate_403(),
+                    _ => request_body_verdict_with(b"processed-by-ext-proc"),
+                };
+                (Some(response), false)
+            }
+            processing_request::Request::ResponseBody(_) if *request_phase_seen => (
+                Some(response_body_verdict_with(b"response-by-attached-ext-proc")),
+                false,
+            ),
+            _ => (None, false),
         }
     }
 
@@ -1399,11 +3200,21 @@ mod ext_proc_server {
             let mut inbound = request.into_inner();
             let (tx, rx) = tokio::sync::mpsc::channel(4);
             tokio::spawn(async move {
+                let mut mode = None;
+                let mut request_phase_seen = false;
                 while let Ok(Some(req)) = inbound.message().await {
-                    if let Some(resp) = handle(req) {
+                    let (response, terminal) = handle(req, &mut mode, &mut request_phase_seen);
+                    if mode.as_deref() == Some("long-idle") {
+                        mode = Some("long-idle-complete".to_string());
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    }
+                    if let Some(resp) = response {
                         if tx.send(Ok(resp)).await.is_err() {
                             break;
                         }
+                    }
+                    if terminal {
+                        break;
                     }
                 }
             });
@@ -1415,6 +3226,52 @@ mod ext_proc_server {
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         info!("✓ ext_proc server listening on http://{}", addr);
         Server::builder()
+            .add_service(ExternalProcessorServer::new(FakeProcessor))
+            .serve(addr)
+            .await?;
+        Ok(())
+    }
+
+    /// TLS variant: serves the same fake processor over HTTPS/h2 so the gateway's
+    /// hand-built rustls ext_proc connector exercises a real outbound TLS
+    /// handshake (ALPN h2 is negotiated by tonic). Used by the ExtProc-over-TLS
+    /// integration scenario.
+    pub async fn start_tls(
+        port: u16,
+        cert_path: String,
+        key_path: String,
+        client_ca_path: Option<String>,
+    ) -> Result<()> {
+        use tonic::transport::{Certificate, Identity, ServerTlsConfig};
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let cert = tokio::fs::read(&cert_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("ext_proc TLS: failed to read cert {}: {}", cert_path, e))?;
+        let key = tokio::fs::read(&key_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("ext_proc TLS: failed to read key {}: {}", key_path, e))?;
+        let identity = Identity::from_pem(cert, key);
+
+        let mut tls = ServerTlsConfig::new().identity(identity);
+        if let Some(client_ca_path) = client_ca_path.as_ref() {
+            let client_ca = tokio::fs::read(client_ca_path)
+                .await
+                .map_err(|e| anyhow::anyhow!("ext_proc mTLS: failed to read client CA {}: {}", client_ca_path, e))?;
+            tls = tls.client_ca_root(Certificate::from_pem(client_ca));
+        }
+
+        info!(
+            "✓ ext_proc TLS server listening on https://{} (client auth: {})",
+            addr,
+            if client_ca_path.is_some() {
+                "required"
+            } else {
+                "disabled"
+            }
+        );
+        Server::builder()
+            .tls_config(tls)?
             .add_service(ExternalProcessorServer::new(FakeProcessor))
             .serve(addr)
             .await?;
@@ -1748,9 +3605,8 @@ async fn oidc_introspect_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::response::Json;
     use serde_json::json;
 
-    let body_bytes = match to_bytes(req.into_body(), 8 * 1024).await {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"active": false}))),
+    let Ok(body_bytes) = to_bytes(req.into_body(), 8 * 1024).await else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"active": false})));
     };
     let body = String::from_utf8_lossy(&body_bytes);
     let token = extract_form_token(&body);
@@ -1804,11 +3660,26 @@ async fn oidc_introspect_handler(req: AxumRequest<Body>) -> impl IntoResponse {
 ///
 /// Also echoes back X-Forwarded-* headers in response body for validation.
 async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::Json;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
 
-    let headers = req.headers();
+    let (parts, body) = req.into_parts();
+    let headers = parts.headers;
+    let Ok(body) = to_bytes(body, 1024 * 1024).await else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if let Some(expected) = headers
+        .get("x-auth-expected-body-sha256")
+        .and_then(|value| value.to_str().ok())
+    {
+        let actual = hex::encode(Sha256::digest(&body));
+        if actual != expected {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
 
     // Collect X-Forwarded-* headers for response body (so client can verify them)
     let forwarded_host = headers
@@ -1863,6 +3734,10 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             } else {
                 "no"
             };
+            // `Expect` is end-to-end, so hop-by-hop filtering keeps it. forwardAll
+            // withholds it anyway: this auth request sends no body of its own, so
+            // the expectation could never be satisfied here (FA-BODY-002).
+            let saw_expect = if headers.contains_key("expect") { "yes" } else { "no" };
             (
                 StatusCode::OK,
                 [
@@ -1871,6 +3746,7 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
                     ("X-User-Email", "test@example.com"),
                     ("X-Saw-Custom-Hop", saw_custom_hop),
                     ("X-Saw-Visible-Header", saw_visible_header),
+                    ("X-Saw-Expect", saw_expect),
                 ],
                 Json(body),
             )
@@ -1910,7 +3786,7 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             )
                 .into_response()
         }
-        // Valid token that returns 204 No Content (for successStatusCodes integration test).
+        // Valid token that returns 204 No Content (for success.statusCodes integration test).
         // Sends an empty body with X-User-ID so upstream-header propagation can be verified.
         "Bearer valid-204-token" => (
             StatusCode::NO_CONTENT,
@@ -2189,4 +4065,286 @@ async fn start_https_backend_multi_sni_server(
         .await?;
 
     Ok(())
+}
+
+// ============================================================================
+// Wildcard-cert HTTPS Backend (for EdgionBackendTrafficPolicy/UpstreamAuthority
+// integration testing — Task 8 of the dynamic-upstream-authority feature)
+// ============================================================================
+//
+// A single wildcard certificate (`*.sandbox.internal`) covers every tenant
+// subdomain the scenario dispatches to (`acme.sandbox.internal`,
+// `globex.sandbox.internal`, the health-probe authority `probe.sandbox.internal`,
+// ...). Unlike `MultiSniResolver` (which recognizes exactly two fixed
+// hostnames), this resolver accepts any SNI *inside* the wildcard pattern and
+// rejects everything else — including the bare parent domain
+// `sandbox.internal`, which a wildcard certificate does not cover per RFC 6125.
+// A successful handshake is therefore already proof the gateway sent an
+// in-pattern SNI; the exact per-tenant value is verified at the HTTP layer via
+// the `Host` header the shared `/echo` handler echoes back.
+
+#[derive(Debug)]
+struct VhostWildcardResolver {
+    cert: Arc<CertifiedKey>,
+}
+
+impl ResolvesServerCert for VhostWildcardResolver {
+    fn resolve(&self, hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        match hello.server_name() {
+            // `ends_with(".sandbox.internal")` cannot match the bare parent
+            // domain "sandbox.internal" itself (the needle is strictly longer
+            // than the parent), so the RFC 6125 exclusion falls out for free.
+            Some(name) if name.to_ascii_lowercase().ends_with(".sandbox.internal") => Some(self.cert.clone()),
+            // Reject everything else (including absent SNI). rustls turns a
+            // `None` return into an `unrecognized_name` TLS alert.
+            _ => None,
+        }
+    }
+}
+
+async fn start_https_backend_wildcard_server(port: u16, cert_path: String, key_path: String) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
+
+    let cert = load_certified_key(&cert_path, &key_path)?;
+    let resolver = Arc::new(VhostWildcardResolver { cert });
+
+    let mut tls_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+
+    // Advertise HTTP/1.1 only; this test verifies Host/SNI dispatch, not protocol version.
+    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+    let tls_config = RustlsConfig::from_config(Arc::new(tls_config));
+    let app = create_echo_router(server_addr_str.clone());
+
+    info!(
+        "Wildcard HTTPS backend (*.sandbox.internal) listening on https://{}",
+        addr
+    );
+    info!("  Certificate: {}", cert_path);
+
+    let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app_with_connect_info)
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth2_fixture_accepts_only_expected_grant_scope_and_bootstrap_pairs() {
+        let active = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD
+                .encode(format!("{OAUTH2_ACTIVE_CLIENT_ID}:{OAUTH2_ACTIVE_CLIENT_SECRET}"))
+        );
+        let valid_form = b"grant_type=client_credentials&scope=inference.invoke";
+        assert_eq!(oauth2_fixture_client(Some(&active), valid_form), Some("active"));
+        assert_eq!(oauth2_fixture_client(Some("Basic aW52YWxpZA=="), valid_form), None);
+        assert_eq!(
+            oauth2_fixture_client(Some(&active), b"grant_type=client_credentials&scope=unexpected"),
+            None
+        );
+    }
+
+    #[test]
+    fn dns_query_defaults_to_loopback_when_no_ip() {
+        let (host, ips) = parse_dns_query("host=backend.test");
+        assert_eq!(host, "backend.test");
+        assert_eq!(ips, vec!["127.0.0.1".to_string()]);
+    }
+
+    #[test]
+    fn dns_query_parses_explicit_single_and_multi_ip() {
+        let (host, ips) = parse_dns_query("host=a.test&ip=10.0.0.1");
+        assert_eq!(host, "a.test");
+        assert_eq!(ips, vec!["10.0.0.1".to_string()]);
+
+        let (_, ips) = parse_dns_query("host=b.test&ip=10.0.0.1,10.0.0.2");
+        assert_eq!(ips, vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
+    }
+
+    #[test]
+    fn dns_query_tolerates_missing_host_and_empty_query() {
+        let (host, ips) = parse_dns_query("");
+        assert_eq!(host, "");
+        assert_eq!(ips, vec!["127.0.0.1".to_string()]);
+    }
+
+    #[test]
+    fn ai_provider_observation_never_contains_credential_material() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer ai-provider-test-key".parse().unwrap(),
+        );
+        headers.insert(axum::http::header::HOST, "127.0.0.1:30001".parse().unwrap());
+        let query = AiProviderQuery {
+            mock_mode: None,
+            fixture_query: Some("preserved".to_string()),
+        };
+        let body = br#"{"model":"fixture-model","stream":true,"stream_options":{"include_usage":true}}"#;
+        let observation = ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body);
+        let encoded = serde_json::to_string(&observation).unwrap();
+
+        assert!(observation.auth_is_provider_key);
+        assert!(observation.host_is_expected);
+        assert!(observation.model_is_canonical);
+        assert!(observation.include_usage);
+        assert_eq!(observation.credential_generation, "a");
+        assert!(!encoded.contains(AI_PROVIDER_KEY_A));
+        assert!(!encoded.contains(AI_PROVIDER_KEY_B));
+        assert!(!encoded.contains("authorization"));
+
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {AI_PROVIDER_KEY_B}").parse().unwrap(),
+        );
+        let rotated = ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body);
+        let rotated_encoded = serde_json::to_string(&rotated).unwrap();
+        assert!(rotated.auth_is_provider_key);
+        assert_eq!(rotated.credential_generation, "b");
+        assert!(!rotated_encoded.contains(AI_PROVIDER_KEY_A));
+        assert!(!rotated_encoded.contains(AI_PROVIDER_KEY_B));
+
+        headers.insert(
+            axum::http::header::HOST,
+            "edgion-test-server.edgion-test.svc.cluster.local:30026"
+                .parse()
+                .unwrap(),
+        );
+        assert!(ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body).host_is_expected);
+        headers.insert(axum::http::header::HOST, "unexpected.example.com".parse().unwrap());
+        assert!(!ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body).host_is_expected);
+    }
+
+    #[test]
+    fn guardrail_observation_retains_only_bounded_structure() {
+        let action = "unit-structure-only";
+        let input = serde_json::json!({
+            "version": "v1",
+            "windows": [{
+                "choiceIndex": 0,
+                "field": {"type": "content"},
+                "context": "sensitive-context-marker",
+                "current": "sensitive-current-marker"
+            }]
+        });
+        record_guardrail_observation(action, &input);
+        let observation = GUARDRAIL_OBSERVATIONS.lock().remove(action).unwrap();
+        assert_eq!(observation.calls, 1);
+        assert_eq!(observation.total_windows, 1);
+        assert!(observation.version_v1);
+        assert!(observation.minimal_envelope);
+        assert!(observation.sorted_unique_keys);
+        assert!(observation.canonical_content_window);
+        let encoded = serde_json::to_string(&observation).unwrap();
+        assert!(!encoded.contains("sensitive-context-marker"));
+        assert!(!encoded.contains("sensitive-current-marker"));
+    }
+
+    #[test]
+    fn ai_stream_modes_have_deterministic_bounded_contracts() {
+        let observation = "{\"fixture_id\":\"test\"}";
+
+        let paced = ai_stream_plan("paced", observation);
+        assert_eq!(paced.chunks.len(), 4);
+        assert_eq!(paced.interval, Duration::from_millis(250));
+        assert!(paced.chunks[2].windows(7).any(|window| window == b"\"usage\""));
+        assert_eq!(paced.chunks[3], Bytes::from_static(b"data: [DONE]\n\n"));
+
+        let split = ai_stream_plan("split", observation);
+        assert!(split.chunks.len() > 4);
+        assert!(split.chunks.iter().all(|chunk| chunk.len() <= 7));
+        let split_joined = split.chunks.concat();
+        assert!(split_joined.windows(7).any(|window| window == b"\"usage\""));
+        assert!(split_joined.ends_with(b"data: [DONE]\n\n"));
+
+        let guardrail_split = ai_stream_plan("guardrail_split", observation);
+        assert!(guardrail_split.chunks.len() > 3);
+        assert!(guardrail_split.chunks.iter().all(|chunk| chunk.len() <= 7));
+        assert!(guardrail_split
+            .chunks
+            .concat()
+            .windows(b"\"index\":0".len())
+            .any(|window| window == b"\"index\":0"));
+
+        let two_windows = ai_stream_plan("guardrail_two_windows", observation);
+        assert_eq!(two_windows.chunks.len(), 4);
+        assert_eq!(
+            two_windows
+                .chunks
+                .concat()
+                .windows(b"\"index\":0".len())
+                .filter(|window| *window == b"\"index\":0")
+                .count(),
+            2
+        );
+
+        let missing = ai_stream_plan("missing_usage", observation).chunks.concat();
+        assert!(!missing.windows(7).any(|window| window == b"\"usage\""));
+        assert!(missing.ends_with(b"data: [DONE]\n\n"));
+
+        let oversized = ai_stream_plan("oversized", observation);
+        assert!(oversized.chunks[0].len() > edgion_gateway::sse::DEFAULT_MAX_PENDING_EVENT_BYTES);
+        assert!(oversized.chunks[0].ends_with(b"\n\n"));
+        assert_eq!(oversized.chunks.len(), 3);
+
+        let resilience_abort = ai_stream_plan("resilience_abort", observation);
+        assert_eq!(resilience_abort.chunks.len(), 3);
+        assert!(resilience_abort.abort_after_chunks);
+
+        let quota_malformed = ai_stream_plan("quota_malformed", observation);
+        assert_eq!(quota_malformed.chunks.len(), 4);
+        assert_eq!(quota_malformed.chunks[0], Bytes::from_static(b"data: \xff\n\n"));
+        assert!(quota_malformed.chunks[1]
+            .windows(b"valid-middle".len())
+            .any(|window| window == b"valid-middle"));
+        assert_eq!(
+            quota_malformed.chunks[2],
+            Bytes::from_static(b"data: \xfe\n\ndata: quota-malformed-boundary-probe")
+        );
+        assert!(quota_malformed.chunks[3]
+            .windows(b"quota-malformed-must-not-reach-client".len())
+            .any(|window| window == b"quota-malformed-must-not-reach-client"));
+        assert!(quota_malformed.chunks[3].ends_with(b"data: [DONE]\n\n"));
+        assert_eq!(quota_malformed.interval, Duration::from_secs(1));
+        assert!(!quota_malformed.abort_after_chunks);
+
+        let long = ai_stream_plan("long", observation);
+        assert!(long.chunks.len() > 100);
+        assert!(long.interval >= Duration::from_millis(100));
+        assert_eq!(long.chunks.last().unwrap(), &Bytes::from_static(b"data: [DONE]\n\n"));
+
+        let quota_terminate = ai_stream_plan("quota_terminate", observation);
+        assert_eq!(quota_terminate.chunks.len(), 7, "5 content deltas + usage + [DONE]");
+        assert!(quota_terminate.interval >= Duration::from_millis(100));
+        assert!(!quota_terminate.abort_after_chunks);
+        for content_chunk in &quota_terminate.chunks[..5] {
+            assert!(content_chunk.windows(7).any(|window| window == b"\"delta\""));
+        }
+        let tail = quota_terminate.chunks[5].clone();
+        assert!(tail.windows(19).any(|window| window == b"unreachable_marker\""));
+        assert_eq!(quota_terminate.chunks[6], Bytes::from_static(b"data: [DONE]\n\n"));
+
+        // Same bytes, one per write: the byte-at-a-time mode must stay a pure
+        // re-segmentation of the paced plan, or the client-side assertions
+        // that mirror the `quota_terminate` fixture would silently stop
+        // applying to it.
+        let byte_at_a_time = ai_stream_plan("quota_terminate_byte_at_a_time", observation);
+        assert!(byte_at_a_time.chunks.iter().all(|chunk| chunk.len() == 1));
+        assert_eq!(
+            byte_at_a_time.chunks.concat(),
+            quota_terminate.chunks.concat(),
+            "byte-at-a-time delivery must not change a single byte of the fixture body"
+        );
+        assert!(byte_at_a_time.interval <= Duration::from_millis(5));
+        assert!(!byte_at_a_time.abort_after_chunks);
+    }
 }

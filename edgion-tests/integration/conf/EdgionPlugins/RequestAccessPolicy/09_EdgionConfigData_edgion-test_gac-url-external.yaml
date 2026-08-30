@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gac-url-external
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: external
+          cidrs: ["192.0.2.0/24"]

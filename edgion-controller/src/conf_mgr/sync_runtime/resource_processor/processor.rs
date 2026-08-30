@@ -49,7 +49,7 @@ use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::make_resource_key;
 use super::raw_store::RawStore;
-use crate::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
+use crate::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue};
 
 /// Result of status extraction
 #[derive(Debug, PartialEq)]
@@ -108,6 +108,89 @@ fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtract
     }
 }
 
+/// Capture the ingest-only unknown-field sidecar carried by the four resource
+/// kinds that support advisory unknown-field detection.
+///
+/// FileSystem/etcd parsing populates this state before status seeding. Because
+/// the fields are intentionally `#[serde(skip)]`, the generic status merge
+/// below must preserve them explicitly across its serde round trip.
+fn capture_unknown_fields_sidecar<T: 'static>(obj: &T) -> Option<Vec<String>> {
+    let obj = obj as &dyn Any;
+    if let Some(resource) = obj.downcast_ref::<edgion_resources::EdgionPlugins>() {
+        Some(resource.spec.unknown_fields.clone())
+    } else if let Some(resource) = obj.downcast_ref::<edgion_resources::EdgionStreamPlugins>() {
+        Some(resource.spec.unknown_fields.clone())
+    } else if let Some(resource) = obj.downcast_ref::<edgion_resources::EdgionConfigData>() {
+        Some(resource.spec.unknown_fields.clone())
+    } else {
+        obj.downcast_ref::<edgion_resources::LinkSys>()
+            .map(|resource| resource.spec.unknown_fields.clone())
+    }
+}
+
+fn restore_unknown_fields_sidecar<T: 'static>(obj: &mut T, unknown_fields: Option<Vec<String>>) {
+    let Some(unknown_fields) = unknown_fields else {
+        return;
+    };
+    let obj = obj as &mut dyn Any;
+    if let Some(resource) = obj.downcast_mut::<edgion_resources::EdgionPlugins>() {
+        resource.spec.unknown_fields = unknown_fields;
+    } else if let Some(resource) = obj.downcast_mut::<edgion_resources::EdgionStreamPlugins>() {
+        resource.spec.unknown_fields = unknown_fields;
+    } else if let Some(resource) = obj.downcast_mut::<edgion_resources::EdgionConfigData>() {
+        resource.spec.unknown_fields = unknown_fields;
+    } else if let Some(resource) = obj.downcast_mut::<edgion_resources::LinkSys>() {
+        resource.spec.unknown_fields = unknown_fields;
+    }
+}
+
+/// Seed previously persisted status (FileSystem/Etcd `.status` sidecar) back
+/// into the object before `update_status` runs.
+///
+/// Spec files carry no status, so without this every reconcile enters
+/// `update_status` with empty conditions and `update_condition` can never
+/// preserve `lastTransitionTime` — the transition-only LTT contract requires
+/// the prior conditions to be present in the object (K8s mode gets this for
+/// free from the watch object). Best-effort: on any roundtrip failure the
+/// object is left unchanged (same as the pre-seed behavior).
+fn seed_existing_status<T: Serialize + DeserializeOwned + 'static>(obj: &mut T, status_json: &str) {
+    let status = match serde_json::from_str::<serde_json::Value>(status_json) {
+        Ok(v) if !v.is_null() => v,
+        _ => return,
+    };
+    // Never seed an ErrorStatus sidecar (parse-failure fallback): no handler
+    // manages its condition type, so once seeded it would survive every
+    // upsert-only update_status as a permanent ghost. Skipping the seed lets
+    // the recovery pass rebuild a clean status that replaces the sidecar.
+    let is_error_status_sidecar = status.get("conditions").and_then(|c| c.as_array()).is_some_and(|arr| {
+        arr.iter().any(|c| {
+            c.get("type").and_then(|t| t.as_str())
+                == Some(crate::conf_mgr::conf_center::common::ERROR_STATUS_CONDITION_TYPE)
+        })
+    });
+    if is_error_status_sidecar {
+        return;
+    }
+    let unknown_fields = capture_unknown_fields_sidecar(obj);
+    let mut obj_value = match serde_json::to_value(&*obj) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let Some(map) = obj_value.as_object_mut() else {
+        return;
+    };
+    map.insert("status".to_string(), status);
+    match serde_json::from_value::<T>(obj_value) {
+        Ok(mut seeded) => {
+            restore_unknown_fields_sidecar(&mut seeded, unknown_fields);
+            *obj = seeded;
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "Existing status not seedable into object; conditions start fresh");
+        }
+    }
+}
+
 /// Extract status field from a resource as serde_json::Value
 ///
 /// Returns the status as a JSON Value, or None if not present.
@@ -153,6 +236,19 @@ pub trait ProcessorObj: Send + Sync {
     /// ```
     fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 
+    /// Look up a processed resource from `ServerCache` by key.
+    ///
+    /// Unlike `get_raw_any`, this returns the handler-filtered object after
+    /// `preparse`, `parse`, and status resolution. Use it for cross-kind reads
+    /// that must observe Controller-derived fields such as PluginPolicy stamps.
+    /// Do not use it for an `on_change` self-lookup: the current object is saved
+    /// only after `on_change` returns.
+    ///
+    /// The returned object may contain resolved secret material. Downcast and
+    /// project only the required fields; never serialize it directly to an
+    /// external response.
+    fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
+
     /// Enqueue a key for immediate processing (original events, init revalidation)
     async fn requeue(&self, key: String);
 
@@ -182,6 +278,28 @@ pub trait ProcessorObj: Send + Sync {
 
     /// List all resource keys in cache
     fn list_keys(&self) -> Vec<String>;
+
+    /// Serialize the processed cache snapshot. Unlike `get_raw_any`, this exposes
+    /// Controller-derived fields such as delegated route `resolvedRules` and
+    /// internal reference-denial markers used by read-only effective APIs.
+    ///
+    /// # Secret boundary — read before returning this to a client
+    ///
+    /// The output is **not redacted**. `crate::redact`'s `AdminRedactGuard` is a
+    /// gateway-admin mechanism; the controller never installs it, so the
+    /// `redact_opt` / `redact_required` field adapters here emit the *real*
+    /// value. For kinds carrying controller-resolved secrets (`EdgionPlugins`
+    /// with `openid_connect` / `ldap_auth` / `jwe_decrypt` configs, `EdgionTls`,
+    /// `EdgionAcme`, `LinkSys`, ...) this snapshot therefore contains live
+    /// credentials.
+    ///
+    /// Existing callers are safe because they project a fixed set of
+    /// non-secret fields out of the snapshot rather than returning it.
+    /// A caller that serializes the snapshot straight into a response — or adds
+    /// a passthrough field — leaks credentials to any identity holding the
+    /// endpoint's verb, including one explicitly denied `Secret` access.
+    /// Project explicit fields, never pass the value through.
+    fn list_cached_json(&self) -> Vec<serde_json::Value>;
 
     /// Number of resources currently held in cache. Must be O(1).
     fn store_size(&self) -> usize;
@@ -275,30 +393,6 @@ where
         }
     }
 
-    /// Create with custom workqueue config
-    pub fn with_workqueue_config(
-        kind: &'static str,
-        capacity: usize,
-        handler: Arc<dyn ProcessorHandler<K>>,
-        workqueue_config: WorkqueueConfig,
-        runtime: Arc<ControllerRuntime>,
-    ) -> Self {
-        let cache = Arc::new(ServerCache::new(capacity as u32));
-        let workqueue = Arc::new(Workqueue::new(kind, workqueue_config));
-
-        Self {
-            kind,
-            cache,
-            workqueue,
-            handler,
-            metadata_filter: RwLock::new(None),
-            namespace_filter: RwLock::new(None),
-            raw_store: RwLock::new(None),
-            runtime,
-            stats_dirty: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
     /// Inject the raw store backend.
     ///
     /// Called once during controller startup:
@@ -369,16 +463,22 @@ where
         );
     }
 
-    /// Handle Apply event (enqueue for runtime processing)
-    pub async fn on_apply(&self, obj: &K) {
-        let key = make_resource_key(obj);
-        self.workqueue.enqueue(key).await;
+    /// Wake any `wait_kinds_ready` waiter. Called by the etcd/FS `InitDone`
+    /// handlers after `on_init_done()` so the Phase-1 gate observes readiness
+    /// immediately instead of via the 1 s fallback poll. The K8s handlers
+    /// deliberately do not call this — the constraint is to leave K8s unchanged.
+    pub fn notify_ready(&self) {
+        self.runtime.processor_registry.notify_ready();
     }
 
-    /// Handle Delete event using the object carried by the watch event.
-    pub async fn on_delete(&self, obj: &K) {
-        let ctx = self.create_context(TriggerChain::default());
-        self.process_delete(obj, &ctx).await;
+    /// Enqueue a watch-event key for the worker (apply and delete alike —
+    /// the worker compares store state vs cache and decides update/delete).
+    ///
+    /// Workqueue discipline: ALL runtime events go through here; nothing
+    /// outside the worker may call `process_resource`/`process_delete`.
+    /// (Init is the sanctioned exception: `on_init_apply` runs pre-worker.)
+    pub async fn on_event_key(&self, key: String) {
+        self.workqueue.enqueue(key).await;
     }
 
     // ==================== Cache Operations ====================
@@ -493,8 +593,11 @@ where
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
         let rv = edgion_resources::resource::meta::extract_version(obj.meta());
 
-        // Generate sv early so the entire processing span carries it for telemetry correlation
-        let sv = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
+        // No `sv` field here: sync_version is drawn inside the store's write lock (see
+        // ServerCache::push_event), so it does not exist yet and must not be predicted.
+        // Drawing it early for span correlation is what opened the reordering window that
+        // got legitimate events discarded as stale. The cache_server's "apply change" log
+        // line reports the assigned version and correlates to this span via kind + name/ns.
         let span = tracing::info_span!(
             "process_resource",
             component = "resource_processor",
@@ -502,9 +605,8 @@ where
             name = %name,
             ns = %namespace,
             rv,
-            sv,
         );
-        self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
+        self.process_resource_inner(obj, ctx, is_init, existing_status_json)
             .instrument(span)
             .await
     }
@@ -515,7 +617,6 @@ where
         ctx: &HandlerContext,
         is_init: bool,
         existing_status_json: Option<String>,
-        sv: u64,
     ) -> WorkItemResult<K> {
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
 
@@ -540,6 +641,18 @@ where
         ctx.clean_metadata(&mut obj);
         self.handler.clean_metadata(&mut obj, ctx);
 
+        // 3.5. Seed previously persisted status (FileSystem/Etcd `.status`
+        // sidecar) into the object, so update_condition later sees the prior
+        // conditions and preserves lastTransitionTime across reconciles.
+        // This MUST run before preparse/parse: the seed is a serde roundtrip
+        // that resets `#[serde(skip)]` runtime fields. The four ingest-only
+        // unknown-field sidecars are preserved explicitly by
+        // `seed_existing_status`; all other runtime fields are populated only
+        // after this point by preparse/parse.
+        if let Some(json) = existing_status_json.as_deref() {
+            seed_existing_status(&mut obj, json);
+        }
+
         // 4. Validate (log warnings but continue)
         let mut all_errors = self.handler.validate(&obj, ctx);
         for error in &all_errors {
@@ -557,7 +670,8 @@ where
         match self.handler.parse(obj, ctx).await {
             ProcessResult::Continue(mut parsed_obj) => {
                 // 7. Determine old status for comparison
-                // - If existing_status_json provided (FileSystem mode): use it
+                // - If existing_status_json provided (FileSystem/Etcd mode): use it
+                //   (already seeded into the object at step 3.5)
                 // - Otherwise: extract from object (K8s mode - status is already in obj)
                 let old_status = match existing_status_json {
                     Some(json) => StatusExtractResult::Present(json),
@@ -633,13 +747,14 @@ where
                 );
 
                 // 11. Save to cache
-                // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
+                // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async).
+                // `None` means "assign sync_version at the store, under its write lock".
                 let obj_for_result = parsed_obj.clone();
                 if is_init {
-                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, Some(sv));
+                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, None);
                     self.stats_dirty.store(true, Ordering::Relaxed);
                 } else {
-                    self.save(parsed_obj, Some(sv));
+                    self.save(parsed_obj, None);
                 }
 
                 WorkItemResult::Processed {
@@ -657,21 +772,24 @@ where
     /// Process resource deletion
     async fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
         let key = make_resource_key(cached_obj);
-        let sv = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
+        // No `sv` field / no early allocation: the version is drawn inside the store's write
+        // lock. This method is where the cache-residue incident originated -- a version drawn
+        // here, then ~839us of on_delete work (clearing secret refs), then a store write that
+        // a parallel task had already overtaken. The store then discarded this delete as
+        // "stale" against a kind-wide high-water mark set by an unrelated Gateway.
         let span = tracing::info_span!(
             "process_delete",
             component = "resource_processor",
             kind = self.kind,
             key = %key,
-            sv,
         );
 
         async {
             // 1. Execute handler's delete cleanup
             self.handler.on_delete(cached_obj, ctx).await;
 
-            // 2. Remove from cache
-            self.remove(&key, Some(sv));
+            // 2. Remove from cache (sync_version assigned at the store)
+            self.remove(&key, None);
 
             tracing::debug!("Resource deleted from cache");
         }
@@ -736,6 +854,15 @@ where
         self.cache.list_keys()
     }
 
+    fn list_cached_json(&self) -> Vec<serde_json::Value> {
+        self.cache
+            .list_keys()
+            .into_iter()
+            .filter_map(|key| self.cache.get_by_key(&key))
+            .filter_map(|resource| serde_json::to_value(&resource).ok())
+            .collect()
+    }
+
     fn store_size(&self) -> usize {
         self.cache.len()
     }
@@ -762,6 +889,12 @@ where
         let raw_store = self.raw_store.read();
         let arc_k = raw_store.as_ref()?.get(key)?;
         Some(arc_k as Arc<dyn Any + Send + Sync>)
+    }
+
+    fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.cache
+            .get_by_key(key)
+            .map(|resource| Arc::new(resource) as Arc<dyn Any + Send + Sync>)
     }
 }
 
@@ -842,6 +975,61 @@ mod tests {
         assert!(processor.is_ready());
     }
 
+    /// `notify_ready()` must wake a `wait_kinds_ready` waiter promptly, without
+    /// relying on the ~1s fallback poll inside `wait_kinds_ready`.
+    ///
+    /// The waiter is given a 5s timeout (far longer than the 1s fallback poll)
+    /// so a pass driven by the fallback poll would still take ~1s. We then wrap
+    /// the join in a 500ms timeout: if `notify_ready()` did nothing, the waiter
+    /// would only resolve via the fallback poll (~1s later) and this 500ms
+    /// timeout would fire, failing the test. Only an actual wake from
+    /// `notify_ready()` can resolve the waiter within the 500ms window.
+    #[tokio::test]
+    async fn notify_ready_wakes_wait_kinds_ready_promptly() {
+        use std::time::Duration;
+
+        let handler = Arc::new(TestHandler);
+        let processor = Arc::new(ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            Arc::new(ControllerRuntime::default()),
+        ));
+
+        processor.runtime.processor_registry.register(processor.clone());
+
+        let runtime = processor.runtime.clone();
+        let kind = processor.kind;
+
+        // Long timeout: if this waiter resolves quickly, it must be because
+        // notify_ready() woke it, not the 1s fallback poll.
+        let waiter = tokio::spawn(async move {
+            runtime
+                .processor_registry
+                .wait_kinds_ready(&[kind], Duration::from_secs(5))
+                .await
+        });
+
+        // Give the waiter a moment to register its `Notify::notified()` future.
+        // `notify_waiters()` only wakes futures that are already registered, so
+        // notifying before the waiter subscribes would be a silent no-op.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Mirror what `on_init_done()` does: mark the cache ready directly
+        // (bypassing the `ProcessorObj::set_ready()` trait method, which
+        // already calls `notify_ready()` itself), then call `notify_ready()`
+        // separately so this test isolates its effect.
+        WatchObj::set_ready(processor.cache.as_ref());
+        processor.notify_ready();
+
+        let resolved = tokio::time::timeout(Duration::from_millis(500), waiter)
+            .await
+            .expect("waiter did not resolve within 500ms; notify_ready() failed to wake it promptly")
+            .expect("waiter task panicked");
+
+        assert!(resolved, "wait_kinds_ready should report the kind as ready");
+    }
+
     #[tokio::test]
     async fn test_processor_init_apply() {
         let handler = Arc::new(TestHandler);
@@ -875,6 +1063,9 @@ mod tests {
         let cached = processor.get("default/test");
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().spec, "test spec");
+        let snapshot = ProcessorObj::list_cached_json(&processor);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0]["spec"], "test spec");
     }
 
     #[tokio::test]
@@ -968,5 +1159,196 @@ mod tests {
 
         let changed = status_has_changed("GatewayClass", &old_status, &new_status);
         assert!(changed, "Status should have changed after update_status");
+    }
+
+    #[test]
+    fn seed_existing_status_enables_ltt_preservation() {
+        use edgion_resources::prelude_resources::GatewayClass;
+
+        // FS/Etcd mode: the spec file carries no status.
+        let mut gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                generation: Some(2),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+
+        let sidecar = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"Resource accepted","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}]}"#;
+        seed_existing_status(&mut gc, sidecar);
+
+        let status = gc.status.as_mut().expect("status seeded from sidecar");
+        assert_eq!(status.conditions.len(), 1);
+
+        // A reconcile that does not flip the condition keeps the stored LTT
+        // (while observedGeneration still advances).
+        crate::conf_mgr::sync_runtime::resource_processor::update_condition(
+            &mut status.conditions,
+            crate::conf_mgr::sync_runtime::resource_processor::accepted_condition(gc.metadata.generation),
+        );
+        assert_eq!(status.conditions[0].last_transition_time, "2026-01-01T00:00:00Z");
+        assert_eq!(status.conditions[0].observed_generation, Some(2));
+    }
+
+    #[test]
+    fn seed_existing_status_preserves_all_unknown_field_sidecars() {
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigDataVisibility, ConfigEntry, EdgionConfigDataSpec,
+        };
+        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
+        use edgion_resources::resources::link_sys::httpdns::{HttpDnsFallback, HttpDnsResponseFormat};
+        use edgion_resources::resources::link_sys::{HttpDnsResolverConfig, LinkSysSpec, SystemConfig};
+        use edgion_resources::{EdgionConfigData, EdgionPlugins, EdgionStreamPlugins, LinkSys};
+
+        let expected = vec!["config.typo".to_string()];
+        let status = r#"{"conditions":[]}"#;
+
+        let mut plugins = EdgionPlugins::new("plugins", Default::default());
+        plugins.spec.unknown_fields = expected.clone();
+        seed_existing_status(&mut plugins, status);
+        assert_eq!(plugins.spec.unknown_fields, expected);
+
+        let mut stream_plugins = EdgionStreamPlugins::new(
+            "stream-plugins",
+            EdgionStreamPluginsSpec {
+                plugins: None,
+                tls_route_plugins: None,
+                unknown_fields: expected.clone(),
+            },
+        );
+        seed_existing_status(&mut stream_plugins, status);
+        assert_eq!(stream_plugins.spec.unknown_fields, expected);
+
+        let mut config_data = EdgionConfigData::new(
+            "config-data",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: ConfigDataVisibility::Namespace,
+                data: ConfigEntry::Misc(serde_json::json!({})),
+                unknown_fields: expected.clone(),
+            },
+        );
+        seed_existing_status(&mut config_data, status);
+        assert_eq!(config_data.spec.unknown_fields, expected);
+
+        let mut link_sys = LinkSys::new(
+            "link-sys",
+            LinkSysSpec {
+                config: SystemConfig::HttpDns(HttpDnsResolverConfig {
+                    preset: None,
+                    url_template: Some("https://resolver.example/dns?name={domain}".to_string()),
+                    response: HttpDnsResponseFormat::default(),
+                    fallback: HttpDnsFallback::default(),
+                    connection: None,
+                }),
+                unknown_fields: expected.clone(),
+            },
+        );
+        seed_existing_status(&mut link_sys, status);
+        assert_eq!(link_sys.spec.unknown_fields, expected);
+    }
+
+    #[test]
+    fn seed_existing_status_skips_error_status_sidecar() {
+        use edgion_resources::prelude_resources::GatewayClass;
+
+        let mut gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+
+        // A resource that was briefly unparseable has an ErrorStatus sidecar;
+        // on recovery it must NOT be seeded, or its unmanaged condition type
+        // would ghost through every subsequent upsert-only update_status.
+        let sidecar = r#"{"conditions":[{"type":"Ready","status":"False","reason":"ParseError","message":"bad yaml","lastTransitionTime":"2026-01-01T00:00:00Z"}]}"#;
+        seed_existing_status(&mut gc, sidecar);
+        assert!(gc.status.is_none(), "ErrorStatus sidecar must not be seeded");
+    }
+
+    #[test]
+    fn seed_existing_status_ignores_unparseable_json() {
+        use edgion_resources::prelude_resources::GatewayClass;
+
+        let mut gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+
+        seed_existing_status(&mut gc, "not-json{{");
+        assert!(gc.status.is_none(), "object must be left unchanged on parse failure");
+    }
+
+    #[tokio::test]
+    async fn on_event_key_enqueues_for_worker() {
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            Arc::new(TestHandler),
+            Arc::new(ControllerRuntime::default()),
+        );
+
+        processor.on_event_key("obj1".to_string()).await;
+
+        let item = tokio::time::timeout(std::time::Duration::from_secs(2), processor.workqueue().dequeue())
+            .await
+            .expect("dequeue timed out")
+            .expect("queue closed");
+        assert_eq!(item.key, "obj1");
+    }
+
+    #[tokio::test]
+    async fn delete_flows_through_worker_arm() {
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            Arc::new(TestHandler),
+            Arc::new(ControllerRuntime::default()),
+        );
+        // Seed cache with the object, as a prior apply would have.
+        let obj = TestResource {
+            metadata: ObjectMeta {
+                name: Some("obj1".to_string()),
+                ..Default::default()
+            },
+            spec: "v1".to_string(),
+        };
+        processor.save(obj, None);
+        assert!(processor.get("obj1").is_some());
+
+        // Delete event: enqueue the key, then drive the worker path manually.
+        processor.on_event_key("obj1".to_string()).await;
+        let item = tokio::time::timeout(std::time::Duration::from_secs(2), processor.workqueue().dequeue())
+            .await
+            .expect("dequeue timed out")
+            .expect("queue closed");
+        let result = processor
+            .process_work_item(&item.key, None, None, item.trigger_chain.clone())
+            .await;
+
+        assert!(matches!(result, WorkItemResult::Deleted { .. }));
+        assert!(processor.get("obj1").is_none());
     }
 }

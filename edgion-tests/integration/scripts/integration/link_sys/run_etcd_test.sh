@@ -42,6 +42,8 @@ NC='\033[0m'
 # ── Paths ───────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../../utils"
+# shellcheck source=../../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 ETCD_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/etcd"
@@ -274,8 +276,8 @@ cleanup() {
         done
 
         # Fallback: kill by pattern (same as kill_all.sh)
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
 
         # Stop Etcd
         log_info "Stopping Etcd container..."
@@ -294,8 +296,8 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
 sleep 2
 log_success "Old processes cleaned up"
 
@@ -323,6 +325,11 @@ done
 # =============================================================================
 log_section "Preparing work directory"
 mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
+
+# conf_sync is mTLS by default (the checked-in config/edgion-*.yaml carry the cert
+# paths, work-dir relative). Both binaries below run with WORK_DIR as their work
+# dir, so the cert set has to land there.
+conf_sync_distribute_certs "$WORK_DIR"
 
 # Copy CRD schemas
 if [ -d "${PROJECT_ROOT}/config/crd" ]; then
@@ -601,7 +608,10 @@ log_info "─── 7. Lease Operations ───"
 RESP=$(gw_api POST "/api/v1/testing/link-sys/etcd/${ETCD_CLIENT}/lease-grant" \
     -d '{"ttl_seconds":10}')
 assert_json_success "Lease grant succeeds" "$RESP"
-LEASE_ID=$(echo "$RESP" | jq -r '.data.lease_id // 0')
+# jq stores JSON numbers as IEEE-754 doubles on common Linux builds and can
+# round Etcd's 64-bit lease IDs. Python's JSON decoder preserves integer
+# precision, so the ID sent back to Etcd remains byte-for-byte identical.
+LEASE_ID=$(printf '%s' "$RESP" | edgion_json_integer 0 data lease_id)
 assert_ne "Lease ID is non-zero" "0" "$LEASE_ID"
 
 # PUT with lease
@@ -635,7 +645,7 @@ log_info "─── 8. Lease Auto-Expire ───"
 RESP=$(gw_api POST "/api/v1/testing/link-sys/etcd/${ETCD_CLIENT}/lease-grant" \
     -d '{"ttl_seconds":2}')
 assert_json_success "Short lease grant (2s TTL)" "$RESP"
-SHORT_LEASE_ID=$(echo "$RESP" | jq -r '.data.lease_id // 0')
+SHORT_LEASE_ID=$(printf '%s' "$RESP" | edgion_json_integer 0 data lease_id)
 assert_ne "Short lease ID is non-zero" "0" "$SHORT_LEASE_ID"
 
 # PUT with short lease
@@ -730,6 +740,40 @@ assert_json_failure "Health non-existent client returns error" "$RESP"
 
 RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/nons_noname/get/anykey")
 assert_json_failure "GET on non-existent client returns error" "$RESP"
+
+# ── 11.4 Outbound TLS verify=false is always rejected for Etcd ──────────────
+# etcd-client's TLS stack always verifies; the outbound-TLS resolver rejects
+# verify=false unconditionally (provider_can_disable=false). Unlike Redis, Etcd
+# resolves TLS lazily in the background init() (from_config does not), so the
+# client IS registered but init() fails with the reject and the client never
+# connects. The gateway log carries the reject error keyed by the client name —
+# that log line is the distinguishing proof (vs. a plain unreachable endpoint).
+# Fixture: conf/LinkSys/Etcd/04_LinkSys_default_etcd-tls-reject.yaml
+log_info "─── 11.4 TLS verify=false reject ───"
+ETCD_REJECT_CLIENT="default_etcd-tls-reject"
+
+RESP=$(gw_api GET "/configclient/LinkSys?namespace=default&name=etcd-tls-reject")
+assert_json_success "etcd-tls-reject CRD synced to Gateway (controller admission is lenient)" "$RESP"
+
+# The client never reaches a connected state: init() returns the reject error.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_REJECT_CLIENT}/health")
+ETCD_REJECT_CONNECTED=$(echo "$RESP" | jq -r '.data.connected // false')
+assert_ne "etcd-tls-reject never connects (verify=false reject in init)" "true" "$ETCD_REJECT_CONNECTED"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_REJECT_CLIENT}/ping")
+assert_json_failure "PING etcd-tls-reject fails (TLS verify=false rejected)" "$RESP"
+
+# Distinguishing proof: the gateway log shows the verify=false reject for this
+# client (not merely an unreachable endpoint). The "init failed" line carries
+# key=default/etcd-tls-reject and the resolver's "skip-verify" error text.
+TESTS_TOTAL=$((TESTS_TOTAL + 1))
+if grep "etcd-tls-reject" "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q "skip-verify"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "gateway log shows verify=false reject for etcd-tls-reject"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_error "gateway log missing the verify=false reject for etcd-tls-reject"
+fi
 
 # ── 11.5 Degradation & Recovery (per-call timeout + auto-recovery) ──────────
 # Validates the fix for the etcd health monitor: a hung etcd must NOT hang the

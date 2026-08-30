@@ -19,7 +19,16 @@ EdgionGatewayConfig is a cluster-scoped Edgion-extension resource used to config
 
 ### parse
 
-No special handling; passes through directly. The contents of EdgionGatewayConfig's spec are handled by the type itself during preparse.
+`preparse` rejects unsupported outbound TLS SAN pinning and validates that DNS resolver
+`linkSysRef` and inline servers are mutually exclusive.
+
+`parse` checks removed/deprecated fields, clears prior Secret registrations, resolves the
+cluster-wide `outboundTls.validation.caCertificateRefs` through runtime material stores with
+ReferenceGrant enforcement, and embeds `resolved_ca_certificates` for conf_sync. Because the owner
+is cluster-scoped, referenced material must carry an explicit namespace.
+
+Change/delete events requeue all GatewayClass resources because their parametersRef status depends
+on EdgionGatewayConfig existence; delete also clears Secret registrations.
 
 ### update_status
 

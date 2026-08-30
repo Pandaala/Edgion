@@ -6,7 +6,7 @@ This document describes the complete syntax specification for EdgionDSL. EdgionD
 
 ## 1. Type System
 
-EdgionDSL has six built-in value types:
+EdgionDSL has seven built-in value types:
 
 | Type | Description | Example Literals |
 |------|-------------|-----------------|
@@ -14,6 +14,7 @@ EdgionDSL has six built-in value types:
 | `Int` | 64-bit signed integer | `42`, `-1` |
 | `Bool` | Boolean value | `true`, `false` |
 | `Nil` | Null value, representing "no value" | `nil` |
+| `Body` | Opaque handle for the current proxied request body | Returned by `req.body` |
 | `List` | A read-only list of strings used for iteration | Returned by APIs such as `req.header_names()` |
 | `Map` | A key-value map with `String` keys and any-type values | `{"key": "value"}`, `{"status": 200}` |
 
@@ -23,7 +24,7 @@ The `Map` type holds an ordered set of key-value pairs. Keys are always `String`
 
 ### 1.1 Type Conversion
 
-When calling `to_string(val)`, or when implicit conversion is triggered during string concatenation, each type behaves as follows:
+When calling `to_str(val)`, or when implicit conversion is triggered during string concatenation, each type behaves as follows:
 
 | Source Type | Conversion Result |
 |-------------|-------------------|
@@ -33,16 +34,17 @@ When calling `to_string(val)`, or when implicit conversion is triggered during s
 | `List` | `"[list]"` (fixed string, contents not expanded) |
 | `Map` | `"[map]"` (fixed string, contents not expanded) |
 | `String` | Unchanged |
+| `Body` | **Rejected**; use a bounded Body read explicitly |
 
 ```dsl
 let n = 100
-let s = to_string(n)      // s == "100"
+let s = to_str(n)      // s == "100"
 
 let b = false
-let t = to_string(b)      // t == "false"
+let t = to_str(b)      // t == "false"
 
 let x = nil
-let y = to_string(x)      // y == "nil"
+let y = to_str(x)      // y == "nil"
 ```
 
 ### 1.2 Truthiness Rules
@@ -50,7 +52,7 @@ let y = to_string(x)      // y == "nil"
 EdgionDSL uses Lua-style truthiness semantics:
 
 - **Falsy**: `Nil` and `false`
-- **Truthy**: all other values, including `0`, the empty string `""`, and empty lists
+- **Truthy**: all other values, including `0`, the empty string `""`, empty lists, and `Body`
 
 ```dsl
 // The following conditions are all truthy (the if branch is entered)
@@ -66,12 +68,16 @@ if false { ... }
 
 ### 1.3 Cross-Type Equality
 
-Values of different types are never equal, even if their contents appear the same:
+Values of different types are normally not equal, even if their contents
+appear the same. `Body`/`String` is the one exception: it performs streaming
+logical-text equality in either operand order. Two Body values are equal
+because both identify the current request body.
 
 ```dsl
 1 == "1"       // false, Int != String
 nil == false   // false, Nil != Bool
 0 == false     // false, Int != Bool
+req.body == "expected"  // streaming Body/String equality
 ```
 
 ---
@@ -146,7 +152,9 @@ if token != nil {
 
 **Division by zero**: Produces a runtime `DivisionByZero` error. The script's subsequent behavior is determined by the `errorPolicy` configuration.
 
-**String concatenation**: When either operand of `+` is a `String`, the other operand is automatically converted via `to_string()` before concatenation:
+**String concatenation**: When either operand of `+` is a `String`, the other
+operand is automatically converted to its textual representation before concatenation.
+`Body` is intentionally excluded; use `read()` or `read_all()` explicitly:
 
 ```dsl
 "count: " + 42           // "count: 42"
@@ -166,9 +174,11 @@ if token != nil {
 | `<=` | Less than or equal |
 | `>=` | Greater than or equal |
 
-Ordering comparisons (`<`, `>`, `<=`, `>=`) only apply to two `Int` operands. Using ordering comparisons on `String` values produces a runtime error.
+Ordering comparisons (`<`, `>`, `<=`, `>=`) accept matching `Int`/`Int` or
+`String`/`String` operands. A Body or mismatched pair produces a runtime type
+error.
 
-String `==` and `!=` comparisons use lexicographic order (byte-by-byte):
+String equality compares exact bytes; String ordering is lexicographic:
 
 ```dsl
 "abc" == "abc"   // true
@@ -353,16 +363,28 @@ for name in req.header_names() {
 
 ---
 
-## 5. String Methods
+## 5. Text and Body Methods
 
-String values support the following method calls using dot notation. If the receiver or an argument is not a string, the method returns `false` instead of raising an error:
+String and Body values share the following method calls using dot notation.
+Predicate methods preserve the existing nil-friendly `false` result when the
+receiver or argument has the wrong type:
 
 | Method | Parameter | Return Type | Description |
 |--------|-----------|-------------|-------------|
+| `.len()` | none | Int | Unicode scalar count for String or lossy-decoded Body text |
+| `.is_empty()` | none | Bool | Whether String or Body text is empty |
 | `.starts_with(prefix)` | String | Bool | Whether the string starts with the given prefix |
 | `.ends_with(suffix)` | String | Bool | Whether the string ends with the given suffix |
 | `.contains(substring)` | String | Bool | Whether the string contains the given substring |
 | `.matches(pattern)` | String | Bool | Whether the string matches the given regular expression (validated at compile time) |
+
+Body additionally provides `.byte_len()`, `.read(offset, max_bytes)`,
+`.read_all()`, `.sha256()`, `.md5()`, `.hmac_sha256(key)`,
+`.json_get("definite path")`, and the static
+multi-path `.json_select({"name": "$.path"})`. Request-stage scripts may
+mutate it with `.clear()`, `.append(s)`, `.prepend(s)`, `.remove(start, end)`,
+and literal `.replace(from, to)`. See the [API
+reference](./api-reference.md#reqbody) for bounds and failure behavior.
 
 ```dsl
 let ua = req.header("User-Agent")
@@ -382,7 +404,10 @@ if ua != nil {
 }
 ```
 
-The regex pattern passed to `.matches()` is validated at script compile time. An invalid pattern causes the script to fail loading:
+The regex pattern passed to `.matches()` is validated at script compile time.
+It must also fit the bounded streaming DFA dialect used for both String and
+Body. Unicode word boundaries are rejected; use `(?-u:\b)` for an ASCII word
+boundary. An invalid or incompatible pattern causes the script to fail loading:
 
 ```dsl
 let path = req.path()
@@ -413,7 +438,7 @@ return next()
 
 Rejects the request with the specified HTTP status code and response body:
 
-- `status`: integer, valid range 100–599
+- `status`: integer, valid final-response range 200–599
 - `body`: string or `nil` (nil means no response body)
 
 ```dsl
@@ -431,7 +456,8 @@ return deny(204, nil)
 Immediately terminates request processing without sending any response. Use this when you need to close the connection directly:
 
 ```dsl
-let ip = req.client_ip()
+// Deliberately match the physical peer for this exact network-origin block.
+let ip = req.direct_peer_ip()
 if ip == "1.2.3.4" {
     return terminate()
 }
@@ -668,7 +694,8 @@ return next()
 ### Example 5: IP Range Check
 
 ```dsl
-let ip = req.client_ip()
+// Deliberately use the physical peer for this internal-origin bypass.
+let ip = req.direct_peer_ip()
 
 // Internal IPs are allowed through directly without a token
 if ip_in_cidr(ip, "10.0.0.0/8") || ip_in_cidr(ip, "172.16.0.0/12") {

@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-body
+          namespace: edgion-default
+          port: 30040
+        request:
+          path:
+            template: /verify
+          method:
+            template: POST
+          headers:
+            forwardAll: true
+        forwardBody: true
+        decision: {}

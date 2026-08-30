@@ -10,17 +10,11 @@ use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
-    HTTPHeader, LocalObjectReference, ParsedRouteRetry, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
-    RouteTimeout as HttpRouteTimeout, SessionPersistence,
+    DelegationIssue, HTTPHeader, LocalObjectReference, ParsedRouteRetry,
+    ParsedRouteTimeouts as HttpParsedRouteTimeouts, RouteTimeout as HttpRouteTimeout, SessionPersistence,
+    GATEWAY_API_GROUP,
 };
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
-
-/// API group for GRPCRoute
-pub const GRPC_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for GRPCRoute
-pub const GRPC_ROUTE_KIND: &str = "GRPCRoute";
 
 /// GRPCRoute defines gRPC rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -40,6 +34,10 @@ pub struct GRPCRouteSpec {
 
     /// Hostnames defines a set of hostnames to match against the gRPC Host header
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
@@ -56,6 +54,7 @@ pub struct GRPCRouteSpec {
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
+    /// Indices refer to `rules`; not applicable to `resolved_rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
@@ -63,6 +62,24 @@ pub struct GRPCRouteSpec {
     /// Rules defines the gRPC routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<GRPCRouteRule>>,
+
+    /// Controller-resolved flattened rules produced by GRPCRoute delegation
+    /// (a rule whose backendRef points at `kind: GRPCRoute` delegates its
+    /// method/service match to child routes; the controller expands the
+    /// delegation tree). Present only on routes containing at least one
+    /// delegating rule. When present, the gateway compiles these INSTEAD of
+    /// `rules`, and `invalid_rule_indices` does not apply (flattening already
+    /// dropped invalid rules). See docs/en/user-guide/grpc-route/delegation.md
+    /// and skills/01-architecture/05-resources/05-grpc-route.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_rules: Option<Vec<GRPCRouteRule>>,
+
+    /// Controller-internal delegation diagnostics, produced by the flatten
+    /// step in `parse` and consumed by `update_status`. Never serialized.
+    #[serde(skip, default)]
+    #[schemars(skip)]
+    pub delegation_issues: Vec<DelegationIssue>,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
@@ -202,6 +219,10 @@ pub struct GRPCHeaderMatch {
     pub match_type: Option<String>,
 
     /// Name is the name of the gRPC Header
+    #[schemars(
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Value is the value of gRPC Header
@@ -220,6 +241,7 @@ pub struct GRPCBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend
@@ -238,14 +260,9 @@ pub struct GRPCBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<GRPCRouteFilter>>,
 
-    /// Parsed extension info (runtime only, not serialized).
-    /// Populated from `filters[].extensionRef` by `preparse()`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
-
-    /// BackendTLSPolicy for this backend (runtime only, not serialized)
-    /// Queried and populated during select_backend
+    /// Runtime-only BackendTLSPolicy attachment used by standalone backend
+    /// utilities. Routed gRPC selection captures its request-stable policy
+    /// separately and does not mutate this schema field.
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_tls_policy: Option<Arc<crate::resources::BackendTLSPolicy>>,
@@ -256,6 +273,15 @@ pub struct GRPCBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
+}
+
+impl GRPCBackendRef {
+    /// True if this backendRef delegates to a child GRPCRoute
+    /// (`group: gateway.networking.k8s.io, kind: GRPCRoute`) instead of
+    /// referencing a Service backend.
+    pub fn is_route_delegation_ref(&self) -> bool {
+        self.group.as_deref() == Some(GATEWAY_API_GROUP) && self.kind.as_deref() == Some("GRPCRoute")
+    }
 }
 
 /// GRPCRouteFilter defines processing steps that must be completed during the request/response lifecycle
@@ -339,8 +365,9 @@ pub struct GRPCRouteRetry {
 
     /// Backoff specifies the minimum duration a Gateway should wait between
     /// retry attempts and is represented in Gateway API Duration formatting.
-    /// Format: Duration (e.g., "10ms", "1s")
+    /// Format: GEP-2257 Duration (e.g., "10ms", "1s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub backoff: Option<String>,
 
     /// Codes specifies the gRPC status codes that a Gateway should
@@ -358,10 +385,13 @@ pub struct GRPCRouteRetry {
 
 /// Pre-parse methods for GRPCRoute.
 impl GRPCRoute {
-    /// Populate `extension_info` on each backend ref from its `ExtensionRef` filter.
-    ///
-    /// This is pure schema normalization (controller-side). It does **not** build
-    /// plugin runtimes — that is gateway-side work done by `compile_grpc_rule()`.
+    /// Rules the gateway should compile: the controller-flattened delegation
+    /// result when present, otherwise the operator-authored `rules`.
+    pub fn effective_rules(&self) -> Option<&Vec<GRPCRouteRule>> {
+        self.spec.resolved_rules.as_ref().or(self.spec.rules.as_ref())
+    }
+
+    /// Parse per-rule annotations (`retry-non-idempotent`).
     ///
     /// # Incomplete by itself
     ///
@@ -403,32 +433,14 @@ impl GRPCRoute {
                 }
             });
 
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
-
-        for rule in rules.iter_mut() {
-            rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
-
-            let Some(backend_refs) = rule.backend_refs.as_mut() else {
-                continue;
-            };
-
-            for backend_ref in backend_refs.iter_mut() {
-                // Populate extension_info from the ExtensionRef filter (schema normalization).
-                // Plugin runtime construction has moved to gateway compile_grpc_rule().
-                backend_ref.extension_info = backend_ref
-                    .filters
-                    .as_ref()
-                    .and_then(|filters| {
-                        filters
-                            .iter()
-                            .find(|f| f.filter_type == GRPCRouteFilterType::ExtensionRef)
-                            .and_then(|f| f.extension_ref.as_ref())
-                            .map(BackendExtensionInfo::from_extension_ref)
-                    })
-                    .unwrap_or_default();
-            }
+        // Both the operator-authored rules and the controller-flattened
+        // delegation rules (resolved_rules) need the annotation copy; the
+        // gateway compiles whichever is effective (see `effective_rules()`).
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            preparse_rules(rules, parsed_allow_non_idempotent_retry);
         }
     }
 
@@ -437,51 +449,11 @@ impl GRPCRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
-
-        for rule in rules.iter_mut() {
-            // Parse timeouts for each rule
-            if let Some(timeouts) = &rule.timeouts {
-                // Parse GRPCRouteTimeouts manually (same structure as HTTPRouteTimeouts)
-                let request_timeout = timeouts
-                    .request
-                    .as_ref()
-                    .map(|s| HttpRouteTimeout::parse(s, "request"))
-                    .unwrap_or(HttpRouteTimeout::Unset);
-
-                let backend_request_timeout = timeouts
-                    .backend_request
-                    .as_ref()
-                    .map(|s| HttpRouteTimeout::parse(s, "backend_request"))
-                    .unwrap_or(HttpRouteTimeout::Unset);
-
-                // Clamp: backendRequest must be <= request (Gateway API spec)
-                let backend_request_timeout =
-                    match (backend_request_timeout.as_duration(), request_timeout.as_duration()) {
-                        (Some(br), Some(req)) if br > req => {
-                            tracing::warn!(
-                                "GRPCRoute backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping",
-                                br,
-                                req
-                            );
-                            HttpRouteTimeout::Duration(req)
-                        }
-                        _ => backend_request_timeout,
-                    };
-
-                if !matches!(request_timeout, HttpRouteTimeout::Unset)
-                    || !matches!(backend_request_timeout, HttpRouteTimeout::Unset)
-                {
-                    rule.parsed_timeouts = Some(HttpParsedRouteTimeouts {
-                        request_timeout,
-                        backend_request_timeout,
-                    });
-
-                    tracing::debug!("Parsed route-level timeouts for GRPCRoute rule");
-                }
-            }
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            parse_timeouts_rules(rules);
         }
     }
 
@@ -491,53 +463,114 @@ impl GRPCRoute {
     /// `codes` (gRPC status codes) require trailers-level interception which is not yet implemented;
     /// if configured, a warning is logged and the field is ignored.
     pub fn parse_retry(&mut self) {
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        let route_id = format!(
+            "{}/{}",
+            self.metadata.namespace.as_deref().unwrap_or("default"),
+            self.metadata.name.as_deref().unwrap_or("")
+        );
 
-        for rule in rules.iter_mut() {
-            let Some(retry) = &rule.retry else {
-                continue;
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            parse_retry_rules(rules, &route_id);
+        }
+    }
+}
+
+/// Copy the pre-parsed `retry-non-idempotent` annotation value onto every rule
+/// in `rules`. Shared by `spec.rules` and `spec.resolved_rules`.
+fn preparse_rules(rules: &mut [GRPCRouteRule], allow_non_idempotent: Option<bool>) {
+    for rule in rules.iter_mut() {
+        rule.parsed_allow_non_idempotent_retry = allow_non_idempotent;
+    }
+}
+
+/// Parse and pre-process timeout configurations for `rules`. Shared by
+/// `spec.rules` and `spec.resolved_rules`.
+fn parse_timeouts_rules(rules: &mut [GRPCRouteRule]) {
+    for rule in rules.iter_mut() {
+        // Parse timeouts for each rule
+        if let Some(timeouts) = &rule.timeouts {
+            // Parse GRPCRouteTimeouts manually (same structure as HTTPRouteTimeouts)
+            let request_timeout = timeouts
+                .request
+                .as_ref()
+                .map(|s| HttpRouteTimeout::parse(s, "request"))
+                .unwrap_or(HttpRouteTimeout::Unset);
+
+            let backend_request_timeout = timeouts
+                .backend_request
+                .as_ref()
+                .map(|s| HttpRouteTimeout::parse(s, "backend_request"))
+                .unwrap_or(HttpRouteTimeout::Unset);
+
+            // Clamp: backendRequest must be <= request (Gateway API spec)
+            let backend_request_timeout = match (backend_request_timeout.as_duration(), request_timeout.as_duration()) {
+                (Some(br), Some(req)) if br > req => {
+                    tracing::warn!(
+                        "GRPCRoute backendRequest timeout ({:?}) exceeds request timeout ({:?}), clamping",
+                        br,
+                        req
+                    );
+                    HttpRouteTimeout::Duration(req)
+                }
+                _ => backend_request_timeout,
             };
 
-            let attempts = retry.attempts.map(|a| a.max(0) as u32);
-
-            let route_id = format!(
-                "{}/{}",
-                self.metadata.namespace.as_deref().unwrap_or("default"),
-                self.metadata.name.as_deref().unwrap_or("")
-            );
-
-            let backoff = retry.backoff.as_deref().and_then(|s| {
-                crate::duration::parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!(
-                            route = %route_id,
-                            value = %s,
-                            error = %e,
-                            "Invalid retry backoff duration in GRPCRoute, backoff disabled"
-                        );
-                    })
-                    .ok()
-            });
-
-            // gRPC retry.codes are gRPC status codes (0-16), not HTTP status codes.
-            // Status-code-based retry requires intercepting gRPC trailers (grpc-status),
-            // which is not supported in the current Pingora proxy architecture.
-            if retry.codes.as_ref().is_some_and(|c| !c.is_empty()) {
-                tracing::warn!(
-                    route = %route_id,
-                    "GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"
-                );
-            }
-
-            if attempts.is_some() || backoff.is_some() {
-                rule.parsed_retry = Some(ParsedRouteRetry {
-                    attempts,
-                    backoff,
-                    codes: None, // Not supported for gRPC
+            if !matches!(request_timeout, HttpRouteTimeout::Unset)
+                || !matches!(backend_request_timeout, HttpRouteTimeout::Unset)
+            {
+                rule.parsed_timeouts = Some(HttpParsedRouteTimeouts {
+                    request_timeout,
+                    backend_request_timeout,
                 });
+
+                tracing::debug!("Parsed route-level timeouts for GRPCRoute rule");
             }
+        }
+    }
+}
+
+/// Parse and pre-process retry configurations for `rules`. Shared by
+/// `spec.rules` and `spec.resolved_rules`.
+fn parse_retry_rules(rules: &mut [GRPCRouteRule], route_id: &str) {
+    for rule in rules.iter_mut() {
+        let Some(retry) = &rule.retry else {
+            continue;
+        };
+
+        let attempts = retry.attempts.map(|a| a.max(0) as u32);
+
+        let backoff = retry.backoff.as_deref().and_then(|s| {
+            crate::duration::parse_duration(s)
+                .map_err(|e| {
+                    tracing::warn!(
+                        route = %route_id,
+                        value = %s,
+                        error = %e,
+                        "Invalid retry backoff duration in GRPCRoute, backoff disabled"
+                    );
+                })
+                .ok()
+        });
+
+        // gRPC retry.codes are gRPC status codes (0-16), not HTTP status codes.
+        // Status-code-based retry requires intercepting gRPC trailers (grpc-status),
+        // which is not supported in the current Pingora proxy architecture.
+        if retry.codes.as_ref().is_some_and(|c| !c.is_empty()) {
+            tracing::warn!(
+                route = %route_id,
+                "GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"
+            );
+        }
+
+        if attempts.is_some() || backoff.is_some() {
+            rule.parsed_retry = Some(ParsedRouteRetry {
+                attempts,
+                backoff,
+                codes: None, // Not supported for gRPC
+            });
         }
     }
 }
@@ -553,6 +586,170 @@ use super::http_route::RouteParentStatus;
 #[serde(rename_all = "camelCase")]
 pub struct GRPCRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live route). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn backend_ref(group: Option<&str>, kind: Option<&str>) -> GRPCBackendRef {
+        GRPCBackendRef {
+            name: "target".to_string(),
+            namespace: None,
+            port: None,
+            weight: None,
+            group: group.map(str::to_string),
+            kind: kind.map(str::to_string),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    #[test]
+    fn test_is_route_delegation_ref_matrix() {
+        // Positive: exact group + kind
+        assert!(backend_ref(Some(GATEWAY_API_GROUP), Some("GRPCRoute")).is_route_delegation_ref());
+        // Negative: kind absent (defaults to Service semantics)
+        assert!(!backend_ref(Some(GATEWAY_API_GROUP), None).is_route_delegation_ref());
+        // Negative: Service kind
+        assert!(!backend_ref(None, Some("Service")).is_route_delegation_ref());
+        // Negative: right kind, wrong/absent group (core group Service named GRPCRoute)
+        assert!(!backend_ref(None, Some("GRPCRoute")).is_route_delegation_ref());
+        assert!(!backend_ref(Some("example.io"), Some("GRPCRoute")).is_route_delegation_ref());
+        // Negative: HTTPRoute is not a gRPC delegation target
+        assert!(!backend_ref(Some(GATEWAY_API_GROUP), Some("HTTPRoute")).is_route_delegation_ref());
+    }
+
+    fn route_json(spec: serde_json::Value) -> GRPCRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": {"name": "r", "namespace": "default"},
+            "spec": spec
+        }))
+        .expect("route should deserialize")
+    }
+
+    #[test]
+    fn test_effective_rules_prefers_resolved() {
+        let mut route = route_json(serde_json::json!({
+            "rules": [{"matches": [{"method": {"service": "svc.Spec"}}]}]
+        }));
+        // No resolved_rules → falls back to spec.rules
+        let rules = route.effective_rules().expect("spec rules present");
+        assert_eq!(
+            rules[0].matches.as_ref().unwrap()[0]
+                .method
+                .as_ref()
+                .unwrap()
+                .service
+                .as_deref(),
+            Some("svc.Spec")
+        );
+
+        // With resolved_rules → resolved wins
+        let resolved: Vec<GRPCRouteRule> = serde_json::from_value(serde_json::json!(
+            [{"matches": [{"method": {"service": "svc.Resolved"}}]}]
+        ))
+        .unwrap();
+        route.spec.resolved_rules = Some(resolved);
+        let rules = route.effective_rules().expect("resolved rules present");
+        assert_eq!(
+            rules[0].matches.as_ref().unwrap()[0]
+                .method
+                .as_ref()
+                .unwrap()
+                .service
+                .as_deref(),
+            Some("svc.Resolved")
+        );
+    }
+
+    #[test]
+    fn test_resolved_rules_serialized_delegation_issues_not() {
+        let mut route = route_json(serde_json::json!({"rules": []}));
+        route.spec.resolved_rules = Some(Vec::new());
+        route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
+            message: "internal".to_string(),
+        }];
+        let json = serde_json::to_value(&route).unwrap();
+        // resolved_rules must survive conf_sync serialization
+        assert!(json["spec"].get("resolvedRules").is_some());
+        // delegation_issues is controller-internal and must never serialize
+        assert!(json["spec"].get("delegationIssues").is_none());
+        assert!(json["spec"].get("delegation_issues").is_none());
+    }
+
+    #[test]
+    fn test_resolved_rules_only_covered_by_preparse_pipeline() {
+        // A route with ONLY resolved_rules set (no spec.rules) must still get
+        // full load-time processing: timeouts, retry, and annotation copies.
+        let mut route = route_json(serde_json::json!({}));
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "matches": [{"method": {"service": "svc.Billing"}}],
+                "timeouts": {"request": "10s"},
+                "retry": {"attempts": 2}
+            }]))
+            .unwrap(),
+        );
+
+        route.preparse();
+        route.parse_timeouts();
+        route.parse_retry();
+
+        let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+        assert!(rule.parsed_timeouts.is_some(), "resolved_rules timeouts must be parsed");
+        assert_eq!(
+            rule.parsed_retry.as_ref().and_then(|r| r.attempts),
+            Some(2),
+            "resolved_rules retry must be parsed"
+        );
+        // No annotation set on the route → None, but the field must still be
+        // reachable/populated by the preparse pipeline (not left stale).
+        assert_eq!(
+            rule.parsed_allow_non_idempotent_retry, None,
+            "resolved_rules annotation copy must run (absent annotation -> None)"
+        );
+    }
+
+    #[test]
+    fn test_resolved_rules_annotation_copy_reaches_resolved_rules() {
+        let mut route: GRPCRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": {
+                "name": "parent", "namespace": "infra",
+                "annotations": {"edgion.io/retry-non-idempotent": "true"}
+            },
+            "spec": {
+                "rules": [{"matches": [{"method": {"service": "svc.Parent"}}]}]
+            }
+        }))
+        .unwrap();
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "matches": [{"method": {"service": "svc.Child"}}]
+            }]))
+            .unwrap(),
+        );
+
+        route.preparse();
+
+        let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+        assert_eq!(
+            rule.parsed_allow_non_idempotent_retry,
+            Some(true),
+            "annotation copies must reach resolved_rules"
+        );
+    }
 }

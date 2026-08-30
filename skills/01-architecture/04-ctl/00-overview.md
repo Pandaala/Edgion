@@ -7,6 +7,8 @@ description: edgion-cli overview — three target modes (center/server/client), 
 
 edgion-cli is Edgion's command-line management tool, built on clap. It interacts with Controller and Gateway via HTTP API and supports resource CRUD, cache queries, and operations commands. Its core value is the ability to compare the three-tier cache (ConfCenter → ServerCache → ClientCache) to troubleshoot configuration sync issues.
 
+The CLI target name `center` refers to the Controller's ConfCenter data source. It does not connect to the external federation Center binary.
+
 ## Three target modes
 
 | Target | Connection target | Default port | Capability | Data source |
@@ -45,6 +47,7 @@ Different targets correspond to different HTTP API routes:
 GET    /api/v1/namespaced/{kind}              # List resources across all namespaces
 GET    /api/v1/namespaced/{kind}/{namespace}   # List resources in the specified namespace
 GET    /api/v1/namespaced/{kind}/{ns}/{name}   # Get the specified resource
+GET    /api/v1/cluster/{kind}                  # List cluster-scoped resources
 GET    /api/v1/cluster/{kind}/{name}           # Get a cluster-scoped resource
 POST   /api/v1/namespaced/{kind}/{namespace}   # Create a namespaced resource
 POST   /api/v1/cluster/{kind}                  # Create a cluster-scoped resource
@@ -69,7 +72,7 @@ GET    /configclient/{kind}/list               # List all resources
 GET    /configclient/{kind}?name=N&namespace=NS  # Filter by name/namespace
 ```
 
-The filtering for server and client routes is done client-side — the full data is fetched first, then filtered inside edgion-cli.
+For server/client list requests, namespace-only filtering is applied by the CLI after fetching the list. Named requests use the query endpoint and are filtered by the server.
 
 ## EdgionClient
 
@@ -80,14 +83,14 @@ pub struct EdgionClient {
     client: Client,         // reqwest HTTP client
     base_url: String,       // Base URL (e.g., http://localhost:12101)
     target: TargetType,     // Target type
-    socket_path: Option<PathBuf>,  // Unix socket path (optional)
+    token: Option<Zeroizing<String>>, // Optional static bearer token
 }
 ```
 
 ### Connection methods
 
-- **HTTP**: the default; the port is chosen based on target type (center/server → 12101, client → 12001)
-- **Unix Socket**: specified via the `--socket` argument, suitable for local communication on the same node
+- **HTTP**: the implemented transport; the port is chosen based on target type (center/server → 12101, client → 12001)
+- **Reserved socket flag**: `--socket` is currently parsed but ignored by `EdgionClient`; do not document or rely on Unix-socket connectivity until the client implements it
 
 ### Error handling
 
@@ -143,11 +146,14 @@ edgion-cli -t client get httproute -o json | jq length
 |------|--------|------|
 | `--target` | `-t` | Target mode: center (default), server, client |
 | `--server` | | Server address (e.g., `http://10.0.0.1:12101`) |
-| `--socket` | | Unix socket path |
-| `--namespace` | `-n` | Namespace filter |
-| `--output` | `-o` | Output format: table, json, yaml, wide |
-| `--file` | `-f` | File/directory path (for apply/delete) |
-| `--dry-run` | | Dry-run mode (apply only) |
+| `--socket` | | Reserved; currently ignored |
+| `--token` | | Bearer token; overrides the environment and token file |
+| `--namespace` | `-n` | `get` / `delete` namespace filter |
+| `--output` | `-o` | `get` format: table, json, yaml, wide |
+| `--file` | `-f` | `apply` / `delete` file or directory path |
+| `--dry-run` | | `apply` local preview; parses metadata and sends no request |
+| `--metadata-only` | | `get` via the ConfCenter metadata-key endpoint; center target only |
+| `--limit`, `--continue`, `--all` | | `get` pagination controls |
 
 ## Module structure
 
@@ -155,13 +161,17 @@ edgion-cli -t client get httproute -o json | jq length
 edgion-cli/src/
 ├── cli/
 │   ├── mod.rs              # Cli struct, TargetType, Commands enum, command routing
+│   ├── auto_auth.rs        # Bearer-token precedence resolution
 │   ├── client.rs           # EdgionClient HTTP client implementation
 │   ├── output.rs           # OutputFormat, table/JSON/YAML output formatting
+│   ├── token.rs            # Token generation and local persistence
 │   └── commands/
 │       ├── mod.rs          # Subcommand module exports
 │       ├── apply.rs        # apply command (YAML parsing → API call)
 │       ├── get.rs          # get command (query + formatted output)
 │       ├── delete.rs       # delete command
-│       └── reload.rs       # reload command
-└── mod.rs
+│       ├── reload.rs       # reload command
+│       ├── gen_certs.rs    # gen-certs command
+│       └── login.rs        # token persistence command
+└── lib.rs
 ```

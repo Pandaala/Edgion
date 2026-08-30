@@ -61,7 +61,7 @@ spec:
       config:
         redisRef: "default/shared-redis"
         key:
-          - type: clientIp
+          - type: remoteIp
         policies:
           - rate: 100
             interval: "1s"
@@ -89,9 +89,9 @@ spec:
 |------|------|--------|------|
 | `redisRef` | String | —（必填） | Redis LinkSys 资源引用，格式 `"namespace/name"`。仅支持字母数字、`-`、`_` |
 | `policies` | Array\<Object\> | —（必填） | 限流策略列表，至少一条，最多 10 条，见下方 Policy 配置 |
-| `key` | Array\<Object\> | `[{type: clientIp}]` | 限流维度列表，多个 key 用 `_` 拼接，见下方 Key 配置 |
-| `onMissingKey` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
-| `defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onMissingKey` |
+| `key` | Array\<Object\> | `[{type: remoteIp}]` | 限流维度列表。单个 key 原样使用，多个 key 带长度前缀后用 `_` 拼接，见下方 Key 配置 |
+| `onKeyMiss` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
+| `defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onKeyMiss` |
 | `rejectStatus` | Integer | `429` | 拒绝时的 HTTP 状态码（100–599） |
 | `rejectMessage` | String | 无 | 拒绝时的 JSON 响应体 |
 | `showLimitHeaders` | Boolean | `true` | 是否返回限流响应头 |
@@ -121,7 +121,7 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `rate` | Integer | —（必填） | 时间窗口内允许的最大请求数（或消耗单位数），必须 > 0 |
-| `interval` | String | —（必填） | 时间窗口，如 `"1s"`、`"1m"`、`"1h"`、`"1d"`，也支持组合格式如 `"1h30m"`。最小 100ms |
+| `interval` | String | —（必填） | 时间窗口，如 `"1s"`、`"1m"`、`"1h"`、`"24h"`，也支持组合格式如 `"1h30m"`。最小 100ms |
 | `algorithm` | Enum | `SlidingWindow` | 限流算法。可选值见下表 |
 
 #### 算法说明
@@ -142,25 +142,31 @@ spec:
 
 | type | 需要 name | 说明 |
 |------|-----------|------|
-| `clientIp` | 否 | 客户端 IP（经过真实 IP 提取后） |
+| `remoteIp` | 否 | 解析后的客户端 IP |
 | `header` | 是 | 指定请求头的值 |
 | `cookie` | 是 | 指定 Cookie 的值 |
 | `query` | 是 | 指定 Query 参数的值 |
 | `path` | 否 | 请求路径 |
 | `method` | 否 | HTTP 方法 |
 | `ctx` | 是 | 上下文变量（由其他插件设置） |
-| `clientIpAndPath` | 否 | 客户端 IP + 路径组合 |
+| `remoteIpAndPath` | 否 | 解析后的客户端 IP + 路径组合 |
 
 多个 key 拼接示例：
 
 ```yaml
 key:
-  - type: clientIp
+  - type: remoteIp
   - type: header
     name: "X-API-Key"
 ```
 
-生成的 Redis key 形如：`edgion:rl:sw:192.168.1.1_apikey123`
+生成的 Redis key 形如 `{keyPrefix}{pluginScope}:{算法}:{策略序号}:{限流键}`，例如 `edgion:rl:default/api-limiter/#0:sw:0:11:192.168.1.1_9:apikey123` —— 配置多个 key 时，限流键的每一段都带 `<字节长度>:` 前缀，保证不同的取值元组不会落进同一个桶。只配置一个 key 时原样使用（`edgion:rl:default/api-limiter/#0:sw:0:192.168.1.1`）。
+
+`{pluginScope}` 标识拥有这个桶的插件条目：插件所在 EdgionPlugins 资源的 `<namespace>/<name>/<alias>`，条目未配 `alias` 时为 `<namespace>/<name>/#<下标>`。同一份资源在每个 Gateway 实例上推导出相同的字符串，集群级计数不受影响；但两个互不相关的 EdgionPlugins 资源再也不会落进同一批桶，哪怕它们的 `keyPrefix` 和 `key` 来源完全相同。没有它，控制了 A 插件某个 key 来源的客户端可以构造出与 B 插件复合键相同的取值；更常见的是，两个用默认配置的插件会悄悄共用同一套按 IP 的桶。重命名资源或 `alias`、或调换未配 alias 的条目顺序，都会让插件切到新命名空间、计数从零开始；配上 `alias` 即可让作用域不随条目顺序变化。alias 在同一 stage 数组内必须唯一：重复会让资源变为 `Accepted=False`，同时 Gateway 会丢弃重复的那个 alias、让该条目回落到 `#<下标>` 作用域——所以重复 alias 不可能把两个条目并进同一个桶。
+
+引用**同一个** EdgionPlugins 资源的多条路由共享同一个限流器——这正是跨路由共享限流的实现方式，也与内存版 `RateLimit`（计数器同样按资源共享）一致。两个**不同**的资源在构造上已经不可能共享桶：想跨路由共享配额，请让它们指向同一个资源，而不是复制一份配置。
+
+不写 `key` 时套用默认值 `[{type: remoteIp}]`。显式写 `key: []` 表示「单一全局桶」：所有请求组合出同一个空键，仍然会被限流——它不算 key 提取失败，因此 `onKeyMiss` / `defaultKey` 对它不生效。
 
 ---
 
@@ -220,7 +226,7 @@ spec:
       config:
         redisRef: "default/shared-redis"
         key:
-          - type: clientIp
+          - type: remoteIp
         policies:
           - rate: 100
             interval: "1s"
@@ -270,7 +276,7 @@ spec:
         key:
           - type: header
             name: "X-API-Key"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         policies:
           - rate: 50
             interval: "1s"
@@ -324,7 +330,7 @@ spec:
         key:
           - type: header
             name: "Authorization"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         onRedisFailure: Deny
         policies:
           - rate: 1000

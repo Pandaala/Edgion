@@ -1,6 +1,6 @@
 ---
 name: resource-edgion-config-data
-description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, apply_override, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), managed-by ownership, and controller/gateway processing.
+description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, apply_override, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), ownership (Center-controlled; the managed-by label is inert here), and controller/gateway processing.
 ---
 
 # EdgionConfigData Resource
@@ -19,6 +19,7 @@ and others later) may reference it via a generic `dataRef`.
 - Type definitions: `edgion-resources/src/resources/edgion_config_data/mod.rs` (main module, `ConfigEntry` enum, `EdgionConfigDataSpec`)
 - `KeyList` shape: `edgion-resources/src/resources/edgion_config_data/key_list.rs`
 - `IpList` shape: `edgion-resources/src/resources/edgion_config_data/ip_list.rs`
+- `RequestAccessUrlAllowList` shape: `edgion-resources/src/resources/edgion_config_data/request_access_url_allow_list.rs`
 - `IpGroup` (shared primitive): `edgion-resources/src/resources/edgion_config_data/ip_group.rs`
 - `Selector` shape: `edgion-resources/src/resources/edgion_config_data/selector.rs`
 - First-party overlay shape: `edgion-resources/src/resources/edgion_config_data/region_route.rs` (`RegionRouteOverride`)
@@ -52,7 +53,7 @@ and others later) may reference it via a generic `dataRef`.
                 │     EdgionConfigData        │  general-purpose, hot-swappable
                 │  (overlay / data)     │  KeyList/IpList + typed overlays + Misc
                 └──────────────────────┘
-           origin-agnostic: operator | controller | center (managed-by label)
+           Center-controlled data; not an ops-repo artifact (see Ownership)
 ```
 
 - **Base** (`EdgionPlugins` / `EdgionStreamPlugins`, git-owned): holds complete, safe default config — decision
@@ -91,7 +92,7 @@ and others later) may reference it via a generic `dataRef`.
 | EdgionConfigData present, valid | `base ⊕ overlay` (field-level replace) |
 | `enable=false` effective (envelope `spec.enable` or variant `enable`) | **Base** + `overlay_disabled` signal (envelope kill switch) |
 
-Signals: gateway uses access-log `EdgionStatus` + Prometheus counter. No `tracing::error!` on the data plane.
+Signals: gateway uses an access-log `EdgionErrorCode` diagnostic + Prometheus counter. No `tracing::error!` on the data plane.
 
 > Three CI gates guard this contract — see [`skills/09-misc/cicd/02-github-workflow.md`](../../../09-misc/cicd/02-github-workflow.md) "EdgionConfigData overlay gates". In short: forbidden-legacy-refs grep, CRD `type` ↔ Rust `ConfigEntry` parity, and overlay-consumer signal completeness (all four signals above).
 
@@ -102,11 +103,35 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 
 | Group | Variant | Shape | Notes |
 |-------|---------|-------|-------|
-| std primitive | `KeyList` | `{ matchMode: Exact\|Regex, items: [KeyGroup] }` | Unified string+regex via `matchMode` |
+| std primitive | `KeyList` | `{ matchMode: exact\|regex, items: [KeyGroup] }` | Unified string+regex via `matchMode` |
 | std primitive | `IpList` | `{ items: [IpGroup] }` | Radix-tree CIDR matcher; consumed by IpRestriction (HTTP/L4/TLS-route) and GCIR per-profile via `allowRefs`/`denyRefs` |
+| typed policy data | `RequestAccessUrlAllowList` | `{ items: [UrlAccessCandidate] }` | URL allow candidates expanded into RequestAccessPolicy by the Controller |
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
+
+## Unknown Config Fields
+
+The Controller applies the shared advisory schema walk to the typed `KeyList`, `IpList`,
+`RequestAccessUrlAllowList`, `Selector`, and `RegionRouteOverride` payloads. A key that serde would otherwise ignore is
+reported through the `UnknownConfigFields=True` condition, a bounded Controller warning,
+`GET /api/v1/diagnostics/unknown-fields`, Admin write warnings, and
+`POST /api/v1/validate/EdgionConfigData`. It does not change `Accepted` or block conf_sync.
+
+Credential and authentication sub-structures nested inside typed policy data retain their
+strict deserialization boundary. For example, `SecretObjectReference`, SecretMatch, and HMAC
+credential shapes still reject unknown fields; this prevents inline or misspelled credential
+material from degrading into an unauthenticated configuration. The surrounding URL candidate,
+path, and IP-match data remains advisory.
+
+`Misc.config` remains deliberately free-form and is never inspected for unknown keys. The
+openness is scoped to that config node; raw-document ingresses still report unknown siblings
+of `data.config` or unknown fields in the spec envelope. Kubernetes is different because its
+structural CRD prunes unknown `spec`/`data` siblings before the watcher sees the object, so the
+Kubernetes capture guarantee applies only below the preserved `data.config` node.
+
+Findings live in `EdgionConfigDataSpec::unknown_fields`, an in-process-only sidecar marked
+`#[serde(skip)]` and `#[schemars(skip)]`. It is absent from both the CRD and conf_sync wire.
 
 No separate `StringList`/`RegexList` (folded into `KeyList(matchMode)`). No standalone `Switch` variant
 (`enable`/`active` live on the envelope). `Selector` replaced the former `GlobalConnIpRestrictionOverride`
@@ -150,6 +175,7 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 | `Accepted` | Spec passes preparse validation. For `IpList`, always `True` even when entries are bad (partial-good). |
 | `ResolvedRefs` | EdgionConfigData itself carries no external cross-resource refs; own `ResolvedRefs` is always `True`. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
 | `PartiallyInvalid` | **`IpList` only**: `status=True`/`reason=RuleInvalid` (with message listing bad entries) when `collect_entry_errors` finds invalid CIDRs, empty groups, duplicate group names, invalid group names, or cross-group duplicate CIDRs (keep-first). `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True`; partial-good entries are admitted and the rest still compile. |
+| `UnknownConfigFields` | Present as `True/UnknownFieldsDetected` when a typed payload contains keys the generated schema does not recognize; removed entirely after a clean reapply. Advisory only and independent of `Accepted`. |
 
 ## Gateway-Side Processing
 
@@ -161,27 +187,63 @@ re-applies `apply_override` on each request from the current snapshot.
   `overlay_type_mismatch` label on the relevant plugin's event counter).
 - **Enable=false:** plugin skipped via the shared `effective_switch` helper.
 
-## Managed-By Ownership
+## Ownership
 
-The `edgion.io/managed-by` **label** on an EdgionConfigData object declares who owns its lifecycle. See
-`skills/02-features/05-annotations/00-annotations-overview.md` (Labels section) for the full vocabulary:
+EdgionConfigData is the **Center-controlled data overlay**, and its bodies are not an ops-repo
+artifact. The split is deliberate: the git-owned half of the model is the base config
+(`EdgionPlugins` and friends), which carries the *logic*; the EdgionConfigData overlay carries
+only *data* and exists to be pushed and hot-swapped by EdgionCenter. There is therefore a single
+intended writer for this kind, no ownership arbitration to perform, and none implemented.
 
-| Value | Meaning | Controller behavior |
-|-------|---------|---------------------|
-| `operator` (default) | Git/kubectl authoritative | Controller never mutates spec |
-| `acme` | ACME-managed (existing usage on Secrets/EdgionTls) | ACME service owns lifecycle |
-| `center` | Placeholder; data pushed via fed_sync from EdgionCenter | Controller does not overwrite from git — **DESIGN-DECLARED, NOT YET IMPLEMENTED** |
-| `controller` | Body regenerated from a template ref | Controller regenerates spec — **DESIGN-DECLARED, NOT YET IMPLEMENTED** |
+**The `edgion.io/managed-by` label is inert on EdgionConfigData — nothing reads it.**
 
-`operator` is the only active ownership mode today. `center` and `controller` require EdgionCenter
-coordination (I1 in `tasks/todo/edgion-config-data-overlay-refactor/05-issues.md`).
+- No handler consults it. `resource_processor/handlers/edgion_config_data.rs` has no label logic,
+  and the reconcile path only stores the spec, requeues dependents, and writes status (see the
+  four sections above). The `operator` value's stated meaning, "controller never mutates spec", was
+  therefore not merely unenforced but wrong: the Controller's own Admin API failover endpoint
+  (`edgion-controller/src/api/region_route_handlers.rs`) rewrites `spec.data.config.regions` on an
+  EdgionConfigData, and consults no label while doing it.
+- The `managed_by` constants in `edgion-resources/src/constants/labels.rs` have **no callers**
+  anywhere in the workspace. They are declarations, not a mechanism.
+- The label's only live use is on `Secret` and `EdgionTls`, never on EdgionConfigData, and it does
+  not go through those constants: ACME writes `acme`
+  (`edgion-controller/src/services/acme/service.rs`,
+  `edgion-controller/src/services/acme/secret_io.rs`) and the conf-sync CA writes `conf-sync-ca`
+  (`edgion-controller/src/services/conf_sync_ca/secret_io.rs`), each via its own local string
+  literal.
+
+Do not put `edgion.io/managed-by` on an EdgionConfigData manifest or sample: it changes no
+behavior and reads as an ownership guarantee that does not exist. See
+`skills/02-features/05-annotations/00-annotations-overview.md` (Labels section) for the label's
+actual vocabulary, which covers only ACME- and conf-sync-CA-owned `Secret`s plus the
+ACME-generated `EdgionTls`.
+
+### Why there is no `center` / `controller` ownership mode
+
+Both values were previously declared here as pending EdgionCenter coordination. The label-based
+ownership design that would have consumed them — Center stamping `managed-by: center`, refusing to
+take over an unowned object, and surfacing an `unowned-conflict` drift state — lived in
+EdgionCenter's `tasks/pending/global-resource-management/` package, which was **superseded and
+rejected on 2026-07-26** in favour of
+`tasks/pending/center-controller-interaction-convergence/`. The current program authority,
+`EdgionCenter/docs/superpowers/specs/2026-07-26-center-controller-write-model-convergence-design.md`,
+declares no `managed-by` mechanism at all. Center's cross-cluster `GlobalResources` view is
+read-only; Center's two *dedicated* write paths — the pair sharing its convergence-outcome write
+core — are RegionRouteOverride failover and row-level copy, while general EdgionConfigData
+create / update / delete stays available through the generic Controller Admin proxy, which is what
+the default federation policy grants. Write safety throughout is a CAS property — `If-Match` on
+`metadata.resourceVersion`, with explicit `converged` / `superseded` / `conflict` outcomes — not an
+ownership epoch.
+
+Full analysis and the decision to keep it that way:
+[`../../04-review/architecture/edgion-config-data-managed-by-is-inert.md`](../../04-review/architecture/edgion-config-data-managed-by-is-inert.md).
 
 ## Cross-Resource Relationships
 
 | Direction | Mechanism |
 |-----------|-----------|
 | EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
-| EdgionConfigData ← EdgionPlugins | `GlobalAccessControl.activeProfileRef` → `Selector`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionPlugins | `RequestAccessPolicy.activeProfileRef` → `Selector`; IP rules/conditions → `IpList`; URL rules → `RequestAccessUrlAllowList` | Selector failures affect `ResolvedRefs`; optional IP/URL data failures, including cross-ns denial, are omitted individually and reported through `PartiallyInvalid`. All refs use the shared reverse index and cross-namespace requeue path. |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
 | EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type → `ResolvedRefs=False`; cross-ns without grant/visibility → `RefNotPermitted`) |
 | EdgionConfigData → {EdgionPlugins, EdgionStreamPlugins} | `EdgionConfigDataRefManager` requeue on change/delete |
@@ -193,7 +255,7 @@ coordination (I1 in `tasks/todo/edgion-config-data-overlay-refactor/05-issues.md
 
 Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`denyRefs` (IpList),
 `overrideRef` (RegionRouteOverride), `activeProfileRef` (Selector, including
-`GlobalAccessControl.activeProfileRef`) — are gated by two complementary controls.
+`RequestAccessPolicy.activeProfileRef`) — are gated by two complementary controls.
 
 ### Mechanism
 
@@ -321,8 +383,6 @@ kind: EdgionConfigData
 metadata:
   name: region-overlay
   namespace: edgion-system
-  labels:
-    edgion.io/managed-by: operator
 spec:
   enable: true
   data:

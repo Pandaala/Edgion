@@ -4,8 +4,6 @@
 //! - `mode=Connection`: read mTLS client cert info from request context
 //! - `mode=Header`: parse certificate from request header and verify with configured CA certs
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -16,7 +14,7 @@ use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
 use crate::ctx::ClientCertInfo;
-use crate::plugins::http::common::auth_common::send_gateway_auth_error_response;
+use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
@@ -333,12 +331,6 @@ impl HeaderCertAuth {
         Ok(Self::extract_client_cert_info(&cert))
     }
 
-    async fn apply_auth_failure_delay(&self) {
-        if self.config.auth_failure_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(self.config.auth_failure_delay_ms)).await;
-        }
-    }
-
     async fn reject(
         &self,
         session: &mut dyn PluginSession,
@@ -346,7 +338,7 @@ impl HeaderCertAuth {
         detail: &'static str,
     ) -> PluginRunningResult {
         plugin_log.push_err(detail);
-        self.apply_auth_failure_delay().await;
+        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
         let _ = send_gateway_auth_error_response(
             session,
             self.config.error_status,

@@ -1,0 +1,19 @@
+# Hop 2 must treat hop 1 as a trusted proxy, otherwise the X-Forwarded-For walk
+# stops at hop 1's own address. This is the L7 trust list and is deliberately
+# separate from edgion.io/proxy-protocol-trusted-cidrs, which is the L4 one.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: chain-egc
+spec:
+  maxRetries: 0
+  requestBody: {}
+  forwardedHeaders:
+    remoteIpHeader: X-Edgion-Remote-IP
+  realIp:
+    trustedIps:
+      - name: peer-gateways
+        cidrs:
+          - "127.0.0.0/8"
+    realIpHeader: X-Forwarded-For
+    recursive: true

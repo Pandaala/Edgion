@@ -1,12 +1,11 @@
 ---
 name: config-center-overview
-description: ConfCenter trait architecture — CenterApi, CenterLifeCycle, Workqueue pipeline, BidirectionalRefManager, Secret management.
+description: ConfCenter trait architecture — three backends, CenterApi, CenterLifeCycle, ControllerRuntime ownership, Workqueue pipeline, reference managers, and Secret management.
 ---
 
 # ConfigCenter Architecture Overview
 
-The ConfigCenter is a core Controller subsystem that abstracts configuration sources (file system / Kubernetes) into a unified trait system.
-Both backends share an identical Workqueue + ResourceProcessor processing pipeline.
+The ConfigCenter abstracts file-system, Kubernetes, and Etcd configuration sources into a unified trait system. All three use the same runtime-owned Workqueue + ResourceProcessor processing model.
 
 ## ConfCenter Trait Hierarchy
 
@@ -15,7 +14,7 @@ ConfMgr (facade, manager.rs)
 └── Arc<dyn ConfCenter>
     ├── FileSystemCenter   — watches a local YAML directory
     ├── KubernetesCenter   — K8s API watchers + leader election
-    └── EtcdCenter         — etcd KV store + watch events (single-Controller only)
+    └── EtcdCenter         — etcd KV store + watch events (active-passive HA via v3election leader election)
 ```
 
 Trait composition:
@@ -27,30 +26,31 @@ Trait composition:
 | `ConfCenter` | Full interface | `= CenterApi + CenterLifeCycle` (blanket impl: any type that implements both automatically gets `ConfCenter`) |
 
 `CenterApi` is implemented at the storage layer: `FileSystemStorage` (local file I/O), `KubernetesStorage` (K8s API calls), `EtcdStorage` (etcd KV I/O).
-`CenterLifeCycle` is implemented at the center layer: `FileSystemCenter` and `KubernetesCenter`.
+`CenterLifeCycle` is implemented at the center layer by `FileSystemCenter`, `KubernetesCenter`, and `EtcdCenter`.
 The center layer delegates CRUD operations to the storage layer via the delegation pattern, focusing on lifecycle management itself.
 
 ### ConfMgr Facade
 
 `ConfMgr` is the unified entry point for external callers; internally it holds an `Arc<dyn ConfCenter>`.
-The factory chooses to instantiate either `FileSystemCenter` or `KubernetesCenter` based on `conf_center.type`.
+The factory instantiates `FileSystemCenter`, `KubernetesCenter`, or `EtcdCenter` based on `conf_center.type`.
 External modules (Admin API, gRPC server) access all configuration operations through `ConfMgr` without needing to know the underlying backend type.
 
 ## Unified Workqueue + ResourceProcessor Pipeline
 
-Both backends share an identical processing pipeline. Each resource type owns its own `ResourceProcessor<K>` + `Workqueue`:
+All backends share the same processing model. Each resource type owns a `ResourceProcessor<K>` + `Workqueue` registered in its ConfCenter's `ControllerRuntime`:
 
 ```mermaid
 flowchart TD
-    A["Event (file change / K8s watch)"] --> B["ResourceController\non_apply(key) / on_delete(key)"]
+    A["Event (file change / K8s watch / Etcd watch)"] --> B["ResourceController\non_apply(key) / on_delete(key)"]
     B --> C["Workqueue.enqueue(key)\nDedup by key (pending set)"]
     C --> D["Worker loop: dequeue()\nKey released from pending (dirty requeue)"]
     D --> E["store.get(key)"]
     E --> F["handler.validate(obj)\nSchema + semantic validation"]
     F --> G["handler.preparse(obj)\nBuild runtime structures"]
     G --> H["handler.parse(obj)\nUpdate cache, resolve references"]
-    H --> I["handler.on_change(obj)\nNotify dependent resources"]
-    I --> J["handler.update_status(obj)\nWrite back status"]
+    H --> I["handler.update_status(obj)\nCompute and persist semantic status changes"]
+    I --> J["handler.on_change(obj)\nNotify dependents before cache save"]
+    J --> K["save processed object to ServerCache"]
 ```
 
 The differences are only at the two ends:
@@ -59,9 +59,9 @@ The differences are only at the two ends:
 |------------|-----------------|-----------------|------------|
 | Event source | `notify` crate, inotify/kqueue file watching | K8s API Reflector watch stream | etcd watch stream |
 | Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | None (status is not persisted) |
-| Leader election | None (single instance) | Lease-based distributed election | None (single instance) |
+| Leader election | None (single instance) | Lease-based distributed election | etcd `v3election` + self-managed lease keepalive (active-passive) |
 | 410 Gone handling | N/A | When detected, watcher reconnect triggers KubernetesController rebuild | N/A |
-| Concurrent-write constraint | Single process; check-then-write is non-atomic | K8s API Server provides atomicity | **Single Controller exclusive**; check-then-write is non-atomic; by design does not support concurrent writes from multiple Controllers to the same etcd |
+| Concurrent-write constraint | Single process; check-then-write is non-atomic | K8s API Server provides atomicity | **Single active writer, guaranteed by leader election**; check-then-write is non-atomic, but active-passive HA (etcd `v3election` + a pre-write leadership gate) ensures exactly one leader writes at a time. The single-writer assumption is now enforced by leader election, not by operator discipline |
 
 The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
 
@@ -100,9 +100,11 @@ BidirectionalRefManager<V>
 2. Handlers clean up reference relationships during the `on_delete()` phase
 3. The source handler's `on_change()` calls `get_refs()` to find all dependents and requeue them
 
-### Cross-resource Requeue DAG
+### Cross-resource Requeue Graph
 
-Cross-resource requeue must form a directed acyclic graph; circular triggering is forbidden:
+The dependency graph includes intentional cycles (for example route delegation
+and parent/status relationships). TriggerChain depth/cycle limits bound repeated
+propagation; do not assume the graph is a DAG.
 
 ```mermaid
 flowchart LR
@@ -125,13 +127,13 @@ flowchart LR
     Route["Route (any)"] -->|"requeue parent gateways\nfor status update"| Gateway3["Gateway"]
 ```
 
-Key constraint: Gateway must not trigger Route requeue, otherwise `Route → Gateway → Route` would form an infinite loop.
-The TriggerChain mechanism records the path on each cross-resource requeue and stops once the depth exceeds `max_trigger_cycles`.
+Treat each new dependency edge as a cycle-safety decision. The TriggerChain
+records propagation and enforces configured cycle/depth limits.
 
-## Secret Management — GLOBAL_SECRET_STORE
+## Secret Management — runtime-owned SecretStore
 
 ```
-GLOBAL_SECRET_STORE (LazyLock<SecretStore>)
+ControllerRuntime.secret_store
 ├── Map: "namespace/name" → Secret
 ├── get_secret(namespace, name) → Option<Secret>
 ├── update_secrets(upsert, remove)
@@ -143,14 +145,14 @@ SecretHandler
 └── on_delete: remove from SecretStore + cascade requeue
 ```
 
-`GLOBAL_SECRET_STORE` is implemented as a `LazyLock` global singleton that all handlers query during `parse()` to read Secret contents.
-On Secret changes, `SecretHandler.on_change()` queries `SecretRefManager` to obtain all resources referencing that Secret,
-then triggers cascading reprocessing through `PROCESSOR_REGISTRY.requeue()`.
+Each ConfCenter's `ControllerRuntime` owns the SecretStore that handlers query during `parse()`.
+On Secret changes, `SecretHandler.on_change()` queries the runtime-owned SecretRefManager to obtain all resources referencing that Secret,
+then triggers cascading reprocessing through `runtime.processor_registry.requeue()`.
 
-## ProcessorRegistry — Global Registry
+## ProcessorRegistry — ControllerRuntime member
 
 ```rust
-pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new);
+runtime.processor_registry
 ```
 
 | Method | Purpose |
@@ -163,14 +165,16 @@ pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(Proce
 | `is_all_ready()` | Check whether all caches are ready |
 | `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds to finish initialization |
 | `all_watch_objs(no_sync)` | Collect WatchObjs for the ConfigSyncServer |
-| `clear_registry()` | Clear all processors (on restart / loss of leadership) |
+| `ControllerRuntime::reset()` | Selectively reset processors and reload-scoped stores |
 
 ## Key Files
 
 - `edgion-controller/src/conf_mgr/conf_center/traits.rs` — trait definitions
 - `edgion-controller/src/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter`
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — `KubernetesCenter`
+- `edgion-controller/src/conf_mgr/conf_center/etcd/center.rs` — `EtcdCenter`
 - `edgion-controller/src/conf_mgr/manager.rs` — `ConfMgr` facade
+- `edgion-controller/src/conf_mgr/runtime.rs` — `ControllerRuntime` ownership and reset semantics
 - `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler` trait
@@ -178,4 +182,4 @@ pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(Proce
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — Secret reference management
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/service_ref.rs` — Service reference management
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs` — cross-namespace references
-- `edgion-controller/src/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`
+- `edgion-controller/src/conf_mgr/processor_registry.rs` — `ProcessorRegistry`

@@ -8,12 +8,6 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// API group for ReferenceGrant
-pub const REFERENCE_GRANT_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for ReferenceGrant
-pub const REFERENCE_GRANT_KIND: &str = "ReferenceGrant";
-
 use super::common::api_groups_match;
 
 /// ReferenceGrant identifies kinds of resources in other namespaces that are

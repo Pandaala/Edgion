@@ -9,9 +9,10 @@ How Edgion handles CORS preflight (`OPTIONS`) requests at the gateway.
 ## Overview
 
 Browsers send a CORS preflight `OPTIONS` request before certain cross-origin calls. Edgion
-answers these preflights at the edge so they do not have to reach every backend. By default
-this works without any configuration: if the route has a CORS plugin, Edgion replies using
-that CORS configuration; otherwise it replies `204 No Content`.
+can answer these preflights at the edge so they do not have to reach every backend. By default,
+a standard preflight is handled by the route's CORS filter when one is configured; otherwise
+Edgion replies `204 No Content`. A CORS filter may deliberately pass the request upstream, as
+described in [Relationship with CORS](#relationship-with-cors).
 
 You only need `preflightPolicy` if you want to change *which* `OPTIONS` requests are treated
 as preflight, or the default status code. It is set on the `EdgionGatewayConfig` referenced by
@@ -51,20 +52,20 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `mode` | Enum | `cors-standard` | Which `OPTIONS` requests are treated as preflight. Allowed values: `cors-standard` \| `all-options` |
-| `statusCode` | Integer | `204` | Preflight response status code used when no CORS plugin is attached to the route |
+| `statusCode` | Integer | `204` | Final preflight response status (200-599) used when no CORS plugin is attached to the route |
 
 ### `mode` values
 
 | Value | Meaning |
 |-------|---------|
 | `cors-standard` | Strict CORS detection: the request must be `OPTIONS` and carry both `Origin` and `Access-Control-Request-Method`. Standard browser behavior. |
-| `all-options` | Treat every `OPTIONS` request as preflight, without checking CORS headers. For non-standard clients that omit CORS headers. |
+| `all-options` | Select every `OPTIONS` request for global preflight handling, without first requiring CORS headers. A route-level CORS filter still decides whether it owns the selected request. |
 
 ## Default behavior
 
 Edgion handles preflight automatically; the default `preflightPolicy` is `mode: cors-standard`
 with `statusCode: 204`. If a route references a CORS plugin, the preflight response follows the
-CORS rules; otherwise Edgion returns the configured `statusCode`.
+CORS rules, including `preflightContinue`; otherwise Edgion returns the configured `statusCode`.
 
 ## Scenarios
 
@@ -86,7 +87,9 @@ spec:
 
 ### Treat all OPTIONS as preflight
 
-Use `all-options` when some clients send `OPTIONS` without standard CORS headers.
+Use `all-options` when some clients send `OPTIONS` without standard CORS headers and routes
+without a CORS filter should answer those requests locally. On a route with a CORS filter, an
+`OPTIONS` request without `Origin` is not a CORS request and continues upstream.
 
 ```yaml
 apiVersion: edgion.io/v1alpha1
@@ -120,9 +123,32 @@ How preflight interacts with CORS depends on how CORS is configured on the route
 - **Gateway API native `type: CORS` filter** — the preflight handler does **not** intervene;
   preflight is handled inside the route-level filter chain. `preflightPolicy` has no effect on
   this path.
-- **EdgionPlugins CORS plugin (via `ExtensionRef`)** — the preflight handler runs first,
-  finds the route's CORS configuration, and answers using it. If no CORS configuration is
-  found, it returns the configured `statusCode`.
+- **EdgionPlugins CORS plugin (via `ExtensionRef`)** — the preflight handler delegates to the
+  normal route plugin pipeline. For an allowed origin, a standard preflight is answered locally
+  with the configured CORS headers unless `preflightContinue: true`; that setting forwards the
+  request upstream. A denied origin receives a local `204` without CORS headers regardless of
+  `preflightContinue`. An `OPTIONS` request without `Origin` is also forwarded because the CORS
+  plugin does not own non-CORS requests, even when `mode: all-options` selected it for global
+  handling. Entry-level plugin conditions remain effective; when they do not match, the CORS
+  plugin is skipped and the request continues upstream.
+- **No route-level CORS filter** — a request selected by `preflightPolicy` is answered locally
+  with `statusCode` and no CORS headers.
+
+The resulting behavior is:
+
+| Request | Route CORS filter | Result |
+|---------|-------------------|--------|
+| Standard preflight (`OPTIONS` + `Origin` + `Access-Control-Request-Method`) | None | Local `statusCode`, without CORS headers |
+| Standard preflight, allowed origin | Native Gateway API CORS | Local `204`, with CORS headers |
+| Standard preflight, denied origin | Native Gateway API CORS | Local `204`, without CORS headers |
+| Standard preflight, allowed origin | EdgionPlugins CORS, `preflightContinue: false` | Local `204`, with CORS headers |
+| Standard preflight, allowed origin | EdgionPlugins CORS, `preflightContinue: true` | Forwarded upstream; CORS headers are applied to the upstream response |
+| Standard preflight, denied origin | EdgionPlugins CORS, either `preflightContinue` value | Local `204`, without CORS headers |
+| Standard preflight | EdgionPlugins CORS whose entry conditions do not match | Forwarded upstream without CORS headers |
+| `OPTIONS` without `Origin`, `mode: all-options` | None | Local `statusCode`, without CORS headers |
+| `OPTIONS` without `Origin`, `mode: all-options` | Native or EdgionPlugins CORS | Forwarded upstream as a non-CORS request |
+| `OPTIONS` with `Origin` but without `Access-Control-Request-Method`, `mode: all-options` | None | Local `statusCode`, without CORS headers |
+| `OPTIONS` with `Origin` but without `Access-Control-Request-Method`, `mode: all-options` | Native or EdgionPlugins CORS | Forwarded as an actual CORS request; an allowed origin receives CORS headers on the upstream response |
 
 ## Edge cases and caveats
 

@@ -1,0 +1,31 @@
+# 1s request timeout vs. the test server's /delay/2 endpoint (2s delay) ->
+# 504 before the backend responds. Same pattern as
+# HTTPRoute/Backend/Timeout/HTTPRoute_default_timeout-request.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-timeout-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-timeout.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      timeouts:
+        request: "1s"
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-timeout
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

@@ -7,7 +7,7 @@ description: Use when reviewing findings that DSL plugin bytecode is deserialize
 
 ## Conclusion
 
-Each enabled `DslPlugin` runs `resolve_script` (base64 decode + JSON deserialize + full `Validator` scan) **twice per config apply / hot-reload**: once in the control-plane validation gate (`DslConfig::validation_error` → `DslPlugin::validate_config`) and once in the data-plane constructor (`DslPlugin::from_config` / `from_config_response` → `resolve_parts`). This is **redundant work, accepted as-is**. The two-path self-validation is intentional defense-in-depth, the redundancy is off the per-request data-plane hot path, and every safe de-duplication fix is disproportionate to a Low-severity redundant-work finding.
+Each enabled `DslPlugin` runs `edgion_dsl::resolve_script` (base64 decode + JSON deserialize + full `Validator` scan) **twice per config apply / hot-reload**: once in the control-plane validation gate (`DslConfig::validation_error` → `DslConfig::compile_and_validate`) and once in the data-plane constructor (`DslPlugin::from_config` / `from_config_response` → `resolve_parts` → `DslConfig::compile_and_validate`). This is **redundant work, accepted as-is**. The two-path self-validation is intentional defense-in-depth, the redundancy is off the per-request data-plane hot path, and every safe de-duplication fix is disproportionate to a Low-severity redundant-work finding.
 
 Fix suggestions of the form "return the `CompiledScript` from `validate_config` and thread it into construction", "skip validation in `from_config` because `validation_error` already ran", or "cache / memoize the `CompiledScript`" are **not accepted**.
 
@@ -15,7 +15,7 @@ Fix suggestions of the form "return the `CompiledScript` from `validate_config` 
 
 **1. Two-path self-validation is intentional defense-in-depth, not an accident**
 
-`add_from_request_filters` (`edgion-gateway/src/plugins/runtime/plugin_runtime.rs:391`) and `add_from_upstream_response_filters` (`:476`) call the generic `entry.plugin.validation_error()` gate for **every** plugin type uniformly — its non-empty result records the plugin in `invalid_plugins`, surfaces the error, and feeds the fail-closed seal. Construction happens later and separately (`:420`/`:755` for request, `:501`/`:778` for upstream response). `DslPlugin::from_config` (`edgion-gateway/src/plugins/http/dsl/plugin.rs:197`) is a `pub` constructor that **must validate independently** — it cannot assume the gate ran first. The doc comment on `validate_config` (`plugin.rs:159`) states this explicitly: it exists so "the control plane sees the same failures the data-plane constructor would hit". Removing the `Validator` pass from either path lets unvalidated bytecode reach `Vm::new` when the entry point is called standalone — a security/contract regression. The security property is sound precisely because both paths validate.
+`add_from_request_filters` (`edgion-gateway/src/plugins/runtime/plugin_runtime.rs:391`) and `add_from_upstream_response_filters` (`:476`) call the generic `entry.plugin.validation_error()` gate for **every** plugin type uniformly — its non-empty result records the plugin in `invalid_plugins`, surfaces the error, and feeds the fail-closed seal. Construction happens later and separately (`:420`/`:755` for request, `:501`/`:778` for upstream response). `DslPlugin::from_config` (`edgion-gateway/src/plugins/http/dsl/plugin.rs:80`) is a `pub` constructor that **must validate independently** — it cannot assume the gate ran first. The doc comment on `DslConfig::compile_and_validate` (`edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs:143-153`) states this explicitly: it exists so the control plane sees "the exact set of failures the gateway's `DslPlugin` constructor would hit". Removing the `Validator` pass from either path lets unvalidated bytecode reach `Vm::new` when the entry point is called standalone — a security/contract regression. The security property is sound precisely because both paths validate.
 
 **2. The redundancy is off the data-plane hot path**
 
@@ -43,7 +43,8 @@ Re-open only if **any** of the following is observed:
 ## Reference Cases
 
 - Finding `plugins-http-dsl-F010` (2026-05-26) — closed as accepted tradeoff.
-- `edgion-gateway/src/plugins/http/dsl/plugin.rs` — `resolve_script`, `validate_config`, `resolve_parts`, `from_config`, `from_config_response`.
-- `edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs` — `DslConfig::validation_error`.
+- `edgion-gateway/src/plugins/http/dsl/plugin.rs` — `resolve_parts`, `from_config`, `from_config_response`.
+- `edgion-dsl/src/script.rs` — `resolve_script`, `check_redis_link_names`, `is_single_push_op`.
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs` — `DslConfig::validation_error`, `DslConfig::compile_and_validate`.
 - `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` — the generic validate gate vs construct dispatch.
 - [plugin-runtime-god-match.md](plugin-runtime-god-match.md) — related plugin-runtime construction design decisions.

@@ -9,13 +9,18 @@ impl TestSuite for CircuitBreakerTestSuite {
         "CircuitBreaker"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/CircuitBreaker")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_normal_request_no_ejection(),
             Self::test_consecutive_failures_eject(),
             Self::test_recovery_after_cooldown(),
             Self::test_gateway_and_app_counters_independent(),
-            Self::test_deprecated_alias_still_ejects(),
+            Self::test_second_policy_still_ejects(),
+            Self::test_status_retry_counts_each_attempt(),
         ]
     }
 }
@@ -150,7 +155,7 @@ impl CircuitBreakerTestSuite {
     fn test_recovery_after_cooldown() -> TestCase {
         TestCase::new(
             "recovery_after_cooldown",
-            "Ejected backend recovers after ejectionSeconds",
+            "Ejected backend recovers after ejectionTime",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = std::time::Instant::now();
@@ -164,7 +169,7 @@ impl CircuitBreakerTestSuite {
 
                     // Wait for the backend to be available before starting the ejection setup.
                     // The previous test (consecutive_failures_eject) may have ejected the backend
-                    // for ejectionSeconds=3; if we proceed while it is still ejected, the gateway
+                    // for ejectionTime=3s; if we proceed while it is still ejected, the gateway
                     // returns 503 without forwarding, so the test-server counter never advances and
                     // the subsequent "recovery" requests all get 502s (attempt <= fail_count).
                     // Poll with fail_count=0 (always 200) until the backend is reachable.
@@ -205,9 +210,9 @@ impl CircuitBreakerTestSuite {
 
                     // Wait for ejection cooldown, then poll for recovery. The ejection
                     // window grows with the endpoint's ejection count (backoff:
-                    // ejectionSeconds * num_ejections, capped at maxEjectionSeconds).
+                    // ejectionTime * num_ejections, capped at maxEjectionTime).
                     // An earlier case in this suite already ejected this same backend
-                    // once, so its second ejection here lasts ~6s (ejectionSeconds=3 * 2)
+                    // once, so its second ejection here lasts ~6s (ejectionTime=3s * 2)
                     // rather than 3s — a fixed short wait is not enough. Sleep past the
                     // base window, then poll generously until the backend serves again
                     // (breaks early on the first 200).
@@ -320,16 +325,16 @@ impl CircuitBreakerTestSuite {
         )
     }
 
-    fn test_deprecated_alias_still_ejects() -> TestCase {
+    fn test_second_policy_still_ejects() -> TestCase {
         TestCase::new(
-            "deprecated_alias_still_ejects",
-            "edgion.io/circuit-breaker alias still drives ejection",
+            "second_policy_still_ejects",
+            "cb-alias outlierDetection policy drives gateway-class ejection",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = std::time::Instant::now();
                     let host = "cb-alias.example.com";
                     let test_id = format!(
-                        "alias-{}",
+                        "second-{}",
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
@@ -342,7 +347,7 @@ impl CircuitBreakerTestSuite {
                         .await
                         .ok();
 
-                    // gateway threshold 3 via the alias config; 502 ejects after 3.
+                    // gateway threshold 3 via the cb-alias policy; 502 ejects after 3.
                     let mut ejected = false;
                     for i in 0..4 {
                         let url = format!("{}/cb-fail/{}/100/502", ctx.http_url(), test_id);
@@ -358,10 +363,131 @@ impl CircuitBreakerTestSuite {
                     if ejected {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "Alias annotation ejected the backend".to_string(),
+                            "cb-alias policy ejected the backend".to_string(),
                         )
                     } else {
-                        TestResult::failed(start.elapsed(), "Alias annotation did not eject".to_string())
+                        TestResult::failed(start.elapsed(), "cb-alias policy did not eject".to_string())
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_status_retry_counts_each_attempt() -> TestCase {
+        TestCase::new(
+            "status_retry_counts_each_attempt",
+            "Each retried 502 contributes an outlier-detection failure",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let host = "cb-retry.example.com";
+                    let test_id = format!("cb-retry-{}", uuid::Uuid::new_v4());
+                    let probe_url = format!("{}/cb-fail/cb-retry-probe/0", ctx.http_url());
+
+                    // A preserved integration stack may still carry the previous run's
+                    // ejection. Wait for the capped cooldown and clear failure counters
+                    // with an always-successful upstream response before starting.
+                    let mut ready = false;
+                    for _ in 0..40 {
+                        match ctx.http_client.get(&probe_url).header("Host", host).send().await {
+                            Ok(resp) if resp.status().as_u16() == 200 => {
+                                ready = true;
+                                break;
+                            }
+                            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+                        }
+                    }
+                    if !ready {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "cb-retry backend did not recover before the test".to_string(),
+                        );
+                    }
+
+                    let _ = ctx
+                        .http_client
+                        .get(format!("{}/retry-sequence-reset", ctx.http_url()))
+                        .header("Host", host)
+                        .send()
+                        .await;
+
+                    // attempts=1 means this request reaches the backend twice.
+                    // Both 502 responses must count, reaching the configured
+                    // consecutiveGatewayErrors threshold of 2.
+                    let url = format!("{}/retry-sequence/{}/502,502,200", ctx.http_url(), test_id);
+                    let first = match ctx.http_client.get(&url).header("Host", host).send().await {
+                        Ok(resp) => resp,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Retried request failed: {}", e)),
+                    };
+                    if first.status().as_u16() != 502 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected terminal 502, got {}", first.status()),
+                        );
+                    }
+                    let first_attempt = first
+                        .headers()
+                        .get("x-attempt-number")
+                        .and_then(|value| value.to_str().ok());
+                    let first_history = first
+                        .headers()
+                        .get("x-attempt-history")
+                        .and_then(|value| value.to_str().ok());
+                    if first_attempt != Some("2") || first_history != Some("502,502") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected two real upstream 502 attempts, got attempt={:?}, history={:?}",
+                                first_attempt, first_history
+                            ),
+                        );
+                    }
+
+                    // If only the terminal attempt were counted, this request
+                    // would reach the sequence's 200. An ejected backend instead
+                    // leaves the gateway with no available upstream.
+                    let second = match ctx.http_client.get(&url).header("Host", host).send().await {
+                        Ok(resp) => resp,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Post-ejection request failed: {}", e))
+                        }
+                    };
+                    let status = second.status().as_u16();
+                    let has_upstream_attempt = second.headers().contains_key("x-attempt-number")
+                        || second.headers().contains_key("x-attempt-history");
+                    let ejection_observed = (status == 502 || status == 503) && !has_upstream_attempt;
+                    let unexpected_response = format!(
+                        "Expected local post-ejection 502/503 without upstream attempt headers, got status={}, headers={:?}",
+                        status,
+                        second.headers()
+                    );
+
+                    // Leave the shared Gateway usable for a direct test-client rerun and
+                    // for any future cb-retry cases appended to this suite.
+                    let mut recovered = false;
+                    for _ in 0..40 {
+                        match ctx.http_client.get(&probe_url).header("Host", host).send().await {
+                            Ok(resp) if resp.status().as_u16() == 200 => {
+                                recovered = true;
+                                break;
+                            }
+                            _ => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+                        }
+                    }
+                    if !recovered {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "cb-retry backend did not recover after the ejection assertion".to_string(),
+                        );
+                    }
+
+                    if ejection_observed {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Two 502 attempts ejected the backend after one client request".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(start.elapsed(), unexpected_response)
                     }
                 })
             },

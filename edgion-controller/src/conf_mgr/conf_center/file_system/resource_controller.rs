@@ -7,8 +7,8 @@
 //! - Init -> processor.on_init()
 //! - InitApply { path, content } -> parse + processor.on_init_apply(obj)
 //! - InitDone -> processor.on_init_done()
-//! - Apply { path, content } -> parse + processor.on_apply(&obj)
-//! - Delete(info) -> processor.on_delete(&obj)
+//! - Apply { path, content } -> parse + processor.on_event_key(key)
+//! - Delete(info) -> processor.on_event_key(key)
 
 use super::event::FileSystemEvent;
 use super::file_watcher::KindEventReceiver;
@@ -67,7 +67,8 @@ where
         let raw_store: std::sync::Arc<dyn crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore<K>> =
             fs_raw_store.clone();
         processor.set_raw_store(raw_store.clone());
-        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
+        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store.clone());
+        crate::observe::unknown_fields_registry::register_unknown_fields_source::<K>(kind, raw_store);
         Self {
             kind,
             processor,
@@ -255,6 +256,7 @@ where
 
                             // Mark cache ready
                             self.processor.on_init_done();
+                            self.processor.notify_ready();
                             init_done = true;
 
                             // Spawn worker for runtime phase
@@ -353,8 +355,8 @@ where
                                             path = %path.display(),
                                             "Received runtime Apply event, enqueuing"
                                         );
-                                        self.fs_raw_store.upsert(key, Arc::new(obj.clone()));
-                                        self.processor.on_apply(&obj).await;
+                                        self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
+                                        self.processor.on_event_key(key).await;
                                     }
                                     Err(e) => {
                                         // File content is invalid — evict any stale entry from
@@ -386,18 +388,10 @@ where
                                 if let Some(key) = parse_delete_info(&info) {
                                     // Remove from raw store immediately on delete.
                                     self.fs_raw_store.remove(&key);
-                                    // For delete, we need to get the cached object
-                                    // The worker will handle the actual deletion
-                                    if let Some(obj) = self.processor.get(&key) {
-                                        self.processor.on_delete(&obj).await;
-                                    } else {
-                                        tracing::trace!(
-                                            component = "fs_resource_controller",
-                                            kind = kind,
-                                            key = %key,
-                                            "Delete event for non-cached resource, ignoring"
-                                        );
-                                    }
+                                    // Enqueue unconditionally: the worker re-reads the
+                                    // store and decides; a key absent from both store
+                                    // and cache resolves to Skipped.
+                                    self.processor.on_event_key(key).await;
                                 }
                             }
                         }
@@ -624,8 +618,14 @@ where
                         continue;
                     }
 
-                    // Read existing status from .status file for comparison
-                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key).await;
+                    // Read existing status only when there is a store object to
+                    // process; the delete/skip arms never consume it, and a
+                    // delete must not pay a status read.
+                    let existing_status_json = if store_obj.is_some() {
+                        status_handler.read_status_json(kind, &work_item.key).await
+                    } else {
+                        None
+                    };
 
                     // Use processor's process_work_item which handles the reconciliation logic
                     let result = processor
@@ -888,6 +888,9 @@ mod tests {
                     name: "backend".to_string(),
                     section_name: None,
                 }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
                 validation: BackendTLSPolicyValidation {
                     ca_certificate_refs: None,
                     hostname: "backend.default.svc".to_string(),
@@ -910,6 +913,7 @@ mod tests {
             metadata: policy.metadata.clone(),
             spec: BackendTLSPolicyAlpha3Spec {
                 target_refs: policy.spec.target_refs.clone(),
+                resolved_target_class: policy.spec.resolved_target_class,
                 validation: policy.spec.validation.clone(),
                 options: policy.spec.options.clone(),
                 resolved_ca_certificates: policy.spec.resolved_ca_certificates.clone(),
@@ -971,7 +975,6 @@ mod tests {
                         weight: Some(1),
                         group: None,
                         kind: None,
-                        extension_info: Default::default(),
                         ref_denied: None,
                     }]),
                 }]),
@@ -1023,5 +1026,171 @@ mod tests {
             Some("gateway.networking.k8s.io/v1")
         );
         assert_eq!(parsed.metadata.name.as_deref(), Some("tr"));
+    }
+
+    use super::{spawn_worker, ResourceProcessor};
+    use crate::conf_mgr::conf_center::file_system::path_registry::PathRegistry;
+    use crate::conf_mgr::conf_center::file_system::status::FileSystemStatusHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ProcessorHandler};
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::prelude_resources::HTTPRoute;
+    use edgion_resources::resources::http_route::HTTPRouteSpec;
+    use kube::api::ObjectMeta;
+    use std::sync::Arc;
+
+    struct FsNoopHandler;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<HTTPRoute> for FsNoopHandler {}
+
+    fn make_route(ns: &str, name: &str) -> HTTPRoute {
+        HTTPRoute {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: HTTPRouteSpec {
+                parent_refs: None,
+                hostnames: None,
+                resolved_hostnames: None,
+                resolved_listeners: None,
+                invalid_rule_indices: None,
+                rules: None,
+                resolved_rules: None,
+                delegation_issues: Vec::new(),
+            },
+            status: None,
+        }
+    }
+
+    /// Build processor + worker over a temp conf dir. Returns what tests need
+    /// to drive and assert; the JoinHandle keeps the worker alive.
+    fn fs_worker_test_harness(
+        conf_dir: &std::path::Path,
+    ) -> (
+        Arc<ResourceProcessor<HTTPRoute>>,
+        Arc<PathRegistry>,
+        Arc<LocalRawStore<HTTPRoute>>,
+        FileSystemStatusHandler,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+            "HTTPRoute",
+            100,
+            Arc::new(FsNoopHandler),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let registry = Arc::new(PathRegistry::default());
+        let raw_store = Arc::new(LocalRawStore::<HTTPRoute>::new());
+        let status_handler = FileSystemStatusHandler::new(conf_dir.to_path_buf()).with_registry(registry.clone());
+        let worker = spawn_worker(
+            processor.clone(),
+            conf_dir.to_path_buf(),
+            registry.clone(),
+            "HTTPRoute",
+            None,
+            raw_store.clone(),
+        );
+        (processor, registry, raw_store, status_handler, worker)
+    }
+
+    #[tokio::test]
+    async fn sole_file_delete_removes_resource_and_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (processor, _registry, _raw_store, status_handler, _worker) = fs_worker_test_harness(tmp.path());
+
+        // Prior state: resource in cache + a persisted .status file, no spec
+        // file on disk (the file was just deleted by the operator).
+        let route = make_route("default", "r1");
+        processor.save(route, None);
+        status_handler
+            .write_status_value("HTTPRoute", "default/r1", &serde_json::json!({"parents": []}))
+            .await
+            .unwrap();
+        assert!(status_handler
+            .read_status_json("HTTPRoute", "default/r1")
+            .await
+            .is_some());
+
+        // Delete event arrives: key is enqueued; the worker must delete.
+        processor.on_event_key("default/r1".to_string()).await;
+
+        // Poll until the worker has processed (cache emptied), max 5s.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get("default/r1").is_some() {
+            assert!(std::time::Instant::now() < deadline, "worker did not delete in time");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Status sidecar must be cleaned up too (the bonus fix from the spec).
+        assert!(status_handler
+            .read_status_json("HTTPRoute", "default/r1")
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn never_cached_key_delete_is_skipped_without_status_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (processor, _registry, _raw_store, status_handler, _worker) = fs_worker_test_harness(tmp.path());
+
+        // An orphan error-status file from a resource that never parsed.
+        status_handler
+            .write_status_value(
+                "HTTPRoute",
+                "default/ghost",
+                &serde_json::json!({"error": "ParseError"}),
+            )
+            .await
+            .unwrap();
+
+        // Delete event for a key in neither cache nor store: worker must skip.
+        processor.on_event_key("default/ghost".to_string()).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert!(processor.get("default/ghost").is_none());
+        // Documented residual (spec: "Bonus fix" section): the orphan status
+        // file is NOT cleaned by the Skipped arm — same as before this change.
+        assert!(status_handler
+            .read_status_json("HTTPRoute", "default/ghost")
+            .await
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_then_recreate_before_dequeue_reapplies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (processor, _registry, _raw_store, _status_handler, _worker) = fs_worker_test_harness(tmp.path());
+
+        // v1 is cached; the file is deleted (delete event pending), but a new
+        // file for the same key reappears before the worker dequeues — the
+        // level-triggered outcome must be re-apply, not delete.
+        let v1 = make_route("default", "r1");
+        processor.save(v1, None);
+
+        // Recreate on disk at the canonical fallback path (registry has no
+        // record, so the worker falls back to build_resource_path_from_key).
+        let mut v2 = make_route("default", "r1");
+        v2.spec.hostnames = Some(vec!["v2.example.com".to_string()]);
+        let path = tmp.path().join("default").join("HTTPRoute_default_r1.yaml");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&path, serde_yaml::to_string(&v2).unwrap())
+            .await
+            .unwrap();
+
+        processor.on_event_key("default/r1".to_string()).await;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(cur) = processor.get("default/r1") {
+                if cur.spec.hostnames.as_deref() == Some(&["v2.example.com".to_string()]) {
+                    break; // re-applied with v2 content
+                }
+            } else {
+                panic!("resource was deleted; expected level-triggered re-apply");
+            }
+            assert!(std::time::Instant::now() < deadline, "worker did not re-apply in time");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 }

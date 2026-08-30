@@ -1,0 +1,45 @@
+# Edgion Alertmanager routing TEMPLATE (Prometheus Operator AlertmanagerConfig CR).
+#
+# Opt-in: adjust `metadata.namespace` and `metadata.labels` to match the
+# `alertmanagerConfigSelector` on your Alertmanager CR, then REPLACE the placeholder
+# receiver configs (the receivers below are intentionally empty no-ops).
+#
+# Same severity-based routing as the bare alertmanager.yml in this directory:
+#   severity=critical -> pager        (PAGE)
+#   severity=warning  -> ticket       (TICKET)
+#   severity=info     -> low-priority (log-only/board — never pages)
+#
+# Full per-alert catalog + rationale: docs/en/ops-guide/observability/alerting.md
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: edgion-routing
+  namespace: monitoring
+  labels:
+    alertmanagerConfig: edgion
+spec:
+  route:
+    receiver: low-priority
+    groupBy: ['alertname', 'namespace']
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    routes:
+      - matchers:
+          - name: severity
+            value: critical
+        receiver: pager
+      - matchers:
+          - name: severity
+            value: warning
+        receiver: ticket
+      - matchers:
+          - name: severity
+            value: info
+        receiver: low-priority
+  receivers:
+    # Fill in each receiver's integration (pagerdutyConfigs / slackConfigs /
+    # webhookConfigs). Empty receivers are valid but drop notifications.
+    - name: pager
+    - name: ticket
+    - name: low-priority

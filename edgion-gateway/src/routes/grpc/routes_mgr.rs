@@ -61,7 +61,7 @@ impl GrpcRouteRules {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         if let Some(ref engine) = self.match_engine {
             engine.match_route(session, ctx, index, hostname)
         } else {
@@ -95,7 +95,7 @@ impl DomainGrpcRouteRules {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         let grpc_routes = self.grpc_routes.load();
         grpc_routes.match_route(session, ctx, index, hostname)
     }
@@ -406,9 +406,7 @@ pub fn get_global_grpc_route_managers() -> &'static GlobalGrpcRouteManagers {
     GLOBAL_GRPC_ROUTE_MANAGERS.get_or_init(GlobalGrpcRouteManagers::new)
 }
 
-// Legacy aliases for backward compatibility
-pub type GrpcRouteManager = GlobalGrpcRouteManagers;
-
+// Legacy alias for backward compatibility
 pub fn get_global_grpc_route_manager() -> &'static GlobalGrpcRouteManagers {
     get_global_grpc_route_managers()
 }

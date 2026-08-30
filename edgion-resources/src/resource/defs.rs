@@ -15,7 +15,6 @@
 //! - `resource_kind_from_name()` function
 //! - `get_resource_info()` function
 //! - `all_resource_kind_names()` function
-//! - `base_conf_kind_names()` function
 //! - `is_kind_cluster_scoped()` function
 
 // The macro is imported via #[macro_use] in mod.rs, no explicit use needed
@@ -198,6 +197,26 @@ define_resources! {
         in_registry: false,  // ConfigMap follows related resources, not tracked independently
     },
 
+    // ==================== Backend Traffic Policy ====================
+    EdgionBackendTrafficPolicy {
+        enum_value: 22,
+        kind_name: "edgionbackendtrafficpolicy",
+        kind_aliases: [],
+        cache_field: edgion_backend_traffic_policy,
+        capacity_field: edgion_backend_traffic_policy_capacity,
+        default_capacity: small,
+    },
+
+    // ==================== AI Gateway Resources ====================
+    EdgionBackend {
+        enum_value: 23,
+        kind_name: "edgionbackend",
+        kind_aliases: [],
+        cache_field: edgion_backends,
+        capacity_field: edgion_backends_capacity,
+        default_capacity: normal,
+    },
+
     // ==================== Infrastructure Resources ====================
     LinkSys {
         enum_value: 15,
@@ -216,8 +235,8 @@ mod tests {
 
     #[test]
     fn test_all_resource_infos_count() {
-        // We have 20 resource types (excluding Unspecified)
-        assert_eq!(ALL_RESOURCE_INFOS.len(), 20);
+        // We have 22 resource types (excluding Unspecified)
+        assert_eq!(ALL_RESOURCE_INFOS.len(), 22);
     }
 
     #[test]
@@ -250,15 +269,6 @@ mod tests {
         assert_eq!(info.kind_name, "gatewayclass");
         assert!(info.cluster_scoped);
         assert!(info.is_base_conf);
-    }
-
-    #[test]
-    fn test_base_conf_resources() {
-        let base_conf = base_conf_kind_names();
-        assert!(base_conf.contains(&"gateway_classes"));
-        assert!(base_conf.contains(&"gateways"));
-        assert!(base_conf.contains(&"edgion_gateway_configs"));
-        assert_eq!(base_conf.len(), 3);
     }
 
     #[test]

@@ -94,10 +94,10 @@ impl IpRestriction {
     }
 
     /// Extract client IP from session based on configured source
-    fn get_client_ip(&self, session: &mut dyn PluginSession) -> Option<IpAddr> {
+    fn get_source_ip(&self, session: &mut dyn PluginSession) -> Option<IpAddr> {
         let ip_str = match self.config.ip_source {
-            IpSource::ClientIp => session.remote_addr(), // Real client IP from proxy headers
-            IpSource::RemoteAddr => session.client_addr(), // Direct TCP connection IP (without port)
+            IpSource::RemoteIp => session.remote_ip(),
+            IpSource::DirectPeerIp => session.direct_peer_ip(),
         };
 
         // Return None if empty string (not yet populated)
@@ -129,7 +129,7 @@ impl RequestFilter for IpRestriction {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        let client_ip_opt = self.get_client_ip(session);
+        let source_ip = self.get_source_ip(session);
 
         // Resolve referenced IpList matchers (empty fast-path when no refs). Arc vecs are kept
         // in locals; the borrowed matcher slices are not used after the response-write await.
@@ -138,7 +138,7 @@ impl RequestFilter for IpRestriction {
         let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
         let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
 
-        let should_deny = match client_ip_opt {
+        let should_deny = match source_ip {
             Some(ip) => match self.config.check_ip_access_with_refs(&ip, &deny_refs, &allow_refs) {
                 AccessDecision::AllowByGroup(g) => {
                     plugin_log.push(&format!("allow:group={}", g));
@@ -222,7 +222,7 @@ mod tests {
             default_action: DefaultAction::Deny,
             allow_refs: None,
             deny_refs: None,
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,
@@ -242,7 +242,7 @@ mod tests {
             default_action: DefaultAction::Allow,
             allow_refs: None,
             deny_refs: None,
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,
@@ -258,12 +258,44 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session.expect_remote_addr().return_const("172.16.0.1".to_string());
+        mock_session.expect_remote_ip().return_const("172.16.0.1".to_string());
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("allow:default"));
+    }
+
+    #[tokio::test]
+    async fn direct_peer_source_does_not_read_remote_ip() {
+        let config = IpRestrictionConfig {
+            allow: None,
+            deny: Some(vec![IpGroup {
+                name: "proxy".into(),
+                description: None,
+                cidrs: vec!["10.0.0.7/32".into()],
+            }]),
+            default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
+            ip_source: IpSource::DirectPeerIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let plugin = IpRestriction::create(&config, "default");
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("10.0.0.7".to_string());
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+        let mut log = PluginLog::new("IpRestriction");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
     }
 
     #[tokio::test]
@@ -274,7 +306,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session.expect_remote_addr().return_const("".to_string());
+        mock_session.expect_remote_ip().return_const("".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
         mock_session.expect_shutdown().returning(|| {});
@@ -304,7 +336,7 @@ mod tests {
             default_action: DefaultAction::Allow,
             allow_refs: None,
             deny_refs: None,
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,
@@ -316,7 +348,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("IpRestriction");
 
         // An IP outside the allow list must be denied.
-        mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
+        mock_session.expect_remote_ip().return_const("10.0.0.1".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
         mock_session.expect_shutdown().returning(|| {});
@@ -335,7 +367,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("IpRestriction");
 
         // An IP outside the configured allow range.
-        mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
+        mock_session.expect_remote_ip().return_const("10.0.0.1".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
         mock_session.expect_shutdown().returning(|| {});
@@ -360,6 +392,7 @@ mod tests {
             enable: true,
             active: None,
             visibility: Default::default(),
+            unknown_fields: Vec::new(),
             data: ConfigEntry::IpList(IpListData {
                 items: vec![IpGroup {
                     name: "blocked".into(),
@@ -383,7 +416,7 @@ mod tests {
                 namespace: Some(ns.to_string()),
                 ..Default::default()
             }]),
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,
@@ -394,7 +427,7 @@ mod tests {
         // 9.9.9.9 is in the referenced blocklist -> denied.
         let mut s = MockPluginSession::new();
         let mut log = PluginLog::new("IpRestriction");
-        s.expect_remote_addr().return_const("9.9.9.9".to_string());
+        s.expect_remote_ip().return_const("9.9.9.9".to_string());
         s.expect_write_response_header().returning(|_, _| Ok(()));
         s.expect_write_response_body().returning(|_, _| Ok(()));
         s.expect_shutdown().returning(|| {});
@@ -406,7 +439,7 @@ mod tests {
         // 8.8.8.8 not in blocklist -> allowed (default Allow).
         let mut s2 = MockPluginSession::new();
         let mut log2 = PluginLog::new("IpRestriction");
-        s2.expect_remote_addr().return_const("8.8.8.8".to_string());
+        s2.expect_remote_ip().return_const("8.8.8.8".to_string());
         assert_eq!(
             plugin.run_request(&mut s2, &mut log2).await,
             PluginRunningResult::GoodNext
@@ -431,6 +464,7 @@ mod tests {
                 enable: true,
                 active: None,
                 visibility: Default::default(),
+                unknown_fields: Vec::new(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -456,7 +490,7 @@ mod tests {
                 ..Default::default()
             }]),
             deny_refs: None,
-            ip_source: IpSource::ClientIp,
+            ip_source: IpSource::RemoteIp,
             message: None,
             status: 403,
             allow_matcher: None,
@@ -467,7 +501,7 @@ mod tests {
         // 127.0.0.1 is in the allowlist -> allowed.
         let mut s = MockPluginSession::new();
         let mut log = PluginLog::new("IpRestriction");
-        s.expect_remote_addr().return_const("127.0.0.1".to_string());
+        s.expect_remote_ip().return_const("127.0.0.1".to_string());
         assert_eq!(
             plugin.run_request(&mut s, &mut log).await,
             PluginRunningResult::GoodNext,
@@ -480,7 +514,7 @@ mod tests {
         // 127.0.0.1 is no longer in the allowlist -> whitelist miss -> denied.
         let mut s2 = MockPluginSession::new();
         let mut log2 = PluginLog::new("IpRestriction");
-        s2.expect_remote_addr().return_const("127.0.0.1".to_string());
+        s2.expect_remote_ip().return_const("127.0.0.1".to_string());
         s2.expect_write_response_header().returning(|_, _| Ok(()));
         s2.expect_write_response_body().returning(|_, _| Ok(()));
         s2.expect_shutdown().returning(|| {});

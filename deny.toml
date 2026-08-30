@@ -1,0 +1,92 @@
+# cargo-deny configuration — supply-chain policy for the Edgion workspace.
+#
+#   cargo deny check              # all four checks (advisories/licenses/bans/sources)
+#   cargo deny check advisories   # RustSec advisory sweep only
+#
+# CI: .github/workflows/supply-chain.yml (PR gate + daily advisory cron).
+#
+# Triage discipline: every `ignore` entry MUST carry a comment stating why it
+# is safe HERE and what would trigger re-evaluation. An ignore without a
+# reason is a review defect. Update policy: Cargo.lock pins the world; a
+# firing advisory is the "must act" signal (usually `cargo update -p <crate>`
+# + the pre-commit battery); routine bumps happen in deliberate batches, not
+# per upstream release.
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # protobuf 2.x decode-recursion crash. Pinned by pingora-core ->
+    # prometheus 0.13 (requires protobuf 2.x); the fixed 3.7+ is a major we
+    # cannot select. Exposure: the prometheus crate only ENCODES our metrics
+    # exposition; no untrusted protobuf is ever decoded through this path.
+    # RE-EVALUATE: next pingora-core bump.
+    { id = "RUSTSEC-2024-0437", reason = "pinned by pingora->prometheus; encode-only usage, no untrusted decode" },
+
+    # daemonize is unmaintained (no vulnerability). Pulled by pingora-core;
+    # runs once at process start for daemon mode. RE-EVALUATE: next
+    # pingora-core bump.
+    { id = "RUSTSEC-2025-0069", reason = "unmaintained only; pingora dep, process-start-only code path" },
+
+    # derivative is unmaintained (no vulnerability). Compile-time proc-macro
+    # via pingora-core; zero runtime attack surface. RE-EVALUATE: next
+    # pingora-core bump.
+    { id = "RUSTSEC-2024-0388", reason = "unmaintained only; compile-time proc-macro" },
+
+    # proc-macro-error2 is unmaintained (no vulnerability). Compile-time
+    # proc-macro via tabled (CLI table rendering); zero runtime surface.
+    { id = "RUSTSEC-2026-0173", reason = "unmaintained only; compile-time proc-macro" },
+
+    # rustls-pemfile is unmaintained (no vulnerability): a feature-complete
+    # PEM parser still pulled by tonic 0.12 (conf_sync gRPC). RE-EVALUATE:
+    # when conf_sync migrates to tonic 0.14 (already in-tree for etcd/otlp).
+    { id = "RUSTSEC-2025-0134", reason = "unmaintained only; pinned by tonic 0.12" },
+]
+
+[licenses]
+# Permissive-only allowlist. cargo-deny evaluates SPDX expressions, so an
+# `OR` license passes if ANY branch is allowed (e.g. ittapi's
+# "GPL-2.0-only OR BSD-3-Clause" passes via BSD-3-Clause).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception", # wasmtime / cranelift family
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",                    # ICU4X data (unicode-ident etc.)
+    "Zlib",
+    "Unlicense",
+    "MIT-0",
+    "0BSD",
+    "CC0-1.0",
+    "BSL-1.0",                        # Boost Software License (permissive)
+    "CDLA-Permissive-2.0",            # webpki-roots certificate data
+    # MPL-2.0 is file-level copyleft: obligations attach only to MODIFYING
+    # the covered files, not to linking. Sole user today: `colored`.
+    # Re-evaluate if a vendored-and-patched MPL crate ever appears.
+    "MPL-2.0",
+]
+# Workspace crates carry no `license` field (private, publish = false).
+private = { ignore = true }
+
+[bans]
+# Duplicate crate versions double binary size and audit surface. Warn (not
+# deny): the tree already carries some transitively-forced duplicates.
+multiple-versions = "warn"
+deny = [
+    # The TLS backend is a mutually-exclusive build feature
+    # (boringssl | rustls). A transitive openssl-sys would silently link a
+    # THIRD TLS stack into the binary.
+    { crate = "openssl-sys", reason = "TLS backend is boringssl/rustls by feature; no OpenSSL" },
+    { crate = "openssl", reason = "TLS backend is boringssl/rustls by feature; no OpenSSL" },
+]
+
+[sources]
+# Git sources are denied except for Edgion's Pingora fork. Cargo-deny permits a
+# named selector here; the stricter check_pingora_source_policy.py guard allows
+# only the shared `edgion` development branch or one family-wide release tag,
+# and requires Cargo.lock to resolve every fork package to one commit.
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "any"
+allow-git = ["https://github.com/Pandaala/pingora.git"]

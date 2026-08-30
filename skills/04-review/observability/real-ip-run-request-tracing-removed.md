@@ -9,16 +9,16 @@ description: Use when reviewing findings that `RealIp::run_request` should emit 
 
 `RealIp::run_request` (`edgion-gateway/src/plugins/http/real_ip/plugin.rs`) **must
 not** emit `tracing::debug!` (or any `tracing::*`) for the matched trusted-proxy
-group name. The `tracing::debug!(group = %group, ip = %client_ip,
+group name. The `tracing::debug!(group = %group, ip = %remote_ip,
 "trusted_proxy_match")` call (with its surrounding `if let Some(group) =
-extractor.matched_trusted_group(&client_ip)` block) was removed on 2026-05-26
+extractor.matched_trusted_group(&remote_ip)` block) was removed on 2026-05-26
 because:
 
 1. `run_request` is the `RequestFilter::run_request` impl, invoked once per
    request by `PluginRuntime::run_request_plugins` from the Pingora
    `request_filter` / `upstream_peer` data-plane phases — squarely the
    per-request hot path (`skills/03-coding/01-log-safety.md` Iron Rule 3).
-2. The `if extractor.is_trusted_proxy(&client_ip)` branch that guarded the call
+2. The `if extractor.is_trusted_proxy(&remote_ip)` branch that guarded the call
    fires for **every** request in the predominant production topology (gateway
    behind a load balancer / trusted proxy). At default `info` level it is a
    cheap per-request callsite-interest check; if an operator raises the gateway

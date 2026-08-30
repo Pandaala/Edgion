@@ -13,23 +13,31 @@ The code is a Cargo workspace (resolver 2); each plane is its own crate (the old
 single-crate `src/core/` layout is gone):
 
 ```
-edgion-resources/    # Shared resource/config schema (leaf)
+edgion-wasm/         # Proxy-Wasm compatibility/profile leaf (external deps only)
+edgion-dsl/          # EdgionDSL language core (leaf, no workspace-internal deps)
+edgion-resources/    # Shared resource/config schema (depends on edgion-dsl)
 edgion-common/       # Code shared across bins (depends on edgion-resources)
 edgion-gateway/      # Data plane + `edgion-gateway` binary
 edgion-controller/   # Control plane + `edgion-controller` binary
 edgion-cli/          # CLI lib + `edgion-cli` binary
-.  (root `edgion`)   # Thin umbrella — only hosts integration-test examples + cache_residue bin
+edgion-tests/        # Integration harness and test/helper binaries; not a default member
 ```
 
+The root `Cargo.toml` is a virtual manifest. There is no root `edgion` package;
+test binaries such as `test_server`, `test_client`, and `cache_residue` belong to
+`edgion-tests` and must be addressed with `-p edgion-tests`.
+
 **Placement principles**:
+- Runtime-independent Proxy-Wasm binary analysis or host ABI contracts → `edgion-wasm/`
 - Serves the control plane only → `edgion-controller/`
 - Serves the data plane only → `edgion-gateway/`
 - Serves only the CLI → `edgion-cli/`
 - Depended on by at least two bins with no implicit runtime coupling → `edgion-common/`
 - Pure resource/config schema (no runtime) → `edgion-resources/`
 
-The federation Center is a separate repository (EdgionCenter); only its shared
-`fed_sync` proto remains here, in `edgion-common/src/fed_sync/`.
+The federation Center is a separate repository (EdgionCenter). The in-repo
+Controller-side federation client and protocol live in
+`edgion-controller/src/fed_sync/`; they are not shared Common modules.
 
 ## Gateway layout
 
@@ -42,9 +50,8 @@ edgion-gateway/src/
 │   ├── discovery/    # Endpoint / EndpointSlice / Service discovery
 │   ├── health/       # Active health checks
 │   ├── policy/       # Backend TLS policy
-│   ├── preload/      # LB preloading
-│   └── validation/   # Endpoint validation
-├── cache/        # LRU cache
+│   └── circuit_breaker/ # Backend circuit-breaker state
+├── cache/        # Retained LRU plus OIDC introspection TinyUFO TTL cache
 ├── cli/          # CLI entry + Pingora startup
 ├── config/       # GatewayClass / EdgionGatewayConfig handlers and storage
 ├── conf_sync/    # gRPC config client + ClientCache
@@ -54,16 +61,14 @@ edgion-gateway/src/
 │   ├── backend_selector/  # Weighted round-robin selector
 │   ├── ewma/              # EWMA algorithm
 │   ├── leastconn/         # Least connections
-│   ├── lb_policy/         # LB policy definitions
 │   ├── runtime_state/     # Per-backend runtime state
 │   └── selection/         # Algorithm factory
 ├── link_sys/     # External system providers + runtime store
-│   ├── providers/    # Redis / Etcd / ES / Webhook / LocalFile
+│   ├── providers/    # Elasticsearch / Kafka / LocalFile / OTLP / Redis / Webhook
 │   └── runtime/      # LinkSysStore + DataSender
 ├── observe/      # AccessLog / Metrics / SSL/TCP/TLS/UDP logs
-├── path_normalization/ # Request path normalization
 ├── plugins/      # Plugin system
-│   ├── http/         # 28 HTTP plugin implementations
+│   ├── http/         # HTTP implementations for EdgionPlugin variants
 │   ├── stream/       # Stream plugins (IP restriction + TLS routing)
 │   └── runtime/      # PluginRuntime + conditions + Gateway API filters
 ├── routes/       # Route processing
@@ -77,12 +82,18 @@ edgion-gateway/src/
 │   ├── matching/     # Gateway/Route/TLS matching
 │   └── store/        # Gateway + Route configuration storage
 ├── services/     # Gateway-side services (ACME challenge)
-└── tls/          # TLS management
-    ├── boringssl/    # BoringSSL backend (feature)
-    ├── runtime/      # Downstream/upstream TLS callbacks
-    ├── store/        # Certificate store + SNI matching
-    └── validation/   # Certificate validation
+├── tls/          # TLS management
+│   ├── boringssl/    # BoringSSL backend (feature)
+│   ├── runtime/      # Downstream/upstream TLS callbacks
+│   ├── store/        # Certificate store + SNI matching
+│   └── validation/   # Certificate validation
+└── util/         # Gateway-owned network / proxy-protocol / real-IP helpers
 ```
+
+Path normalization schema and algorithms live in
+`edgion-resources/src/path_normalization/`. The Etcd LinkSys provider lives in
+`edgion-common/src/link_sys_core/providers/etcd/`; it is shared core rather than
+a Gateway-local provider.
 
 **Second-level rules**:
 - `runtime/` — Pingora runtime core only
@@ -118,20 +129,21 @@ edgion-controller/src/
 │   ├── schema_validator.rs       # CRD Schema validation
 │   ├── conf_center/              # Configuration source abstraction
 │   │   ├── file_system/          #   FileSystemCenter implementation
-│   │   └── kubernetes/           #   KubernetesCenter implementation
+│   │   ├── kubernetes/           #   KubernetesCenter implementation
+│   │   └── etcd/                 #   EtcdCenter implementation
 │   └── sync_runtime/             # Sync runtime
 │       ├── workqueue.rs          #   Work queue
 │       ├── metrics.rs            #   Prometheus metrics
 │       ├── shutdown.rs           #   Graceful shutdown
 │       └── resource_processor/   #   Resource processing pipeline
-│           ├── handlers/         #     20 resource handlers
+│           ├── handlers/         #     Registry-backed resource handlers
 │           ├── ref_grant/        #     Cross-namespace reference validation
 │           ├── secret_utils/     #     Secret dependency tracking
 │           └── configmap_utils/  #     ConfigMap utilities
 ├── conf_sync/    # Config sync (gRPC server side)
 │   ├── conf_server/              # ConfigSyncServer + gRPC implementation
 │   └── cache_server/             # ServerCache + EventStore
-├── fed_sync/     # Federation sync toward Center
+├── fed_sync/     # Controller-side federation client, supervisor, and protocol
 ├── observe/      # Logging facade
 └── services/     # Controller-side services
     └── acme/                     # ACME certificate automation
@@ -144,8 +156,9 @@ edgion-controller/src/
 ## Center layout
 
 The federation Center binary (edgion-center) and its tree have been extracted to the
-separate EdgionCenter repository. The Controller side still depends on the shared federation-sync proto in
-`edgion-common/src/fed_sync/`; cross-crate schema types live in `edgion-resources`.
+separate EdgionCenter repository. The Controller-side protocol and client remain in
+`edgion-controller/src/fed_sync/`; cross-crate resource schema types live in
+`edgion-resources`.
 
 ## Common layout
 
@@ -153,27 +166,21 @@ Deliberately kept small:
 
 ```
 edgion-common/src/
-├── secret/       # Secret store
+├── cert_util.rs  # Certificate helpers
 ├── conf_sync/    # Shared proto / traits / sync types + gRPC sync security config
 │   ├── config.rs     # ConfSyncConfig / ConfSyncSecurityConfig / ConfSyncTlsConfig
 │   ├── proto/        # protobuf definitions
 │   ├── traits/       # CacheEventDispatch + ConfHandler
 │   └── types/        # Sync-related types
-├── fed_sync/     # Shared federation-sync proto / types (Controller ↔ Center)
+├── dns/          # DNS resolver implementations
+├── ext_proc/     # Shared external-processing protocol
+├── link_sys_core/# Backend-agnostic LinkSys lifecycle, TLS, health, and Etcd
 ├── observe/      # Shared observability helpers (logging facade)
-├── config/       # Shared startup configuration
+├── secret/       # Secret store
 ├── startup.rs    # Common process startup helpers
 ├── grpc_tls.rs   # Shared gRPC TLS setup
-├── matcher/      # Shared matching algorithms
-│   ├── host_match/   # Domain matching (Hash + Radix)
-│   ├── ip_radix_tree/ # IP Radix tree
-│   └── radix_tree/   # Generic Radix tree
-└── utils/        # Reusable utilities
-    ├── net/              # IP validation, parsing
-    ├── duration/         # Duration parsing
-    ├── real_ip_extractor/# Real-IP extraction
-    ├── metadata_filter/  # Metadata cleansing
-    └── proxy_protocol/   # PROXY Protocol
+├── test_mode.rs  # Shared test-mode flags
+└── tls_validation.rs # Backend-agnostic TLS validation
 ```
 
 **Dependency direction constraints** (now enforced by the crate boundary — a
@@ -183,8 +190,9 @@ violation is a compile error, not just a convention):
   `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer
   `EdgionPlugins::validate_plugins` (in `edgion-resources`), not the gateway's
   `plugins::http::compile_plugins`. The two share the same underlying checks; the
-  schema layer omits only the DSL deep checks (Rhai compile / VM init), which the
-  data plane still enforces fail-closed at runtime.
+  schema layer now runs the full DSL static pipeline (parse, compile, validate)
+  via the shared `edgion-dsl` crate and omits only VM init, which the data plane
+  still enforces fail-closed at runtime.
 - The config-center schema (`ConfCenterConfig`, `FileSystemConfig`,
   `KubernetesConfig`, `MetadataFilterConfig`, `EtcdConfig`) lives in
   `edgion-controller/src/config/conf_center/` (controller-only — the gateway never
@@ -203,30 +211,30 @@ ownership clear by business domain.
 ```
 edgion-resources/src/
 ├── resource/         # Resource system infrastructure
-│   ├── kind/         #   ResourceKind enum
-│   ├── defs/         #   define_resources! macro declarations
-│   ├── macros/       #   Macro definitions
+│   ├── kind.rs       #   ResourceKind enum
+│   ├── defs.rs       #   define_resources! declarations (source of truth)
+│   ├── macros.rs     #   Macro definitions
 │   ├── meta/         #   ResourceMeta trait
-│   └── registry/     #   Resource type registry
+│   └── registry.rs   #   Resource type registry
 ├── resources/        # Per-kind resource structs (corresponding to CRDs)
-│   ├── gateway/      #   Gateway
-│   ├── http_route/   #   HTTPRoute
+│   ├── gateway.rs    #   Gateway
+│   ├── http_route.rs #   HTTPRoute
 │   ├── edgion_plugins/#  EdgionPlugins
-│   └── ...           #   The remaining 17 resources
+│   └── ...           #   Other registry-backed and helper resource modules
 ├── common/           # KeyGet/KeySet unified accessors
-├── constants/        # Centralized constants
-│   ├── app/          #   Application identifiers
-│   ├── labels/       #   K8s labels
-│   ├── annotations/  #   K8s annotations
-│   ├── headers/      #   HTTP headers
-│   └── secret_keys/  #   Secret data keys
-├── ctx.rs            # EdgionHttpContext
+├── constants/        # Application, label, annotation, and Secret-key constants
+├── credentials/      # Secret-material types and resolvers
+├── matcher/          # Shared host/IP/radix matching algorithms
+├── path_normalization/ # Shared path-normalization schema and implementation
 ├── filters.rs        # PluginRunningResult
 ├── schema.rs         # JSON Schema
 ├── err.rs            # Error types
 ├── work_dir.rs       # Working directory
 └── observe.rs        # Observability configuration
 ```
+
+`EdgionHttpContext` is request-runtime state and therefore belongs to
+`edgion-gateway/src/ctx.rs`, not `edgion-resources`.
 
 ## Anti-patterns
 

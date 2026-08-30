@@ -344,6 +344,82 @@ impl LBConsistentHashTestSuite {
             },
         )
     }
+
+    /// Test ConsistentHash with sourceIp - all requests from one client IP
+    /// hash to a single backend (one unique key, consistently routed).
+    fn test_chash_source_ip() -> TestCase {
+        TestCase::new(
+            "chash_source_ip",
+            "Verify ConsistentHash (sourceIp) - one client IP locks onto one backend",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let client = reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(2))
+                        .timeout(std::time::Duration::from_secs(5))
+                        .no_proxy()
+                        .build()
+                        .expect("Failed to create HTTP client");
+
+                    // No per-request key: identity is the source IP alone.
+                    let total_requests = 12;
+                    let mut tasks = Vec::new();
+                    for i in 0..total_requests {
+                        let client = client.clone();
+                        let url = format!("http://{}:31121/test", ctx.target_host);
+                        let trace_id = format!("ch-sourceip-{}", i);
+
+                        let task = tokio::spawn(async move {
+                            client
+                                .get(&url)
+                                .header("host", "lb-ch-sourceip.example.com")
+                                .header("x-trace-id", &trace_id)
+                                .send()
+                                .await
+                        });
+                        tasks.push(task);
+                    }
+
+                    for task in tasks {
+                        let _ = task.await;
+                    }
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 12090);
+                    match metrics_client.analyze_chash_consistency("lb-ch-test").await {
+                        Ok(analysis) => {
+                            if analysis.total_requests == 0 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No requests recorded in metrics".to_string(),
+                                );
+                            }
+
+                            let is_consistent = analysis.is_consistent;
+                            let consistency_rate = analysis.consistency_rate;
+
+                            let msg = format!(
+                                "SourceIp ConsistentHash: {} requests, {} unique keys, consistency={:.1}%, consistent={}",
+                                analysis.total_requests,
+                                analysis.unique_keys,
+                                consistency_rate * 100.0,
+                                is_consistent
+                            );
+
+                            if is_consistent {
+                                TestResult::passed_with_message(start.elapsed(), msg)
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Inconsistent routing detected: {}", msg))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Metrics analysis failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -362,6 +438,7 @@ impl TestSuite for LBConsistentHashTestSuite {
             Self::test_chash_cookie(),
             Self::test_chash_arg(),
             Self::test_chash_multi_slice(),
+            Self::test_chash_source_ip(),
         ]
     }
 }

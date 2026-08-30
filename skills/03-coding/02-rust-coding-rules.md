@@ -8,16 +8,16 @@ When referencing types, functions, or constants, **always** import them with `us
 
 ```rust
 // Correct: import at the top, concise at the call site
-use crate::types::constants::annotations::edgion;
-use crate::types::resources::common::ParentReference;
-use crate::types::resources::link_sys::SystemConfig;
+use edgion_resources::constants::annotations::edgion;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::link_sys::SystemConfig;
 
 let proxy_proto = annotations.get(edgion::PROXY_PROTOCOL);
 let config = SystemConfig::Webhook(config);
 
 // Wrong: long inline path hurts readability
-let proxy_proto = annotations.get(crate::types::constants::annotations::edgion::PROXY_PROTOCOL);
-let config = crate::types::resources::link_sys::SystemConfig::Webhook(config);
+let proxy_proto = annotations.get(edgion_resources::constants::annotations::edgion::PROXY_PROTOCOL);
+let config = edgion_resources::resources::link_sys::SystemConfig::Webhook(config);
 ```
 
 **Criterion**: any path longer than 2 segments (`crate::a::b::Item`) should be imported.
@@ -125,7 +125,9 @@ When in doubt, prefer graceful-degrade — Edgion is a gateway, a panicked reque
 
 ## Rule 6: prefer canonical utilities over local copies
 
-Before writing a parsing / formatting / validation helper, search `edgion-common/src/utils/` and `edgion-resources/src/common/` for an existing one. Re-using the canonical implementation keeps behavior consistent and lets future fixes propagate to all call sites.
+Before writing a parsing, formatting, or validation helper, search the owning crate and
+the lower layers it is allowed to depend on. Reusing the canonical implementation keeps
+behavior consistent and lets fixes propagate.
 
 Known canonical helpers (non-exhaustive):
 
@@ -135,7 +137,10 @@ Known canonical helpers (non-exhaustive):
 | `MetadataFilter` matching | `edgion-controller/src/conf_mgr/metadata_filter.rs` | K8s label / namespace selector evaluation |
 | Real-IP extraction | `edgion-gateway/src/util/real_ip_extractor.rs` | Trusted proxy / `X-Forwarded-For` parsing |
 
-If you genuinely need different behavior, **extend the canonical** (add a unit, a flag, a new variant) rather than forking. Layering note: `edgion-resources/src/` may import from `edgion-common/src/utils/` — there is no cycle.
+If you genuinely need different behavior, extend the canonical rather than forking.
+Preserve the workspace DAG: `edgion-dsl → edgion-resources → edgion-common →
+{edgion-gateway, edgion-controller, edgion-cli}`. In particular,
+`edgion-resources` must not import `edgion-common`; that would create a dependency cycle.
 
 ## Checklist
 
@@ -146,5 +151,9 @@ Use during code review:
 - [ ] Do `expect()` messages explain why panic is impossible?
 - [ ] Any unnecessary `.clone()`? Can a reference or `Arc` be used instead?
 - [ ] Do error messages carry enough context for troubleshooting?
-- [ ] New parsing/validation helper? Check `core::common::utils::` first — extend the canonical instead of forking
+- [ ] New parsing/validation helper? Search the current crate and permitted lower-layer crates; do not reverse the workspace DAG
+
+These are review conventions rather than compiler-enforced lints. Verify changes with
+the project commands (`cargo fmt --all`, workspace check/clippy, and the relevant custom
+guards) in addition to manual review.
 - [ ] New `panic!` / `unreachable!()` / `debug_assert!(false, ...)` on a long-running path? Check Rule 5 exceptions — most should be graceful-degrade + `push_err`/`tracing::warn!`

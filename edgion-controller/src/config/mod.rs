@@ -10,6 +10,10 @@ use std::sync::OnceLock;
 /// controller runtime and the shared config loader below.
 pub mod conf_center;
 
+/// Plugin policy configuration: schema, fail-fast startup validation, and the
+/// compiled lookup used by the preparse stamping handlers.
+pub mod plugin_policy;
+
 /// Global controller configuration for runtime access
 static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
 
@@ -40,6 +44,16 @@ pub fn get_no_sync_kinds() -> Vec<String> {
                 .map(|s| s.to_string())
                 .collect()
         })
+}
+
+/// Get the control-plane DNS resolver configuration (background loop).
+/// Returns the default (enabled, 15s, no default resolver) when config is
+/// uninitialized.
+pub fn dns_resolver_config() -> DnsResolverConfig {
+    CONTROLLER_CONFIG
+        .get()
+        .map(|c| c.dns_resolver.clone())
+        .unwrap_or_default()
 }
 
 /// Get the cache capacity for a specific resource kind.
@@ -130,7 +144,13 @@ pub struct EdgionControllerConfig {
     pub conf_center: ConfCenterConfig,
 
     /// conf_sync gRPC channel security (mTLS).
-    /// Omit this section to keep plaintext gRPC (backward compatible).
+    ///
+    /// REQUIRED: this section carries the transport choice for a channel that streams
+    /// resolved Secrets to the data plane, so it must be made explicitly. Omitting it
+    /// makes the Controller REFUSE TO START (see
+    /// [`ConfSyncSecurityConfig::ensure_transport_configured`]). Configure exactly one of:
+    /// `auto_ca: true` (Kubernetes), `certs`/legacy `tls` cert paths (file-mode mTLS), or
+    /// `tls.skip_tls: true` — the explicit opt-in for plaintext.
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: ConfSyncSecurityConfig,
@@ -154,6 +174,71 @@ pub struct EdgionControllerConfig {
     #[arg(skip)]
     #[serde(default)]
     pub admin_token: Option<String>,
+
+    /// Control-plane DNS resolution for ExternalName backends (background loop).
+    #[arg(skip)]
+    #[serde(default)]
+    pub dns_resolver: DnsResolverConfig,
+}
+
+/// Control-plane DNS resolver configuration.
+///
+/// Governs the background resolution loop (data-plane resolution is configured
+/// separately via `EdgionGatewayConfig.spec.dnsResolver` + annotations). The
+/// default resolver is either an httpdns LinkSys reference (`link_sys_ref`) OR
+/// an inline standard-DNS server list (`servers`) — the two are mutually
+/// exclusive (validated at load).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsResolverConfig {
+    /// Control-plane resolution on/off.
+    pub enabled: bool,
+    /// Background refresh interval (duration string, e.g. "15s").
+    pub refresh_interval: String,
+    /// Default resolver: httpdns LinkSys reference `"namespace/name"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_sys_ref: Option<String>,
+    /// Default resolver: inline standard-DNS server list (`ip[:port]`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<String>,
+}
+
+impl Default for DnsResolverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_interval: "15s".to_string(),
+            link_sys_ref: None,
+            servers: Vec::new(),
+        }
+    }
+}
+
+impl DnsResolverConfig {
+    /// Validate the default-resolver configuration. `link_sys_ref` and `servers`
+    /// are mutually exclusive (a single default resolver, not both), and
+    /// `refresh_interval` must be a parseable duration.
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .link_sys_ref
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+            && !self.servers.is_empty()
+        {
+            return Err("dns_resolver: `link_sys_ref` and `servers` are mutually exclusive (set only one)".to_string());
+        }
+        // Reject an unparseable interval at load rather than silently defaulting
+        // it at runtime. (A sub-second value is accepted here but clamped up to a
+        // safe minimum by the loop — see `MIN_REFRESH`.)
+        if crate::services::dns_resolver::service::parse_duration_str(&self.refresh_interval).is_none() {
+            return Err(format!(
+                "dns_resolver: refresh_interval '{}' is not a valid duration (e.g. \"15s\", \"500ms\", \"2m\")",
+                self.refresh_interval
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Server configuration
@@ -237,12 +322,19 @@ pub struct ValidationConfig {
     #[arg(skip)]
     #[serde(default = "default_reference_grant_validation")]
     pub enable_reference_grant_validation: bool,
+
+    /// Optional plugin allowlist/denylist. Absent = allow all plugins.
+    /// Config-file only (no CLI flag). Changes require a controller restart.
+    #[arg(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_policy: Option<plugin_policy::PluginPolicyConfig>,
 }
 
 impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
             enable_reference_grant_validation: default_reference_grant_validation(),
+            plugin_policy: None,
         }
     }
 }
@@ -252,10 +344,30 @@ fn default_reference_grant_validation() -> bool {
 }
 
 /// Top-level metrics configuration section.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
     pub resource_abnormal: ResourceAbnormalMetricsConfig,
+    /// Max distinct series before the runtime cardinality guard acts (0 = off).
+    #[serde(default = "default_cardinality_cap")]
+    pub cardinality_cap: usize,
+    /// Guard behavior on breach: enforce (drop new series) | observe (flag only).
+    #[serde(default)]
+    pub cardinality_mode: edgion_common::observe::cardinality_guard::CardinalityMode,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            resource_abnormal: ResourceAbnormalMetricsConfig::default(),
+            cardinality_cap: default_cardinality_cap(),
+            cardinality_mode: Default::default(),
+        }
+    }
+}
+
+fn default_cardinality_cap() -> usize {
+    10_000
 }
 
 /// Configuration for the resource-abnormal gauge
@@ -269,6 +381,12 @@ pub struct ResourceAbnormalMetricsConfig {
     /// exceed this value it is truncated and a `tracing::error!` is
     /// emitted. Default 1000; validated range is `[10, 100000]`.
     pub hard_cap: usize,
+    /// Largest single `.status.conditions` array length at which a resource
+    /// is emitted as an `edgion_controller_status_conditions_max` series (the
+    /// status-write-loop / condition-pollution sentinel). Only resources at or
+    /// above this bound produce a series, so healthy fleets emit nothing.
+    /// Default 20; validated range is `[5, 100000]`.
+    pub status_conditions_threshold: usize,
 }
 
 impl Default for ResourceAbnormalMetricsConfig {
@@ -277,6 +395,7 @@ impl Default for ResourceAbnormalMetricsConfig {
             enabled: true,
             tick_secs: 300,
             hard_cap: 1000,
+            status_conditions_threshold: 20,
         }
     }
 }
@@ -370,6 +489,7 @@ impl EdgionControllerConfig {
 
         file_config.validate_metrics()?;
         crate::api::ip_allowlist::validate_admin_ips(&file_config.server.allow_admin_ips)?;
+        file_config.dns_resolver.validate().map_err(anyhow::Error::msg)?;
 
         Ok(file_config)
     }
@@ -390,6 +510,12 @@ impl EdgionControllerConfig {
                 anyhow::bail!(
                     "metrics.resource_abnormal.hard_cap must be in [10, 100000], got {}",
                     cfg.hard_cap
+                );
+            }
+            if cfg.status_conditions_threshold < 5 || cfg.status_conditions_threshold > 100_000 {
+                anyhow::bail!(
+                    "metrics.resource_abnormal.status_conditions_threshold must be in [5, 100000], got {}",
+                    cfg.status_conditions_threshold
                 );
             }
         }
@@ -550,11 +676,6 @@ impl EdgionControllerConfig {
         self.conf_center.is_k8s_mode()
     }
 
-    /// Get the ConfCenterConfig
-    pub fn conf_center_config(&self) -> &ConfCenterConfig {
-        &self.conf_center
-    }
-
     /// Convert to SysLogConfig (for system logging)
     pub fn to_log_config(&self) -> edgion_common::observe::SysLogConfig {
         use edgion_common::observe::SysLogConfig;
@@ -634,9 +755,6 @@ pub struct CenterClientConfig {
     pub env: Vec<String>,
     /// Arbitrary extension tags
     pub tag: Vec<String>,
-    /// Heartbeat interval in seconds (default: 30)
-    #[serde(default = "default_ping_interval_secs")]
-    pub ping_interval_secs: u64,
     /// TLS config for the federation gRPC channel to Center.
     #[serde(default)]
     pub security: ConfSyncSecurityConfig,
@@ -646,10 +764,6 @@ pub struct CenterClientConfig {
     /// Default-deny RBAC for Center operations. Absent => Center authorizes nothing.
     #[serde(default)]
     pub rbac: Option<FedRbacConfig>,
-}
-
-fn default_ping_interval_secs() -> u64 {
-    30
 }
 
 fn default_center_enabled() -> bool {
@@ -664,7 +778,6 @@ impl Default for CenterClientConfig {
             cluster: String::new(),
             env: Vec::new(),
             tag: Vec::new(),
-            ping_interval_secs: default_ping_interval_secs(),
             security: ConfSyncSecurityConfig::default(),
             enabled: default_center_enabled(),
             rbac: None,
@@ -682,6 +795,72 @@ impl CenterClientConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_resolver_defaults_enabled_15s() {
+        let cfg = DnsResolverConfig::default();
+        assert!(cfg.enabled, "control-plane resolution defaults to on");
+        assert_eq!(cfg.refresh_interval, "15s");
+        assert!(cfg.link_sys_ref.is_none());
+        assert!(cfg.servers.is_empty());
+    }
+
+    #[test]
+    fn dns_resolver_parses_from_yaml() {
+        let yaml = "enabled: false\nrefresh_interval: 30s\nservers:\n  - 1.1.1.1\n  - 8.8.8.8:5353\n";
+        let cfg: DnsResolverConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.refresh_interval, "30s");
+        assert_eq!(cfg.servers, vec!["1.1.1.1".to_string(), "8.8.8.8:5353".to_string()]);
+    }
+
+    #[test]
+    fn dns_resolver_omitted_fields_take_defaults() {
+        // `#[serde(default)]` on the struct → an empty map yields the full default.
+        let cfg: DnsResolverConfig = serde_yaml::from_str("{}").unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.refresh_interval, "15s");
+    }
+
+    #[test]
+    fn dns_resolver_link_sys_ref_and_servers_are_mutually_exclusive() {
+        let cfg = DnsResolverConfig {
+            link_sys_ref: Some("dns/aliyun".to_string()),
+            servers: vec!["1.1.1.1".to_string()],
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err(), "both set must be rejected");
+    }
+
+    #[test]
+    fn dns_resolver_single_source_validates_clean() {
+        let only_ref = DnsResolverConfig {
+            link_sys_ref: Some("dns/aliyun".to_string()),
+            ..Default::default()
+        };
+        assert!(only_ref.validate().is_ok());
+        let only_servers = DnsResolverConfig {
+            servers: vec!["1.1.1.1".to_string()],
+            ..Default::default()
+        };
+        assert!(only_servers.validate().is_ok());
+        assert!(DnsResolverConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn dns_resolver_rejects_unparseable_refresh_interval() {
+        let cfg = DnsResolverConfig {
+            refresh_interval: "soon".to_string(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err(), "unparseable interval must be rejected at load");
+        // A parseable sub-second value passes validation (the loop clamps it up).
+        let cfg = DnsResolverConfig {
+            refresh_interval: "500ms".to_string(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
+    }
 
     #[test]
     fn test_to_log_config_respects_console_flag() {
@@ -731,7 +910,6 @@ center:
         assert_eq!(center.name, "ctrl-01");
         assert_eq!(center.cluster, "prod-cn");
         assert_eq!(center.env, vec!["production"]);
-        assert_eq!(center.ping_interval_secs, 30); // default
     }
 
     // ── Group E: metrics_resource_abnormal defaults (2 independent, kept) ───

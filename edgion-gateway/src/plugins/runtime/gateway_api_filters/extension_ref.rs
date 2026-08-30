@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
-use crate::plugins::http::get_global_plugin_store;
 use crate::plugins::runtime::log::EdgionPluginsLogToken;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{
@@ -52,9 +51,9 @@ pub struct ExtensionRefFilter {
     ext_ref: LocalObjectReference,
     /// Position in the rule's ExtensionRef list, assigned at route build time.
     /// `Some(idx)` -> look up resolved target via `session.resolved_route_ext_ref(idx)`.
-    /// `None` -> backend-level filter (no per-request resolve cache); fall back to
-    /// direct global store lookup. Set to `None` initially; rule-scope builder
-    /// patches to `Some` in a later task.
+    /// `None` -> backend-level filter, resolved through the request-scoped
+    /// pinned cache. Set to `None` initially; rule-scope builder patches to
+    /// `Some`.
     index: Option<usize>,
 }
 
@@ -90,17 +89,21 @@ impl ExtensionRefFilter {
     /// This is the body-stage path: body filters run per chunk and do not
     /// surface PluginLog entries, so calling `start_edgion_plugins_log` here
     /// would push entries that no stage drains, leaking into
-    /// `EdgionHttpContext.pending_edgion_plugins_logs` for the entire request
+    /// the request's pending EdgionPlugins log queue for the entire request
     /// lifetime (one entry per chunk on long streams). This sibling helper
     /// returns just the runtime, with no log side-effects at all.
     fn resolve_runtime_silent(&self, session: &mut dyn PluginSession) -> Option<Arc<PluginRuntime>> {
         if !self.is_edgion_plugins() {
             return None;
         }
-        match self.index {
+        let runtime = match self.index {
             Some(idx) => session.resolved_route_ext_ref(idx),
-            None => get_global_plugin_store().get_plugin_runtime(&self.plugin_key()),
+            None => session.pinned_backend_ext_ref(&self.plugin_key()),
+        }?;
+        if self.index.is_none() && runtime.has_waf() {
+            return None;
         }
+        Some(runtime)
     }
 
     /// Helper to prepare plugin execution: validation, lookup, logging setup
@@ -126,8 +129,8 @@ impl ExtensionRefFilter {
 
         let key = self.plugin_key();
 
-        // Resolve target: rule-scope reads pre-resolved Vec via index;
-        // backend-scope falls back to direct global store lookup.
+        // Resolve target: rule-scope reads the pre-resolved Vec via index;
+        // backend-scope resolves through the request-pinned cache.
         let plugin_runtime = match self.index {
             Some(idx) => match session.resolved_route_ext_ref(idx) {
                 Some(rt) => rt,
@@ -136,7 +139,7 @@ impl ExtensionRefFilter {
                     return Err(());
                 }
             },
-            None => match get_global_plugin_store().get_plugin_runtime(&key) {
+            None => match session.pinned_backend_ext_ref(&key) {
                 Some(rt) => rt,
                 None => {
                     log.push_err("extension ref not found");
@@ -144,6 +147,11 @@ impl ExtensionRefFilter {
                 }
             },
         };
+
+        if self.index.is_none() && plugin_runtime.has_waf() {
+            log.push_err("backend-scoped WAF is not supported");
+            return Err(());
+        }
 
         let token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
         Ok(Some((plugin_runtime, token)))
@@ -181,9 +189,23 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    // Install this inner filter's dye plan before invocation,
+                    // mirroring `PluginRuntime::run_upstream_response_plugins_sync`
+                    // — an ExtensionRef bundle iterates its nested runtime's
+                    // filters directly rather than through that loop, so this
+                    // call site must do it itself or the bundle's dye rules
+                    // never render (response-stage: no strip).
+                    session.install_dye_plan(plugin.dye_plan().cloned());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -235,9 +257,29 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::Request => {
                 for plugin in plugin_runtime.request_plugins_iter() {
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    let previous_identity = session.replace_plugin_entry_identity(
+                        crate::ctx::CurrentPluginEntryIdentity::new(plugin.name(), plugin.alias()),
+                    );
+                    // Install this inner filter's dye plan + run the
+                    // request-direction anti-spoof strip before invocation,
+                    // mirroring `PluginRuntime::run_request_plugins` — an
+                    // ExtensionRef bundle iterates its nested runtime's
+                    // filters directly rather than through that loop, so this
+                    // call site must do it itself or the bundle's dye rules
+                    // (and the strip) never run.
+                    session.install_dye_plan(plugin.dye_plan().cloned());
+                    session.strip_request_dye_once();
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_request(session, &mut inner_log).await;
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    session.restore_plugin_entry_identity(previous_identity);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -247,9 +289,20 @@ impl ExtensionRefFilter {
             }
             PluginRunningStage::UpstreamResponse => {
                 for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    // See the Request arm above: mirrors
+                    // `PluginRuntime::run_upstream_response_plugins_async`
+                    // (response-stage: no strip).
+                    session.install_dye_plan(plugin.dye_plan().cloned());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -259,9 +312,20 @@ impl ExtensionRefFilter {
             }
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
-                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
+                    // See the Request arm above: mirrors
+                    // `PluginRuntime::run_upstream_response_plugins_sync`
+                    // (response-stage: no strip).
+                    session.install_dye_plan(plugin.dye_plan().cloned());
+                    let suppress_log = plugin.suppress_automatic_log();
+                    let mut inner_log = if suppress_log {
+                        PluginLog::disabled()
+                    } else {
+                        PluginLog::with_alias(plugin.name(), plugin.alias())
+                    };
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
-                    session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    if !suppress_log {
+                        session.push_to_edgion_plugins_log(&log_token, inner_log);
+                    }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         return result;
@@ -286,6 +350,10 @@ impl ExtensionRefFilter {
 
         let mut max_delay: Option<std::time::Duration> = None;
         for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
+            // See `run_extension_async`'s Request arm: mirrors
+            // `PluginRuntime::run_upstream_response_body_plugins` (response-stage:
+            // no strip; no PluginLog here either, matching that loop).
+            session.install_dye_plan(plugin.dye_plan().cloned());
             if let Some(d) = plugin.run_upstream_response_body_filter(body, end_of_stream, session) {
                 max_delay = Some(match max_delay {
                     Some(current) => current.max(d),
@@ -413,18 +481,152 @@ mod tests {
         get_global_plugin_store().replace_all(map);
     }
 
+    fn make_terminating_plugin(key_ns: &str, name: &str) -> Arc<crate::plugins::runtime::PluginRuntime> {
+        let ep = EdgionPlugins {
+            metadata: ObjectMeta {
+                namespace: Some(key_ns.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Mock(
+                    edgion_resources::resources::edgion_plugins::MockConfig::default(),
+                ))]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        Arc::clone(&compile_plugins(&ep).plugin_runtime)
+    }
+
+    #[tokio::test]
+    async fn request_inner_identity_restores_outer_on_early_result() {
+        let runtime = make_terminating_plugin("ns", "terminating");
+        let runtime_for_resolve = Arc::clone(&runtime);
+        let outer = crate::ctx::CurrentPluginEntryIdentity::new("ExtensionRef", Some("outer"));
+        let outer_for_replace = outer;
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(0usize))
+            .times(1)
+            .returning(move |_| Some(Arc::clone(&runtime_for_resolve)));
+        session
+            .expect_start_edgion_plugins_log()
+            .returning(|_| EdgionPluginsLogToken::new(0));
+        session.expect_install_dye_plan().return_const(());
+        session.expect_strip_request_dye_once().return_const(());
+        session
+            .expect_replace_plugin_entry_identity()
+            .times(1)
+            .withf(|identity| identity.as_ref().is_some_and(|value| value.name() == "Mock"))
+            .returning(move |_| outer_for_replace);
+        session
+            .expect_restore_plugin_entry_identity()
+            .times(1)
+            .withf(|identity| identity.as_ref().is_some_and(|value| value.name() == "ExtensionRef"))
+            .return_const(());
+        session.expect_set_response_header().times(1).returning(|_, _| Ok(()));
+        session.expect_push_to_edgion_plugins_log().times(1).return_const(());
+
+        let mut filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "terminating".into(),
+                resolved_namespace: None,
+            },
+        );
+        filter.set_index(0);
+        let mut log = PluginLog::new("test");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 200, .. }));
+    }
+
+    #[tokio::test]
+    async fn request_extension_suppresses_inner_waf_plugin_log() {
+        let mut inner = crate::plugins::runtime::PluginRuntime::new();
+        inner
+            .add_waf(&edgion_resources::resources::edgion_plugins::WafConfig {
+                rules: "SecAction \"id:1,phase:1,pass,log\"\n".to_string(),
+                mode: edgion_resources::resources::edgion_plugins::WafMode::On,
+                priority: 0,
+            })
+            .unwrap();
+        let inner = Arc::new(inner);
+        let inner_for_resolve = Arc::clone(&inner);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(0usize))
+            .times(1)
+            .returning(move |_| Some(Arc::clone(&inner_for_resolve)));
+        session
+            .expect_start_edgion_plugins_log()
+            .returning(|_| EdgionPluginsLogToken::new(0));
+        session.expect_install_dye_plan().return_const(());
+        session.expect_strip_request_dye_once().return_const(());
+        session
+            .expect_replace_plugin_entry_identity()
+            .times(1)
+            .returning(|_| None);
+        session.expect_restore_plugin_entry_identity().times(1).return_const(());
+        session
+            .expect_claim_waf_phase()
+            .returning(|_, _| crate::ctx::WafPhaseClaim::Execute);
+        session.expect_request_headers_bytes().return_once(Vec::new);
+        session.expect_get_method().times(2).return_const("GET".to_string());
+        session.expect_get_uri().return_const("/".to_string());
+        session.expect_get_request_uri().return_const("/".to_string());
+        session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
+        session.expect_remote_ip().return_const("192.0.2.1".to_string());
+        session.expect_get_request_id().return_const("request-1".to_string());
+        session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
+        session.expect_install_waf_transaction().return_once(|_, transaction| {
+            drop(transaction);
+            true
+        });
+        session.expect_push_to_edgion_plugins_log().times(0);
+
+        let mut filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "waf".into(),
+                resolved_namespace: None,
+            },
+        );
+        filter.set_index(0);
+        let mut log = PluginLog::new("ExtensionRef");
+
+        let result = filter.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.refer_to.as_deref(), Some("waf"));
+    }
+
     #[test]
-    fn test_resolves_via_store_and_runs() {
+    fn backend_scope_uses_request_pinned_runtime_across_attempts() {
         use crate::plugins::runtime::log::EdgionPluginsLogToken;
 
         // Prepare store with plugin
         make_plugin("ns", "p1");
+        let runtime = get_global_plugin_store().get_plugin_runtime("ns/p1").unwrap();
 
         let mut session = MockPluginSession::new();
         session
+            .expect_pinned_backend_ext_ref()
+            .with(eq("ns/p1"))
+            .times(2)
+            .returning(move |_| Some(Arc::clone(&runtime)));
+        session
             .expect_start_edgion_plugins_log()
+            .times(2)
             .returning(|_| EdgionPluginsLogToken::new(0));
-        session.expect_push_to_edgion_plugins_log().return_const(());
 
         let filter = ExtensionRefFilter::new(
             "ns".to_string(),
@@ -432,11 +634,14 @@ mod tests {
                 group: "".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
+                resolved_namespace: None,
             },
         );
         let mut log = PluginLog::new("test");
-        let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
-        assert_eq!(result, PluginRunningResult::GoodNext);
+        for _ in 0..2 {
+            let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
+            assert_eq!(result, PluginRunningResult::GoodNext);
+        }
         // Verify refer_to is set
         assert!(log.refer_to.is_some());
         assert_eq!(log.refer_to.as_ref().unwrap(), "p1");
@@ -469,6 +674,7 @@ mod tests {
                 group: "".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
+                resolved_namespace: None,
             },
         );
         filter.set_index(0);
@@ -499,6 +705,7 @@ mod tests {
                 group: "".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
+                resolved_namespace: None,
             },
         );
         filter.set_index(7);
@@ -542,6 +749,7 @@ mod tests {
                 group: "edgion.io".into(),
                 kind: "NotAPlugin".into(),
                 name: "x".into(),
+                resolved_namespace: None,
             },
         );
         let mut log = PluginLog::with_alias("ExtensionRef", None);

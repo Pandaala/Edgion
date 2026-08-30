@@ -31,7 +31,7 @@ impl<'a> From<&'a str> for LogArg<'a> {
 /// Plain arguments need no annotation — only wrap sensitive ones.
 ///
 /// ```ignore
-/// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
+/// log.push_fmt("user {} from {}", la!["admin", sensitive(&remote_ip)]);
 /// ```
 #[inline]
 pub fn sensitive(s: &str) -> LogArg<'_> {
@@ -113,6 +113,9 @@ pub struct PluginLog {
 
     /// ExtensionRef reference name (for ExtensionRef filter only)
     pub refer_to: Option<String>,
+
+    /// Request-local attachment token. Never serialized.
+    pub(crate) internal_token: Option<String>,
 }
 
 impl Serialize for PluginLog {
@@ -183,6 +186,23 @@ impl Serialize for MergedLog<'_> {
 }
 
 impl PluginLog {
+    /// Allocation-free scratch value for plugins that own a dedicated
+    /// top-level access-log block and suppress the generic stage entry.
+    #[inline]
+    pub(crate) const fn disabled() -> Self {
+        Self {
+            name: String::new(),
+            alias: None,
+            time_cost: None,
+            cond_skip: None,
+            log: None,
+            ulog: None,
+            log_full: None,
+            refer_to: None,
+            internal_token: None,
+        }
+    }
+
     #[inline]
     pub fn new(name: &str) -> Self {
         let mut n = String::with_capacity(NAME_CAPACITY);
@@ -197,6 +217,7 @@ impl PluginLog {
             ulog: None,
             log_full: None,
             refer_to: None,
+            internal_token: None,
         }
     }
 
@@ -327,7 +348,7 @@ impl PluginLog {
     ///
     /// ```ignore
     /// log.push_fmt("key {} set", la![rule.name.as_str()]);
-    /// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
+    /// log.push_fmt("user {} from {}", la!["admin", sensitive(&remote_ip)]);
     /// ```
     pub fn push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
         // 128-byte inline scratch matches the tier-1 LogBuffer budget, so a
@@ -373,11 +394,8 @@ impl PluginLog {
         self.refer_to = Some(name);
     }
 
-    /// Legacy method for backward compatibility (deprecated, use push() instead)
-    #[inline]
-    #[deprecated(note = "Use push() instead")]
-    pub fn add_plugin_log(&mut self, log: &str) {
-        self.push(log);
+    pub(crate) fn set_internal_token(&mut self, token: String) {
+        self.internal_token = Some(token);
     }
 
     /// Render this log as a single `String` suitable for `expect-test`
@@ -575,6 +593,17 @@ mod tests {
         assert_eq!(parsed["log"][1], "bbb; ");
         assert!(parsed.get("ulog").is_none());
         assert!(parsed.get("log_full").is_none()); // false doesn't serialize
+    }
+
+    #[test]
+    fn internal_attachment_token_is_never_serialized() {
+        let mut log = PluginLog::new("ExtProc");
+        log.set_internal_token("secret/request-scoped-identity".to_string());
+        log.push("safe summary");
+        let json = serde_json::to_string(&log).unwrap();
+        assert!(!json.contains("internal_token"));
+        assert!(!json.contains("request-scoped-identity"));
+        assert!(json.contains("safe summary"));
     }
 
     #[test]

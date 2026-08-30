@@ -179,7 +179,8 @@ impl RealIpTestSuite {
                                         }
                                     };
 
-                                    // Without XFF, X-Real-IP should be client_addr.
+                                    // Without XFF, X-Real-IP should be the resolved RemoteIp,
+                                    // which starts from the direct peer on an unproxied request.
                                     let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
                                         Some(ip) => ip,
                                         None => {
@@ -197,7 +198,7 @@ impl RealIpTestSuite {
                                         );
                                     }
 
-                                    // X-Forwarded-For should be created with just client_addr.
+                                    // X-Forwarded-For should be created with just the resolved RemoteIp.
                                     let xff = match headers.get("x-forwarded-for").and_then(|v| v.as_str()) {
                                         Some(x) => x,
                                         None => {

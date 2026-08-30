@@ -22,7 +22,7 @@ Do **not** add grouping when any of these hold:
 - The list element already carries identity (mTLS subject DN/SAN, OIDC `sub`) — server-side grouping is redundant.
 - There is no actor concept on a hit (CORS origin is value-match, not actor identity).
 - The resource is single-valued (one LDAP server, one CSRF key, one rate, one IdP, one forward-auth URI, one rewrite target). Multi-source is modelled by multiple plugin / resource instances, not by grouping.
-- The list already lives in a per-rule wrapper that itself acts as the group (e.g. `RestrictionRule.name/source/key`). Adding sub-groups doubles the schema depth without new attribution.
+- The list already lives in a per-rule wrapper inside a named outer group (for example, `GeoRuleGroup.name` plus each `GeoRule`'s `source` / `key` / `values`). Adding sub-groups inside `GeoRule.values` doubles the schema depth without new attribution.
 
 Closed cases (do not reopen without new requirement): see the "Closed: not grouped" register in [`../../04-review/SKILL.md`](../../04-review/SKILL.md).
 
@@ -32,8 +32,8 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 |------|--------|
 | **Field name** | `<thing>_groups: Vec<<Thing>Group>` (e.g. `secret_groups`, `issuer_groups`, `ca_secret_groups`, `origin_groups`). |
 | **Group struct** | `{ name: String, items: Vec<…> }`. **Always use `String` for `name`** — `Arc<str>` is not `serde::{Serialize,Deserialize}` (serde `rc` feature only covers `Arc<T: Sized>`). |
-| **Mutual exclusion with the flat field** | The legacy flat field (`secret_refs`, `issuer_refs`, …) and the new `*_groups` must be **preparse-validated as exclusive** in `validate_and_check` / `detect_validation_error`. Emit a precise error pointing at which two fields collided. |
-| **Rolling-upgrade safety** | Any new field added to a struct that crosses the controller → gateway gRPC boundary (`ResolvedKey`, `HmacCredential`, `ResolvedJwtCredential`, `ResolvedUser`, `KeyMetadata`, …) **must** carry `#[serde(default = "…")]` with a reasonable default. Otherwise a new gateway deserializing an old controller's payload fails for the whole `EdgionPlugins` resource. |
+| **Replace, do not dual-publish** | When grouping replaces a flat field, remove the flat field and update Controller, Gateway, CRD, fixtures, and docs atomically. Do not retain both fields, add aliases, or validate a legacy/new-field combination. |
+| **Transport fields** | Add serde defaults only when the field is genuinely optional in the current schema, not to deserialize payloads from an older Controller. Controller and Gateway changes land together in this pre-release workspace. |
 | **Group name validation** | Reuse [`validate_group_name`](../../../edgion-resources/src/resources/common/group_name.rs) (≤ 63 chars, K8s label-value charset `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`). Do not invent a per-plugin variant. |
 | **CRD schema shape** | For nested `config:` under `requestPlugins[]`, declare grouped fields with `properties:` + `x-kubernetes-preserve-unknown-fields: true`. Do **not** try to use `oneOf` keyed on the sibling `type` field — CRDs cannot cross-field branch without `x-kubernetes-validations` CEL. |
 | **Fixture coverage** | Update both `edgion-tests/integration/conf/EdgionPlugins/<Plugin>/` **and** `edgion-tests/k8s/conf/EdgionPlugins/<Plugin>/`. K8s integration breaks with `unknown field` if one side is missed. |
@@ -51,7 +51,7 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 | Helper | Path | Used by |
 |--------|------|---------|
 | `validate_groups_structure` | Strict: any bad entry → `Err`, callers typically set `Accepted=False` | `real_ip::trusted_ips` (strict/all-or-nothing; intentional) |
-| `build_grouped_matcher` | Strict: same, builds matcher only if all entries valid | Any legacy/strict caller that must treat a partial group as invalid |
+| `build_grouped_matcher` | Strict: same, builds matcher only if all entries valid | Current strict callers that must treat a partial group as invalid |
 | `collect_entry_errors(groups) -> Vec<EntryError>` | Partial-good: returns per-entry errors without aborting | Controller `update_status` for `PartiallyInvalid` condition; gateway metric gate |
 | `build_grouped_matcher_partial(groups) -> (IpRadixMatcher, Vec<EntryError>)` | Partial-good: skips bad entries, builds matcher from valid ones | `validate_and_init` for all IP-restriction inline lists; `IpList` gateway index build |
 
@@ -72,7 +72,7 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 
 - **Hit branch** (`Allow` / `OK`): `PluginLog` must include `group=<name>`. Follow the `<verb>:group=<name>` shape that IpRestriction uses (`allow:group=<name>`, `deny:group=<name>`, `deny:default`, `deny:not-in-allow`) so existing log parsers keep working.
 - **Failure / anonymous branch** (`Deny *`, `Allow anon`): **must not** include `group=`. Leaking the group on a failed credential lets an attacker enumerate multi-tenant topology by brute-forcing keys. This is an iron rule; every grouping plugin records it as `skills/04-review/<plugin>/group-in-ok-log.md`.
-- **Tracing forbidden on the data plane**: all attribution signal on the gateway path goes through `PluginLog`, the access log's `EdgionStatus`, or Prometheus metrics. `tracing::warn!/error!/info!` is reserved for the controller (resolution path, duplicate warnings). See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3.
+- **Tracing forbidden on the data plane**: all attribution signal on the gateway path goes through `PluginLog`, access-log diagnostics, or Prometheus metrics. `tracing::warn!/error!/info!` is reserved for the controller (resolution path, duplicate warnings). See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3.
 
 ## 5. Access-log skill must be updated in the same PR
 

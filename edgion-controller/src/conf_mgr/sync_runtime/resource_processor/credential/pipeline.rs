@@ -10,13 +10,15 @@
 //! 6. Extract `Secret.data`.
 //! 7. Delegate to [`SecretMaterialResolver::parse`] for keys/decode checks.
 //!
-//! Three public entry points:
+//! Four entry points:
 //! - [`fetch_secret`] — steps 1–4 only; returns the raw `Secret`. Used by
 //!   plugin resolvers that do their own data-shape extraction (EdgionPlugins).
 //! - [`resolve_secret`] — full pipeline; returns the validated `Secret`.
 //! - [`resolve_credential`] — full pipeline; returns the parsed `Material`.
+//! - [`resolve_secret_readonly`] — validated Secret lookup without reverse
+//!   dependency registration, for status derivation after parse.
 
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::resources::common::SecretObjectReference;
@@ -51,6 +53,12 @@ pub enum InvalidCredentialError {
 
     /// A key's value could not be decoded (e.g., non-UTF-8).
     DecodeError { key: &'static str, detail: String },
+
+    /// A required value decoded successfully but violates its fixed syntax.
+    InvalidValue {
+        key: &'static str,
+        class: edgion_resources::credentials::InvalidValueClass,
+    },
 
     /// The `Secret.type` is not in the resolver's accepted whitelist.
     InvalidSecretType {
@@ -89,7 +97,7 @@ pub enum FetchOutcome<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal steps (shared by the three public entry points)
+// Internal steps (shared by the four entry points)
 // ---------------------------------------------------------------------------
 
 /// Fetch the Secret object: compute namespace, register dependency, check
@@ -102,8 +110,8 @@ pub enum FetchOutcome<T> {
 ///
 /// Callers that only need the raw Secret (e.g. EdgionPlugins plugin
 /// resolvers) use this directly; the typed pipeline entry points
-/// (`resolve_secret`, `resolve_credential`) layer type and key validation
-/// on top via `resolve_inner`.
+/// (`resolve_secret`, `resolve_credential`, `resolve_credential_readonly`)
+/// layer type and key validation on top via `resolve_inner`.
 pub fn fetch_secret(
     ctx: &HandlerContext,
     owner: &ResourceRef,
@@ -111,16 +119,45 @@ pub fn fetch_secret(
     owner_kind: &str,
     secret_ref: &SecretObjectReference,
 ) -> FetchOutcome<Secret> {
+    fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, true)
+}
+
+/// Read-only form of [`fetch_secret`] for status derivation after parse has
+/// already registered dependencies. It shares the exact namespace, grant, and
+/// store lookup path but does not mutate `SecretRefManager`.
+pub(crate) fn fetch_secret_readonly(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+) -> FetchOutcome<Secret> {
+    fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, false)
+}
+
+fn fetch_secret_inner(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    register_dependency: bool,
+) -> FetchOutcome<Secret> {
     // ── Step 1: compute effective namespace ──────────────────────────────
     let owner_ns = owner.namespace.as_deref().unwrap_or("default");
     let secret_ns = secret_ref.effective_namespace(owner_ns).to_string();
 
     // ── Step 2: register SecretRefManager dependency ─────────────────────
     // Before Grant check and Secret lookup: owners must be tracked for Secret
-    // lifecycle events even while Pending. ReferenceGrant changes requeue via
-    // `ReferenceGrantStore`, not SecretRefManager.
-    let secret_key = format_secret_key(Some(&secret_ns), &secret_ref.name);
-    ctx.secret_ref_manager().add_ref(secret_key, owner.clone());
+    // lifecycle events even while Pending. Cross-namespace refs are also
+    // indexed so a ReferenceGrant change requeues the owner.
+    if register_dependency {
+        let secret_key = format_secret_key(Some(&secret_ns), &secret_ref.name);
+        ctx.secret_ref_manager().add_ref(secret_key, owner.clone());
+        if secret_ref.is_cross_namespace(owner_ns) {
+            ctx.runtime().cross_ns_ref_mgr.add_ref(secret_ns.clone(), owner.clone());
+        }
+    }
 
     // ── Step 3: cross-namespace ReferenceGrant check ─────────────────────
     if secret_ref.is_cross_namespace(owner_ns) {
@@ -156,6 +193,80 @@ pub fn fetch_secret(
     }
 }
 
+/// Fetch the ConfigMap object: register dependency, optionally check cross-namespace
+/// ReferenceGrant, then look up in the store.
+///
+/// Mirrors [`fetch_secret`] for ConfigMaps. The `namespace` parameter is the
+/// explicit namespace of the target ConfigMap (`None` means "same as owner"). The
+/// `owner_ns` parameter is the owner resource's own namespace (`None` for
+/// cluster-scoped resources). When `namespace` is `Some` and differs from
+/// `owner_ns` the function checks for a cross-namespace `ReferenceGrant` authorised
+/// by `owner_group`/`owner_kind` before accessing the store.
+///
+/// `owner_group` and `owner_kind` identify the requesting resource type on the
+/// "from" side of the `ReferenceGrant` (`from.group`, `from.kind`).
+pub fn fetch_configmap(
+    ctx: &HandlerContext,
+    resource_ref: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    name: &str,
+    namespace: Option<&str>,
+    owner_ns: Option<&str>,
+) -> FetchOutcome<ConfigMap> {
+    // ── Step 1: compute effective namespace ──────────────────────────────
+    let effective_ns = match namespace.or(owner_ns) {
+        Some(ns) => ns,
+        None => {
+            // Cluster-scoped owner with no explicit namespace: cannot resolve.
+            return FetchOutcome::Pending(PendingReason::SecretNotFound {
+                namespace: String::new(),
+                name: name.to_string(),
+            });
+        }
+    };
+
+    // ── Step 2: register SecretRefManager dependency ─────────────────────
+    let key_ns = effective_ns.to_string();
+    let cm_key = format_secret_key(Some(&key_ns), name);
+    ctx.secret_ref_manager().add_ref(cm_key, resource_ref.clone());
+
+    // ── Step 3: cross-namespace ReferenceGrant check ─────────────────────
+    let cross_ns = match (namespace, owner_ns) {
+        (Some(ns), Some(own)) => ns != own,
+        (Some(_), None) => true, // cluster-scoped owner referencing an explicit namespace
+        (None, _) => false,      // same-namespace reference
+    };
+    if cross_ns {
+        let from_ns = owner_ns.unwrap_or("");
+        let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
+            from_ns,
+            owner_group,
+            owner_kind,
+            effective_ns,
+            "",
+            "ConfigMap",
+            Some(name),
+        );
+        if !allowed {
+            return FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                from_ns: from_ns.to_string(),
+                to_ns: effective_ns.to_string(),
+                secret_name: name.to_string(),
+            });
+        }
+    }
+
+    // ── Step 4: look up the ConfigMap ────────────────────────────────────
+    match ctx.runtime().configmap_store.get(Some(effective_ns), name) {
+        Some(cm) => FetchOutcome::Ok(cm),
+        None => FetchOutcome::Pending(PendingReason::SecretNotFound {
+            namespace: effective_ns.to_string(),
+            name: name.to_string(),
+        }),
+    }
+}
+
 /// Validate `Secret.type` against the resolver's whitelist. Missing type is
 /// matched against the sentinel `""` entry.
 fn check_secret_type<R: SecretMaterialResolver>(secret: &Secret, resolver: &R) -> Option<InvalidCredentialError> {
@@ -178,6 +289,7 @@ fn map_parse_error(err: ResolveError) -> InvalidCredentialError {
             key,
             detail: format!("{source}"),
         },
+        ResolveError::InvalidValue { key, class } => InvalidCredentialError::InvalidValue { key, class },
         ResolveError::InvalidSecretType { got, allowed } => InvalidCredentialError::InvalidSecretType { got, allowed },
     }
 }
@@ -193,7 +305,19 @@ fn resolve_inner<R: SecretMaterialResolver>(
     secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<(Secret, R::Material)> {
-    let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref) {
+    resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, true)
+}
+
+fn resolve_inner_with_registration<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+    register_dependency: bool,
+) -> ResolveOutcome<(Secret, R::Material)> {
+    let secret = match fetch_secret_inner(ctx, owner, owner_group, owner_kind, secret_ref, register_dependency) {
         FetchOutcome::Ok(s) => s,
         FetchOutcome::Pending(r) => return ResolveOutcome::Pending(r),
     };
@@ -236,6 +360,23 @@ pub async fn resolve_secret<R: SecretMaterialResolver>(
         ResolveOutcome::Ok((secret, _)) => ResolveOutcome::Ok(secret),
         ResolveOutcome::Pending(r) => ResolveOutcome::Pending(r),
         ResolveOutcome::Invalid(e) => ResolveOutcome::Invalid(e),
+    }
+}
+
+/// Read-only form of [`resolve_secret`] for status derivation and internal
+/// managed-Secret validation after the parse path registered dependencies.
+pub(crate) fn resolve_secret_readonly<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+) -> ResolveOutcome<Secret> {
+    match resolve_inner_with_registration(ctx, owner, owner_group, owner_kind, secret_ref, resolver, false) {
+        ResolveOutcome::Ok((secret, _)) => ResolveOutcome::Ok(secret),
+        ResolveOutcome::Pending(reason) => ResolveOutcome::Pending(reason),
+        ResolveOutcome::Invalid(error) => ResolveOutcome::Invalid(error),
     }
 }
 

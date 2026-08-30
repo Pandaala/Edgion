@@ -20,7 +20,7 @@ Use this checklist when reviewing documents under `docs/`. Ordered by priority: 
 
 ## Multilingual sync
 
-- [ ] **zh-CN and en are symmetric**: both language versions have the file
+- [ ] **zh-CN and en are paired**: both language versions have the file, or a temporary gap is explicitly tracked
 - [ ] **Section structure consistent**: same number, order, and level of sections
 - [ ] **YAML examples identical**: code-block content is identical; only comment language differs
 - [ ] **Parameter tables match**: parameter names, types, and defaults are identical; only the description column differs by language
@@ -31,7 +31,7 @@ Use this checklist when reviewing documents under `docs/`. Ordered by priority: 
 - [ ] **Internal links valid**: all relative-path internal links point to existing files
 - [ ] **Anchors valid**: links with `#section` anchors point to anchors that exist in the target file
 - [ ] **External links reasonable**: external links point to authoritative sources (MDN, K8s official, RFC), not blogs or pages likely to break
-- [ ] **No links to skills/**: documents under docs/ do not reference the skills/ directory directly
+- [ ] **Audience-appropriate links**: end-user pages do not link to agent workflows; curated contributor `dev-guide/` links to canonical `skills/` sources are allowed
 
 ## Writing style
 
@@ -54,6 +54,10 @@ Use this checklist when reviewing documents under `docs/`. Ordered by priority: 
 - [ ] **Section order correct**: follows progressive complexity (overview → configuration → scenarios → advanced → FAQ → links)
 - [ ] **README.md updated**: for new documents, the README.md of the containing directory is updated
 - [ ] **Site navigation updated**: when adding / removing / moving user-facing documents, VitePress sidebar/nav entries are in sync
+
+The anchor, external-destination, bilingual-structure, and YAML-equivalence
+items above are manual review checks unless a dedicated validator is added.
+`validate_agent_docs.py` does not prove all of them.
 
 ## Security review
 

@@ -1,0 +1,33 @@
+# Streamed route to the raw HTTP/2 (h2c) transport backend.
+#
+# Proves the `Streamed` row of contract §3 against an H2 upstream: neither
+# `Content-Length` nor `Transfer-Encoding` on the upstream HEADERS, and
+# END_STREAM on HEADERS is `false` ALWAYS — including for a request the
+# downstream client declared bodyless, which is the fact that distinguishes
+# `Streamed` from `Ordinary` at the frame level.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-streamed-h2
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-streamed-h2.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: transport-streamed
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031

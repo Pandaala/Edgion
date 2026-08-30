@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use etcd_client::EventType;
 use parking_lot::RwLock as SyncRwLock;
 use tokio::sync::{mpsc, RwLock};
@@ -31,6 +31,14 @@ use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 pub type KindEventSender = mpsc::Sender<EtcdEvent>;
 /// Receiver type for per-kind event channels.
 pub type KindEventReceiver = mpsc::Receiver<EtcdEvent>;
+
+/// Snapshot captured by `prime`, consumed by `dispatch_init` / `run_runtime`.
+struct PrimedSnapshot {
+    /// Resources grouped by kind: kind -> Vec<(key, content)>.
+    by_kind: HashMap<&'static str, Vec<(String, String)>>,
+    /// Cluster revision at list time; the runtime watch resumes from `revision + 1`.
+    revision: i64,
+}
 
 /// EtcdWatcher — watches the etcd `{prefix}/conf/` key space.
 ///
@@ -48,6 +56,8 @@ pub struct EtcdWatcher {
     senders: Arc<RwLock<HashMap<&'static str, KindEventSender>>>,
     /// Known keys per kind — maintained across init and runtime for resync diff.
     known_keys: Arc<SyncRwLock<HashMap<&'static str, HashSet<String>>>>,
+    /// Snapshot captured by `prime`.
+    primed: SyncRwLock<Option<PrimedSnapshot>>,
 }
 
 impl EtcdWatcher {
@@ -57,11 +67,12 @@ impl EtcdWatcher {
             conf_prefix: format!("{}/conf/", key_prefix),
             senders: Arc::new(RwLock::new(HashMap::new())),
             known_keys: Arc::new(SyncRwLock::new(HashMap::new())),
+            primed: SyncRwLock::new(None),
         }
     }
 
     /// Register a kind and get its event receiver.
-    /// Must be called before `run()`. Each kind may only be subscribed once.
+    /// Must be called before `dispatch_init()`. Each kind may only be subscribed once.
     pub async fn subscribe(&self, kind: &'static str) -> KindEventReceiver {
         let mut senders = self.senders.write().await;
         let (tx, rx) = mpsc::channel(256);
@@ -69,48 +80,18 @@ impl EtcdWatcher {
         rx
     }
 
-    /// Run the watcher: init phase → runtime phase.
-    pub async fn run(&self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
-        tracing::info!(
-            component = "etcd_watcher",
-            prefix = %self.conf_prefix,
-            "Starting EtcdWatcher"
-        );
-
-        // Phase 1: full list (first time — sends Init/InitApply/InitDone)
-        let revision = self.init_phase().await?;
-
-        // Phase 2: watch stream
-        self.runtime_phase(revision, &mut shutdown_signal).await?;
-
-        tracing::info!(component = "etcd_watcher", "EtcdWatcher stopped");
-        Ok(())
-    }
-
     // ==================== Init Phase ====================
 
-    /// Full-list all existing keys, dispatch Init/InitApply/InitDone per kind.
-    /// Called once at startup. Returns the cluster revision.
-    async fn init_phase(&self) -> Result<i64> {
-        tracing::info!(
-            component = "etcd_watcher",
-            prefix = %self.conf_prefix,
-            "Starting init phase"
-        );
+    /// Full-list all existing keys into a snapshot (no dispatch). Records the
+    /// cluster revision and populates `known_keys` from the full snapshot so
+    /// resync diffs stay correct. Called once at startup, before `dispatch_init`.
+    pub async fn prime(&self) -> Result<()> {
+        tracing::info!(component = "etcd_watcher", prefix = %self.conf_prefix, "Starting prime (full list)");
 
         let (kvs, revision) = self.client.get_prefix_with_revision(&self.conf_prefix).await?;
 
-        tracing::info!(
-            component = "etcd_watcher",
-            count = kvs.len(),
-            revision = revision,
-            "Init phase: fetched all keys"
-        );
-
-        // Group by kind and record known keys
-        let mut by_kind: HashMap<&str, Vec<(String, String)>> = HashMap::new();
+        let mut by_kind: HashMap<&'static str, Vec<(String, String)>> = HashMap::new();
         let mut new_known: HashMap<&'static str, HashSet<String>> = HashMap::new();
-
         for (key, value, _rev) in &kvs {
             if let Some(kind) = self.parse_kind_from_key(key) {
                 if let Ok(content) = std::str::from_utf8(value) {
@@ -123,15 +104,40 @@ impl EtcdWatcher {
             }
         }
 
-        // Clone the snapshot so we don't hold the read guard across `tx.send().await`.
-        // Holding it would block any future dynamic `subscribe()` (which takes the write lock).
+        *self.known_keys.write() = new_known;
+        tracing::info!(
+            component = "etcd_watcher",
+            kinds = by_kind.len(),
+            revision = revision,
+            "Prime complete"
+        );
+        *self.primed.write() = Some(PrimedSnapshot { by_kind, revision });
+        Ok(())
+    }
+
+    /// Dispatch `Init` -> `InitApply` x N -> `InitDone` for exactly `kinds`,
+    /// drawn from the snapshot captured by `prime`. A kind absent from the
+    /// snapshot still receives an empty `Init` + `InitDone`.
+    pub async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
+        // Clone the requested slice out from under the lock (send is awaited below).
+        let per_kind: HashMap<&'static str, Vec<(String, String)>> = {
+            let guard = self.primed.read();
+            let snap = guard
+                .as_ref()
+                .ok_or_else(|| anyhow!("dispatch_init called before prime"))?;
+            kinds
+                .iter()
+                .filter_map(|k| snap.by_kind.get(*k).map(|v| (*k, v.clone())))
+                .collect()
+        };
+
         let senders = self.senders.read().await.clone();
-
-        // For each registered kind: Init → InitApply × N → InitDone
-        for (kind, tx) in senders.iter() {
+        for kind in kinds {
+            let Some(tx) = senders.get(*kind) else {
+                continue;
+            };
             let _ = tx.send(EtcdEvent::Init).await;
-
-            if let Some(items) = by_kind.get(*kind) {
+            if let Some(items) = per_kind.get(kind) {
                 for (key, content) in items {
                     let _ = tx
                         .send(EtcdEvent::InitApply {
@@ -141,21 +147,26 @@ impl EtcdWatcher {
                         .await;
                 }
             }
-
             let _ = tx.send(EtcdEvent::InitDone).await;
         }
+        Ok(())
+    }
 
-        // Store known keys for future resync diff
-        *self.known_keys.write() = new_known;
-
+    /// Runtime phase only: watch from the primed revision + 1 until shutdown.
+    /// `prime` must have been called first.
+    pub async fn run_runtime(&self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
+        let revision = self
+            .primed
+            .read()
+            .as_ref()
+            .map(|s| s.revision)
+            .ok_or_else(|| anyhow!("run_runtime called before prime"))?;
         tracing::info!(
             component = "etcd_watcher",
-            kinds = by_kind.len(),
             revision = revision,
-            "Init phase complete"
+            "Starting EtcdWatcher runtime"
         );
-
-        Ok(revision)
+        self.runtime_phase(revision, &mut shutdown_signal).await
     }
 
     // ==================== Resync Phase (compaction recovery) ====================
@@ -240,7 +251,7 @@ impl EtcdWatcher {
         let mut reconnect_backoff = Duration::from_secs(1);
         const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-        // Snapshot senders once — they are registered before run() and never change.
+        // Snapshot senders once — they are registered before dispatch_init/run_runtime and never change.
         let senders = self.senders.read().await.clone();
 
         loop {

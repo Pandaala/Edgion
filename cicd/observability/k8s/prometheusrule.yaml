@@ -1,0 +1,135 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: edgion-rules
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: edgion.rules
+      rules:
+        # ── critical (PAGE) ──
+        - alert: EdgionConfigSyncFrozen
+          expr: edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 1
+          for: 10m
+          labels: {severity: critical}
+          annotations: {summary: "Gateway {{ $labels.instance }} config-sync frozen (serving stale config)"}
+        - alert: EdgionLeaderJobDead
+          expr: edgion_controller_leader_job_alive == 0 and on(instance) edgion_controller_leader == 1
+          for: 2m
+          labels: {severity: critical}
+          annotations: {summary: "Controller leader-job {{ $labels.leader_job }} dead on the leader"}
+        - alert: EdgionCertExpiryCritical
+          expr: edgion_conf_sync_cert_expiry_timestamp_seconds - time() < 7 * 86400
+          for: 1h
+          labels: {severity: critical}
+          annotations: {summary: "conf_sync {{ $labels.side }} cert expires in < 7 days (PAGE band)"}
+        - alert: EdgionCertRotationFailed
+          expr: edgion_system_error_state{reason=~"cert_rotation_failed|cert_identity_sync_failed"} == 1
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: "conf_sync cert rotation failing on {{ $labels.instance }} (reason {{ $labels.reason }})"}
+        # ── warning (TICKET) ──
+        - alert: EdgionCertExpirySoon
+          expr: edgion_conf_sync_cert_expiry_timestamp_seconds - time() < 30 * 86400
+          for: 1h
+          labels: {severity: warning}
+          annotations: {summary: "conf_sync {{ $labels.side }} cert expires in < 30 days"}
+        - alert: EdgionResourceAbnormal
+          expr: edgion_controller_resource_abnormal{err!=""} == 1
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: "Resource {{ $labels.namespace }}/{{ $labels.name }} ({{ $labels.kind }}) abnormal"}
+        - alert: EdgionSchemaDrift
+          expr: increase(edgion_config_event_parse_errors_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Controller/Gateway schema drift: watch-event parse errors for kind {{ $labels.kind }}"}
+        - alert: EdgionFipsHostModuleMismatch
+          expr: edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "FIPS host running a non-FIPS binary on {{ $labels.instance }}"}
+        - alert: EdgionOutboundTlsSanMismatch
+          expr: increase(edgion_gateway_outbound_tls_san_mismatch_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Outbound TLS SAN-pin rejection ({{ $labels.plugin }}) — cert rotation or misconfig"}
+        - alert: EdgionIpDenyEntriesSkipped
+          expr: increase(edgion_ip_deny_entries_skipped_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Deny CIDR entries skipped ({{ $labels.scope }}) — blacklist hole (fail-open)"}
+        - alert: EdgionLinkSysUnhealthy
+          expr: edgion_link_sys_health == 0
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: "LinkSys provider {{ $labels.link }} unhealthy"}
+        - alert: EdgionWasmGuestFailing
+          expr: increase(edgion_wasm_trap_total[15m]) > 0 or increase(edgion_wasm_fail_mode_total{mode="close"}[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Wasm guest {{ $labels.module }} trapping or failing closed"}
+        - alert: EdgionLbPanicMode
+          expr: edgion_lb_panic_mode == 1
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Load-balancer panic mode engaged for service {{ $labels.service }}"}
+        - alert: EdgionUnexpectedApplyDuringInit
+          expr: increase(edgion_controller_unexpected_apply_during_init_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Apply during init for kind {{ $labels.kind }} (watcher-stream anomaly; should stay 0)"}
+        - alert: EdgionConnRateLimitRedisFailure
+          expr: increase(edgion_connection_rate_limit_redis_failure_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "L4 connection rate-limit Redis failure ({{ $labels.dimension }}/{{ $labels.cause }}) — fail-open"}
+        - alert: EdgionStatusConditionsHigh
+          expr: edgion_controller_status_conditions_max > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: "Resource {{ $labels.namespace }}/{{ $labels.name }} ({{ $labels.kind }}) has a bloated status.conditions array ({{ $value }} entries) — status-write loop or cross-controller condition pollution"}
+        - alert: EdgionStatusWriteErrorsSustained
+          expr: sum by (kind) (increase(edgion_controller_status_writes_total{result="error"}[10m])) > 0
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: "Controller status writes failing for kind {{ $labels.kind }} — likely SSA 409 conflict loop (competing field managers / multiple controllers)"}
+        - alert: EdgionSystemErrorStateLatched
+          expr: edgion_system_error_state{reason=~"cert_rotation_config_suspect|cert_reload_invalid|cert_watch_failed|skip_tls|insecure_admin_exposure|no_tls_configured|peer_identity_self_check"} == 1
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: "Degraded operating condition on {{ $labels.instance }} (component {{ $labels.component }}, reason {{ $labels.reason }})"}
+        - alert: EdgionCardinalityGuardActive
+          expr: edgion_metrics_cardinality_limit_active == 1
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Cardinality cap breached; new series being dropped (enforce) or flagged (observe)"}
+        # ── 2b: new sentinel metrics (warning) ──
+        - alert: EdgionConfigConflict
+          expr: increase(edgion_config_conflict_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "Config-aggregation conflict fell back to a default (field {{ $labels.field }})"}
+        - alert: EdgionOutboundInjectedHeaderSkipped
+          expr: increase(edgion_outbound_injected_header_skipped_total[15m]) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations: {summary: "A configured outbound-injected header was silently dropped (invalid name/value)"}
+        # ── info (log-only / board; never pages) ──
+        - alert: EdgionMetricSeriesHigh
+          expr: count by (__name__)({__name__=~"edgion_.*"}) > 5000
+          for: 15m
+          labels: {severity: info}
+          annotations: {summary: "Edgion metric {{ $labels.__name__ }} series count high (cardinality)"}
+        - alert: EdgionOutboundEgressBlocked
+          expr: increase(edgion_outbound_egress_blocked_total[15m]) > 0
+          for: 5m
+          labels: {severity: info}
+          annotations: {summary: "Outbound egress blocked by SSRF policy (reason {{ $labels.reason }})"}
+        - alert: EdgionOutboundTemplateFallback
+          expr: increase(edgion_outbound_template_fallback_total[15m]) > 0
+          for: 5m
+          labels: {severity: info}
+          annotations: {summary: "Templated outbound field {{ $labels.field }} silently fell back to default"}

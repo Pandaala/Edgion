@@ -6,7 +6,7 @@
 
 ## 1. 类型系统
 
-EdgionDSL 拥有六种内置值类型：
+EdgionDSL 拥有七种内置值类型：
 
 | 类型 | 说明 | 示例字面量 |
 |------|------|-----------|
@@ -14,6 +14,7 @@ EdgionDSL 拥有六种内置值类型：
 | `Int` | 64 位有符号整数 | `42`、`-1` |
 | `Bool` | 布尔值 | `true`、`false` |
 | `Nil` | 空值，表示"无值" | `nil` |
+| `Body` | 当前被代理请求 body 的不透明句柄 | 由 `req.body` 返回 |
 | `List` | 字符串列表，用于迭代（只读） | 由 `req.header_names()` 等 API 返回 |
 | `Map` | 字符串键、任意类型值的有序映射表 | `{"key": "value"}`、`{"status": 200}` |
 
@@ -23,7 +24,7 @@ EdgionDSL 拥有六种内置值类型：
 
 ### 1.1 类型转换
 
-调用 `to_string(val)` 或在字符串拼接中隐式触发转换时，各类型的行为如下：
+调用 `to_str(val)` 或在字符串拼接中隐式触发转换时，各类型的行为如下：
 
 | 源类型 | 转换结果 |
 |--------|---------|
@@ -33,16 +34,17 @@ EdgionDSL 拥有六种内置值类型：
 | `List` | `"[list]"`（固定字符串，不展开内容） |
 | `Map` | `"[map]"`（固定字符串，不展开内容） |
 | `String` | 不变 |
+| `Body` | **拒绝转换**；必须显式使用有界 Body 读取 |
 
 ```dsl
 let n = 100
-let s = to_string(n)      // s == "100"
+let s = to_str(n)      // s == "100"
 
 let b = false
-let t = to_string(b)      // t == "false"
+let t = to_str(b)      // t == "false"
 
 let x = nil
-let y = to_string(x)      // y == "nil"
+let y = to_str(x)      // y == "nil"
 ```
 
 ### 1.2 真值规则
@@ -50,7 +52,7 @@ let y = to_string(x)      // y == "nil"
 EdgionDSL 采用 Lua 风格的真值语义：
 
 - **假值**：`Nil` 和 `false`
-- **真值**：所有其他值，包括 `0`、空字符串 `""`、空列表
+- **真值**：所有其他值，包括 `0`、空字符串 `""`、空列表和 `Body`
 
 ```dsl
 // 以下条件均为真（进入 if 分支）
@@ -66,12 +68,14 @@ if false { ... }
 
 ### 1.3 跨类型相等
 
-不同类型的值永远不相等，即使内容看起来相同：
+不同类型的值通常不相等，即使内容看起来相同。`Body`/`String` 是唯一例外：
+无论左右顺序，都按流比较逻辑文本。两个 Body 都标识当前请求 body，因此相等。
 
 ```dsl
 1 == "1"       // false，Int != String
 nil == false   // false，Nil != Bool
 0 == false     // false，Int != Bool
+req.body == "expected"  // Body/String 流式相等比较
 ```
 
 ---
@@ -146,7 +150,9 @@ if token != nil {
 
 **除以零**：产生运行时 `DivisionByZero` 错误。脚本会根据 `errorPolicy` 配置决定后续行为。
 
-**字符串拼接**：`+` 运算符两侧只要有一侧是 `String`，另一侧会自动调用 `to_string()` 转换后拼接：
+**字符串拼接**：`+` 运算符两侧只要有一侧是 `String`，另一侧会自动调用
+转换为文本后拼接。`Body` 被明确排除；必须显式使用 `read()` 或
+`read_all()`：
 
 ```dsl
 "count: " + 42           // "count: 42"
@@ -166,9 +172,10 @@ if token != nil {
 | `<=` | 小于等于 |
 | `>=` | 大于等于 |
 
-数值比较（`<`、`>`、`<=`、`>=`）仅适用于两个 `Int` 类型的操作数。对 `String` 类型使用大小比较会产生运行时错误。
+大小比较（`<`、`>`、`<=`、`>=`）接受类型匹配的 `Int`/`Int` 或
+`String`/`String` 操作数。Body 或类型不匹配的组合会产生运行时类型错误。
 
-字符串的 `==` 和 `!=` 比较使用字典序（逐字节比较）：
+字符串相等比较使用精确字节值，字符串大小比较使用字典序：
 
 ```dsl
 "abc" == "abc"   // true
@@ -353,16 +360,26 @@ for name in req.header_names() {
 
 ---
 
-## 5. 字符串方法
+## 5. 文本与 Body 方法
 
-字符串值支持以下方法调用（点号语法）。当调用者或参数不是字符串类型时，方法返回 `false` 而不报错：
+字符串和 Body 共享以下点号方法。调用者或参数类型错误时，谓词方法保留现有
+nil-friendly 行为，返回 `false`：
 
 | 方法 | 参数 | 返回值 | 说明 |
 |------|------|--------|------|
+| `.len()` | 无 | Int | String 或 lossy 解码后的 Body 文本 Unicode 标量数量 |
+| `.is_empty()` | 无 | Bool | String 或 Body 文本是否为空 |
 | `.starts_with(prefix)` | String | Bool | 是否以指定前缀开头 |
 | `.ends_with(suffix)` | String | Bool | 是否以指定后缀结尾 |
 | `.contains(substring)` | String | Bool | 是否包含指定子字符串 |
 | `.matches(pattern)` | String | Bool | 是否匹配正则表达式（编译期校验） |
+
+Body 还提供 `.byte_len()`、`.read(offset, max_bytes)`、`.read_all()`、
+`.sha256()`、`.md5()`、`.hmac_sha256(key)`、`.json_get("确定路径")` 和静态多路径
+`.json_select({"name": "$.path"})`。请求阶段脚本可用 `.clear()`、
+`.append(s)`、`.prepend(s)`、`.remove(start, end)` 和字面量 `.replace(from,
+to)` 修改它。边界和失败行为见
+[API 参考](./api-reference.md#reqbody)。
 
 ```dsl
 let ua = req.header("User-Agent")
@@ -382,7 +399,9 @@ if ua != nil {
 }
 ```
 
-`.matches()` 的正则模式在脚本编译期进行校验，非法正则会导致脚本加载失败：
+`.matches()` 的正则模式在脚本编译时验证，并且必须符合 String 与 Body 共用的
+有界流式 DFA 方言。Unicode 单词边界会被拒绝；ASCII 单词边界可用
+`(?-u:\b)`。无效或不兼容的模式会导致脚本加载失败：
 
 ```dsl
 let path = req.path()
@@ -413,7 +432,7 @@ return next()
 
 拒绝请求，返回指定的 HTTP 状态码和响应体：
 
-- `status`：整数，范围 100-599
+- `status`：整数，最终响应范围 200-599
 - `body`：字符串或 `nil`（nil 表示无响应体）
 
 ```dsl
@@ -431,7 +450,8 @@ return deny(204, nil)
 立即终止请求处理，不发送任何响应。适用于需要直接关闭连接的场景：
 
 ```dsl
-let ip = req.client_ip()
+// 该精确网络来源规则故意匹配物理传输对端。
+let ip = req.direct_peer_ip()
 if ip == "1.2.3.4" {
     return terminate()
 }
@@ -668,7 +688,8 @@ return next()
 ### 示例 5：IP 范围检查
 
 ```dsl
-let ip = req.client_ip()
+// 该内网来源豁免故意使用物理传输对端。
+let ip = req.direct_peer_ip()
 
 // 内网 IP 允许直接通过，无需 Token
 if ip_in_cidr(ip, "10.0.0.0/8") || ip_in_cidr(ip, "172.16.0.0/12") {

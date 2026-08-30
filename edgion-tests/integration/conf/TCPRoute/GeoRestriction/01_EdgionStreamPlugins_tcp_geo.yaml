@@ -1,0 +1,41 @@
+# L4 GeoIpLocation coverage. Unlike the pre-refactor GlobalConnectionIpRestriction
+# `geo` block, GeoIpLocation is its own stream plugin (`EdgionStreamPlugin::
+# GeoIpLocation`) with no per-profile/Selector envelope — its config is flat
+# (`denyRuleGroups`/`allowRuleGroups`/`defaultAction`/`failOpen`), so test
+# cases hot-swap this WHOLE resource via ctx.apply_yaml(...) before each
+# probe (same "one flexible resource, re-applied per case" pattern the HTTP
+# GeoRestriction suite uses for its "geo-rr" EdgionPlugins resource) rather
+# than switching a Selector-driven `activeProfile`.
+#
+# This same ESP is referenced from BOTH:
+#   - the tcp-geo-route TCPRoute (edgion.io/edgion-stream-plugins annotation
+#     on the ROUTE) -> Stage-2 "tcp" layer, post route-match
+#     (see edgion-gateway/src/routes/tcp/edgion_tcp.rs::check_stream_plugins)
+#   - the tcp-geo-bare-gw Gateway (edgion.io/edgion-stream-plugins annotation
+#     on the GATEWAY, no TCPRoute attached at all) -> Stage-1 "stage1" layer,
+#     the pre-accept ConnectionFilter
+#     (see edgion-gateway/src/plugins/stream/connection_filter_bridge.rs)
+# Two separate Gateways are used (rather than one Gateway with two listeners)
+# because the edgion-stream-plugins annotation is resolved per-Gateway, not
+# per-listener: both listeners of one Gateway would get the same Stage-1
+# filter, and there would be no way to isolate the "only stage1" case.
+#
+# This file's content is only the starting state loaded by prepare /
+# --no-prepare reruns; every test case overwrites it before its own probes.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-geo-esp
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["RU"]

@@ -64,5 +64,5 @@ polish, not a required fix.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → N7` (CONFIRM, but RFC-CHECK = N/A clarity-only)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a2.md → N7` (CONFIRM, but RFC-CHECK = N/A clarity-only)
 - Related rename: `naming-h2-grpc-01` (`send_grpc_trailers_only` → `send_grpc_error_three_frame`)

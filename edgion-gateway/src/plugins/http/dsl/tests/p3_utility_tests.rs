@@ -57,7 +57,7 @@ fn test_hmac_sha256_result_too_long() {
 #[test]
 fn test_json_get_string() {
     let source = r#"
-        let val = json_get("{\"user\":{\"name\":\"alice\"}}", "user.name")
+        let val = json_get("{\"user\":{\"name\":\"alice\"}}", "$.user.name")
         req.set_header("X-Name", val)
     "#;
     let mut session = MockPluginSession::new();
@@ -73,7 +73,7 @@ fn test_json_get_string() {
 #[test]
 fn test_json_get_number() {
     let source = r#"
-        let age = json_get("{\"age\": 30}", "age")
+        let age = json_get("{\"age\": 30}", "$.age")
         if age == 30 {
             req.set_header("X-Age", "thirty")
         }
@@ -91,7 +91,7 @@ fn test_json_get_number() {
 #[test]
 fn test_json_get_missing_key() {
     let source = r#"
-        let val = json_get("{\"a\": 1}", "b")
+        let val = json_get("{\"a\": 1}", "$.b")
         if val == nil {
             req.set_header("X-Found", "no")
         }
@@ -109,7 +109,7 @@ fn test_json_get_missing_key() {
 #[test]
 fn test_json_get_invalid_json() {
     let source = r#"
-        let val = json_get("not json", "key")
+        let val = json_get("not json", "$.key")
         if val == nil {
             req.set_header("X-Valid", "no")
         }
@@ -127,7 +127,7 @@ fn test_json_get_invalid_json() {
 #[test]
 fn test_json_get_array_index() {
     let source = r#"
-        let val = json_get("[\"a\",\"b\",\"c\"]", "1")
+        let val = json_get("[\"a\",\"b\",\"c\"]", "$[1]")
         req.set_header("X-Val", val)
     "#;
     let mut session = MockPluginSession::new();

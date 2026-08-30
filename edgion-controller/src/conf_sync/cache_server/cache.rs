@@ -35,49 +35,17 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 
     /// Get a clone of the shared notify for watchers
-    pub fn get_notify(&self) -> Arc<Notify> {
+    fn get_notify(&self) -> Arc<Notify> {
         self.notify.clone()
     }
 
     /// Get a clone of the store for watchers
-    pub fn get_store(&self) -> Arc<RwLock<EventStore<T>>> {
+    fn get_store(&self) -> Arc<RwLock<EventStore<T>>> {
         self.store.clone()
     }
 
     pub fn is_ready(&self) -> bool {
         *self.ready.read()
-    }
-
-    /// Set cache to not ready state
-    /// Used during relink to prevent serving stale data
-    pub fn set_not_ready(&self) {
-        *self.ready.write() = false;
-    }
-
-    /// Clear all data from the cache
-    /// Used during relink to remove stale data
-    ///
-    /// Notifies all waiting watcher tasks so they can detect the version
-    /// discontinuity (EventsLost) and exit cleanly. This is essential for
-    /// Federation watchers (Center) which don't have server_id polling —
-    /// without notification they'd wait forever on a dead cache.
-    pub fn clear(&self)
-    where
-        T: Clone,
-    {
-        let mut store_guard = self.store.write();
-        store_guard.clear();
-        drop(store_guard);
-        // Wake all watchers so they detect the version discontinuity and exit.
-        self.notify.notify_waiters();
-    }
-
-    /// List all resources in the cache with their sync version.
-    pub fn list(&self) -> ListData<T>
-    where
-        T: Clone,
-    {
-        self.list_owned()
     }
 
     /// List all resources as owned (cloned) values with their sync version.
@@ -252,7 +220,17 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     /// guaranteeing that write order follows the caller's invocation order and
     /// eliminating the tokio-scheduler-induced reordering window that could cause
     /// stale state to overwrite newer state in the EventStore.
-    fn push_event(&self, event_type: EventType, resource: T, sync_version: u64)
+    ///
+    /// Draws `sync_version` from the global counter **while holding the store's write lock**
+    /// (unless the caller pins one via `sv`), so allocation order is identical to apply order
+    /// for every caller, task and thread. Drawing it earlier -- as the resource processor
+    /// used to, up to ~839us before the write -- let a parallel task land a higher version
+    /// first, which the store's then-kind-wide stale guard treated as grounds to discard the
+    /// event entirely.
+    ///
+    /// Returns the version actually assigned, so the caller can log the real value rather
+    /// than one picked before the write.
+    fn push_event(&self, event_type: EventType, resource: T, sv: Option<u64>) -> u64
     where
         T: Clone + Send + 'static,
     {
@@ -262,11 +240,14 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             tracing::trace!("Pushing event while cache not yet ready (expected during initial sync)");
         }
 
-        {
+        let sync_version = {
             let mut store_guard = self.store.write();
+            let sync_version = sv.unwrap_or_else(resource_version::next_resource_version);
             store_guard.apply_event(event_type, resource, sync_version);
-        }
+            sync_version
+        };
         self.notify.notify_waiters();
+        sync_version
     }
 }
 
@@ -284,6 +265,10 @@ where
         store_guard
             .serialize_snapshot_json()
             .map_err(|e| format!("Failed to serialize {} data: {}", T::kind_name(), e))
+    }
+
+    fn current_version(&self) -> u64 {
+        self.store.read().sync_version()
     }
 
     fn watch_json(
@@ -360,20 +345,16 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
     where
         T: Resource + Send + 'static,
     {
-        let sync_version = sv.unwrap_or_else(resource_version::next_resource_version);
+        // Capture identity before `resource` is moved into the store.
+        let name = resource.name_any();
+        let namespace = resource.namespace();
 
-        tracing::info!(
-            component = "cache_server",
-            event = "apply_change",
-            change = ?change,
-            kind = T::kind_name(),
-            name = ?resource.name_any(),
-            namespace = ?resource.namespace(),
-            sync_version = sync_version,
-            "apply change"
-        );
-
-        match change {
+        // The version is drawn inside the store's write lock -- by push_event, or by the
+        // InitAdd arm below -- never here. Drawing it before taking the lock reopens the
+        // reordering window that let a parallel task overtake this one and get this event
+        // discarded as "stale". InitStart/InitDone carry no resource data and allocate
+        // nothing; they previously burned a counter value for no reason.
+        let sync_version = match change {
             ResourceChange::InitStart => {
                 // Signal only: log initialization start
                 tracing::info!(
@@ -381,10 +362,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
                     kind = T::kind_name(),
                     "Cache initialization started"
                 );
-            }
-            ResourceChange::InitAdd => {
-                let mut store_guard = self.store.write();
-                store_guard.init_add(sync_version, resource);
+                return;
             }
             ResourceChange::InitDone => {
                 // Signal: initialization complete, mark cache as ready
@@ -394,17 +372,29 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
                     kind = T::kind_name(),
                     "Cache initialization done, marked as ready"
                 );
+                return;
             }
-            ResourceChange::EventAdd => {
-                self.push_event(EventType::Add, resource, sync_version);
+            ResourceChange::InitAdd => {
+                let mut store_guard = self.store.write();
+                let sync_version = sv.unwrap_or_else(resource_version::next_resource_version);
+                store_guard.init_add(sync_version, resource);
+                sync_version
             }
-            ResourceChange::EventUpdate => {
-                self.push_event(EventType::Update, resource, sync_version);
-            }
-            ResourceChange::EventDelete => {
-                self.push_event(EventType::Delete, resource, sync_version);
-            }
-        }
+            ResourceChange::EventAdd => self.push_event(EventType::Add, resource, sv),
+            ResourceChange::EventUpdate => self.push_event(EventType::Update, resource, sv),
+            ResourceChange::EventDelete => self.push_event(EventType::Delete, resource, sv),
+        };
+
+        tracing::info!(
+            component = "cache_server",
+            event = "apply_change",
+            change = ?change,
+            kind = T::kind_name(),
+            name = ?name,
+            namespace = ?namespace,
+            sync_version = sync_version,
+            "apply change"
+        );
     }
 
     fn set_ready(&self) {
@@ -567,5 +557,91 @@ mod tests {
             "cache must contain the last (highest-versioned) state after rapid updates"
         );
         assert!(snapshot.sync_version > 0);
+    }
+
+    /// Concurrent `apply_change` calls must never lose an event, and the circular queue must
+    /// stay monotonic so `get_events_from_sync_version`'s backward scan can resume a watch.
+    ///
+    /// Regression for the cache-residue incident: `sync_version` used to be drawn before the
+    /// store lock was taken, so a thread could be overtaken between drawing its number and
+    /// applying it. The store's then-kind-wide stale guard saw the overtaken thread's lower
+    /// number and silently discarded a legitimate event -- a deleted Gateway stayed in the
+    /// data plane's cache forever.
+    ///
+    /// **Concurrency is the discriminator, not `None` vs `Some`.** A sequential test cannot
+    /// detect this bug in either direction: the old code drew the version a few instructions
+    /// before applying it, on the same thread, so sequential calls came out monotonic under
+    /// the old code too. (Verified: an earlier sequential version of this test passed against
+    /// the buggy commit.) The bug needs a real overlap -- thread A draws, thread B draws AND
+    /// applies, thread A applies -- which only threads can produce. The old suite missed this
+    /// bug for exactly the same reason.
+    ///
+    /// Against the buggy code this fails with high probability (the window between drawing
+    /// and applying spans a `tracing::info!`); against the fix it cannot fail, because the
+    /// version is drawn under the same lock that applies it.
+    #[test]
+    fn concurrent_apply_change_never_drops_events_and_stays_monotonic() {
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 16;
+
+        for round in 0..ROUNDS {
+            let cache = Arc::new(ServerCache::<TestResource>::new(200));
+            let barrier = Arc::new(Barrier::new(THREADS));
+
+            let handles: Vec<_> = (0..THREADS)
+                .map(|i| {
+                    let cache = Arc::clone(&cache);
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        // Maximise the overlap: every thread is released at once.
+                        barrier.wait();
+                        // Distinct key per thread -- these are unrelated resources, so no
+                        // event may suppress any other. That is the whole point.
+                        cache.apply_change(ResourceChange::EventAdd, make_resource(&format!("r{i}"), 1), None);
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.join().expect("worker thread panicked");
+            }
+
+            let (_, events_opt) = cache
+                .store
+                .read()
+                .get_events_from_sync_version(0)
+                .expect("watch from 0 must succeed");
+            let versions: Vec<u64> = events_opt
+                .expect("expected events")
+                .iter()
+                .map(|e| e.sync_version)
+                .collect();
+
+            assert_eq!(
+                versions.len(),
+                THREADS,
+                "round {round}: {} of {THREADS} concurrent events were dropped; versions={versions:?}",
+                THREADS - versions.len()
+            );
+            assert!(
+                versions.windows(2).all(|w| w[1] > w[0]),
+                "round {round}: queue must be monotonic in apply order, got {versions:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn current_version_tracks_store_version() {
+        let cache = ServerCache::<TestResource>::new(10);
+        assert_eq!(WatchObj::current_version(&cache), 0);
+
+        cache.apply_change(ResourceChange::EventAdd, make_resource("foo", 1), Some(42));
+        assert_eq!(WatchObj::current_version(&cache), 42);
+
+        // Contract: same store list_json serializes.
+        let (_json, v) = cache.list_json().unwrap();
+        assert_eq!(v, 42);
     }
 }

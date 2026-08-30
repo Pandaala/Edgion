@@ -1,0 +1,55 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: condition-refs-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestBodyBuffer
+      body:
+        maxBodySize: 1MiB
+        conditions:
+          run:
+            allOf:
+              - type: secretMatch
+                key:
+                  type: header
+                  name: X-Body-Token
+                secretKey: token
+                secretRef:
+                  name: condition-refs-dynamic
+      config: {}
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Condition-Ref-Dye
+            value: matched
+            conditions:
+              run:
+                allOf:
+                  - type: secretMatch
+                    key:
+                      type: header
+                      name: X-Dye-Token
+                    secretKey: token
+                    secretRef:
+                      name: condition-refs-dynamic
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: condition-refs-dynamic-backend
+        onInvalid: reject
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: condition-ref-late-reader
+        source: |
+          if req.body == "abcdef" {
+            resp.set_header("X-Condition-Ref-Body", "matched")
+          }
+        errorPolicy: deny

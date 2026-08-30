@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: ai-resilience-gateway-egc
+spec:
+  securityProtect:
+    # Test-only providers use the loopback test server.
+    allowLoopbackUpstream: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: ai-resilience-gateway-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: ai-resilience-gateway-egc

@@ -38,6 +38,8 @@ struct EdgionPluginsLog {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct PluginLog {
     name: String,
+    #[serde(default)]
+    alias: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cond_skip: Option<String>,
     #[serde(default)]
@@ -85,7 +87,9 @@ impl PluginConditionTestSuite {
                                                 .iter()
                                                 .flat_map(|stage| &stage.edgion_plugins)
                                                 .flat_map(|ep| &ep.logs)
-                                                .find(|log| log.name == "Cors");
+                                                .find(|log| {
+                                                    log.name == "Cors" && log.alias.as_deref() == Some("single-leaf")
+                                                });
 
                                             match cors_log {
                                                 Some(log) => {
@@ -177,24 +181,35 @@ impl PluginConditionTestSuite {
                                                 .iter()
                                                 .flat_map(|stage| &stage.edgion_plugins)
                                                 .flat_map(|ep| &ep.logs)
-                                                .find(|log| log.name == "Cors");
+                                                .find(|log| {
+                                                    log.name == "Cors" && log.alias.as_deref() == Some("single-leaf")
+                                                });
 
                                             match cors_log {
                                                 Some(log) => {
                                                     // Check if cond_skip is set
                                                     if let Some(ref skip_reason) = log.cond_skip {
-                                                        // Verify skip reason format: "skip:keyExist,hdr:X-Skip-Cors"
-                                                        if skip_reason.contains("skip:keyExist")
-                                                            && skip_reason.contains("hdr:X-Skip-Cors")
+                                                        let atomic_descriptor_emitted = log
+                                                            .log
+                                                            .iter()
+                                                            .any(|entry| entry.starts_with("skip.allOf[0]:"));
+                                                        if skip_reason.starts_with("skip:")
+                                                            && !atomic_descriptor_emitted
                                                         {
                                                             TestResult::passed_with_message(
                                                                 start.elapsed(),
-                                                                format!("CORS skipped correctly: {}", skip_reason),
+                                                                format!(
+                                                                    "single-leaf CORS skipped without atomic descriptor: {}",
+                                                                    skip_reason
+                                                                ),
                                                             )
                                                         } else {
                                                             TestResult::failed(
                                                                 start.elapsed(),
-                                                                format!("Unexpected skip reason: {}", skip_reason),
+                                                                format!(
+                                                                    "single-leaf log threshold mismatch: cond_skip={skip_reason}, log={:?}",
+                                                                    log.log
+                                                                ),
                                                             )
                                                         }
                                                     } else {
@@ -228,6 +243,91 @@ impl PluginConditionTestSuite {
             },
         )
     }
+
+    /// Test 3: A composite condition emits the matched atomic path.
+    fn test_multi_leaf_match_descriptors_are_logged() -> TestCase {
+        TestCase::new(
+            "multi_leaf_match_descriptors_are_logged",
+            "Verify composite conditions log their matched atomic path",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("test-cond-multi-leaf-{}", uuid::Uuid::new_v4());
+                    let response = ctx
+                        .http_client
+                        .get(format!("{}/health", ctx.http_url()))
+                        .header("host", "condition-test.example.com")
+                        .header("X-Multi-A", "1")
+                        .header("X-Multi-B", "1")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+                    let response = match response {
+                        Ok(response) if response.status().is_success() => response,
+                        Ok(response) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Request failed with status: {}", response.status()),
+                            );
+                        }
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Request failed: {error}"));
+                        }
+                    };
+                    drop(response);
+
+                    let entry = match ctx
+                        .access_log_client()
+                        .get_access_log_with_retry(&trace_id, 10, 200)
+                        .await
+                    {
+                        Ok(entry) => entry,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to fetch access log: {error}"));
+                        }
+                    };
+                    let access_log = match serde_json::from_value::<AccessLog>(entry.data) {
+                        Ok(access_log) => access_log,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Parse error: {error}"));
+                        }
+                    };
+                    let log = access_log
+                        .stage_logs
+                        .iter()
+                        .flat_map(|stage| &stage.edgion_plugins)
+                        .flat_map(|plugins| &plugins.logs)
+                        .find(|log| log.name == "Cors" && log.alias.as_deref() == Some("multi-leaf"));
+                    let Some(log) = log else {
+                        return TestResult::failed(start.elapsed(), "multi-leaf Cors log not found".to_string());
+                    };
+                    let first = log
+                        .log
+                        .iter()
+                        .any(|entry| entry.starts_with("skip.anyOf[0].allOf[0]:keyExist"));
+                    let second = log
+                        .log
+                        .iter()
+                        .any(|entry| entry.starts_with("skip.anyOf[0].allOf[1]:keyExist"));
+                    if log.cond_skip.as_deref() == Some("skip:both-debug-headers") && first && second {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "composite condition emitted both matched atomic descriptors".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "multi-leaf log threshold mismatch: cond_skip={:?}, log={:?}",
+                                log.cond_skip, log.log
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for PluginConditionTestSuite {
@@ -239,6 +339,7 @@ impl TestSuite for PluginConditionTestSuite {
         vec![
             Self::test_cors_runs_without_skip_header(),
             Self::test_cors_skipped_with_skip_header(),
+            Self::test_multi_leaf_match_descriptors_are_logged(),
         ]
     }
 }

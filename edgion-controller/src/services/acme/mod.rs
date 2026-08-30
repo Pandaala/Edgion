@@ -6,6 +6,7 @@
 
 pub mod acme_client;
 pub mod dns_provider;
+mod propagation;
 mod secret_io;
 pub mod service;
 

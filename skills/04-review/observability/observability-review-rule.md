@@ -39,7 +39,7 @@ description: Use when reviewing observability code changes; provides the checkli
 | Print Secret.data | `tracing::info!(data = ?secret.data, ...)` | Print only `name/namespace` + field key list |
 | PluginLog writes original key value | `log.push(&format!("key={}", api_key))` | `log.push(&format!("kl={}", api_key.len()))` |
 | `{:?}` entire resource spec | `tracing::debug!(spec = ?route.spec)` | Forbidden even at debug level — print key_name + rv instead |
-| `ctx_map` serialized as-is | `serde_json::to_string(&ctx_map)` | Project via a deny-by-default allowlist (the access log uses `AllowlistedCtx` gated by the per-route `edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx` opt-in) |
+| `ctx_map` serialized as-is | `serde_json::to_string(&ctx_map)` | Project via an explicit `AccessLogExtern from: ctx` declaration (`EdgionPlugins.spec.accessLogExtern`), resolved only at `logging()` — never inside a request-stage filter |
 
 **Historical cases** (used to identify the same pattern during reviews):
 
@@ -63,7 +63,7 @@ The data-plane hot path (`request_filter`, `upstream_peer`, `response_filter`, `
 | Scenario | Alternative |
 |------|---------|
 | Per-request result/decision | `PluginLog` → access log |
-| Per-connection error/event | `ctx.err_log` / `ctx.add_error()` |
+| Per-connection or per-request error/event | `ctx.err_log` / `ctx.record_error(EdgionErrorCode::...)` |
 | Aggregate counts | `global_metrics().xxx()` |
 
 **Exceptions** (only the following scenarios are permitted):
@@ -97,7 +97,7 @@ See [coding-standards/01-log-safety.md](../../03-coding/01-log-safety.md) Iron R
 
 - [ ] New keys added to `ctx_map` do not contain JWT / OIDC / JWE claims or other sensitive info
 - [ ] If sensitive-related keys must be stored, is the access-log projection still safe?
-  - The access-log projection of `ctx_map` is **deny-by-default** in `gateway/observe/access_log/entry.rs` (`AllowlistedCtx`): a ctx var is logged only when the matched route opts it in via the `edgion.io/log-ctx-keys` annotation (or the `type: ctx` entries of the unified `edgion.io/log-keys` annotation). The `ACCESS_LOG_BLOCKED_CTX_KEYS` blocklist remains as defense-in-depth — any new key that stores claims / payloads / secrets for downstream `get_ctx_var` reads SHOULD still be added there so it can never be logged even if mistakenly allow-listed.
+  - The access-log projection of `ctx_map` requires an explicit `AccessLogExtern from: ctx` declaration (`EdgionPlugins.spec.accessLogExtern`) naming the key; nothing reaches the log otherwise. The `ACCESS_LOG_BLOCKED_CTX_KEYS` blocklist (`jwt_claims`/`oidc_claims`/`jwe_payload`) enforcement is two-part: a declaration naming a blocked key is **reported** on the resource's `Accepted=False` status condition at `EdgionPlugins` ingest — admission in this repo is lenient, so that report does NOT keep the resource off the cluster; it still lands in the cache conf_sync serves to the gateway. The actual enforcement is at gateway load: `compile_plugins` (`edgion-gateway/src/plugins/http/plugin_store.rs`, ~line 88) `retain()`s the declared fields and drops any whose `validation_error()` is `Some` before the spec is stored. **When reviewing a change to this blocklist or its enforcement, verify both halves — the ingest report AND the `compile_plugins` `retain()` — the retain is what actually keeps a blocked key out of the log; do not let a change remove it on the theory that ingest already rejects it.** Any new key that stores claims / payloads / secrets for downstream `get_ctx_var` reads SHOULD still be added to that blocklist so it can never be declared even by mistake.
 
 ---
 

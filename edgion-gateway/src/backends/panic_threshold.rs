@@ -3,13 +3,13 @@
 //!
 //! Panic mode engages when the fraction of backends passing the combined
 //! health predicate drops below the effective threshold percent. Threshold
-//! resolves as: `edgion.io/panic-threshold` annotation (per service) → the
+//! resolves as: the `EdgionBackendTrafficPolicy` policy-store override for the
+//! service (`loadBalancer.panicThreshold`, written by
+//! `backends/policy/backend_traffic/store.rs`) → the
 //! `EdgionGatewayConfig.loadBalancing.panicThreshold` global default → 0.
 //! A threshold of 0 disables panic mode (opt-in; matches Istio's k8s default).
 
 use dashmap::DashMap;
-use edgion_resources::constants::annotations::edgion::PANIC_THRESHOLD;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -24,7 +24,8 @@ pub fn get_panic_threshold_store() -> Arc<PanicThresholdStore> {
     PANIC_THRESHOLD_STORE.clone()
 }
 
-/// Per-service panic-threshold overrides parsed from the Service annotation.
+/// Per-service panic-threshold overrides, written by the
+/// `EdgionBackendTrafficPolicy` policy store (`loadBalancer.panicThreshold`).
 pub struct PanicThresholdStore {
     services: DashMap<String, u8>,
 }
@@ -96,40 +97,9 @@ pub fn panic_floor(threshold: u8, total: usize) -> usize {
     (threshold as usize * total).div_ceil(100)
 }
 
-/// Parse the `edgion.io/panic-threshold` annotation: a bare integer percent
-/// string in 0..=100. Anything else (non-integer, > 100) is logged and ignored
-/// so the service falls back to the global default.
-pub fn parse_panic_threshold_annotation(meta: &ObjectMeta) -> Option<u8> {
-    let raw = meta.annotations.as_ref()?.get(PANIC_THRESHOLD)?;
-    match raw.trim().parse::<u8>() {
-        Ok(v) if v <= 100 => Some(v),
-        _ => {
-            tracing::warn!(
-                resource = %meta.name.as_deref().unwrap_or(""),
-                value = %raw,
-                "Invalid edgion.io/panic-threshold annotation (want integer 0-100), ignoring"
-            );
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
-
-    fn meta_with(value: Option<&str>) -> ObjectMeta {
-        let mut ann = BTreeMap::new();
-        if let Some(v) = value {
-            ann.insert(PANIC_THRESHOLD.to_string(), v.to_string());
-        }
-        ObjectMeta {
-            name: Some("svc".to_string()),
-            annotations: if ann.is_empty() { None } else { Some(ann) },
-            ..Default::default()
-        }
-    }
 
     #[test]
     fn floor_is_ceil() {
@@ -137,17 +107,6 @@ mod tests {
         assert_eq!(panic_floor(50, 3), 2); // ceil(1.5)
         assert_eq!(panic_floor(100, 10), 10); // require all healthy
         assert_eq!(panic_floor(1, 1), 1);
-    }
-
-    #[test]
-    fn annotation_parse_valid_and_invalid() {
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(Some("50"))), Some(50));
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(Some("0"))), Some(0));
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(Some("100"))), Some(100));
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(Some("101"))), None);
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(Some("50%"))), None);
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(Some("abc"))), None);
-        assert_eq!(parse_panic_threshold_annotation(&meta_with(None)), None);
     }
 
     #[test]

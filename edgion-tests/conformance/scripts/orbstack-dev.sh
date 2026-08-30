@@ -380,8 +380,13 @@ cmd_find_sv() {
     || echo "  (no matches)"
 
   echo ""
+  # The controller no longer stamps `sv` on its processing spans: sync_version is assigned
+  # inside the event store's write lock, so it does not exist when the span opens. The
+  # cache_server's "apply change" line carries the assigned value as `sync_version=`.
+  # Keep the old patterns too -- the gateway still emits `sv=` / `"sv":`.
   echo "=== Controller log (sv=${sv}) ==="
-  kubectl exec -n "$NS" "$ctl_pod" -- grep "\"sv\":${sv}\b\|sv=${sv}\b" "$ctl_log" 2>/dev/null \
+  kubectl exec -n "$NS" "$ctl_pod" -- \
+    grep "\"sv\":${sv}\b\|sv=${sv}\b\|sync_version=${sv}\b" "$ctl_log" 2>/dev/null \
     || echo "  (no matches)"
 
   echo ""

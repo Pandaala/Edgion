@@ -42,8 +42,8 @@ with a source label (`fold_peer_timeouts` → `PeerTimeoutSource`);
 `error_while_proxy` Case 1.5 retries upstream Read/Write timeouts whose source
 is `BackendRequest` when `retry_configured()`, guarded by attempts / request
 deadline / grpc deadline / retry buffer / nothing-written-downstream.
-Deadline-sourced timeouts are never retried (Envoy parity). Status:
-`EdgionStatus::BackendRequestTimeoutRetry` (504_03).
+Deadline-sourced timeouts are never retried (Envoy parity). The retry records
+`EdgionErrorCode::BackendRequestTimeoutRetry` in the ordered diagnostics.
 
 ## Fix Suggestions Not Accepted
 

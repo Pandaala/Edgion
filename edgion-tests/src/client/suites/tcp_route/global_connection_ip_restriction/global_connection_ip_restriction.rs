@@ -35,6 +35,79 @@ use tokio::net::TcpStream;
 
 pub struct GcirEnforcementTestSuite;
 
+enum TcpEchoProbe {
+    Echoed(usize),
+    Closed(String),
+    Inconclusive(String),
+}
+
+async fn probe_tcp_echo(addr: &str, test_data: &[u8]) -> TcpEchoProbe {
+    let mut stream = match tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(addr)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => return TcpEchoProbe::Inconclusive(format!("connect failed: {e}")),
+        Err(_) => return TcpEchoProbe::Inconclusive("connect timed out".to_string()),
+    };
+
+    if let Err(e) = stream.write_all(test_data).await {
+        return TcpEchoProbe::Closed(format!("write failed: {e}"));
+    }
+
+    let mut buf = vec![0u8; 1024];
+    match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut buf)).await {
+        Ok(Ok(n)) if n > 0 => TcpEchoProbe::Echoed(n),
+        Ok(Ok(_)) => TcpEchoProbe::Closed("connection closed with EOF".to_string()),
+        Ok(Err(e)) => TcpEchoProbe::Closed(format!("read failed: {e}")),
+        Err(_) => TcpEchoProbe::Inconclusive("read timed out".to_string()),
+    }
+}
+
+async fn wait_for_tcp_echo(addr: &str, test_data: &[u8]) -> Result<usize, String> {
+    let mut last_observation = "no probe completed".to_string();
+    let wait = async {
+        loop {
+            match probe_tcp_echo(addr, test_data).await {
+                TcpEchoProbe::Echoed(n) => return n,
+                TcpEchoProbe::Closed(reason) | TcpEchoProbe::Inconclusive(reason) => {
+                    last_observation = reason;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(8), wait).await {
+        Ok(n) => Ok(n),
+        Err(_) => Err(format!(
+            "TCP echo did not become available within 8s; last observation: {last_observation}"
+        )),
+    }
+}
+
+async fn wait_for_tcp_denial(addr: &str, test_data: &[u8]) -> Result<String, String> {
+    let mut last_observation = "no probe completed".to_string();
+    let wait = async {
+        loop {
+            match probe_tcp_echo(addr, test_data).await {
+                TcpEchoProbe::Closed(reason) => return reason,
+                TcpEchoProbe::Echoed(n) => {
+                    last_observation = format!("received {n} echo bytes");
+                }
+                TcpEchoProbe::Inconclusive(reason) => {
+                    last_observation = reason;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(8), wait).await {
+        Ok(reason) => Ok(reason),
+        Err(_) => Err(format!(
+            "TCP connection was not denied within 8s; last observation: {last_observation}"
+        )),
+    }
+}
+
 /// Build a `Selector` EdgionConfigData YAML that hot-swaps the *active profile* of the
 /// inline GlobalConnectionIpRestriction config in the `gcir-stream-plugins`
 /// EdgionStreamPlugins (which owns both profiles). The selector is referenced via
@@ -80,50 +153,17 @@ impl GcirEnforcementTestSuite {
                         );
                     }
 
-                    // Brief pause for the Gateway to pick up the updated configuration
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
-
                     let addr = ctx.tcp_addr();
                     let test_data = b"Hello GCIR allow-local";
 
-                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(mut stream)) => {
-                            if let Err(e) = stream.write_all(test_data).await {
-                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
-                            }
-
-                            let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
-                                Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "TCP echo succeeded ({} bytes) — 127.0.0.1 correctly allowed by allow-local",
-                                        n
-                                    ),
-                                ),
-                                Ok(Ok(_)) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Connection closed immediately (0 bytes) — allow-local should permit 127.0.0.1"
-                                        .to_string(),
-                                ),
-                                Ok(Err(e)) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Read failed: {} — allow-local should permit 127.0.0.1", e),
-                                ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out — allow-local should permit 127.0.0.1".to_string(),
-                                ),
-                            }
+                    match wait_for_tcp_echo(&addr, test_data).await {
+                        Ok(n) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("TCP echo succeeded ({n} bytes) — 127.0.0.1 correctly allowed by allow-local"),
+                        ),
+                        Err(e) => {
+                            TestResult::failed(start.elapsed(), format!("{e} — allow-local should permit 127.0.0.1"))
                         }
-                        Ok(Err(e)) => TestResult::failed(
-                            start.elapsed(),
-                            format!("Connection refused (allow-local should permit 127.0.0.1): {}", e),
-                        ),
-                        Err(_) => TestResult::failed(
-                            start.elapsed(),
-                            "Connection timed out (allow-local should permit 127.0.0.1)".to_string(),
-                        ),
                     }
                 })
             },
@@ -151,46 +191,15 @@ impl GcirEnforcementTestSuite {
                         );
                     }
 
-                    // Wait for the config sync to propagate to the Gateway
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-
                     let addr = ctx.tcp_addr();
-
-                    // Connect — TCP handshake may succeed (plugin runs after accept),
-                    // but the connection should be closed immediately without proxying.
-                    match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
-                        Ok(Ok(mut stream)) => {
-                            let test_data = b"Hello GCIR block-local";
-                            let _ = stream.write_all(test_data).await;
-
-                            let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
-                                Ok(Ok(0)) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Connection closed by GCIR block-local (EOF) — deny working".to_string(),
-                                ),
-                                Ok(Ok(n)) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected denial but received {} bytes — block-local not enforced", n),
-                                ),
-                                Ok(Err(_)) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Connection rejected by GCIR block-local (read error)".to_string(),
-                                ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out — GCIR block-local did not deny the connection".to_string(),
-                                ),
-                            }
+                    match wait_for_tcp_denial(&addr, b"Hello GCIR block-local").await {
+                        Ok(reason) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("Connection rejected by GCIR block-local ({reason})"),
+                        ),
+                        Err(e) => {
+                            TestResult::failed(start.elapsed(), format!("{e} — block-local should deny 127.0.0.1"))
                         }
-                        Ok(Err(_)) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Connection refused by GCIR block-local".to_string(),
-                        ),
-                        Err(_) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Connection dropped by GCIR block-local (timeout)".to_string(),
-                        ),
                     }
                 })
             },
@@ -218,52 +227,19 @@ impl GcirEnforcementTestSuite {
                         );
                     }
 
-                    // Wait for config propagation
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-
                     let addr = ctx.tcp_addr();
                     let test_data = b"Hello GCIR unknown-profile";
 
-                    let result = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(mut stream)) => {
-                            if let Err(e) = stream.write_all(test_data).await {
-                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
-                            }
-
-                            let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
-                                Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "TCP echo succeeded ({} bytes) — unknown selector profile fell back to base allow-local",
-                                        n
-                                    ),
-                                ),
-                                Ok(Ok(_)) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Connection closed immediately (0 bytes) — unknown profile should fall back to base allow-local"
-                                        .to_string(),
-                                ),
-                                Ok(Err(e)) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Read failed: {} — unknown profile should fall back to base allow-local", e),
-                                ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out — unknown profile should fall back to base allow-local".to_string(),
-                                ),
-                            }
-                        }
-                        Ok(Err(e)) => TestResult::failed(
+                    let result = match wait_for_tcp_echo(&addr, test_data).await {
+                        Ok(n) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!(
-                                "Connection refused (unknown profile should fall back to base allow-local): {}",
-                                e
+                                "TCP echo succeeded ({n} bytes) — unknown selector profile fell back to base allow-local"
                             ),
                         ),
-                        Err(_) => TestResult::failed(
+                        Err(e) => TestResult::failed(
                             start.elapsed(),
-                            "Connection timed out (unknown profile should fall back to base allow-local)".to_string(),
+                            format!("{e} — unknown profile should fall back to base allow-local"),
                         ),
                     };
 
@@ -297,8 +273,6 @@ impl GcirEnforcementTestSuite {
                             format!("Failed to apply Selector before delete: {}", e),
                         );
                     }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-
                     // Delete the Selector the GCIR plugin references.
                     if let Err(e) = ctx
                         .delete_resource("EdgionConfigData", "edgion-test", "gcir-enforce-test")
@@ -307,52 +281,17 @@ impl GcirEnforcementTestSuite {
                         return TestResult::failed(start.elapsed(), format!("Failed to delete Selector: {}", e));
                     }
 
-                    // Wait for deletion to propagate to the Gateway.
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
-
                     let addr = ctx.tcp_addr();
                     let test_data = b"Hello GCIR no-selector";
 
-                    let result = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(mut stream)) => {
-                            if let Err(e) = stream.write_all(test_data).await {
-                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
-                            }
-
-                            let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
-                                Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "TCP echo succeeded ({} bytes) — missing selector fell back to base allow-local",
-                                        n
-                                    ),
-                                ),
-                                Ok(Ok(_)) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Connection closed immediately (0 bytes) — missing selector should fall back to base allow-local"
-                                        .to_string(),
-                                ),
-                                Ok(Err(e)) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Read failed: {} — missing selector should fall back to base allow-local", e),
-                                ),
-                                Err(_) => TestResult::failed(
-                                    start.elapsed(),
-                                    "Read timed out — missing selector should fall back to base allow-local".to_string(),
-                                ),
-                            }
-                        }
-                        Ok(Err(e)) => TestResult::failed(
+                    let result = match wait_for_tcp_echo(&addr, test_data).await {
+                        Ok(n) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!(
-                                "Connection refused (missing selector should fall back to base allow-local): {}",
-                                e
-                            ),
+                            format!("TCP echo succeeded ({n} bytes) — missing selector fell back to base allow-local"),
                         ),
-                        Err(_) => TestResult::failed(
+                        Err(e) => TestResult::failed(
                             start.elapsed(),
-                            "Connection timed out (missing selector should fall back to base allow-local)".to_string(),
+                            format!("{e} — missing selector should fall back to base allow-local"),
                         ),
                     };
 

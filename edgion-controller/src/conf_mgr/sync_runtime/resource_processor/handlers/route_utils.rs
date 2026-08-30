@@ -10,10 +10,10 @@ use crate::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::A
 use crate::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
-use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::prelude_resources::{EdgionPlugins, Gateway};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::gateway::AllowedRoutes;
-use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
 use edgion_resources::ResourceKind;
 
 /// Result of validating a parentRef for acceptance.
@@ -26,6 +26,36 @@ pub struct AcceptedResult {
     /// Protocols of the matched listeners (e.g. "HTTPS", "TLS", "HTTP").
     /// Populated alongside matched_listeners; same order is NOT guaranteed.
     pub matched_listener_protocols: Vec<String>,
+}
+
+/// Return the validation error for an EdgionPlugins backend filter whose
+/// desired resource declares the request-wide WAF.
+///
+/// Backend filters execute only after backend selection, which is too late to
+/// participate in the Global/Gateway/Route WAF ownership election. The raw
+/// desired generation is intentional: EdgionPlugins requeues dependents before
+/// its processed cache is replaced, so the cache may still contain the prior
+/// generation during this route reconcile.
+pub(super) fn backend_waf_extension_ref_error(
+    runtime: &ControllerRuntime,
+    route_namespace: &str,
+    backend_index: usize,
+    extension_ref: &LocalObjectReference,
+) -> Option<String> {
+    if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io") || extension_ref.kind != "EdgionPlugins"
+    {
+        return None;
+    }
+    let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
+    let processor = runtime.processor_registry.get("EdgionPlugins")?;
+    let key = format!("{namespace}/{}", extension_ref.name);
+    let plugins = processor
+        .get_raw_any(&key)
+        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())?;
+    plugins.spec.waf.as_ref()?;
+    Some(format!(
+        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain WAF; attach WAF at Global, Gateway, or Route scope"
+    ))
 }
 
 /// Check if a listener's namespace policy allows a route from the given namespace.
@@ -409,20 +439,34 @@ pub fn update_tracker_accepted_only(
 ///
 /// Tracks which Services this route depends on, so that when a Service
 /// changes, the route is requeued to re-evaluate its ResolvedRefs status.
+///
+/// Returns the Service keys the route no longer references (dropped by this
+/// update). The caller MUST requeue backend policies (BackendTLSPolicy and
+/// EdgionBackendTrafficPolicy) bound to those Services via
+/// `requeue_backend_policies_for_services`: a coalesced delete->recreate
+/// skips `on_delete`'s requeue for the previous generation, and even a plain
+/// update that drops a backend Service would otherwise never notify that
+/// Service's policies to re-resolve their ancestor Gateways.
 pub fn register_service_backend_refs(
     route_kind: edgion_resources::ResourceKind,
     route_ns: &str,
     route_name: &str,
     backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)], // (group, kind, namespace, name)
     runtime: &ControllerRuntime,
-) {
+) -> Vec<String> {
     use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
     let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
 
     let manager = &runtime.service_ref_mgr;
+
+    // Snapshot the Services this route referenced before this reconcile so the
+    // caller can requeue BTPs bound to any Service dropped from backendRefs.
+    let old_service_keys: HashSet<String> = manager.get_dependencies(&resource_ref.key()).into_iter().collect();
+
     manager.clear_resource_refs(&resource_ref);
 
+    let mut new_service_keys = HashSet::new();
     for &(group, kind, namespace, name) in backend_refs {
         let group_str = group.unwrap_or("");
         if !group_str.is_empty() && group_str != "core" {
@@ -434,8 +478,11 @@ pub fn register_service_backend_refs(
         }
         let backend_ns = namespace.unwrap_or(route_ns);
         let service_key = format!("{}/{}", backend_ns, name);
-        manager.add_ref(service_key, resource_ref.clone());
+        manager.add_ref(service_key.clone(), resource_ref.clone());
+        new_service_keys.insert(service_key);
     }
+
+    old_service_keys.difference(&new_service_keys).cloned().collect()
 }
 
 /// Clear Service backend references for a deleted route.
@@ -513,6 +560,14 @@ fn resolve_listeners_inner(
     let mut listener_hostnames: Vec<Option<String>> = Vec::new();
 
     for parent_ref in parent_refs {
+        // Only Gateway parentRefs bind to listeners. Delegation parentRefs
+        // (`kind: HTTPRoute` reverse locks) and other kinds are skipped.
+        let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+        if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
+            continue;
+        }
+
         let gw_ns = parent_ref
             .namespace
             .as_deref()
@@ -685,6 +740,24 @@ mod tests {
         let runtime = crate::conf_mgr::ControllerRuntime::default();
         assert!(listener_allows_route_namespace(&None, "ns1", "ns1", &runtime));
         assert!(!listener_allows_route_namespace(&None, "ns1", "ns2", &runtime));
+    }
+
+    #[test]
+    fn test_resolve_listener_keys_skips_delegation_parent_refs() {
+        // A `kind: HTTPRoute` parentRef (delegation reverse lock) must not be
+        // looked up as a Gateway — it yields no listener keys and no side
+        // effects (previously it would log a bogus "Gateway not found").
+        let runtime = crate::conf_mgr::ControllerRuntime::default();
+        let delegation_ref = ParentReference {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: Some("HTTPRoute".to_string()),
+            namespace: Some("infra".to_string()),
+            name: "parent-route".to_string(),
+            section_name: None,
+            port: None,
+        };
+        let keys = resolve_listener_keys(&[delegation_ref], "billing", Some("billing"), &runtime);
+        assert!(keys.is_empty());
     }
 
     #[test]

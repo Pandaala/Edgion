@@ -1,205 +1,111 @@
 ---
 name: gateway-startup-shutdown
-description: edgion-gateway startup and shutdown — 14-step startup sequence, two-phase Pingora integration, Tokio runtime lifecycle management.
+description: edgion-gateway startup, security gates, Pingora handoff, auxiliary-service shutdown, and listener hot-reload boundary.
 ---
 
 # Gateway startup and shutdown
 
-## Startup entry
+## Entry point
 
-`EdgionGatewayCli::run()` (`cli/mod.rs`) orchestrates the entire startup flow. The method runs synchronously on the `main()` thread, internally creates a Tokio Runtime for async operations, and finally hands control off to the Pingora main loop.
+`EdgionGatewayCli::run()` creates a Tokio runtime, loads local configuration, performs async
+initialization, constructs the Pingora server, moves the runtime to a shutdown-aware background
+thread, and finally runs Pingora's blocking main loop.
 
-## 14-step startup sequence
+The numbered comments in `edgion-gateway/src/cli/mod.rs` are the authoritative startup sequence.
+Keep this page grouped by responsibility instead of freezing a shorter historical step count.
 
-```rust
-// cli/mod.rs - EdgionGatewayCli::run()
-pub fn run(&self) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    // ... 14 steps below ...
-}
-```
+## Startup sequence
 
-### Step 1: Load YAML configuration
+### 1. Local configuration and process globals
 
-```rust
-let config = EdgionGatewayConfig::load(self.config.clone())?;
-```
+1. Load and merge `EdgionGatewayConfig`; initialize and validate the work directory.
+2. Create the Tokio runtime and initialize system logging.
+3. Reject `--integration-testing-mode` unless the explicit production-unsafe environment gate is set.
+4. Install the Prometheus recorder before emitting startup metrics.
+5. Detect host/module FIPS state, enforce `require_fips`, resolve `fips_policy`, and publish gauges.
+6. Configure outbound-egress defaults and the Wasm OCI disk/pull cache.
+7. Initialize rate-limit, LRU, sensitive-field, AllEndpointStatus, request-duration,
+   backend-request, path-normalization, and access-log option globals.
 
-`EdgionGatewayConfig::load()` merges CLI arguments and the YAML configuration file. The configuration structure is defined in `cli/config.rs` and includes sections such as server, access_log, ssl_log, tcp_log, tls_log, udp_log, rate_limit, all_endpoint_status.
+`fips_policy` resolves environment over the already-merged CLI/file value over `auto`. An invalid
+environment token warns and falls through; it never silently becomes `off`. See
+[`04-tls/03-ssl-backends.md`](04-tls/03-ssl-backends.md).
 
-### Step 2: Initialize the working directory
+### 2. Secure configuration sync
 
-```rust
-init_work_dir(work_dir_path)?;
-let wd = work_dir();
-wd.validate()?;
-```
+1. Validate `conf_sync_security`; omitted transport configuration fails closed.
+2. If `auto_ca` is enabled, require configured certificate paths and retry initial client creation
+   for the mounted Secret to appear (20 attempts, 2 seconds apart).
+3. Create `ConfigSyncClient` with a 10-second connection timeout and publish the global
+   `ConfigClient`.
+4. Fetch Controller `ServerInfo`, initialize the test-mode globals, and start resource watches for
+   the advertised kinds plus the server-metadata watch.
+5. For an active file-backed mTLS identity, start the conf-sync certificate watcher so in-place
+   Secret/cert renewal rebuilds the client channel without changing the active transport mode.
 
-Working directory priority: CLI `--work-dir` > environment variable `EDGION_WORK_DIR` > configuration file `work_dir` > current directory `"."`. `init_work_dir()` creates the necessary subdirectory structure and `validate()` checks writability.
+The config-independent security contract is documented with the sync subsystem; do not add a
+plaintext example to this startup guide.
 
-### Step 3: Initialize the logging system
+### 3. Auxiliary services and cache readiness
 
-```rust
-let log_config = config.to_log_config();
-let _log_guard = runtime.block_on(init_logging(log_config))?;
-```
+`start_auxiliary_services` starts:
 
-`init_logging()` configures the tracing logging framework and returns a `WorkerGuard` to ensure logs are flushed when the process exits. It also initializes the RateLimit global configuration and the AllEndpointStatus global configuration.
+- the LeastConn backend cleaner;
+- health-check stores/manager initialization;
+- the bearer-token-protected Admin API (`gateway.admin_listen`, default `127.0.0.1:12001`);
+- the public probe server (`gateway.probe_listen`, default `0.0.0.0:12000`);
+- the metrics server (`metrics.listen`, default `0.0.0.0:12090`).
 
-### Step 4: Create ConfigSyncClient (gRPC to Controller)
+All three HTTP servers use graceful-shutdown futures. If neither
+`EDGION_GATEWAY_ADMIN_TOKEN` nor `gateway.admin_token` supplies a nonblank token, the Admin API
+starts but fails closed with 503 on business routes.
 
-```rust
-let mut sync_client = runtime.block_on(Self::create_config_sync_client(&config))?;
-let config_client = sync_client.get_config_client();
-```
+Startup then waits until every watched `ClientCache` has completed its initial List. Once ready it
+hydrates backend lists for services referenced by HTTP, gRPC, TCP, TLS, and UDP routes, and
+initializes the access, SSL, TCP, TLS, and UDP loggers.
 
-`ConfigSyncClient::new()` establishes a gRPC connection to the Controller. Parameters include `server_addr`, the client name `"edgion-gateway"`, and a 10-second timeout. `get_config_client()` returns `Arc<ConfigClient>`, aggregating ClientCache instances of all resource kinds.
+### 4. Pingora handoff
 
-### Step 5: Initialize the global ConfigClient
+`create_and_configure_server()` runs in `spawn_blocking` while the Tokio runtime is active:
 
-```rust
-init_global_config_client(config_client.clone())?;
-```
+1. Build `ServerConf` (`threads`, `work_stealing`, grace periods, keepalive pool, error log).
+2. Create and bootstrap `pingora_core::Server`.
+3. Create `GatewayBase`, list Gateway resources, and configure startup listener sockets.
 
-Registers the ConfigClient into a global `OnceLock<Arc<ConfigClient>>` so other modules can access it via `get_global_config_client()`.
+The Tokio runtime is then moved to a background thread that waits on the auxiliary shutdown watch.
+The main thread calls `run_server()` → `Server::run_forever()`.
 
-### Step 6: Get ServerInfo from the Controller
+## Shutdown
 
-```rust
-let server_info = runtime.block_on(sync_client.get_server_info())?;
-```
+1. Pingora handles SIGTERM/SIGINT and its configured grace period (default 30 seconds) plus
+   graceful-shutdown timeout (default 10 seconds).
+2. During process shutdown, the HTTP proxy disables keepalive and adds `Connection: close` where
+   applicable.
+3. After `run_forever()` returns, the main thread sends the auxiliary shutdown signal.
+4. Admin, probe, metrics, backend-cleaner, and other shutdown-aware tasks begin draining.
+5. The background runtime allows a five-second drain window, returns, and is joined before
+   `EdgionGatewayCli::run()` completes.
 
-The `GetServerInfo` gRPC call returns:
-- `supported_kinds`: list of resource kinds supported by the Controller, used for selective Watch.
-- `server_id`: Controller instance identifier, used for version consistency checks.
+The background Tokio thread is therefore not an intentionally permanent `pending()` task.
 
-It also initializes integration testing mode and the global testing mode (controlled by the `--integration-testing-mode` CLI flag). The flag is gated earlier in `run_after_logging`: startup fails closed unless `EDGION_ALLOW_INTEGRATION_TESTING_MODE` is also set to a truthy value, and when the mode is active the gateway raises `edgion_system_error_state{component="gateway_runtime", reason="integration_testing_mode"}`. The Prometheus recorder is installed up-front in the same function so this (and other startup-time degraded-state marks like `skip_tls`) is captured rather than dropped before the metrics server task starts.
+## Listener hot-reload boundary
 
-### Step 7: Start watching resources
+Listener sockets are bound once during Pingora construction. Runtime Gateway updates rebuild
+listener metadata and per-listener route snapshots, but cannot add or remove Pingora services after
+`run_forever()` begins.
 
-```rust
-runtime.block_on(sync_client.start_watch_kinds(&server_info.supported_kinds))?;
-```
+- Adding a new listener port does not bind a socket in the running process.
+- Removing a port does not close its already-bound socket.
+- Route data and TLS certificates on existing sockets hot-reload through atomic snapshots.
 
-Based on the `supported_kinds` list returned by the Controller, start a gRPC Watch stream for each resource kind. Also start the `start_watch_server_meta()` background task to monitor the gateway instance count for cluster-level rate limiting.
+Changing the listener port set requires a Gateway process restart/rolling restart.
 
-### Step 8: Start auxiliary services
+## Key source files
 
-```rust
-runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
-```
-
-`start_auxiliary_services()` starts five components:
-1. **BackendCleaner**: `BackendCleaner::new().start()`, cleans up stale backend state for LeastConnection LB.
-2. **Health Check Manager**: `get_hc_config_store()` + `get_health_check_manager()` initialize the health-check configuration store and manager.
-3. **Admin API**: `tokio::spawn(api::serve(config_client, admin_listen))`, listens on the address from `gateway.admin_listen` (default `127.0.0.1:12001`, loopback-only; serves `/configclient`, `/api/v1/server-info`, and other sensitive endpoints).
-4. **Probe server**: `tokio::spawn(api::serve_probe_with_shutdown(config_client, probe_listen, ...))`, listens on the address from `gateway.probe_listen` (default `0.0.0.0:12000`); serves `/health` and `/ready` only; binds all interfaces so kubelet can reach the pod IP. Not included in the gateway Service.
-5. **Metrics API**: `tokio::spawn(metrics::serve(12090))`, port 12090, exposes Prometheus metrics.
-
-### Step 9: Wait for all caches to be ready
-
-```rust
-runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
-```
-
-Polls `config_client.is_ready()` (once per second) until all ClientCache instances have completed their first List (`CacheData.is_ready() == true`). This ensures resources such as Gateway/GatewayClass/EdgionGatewayConfig/HTTPRoute are loaded before traffic is accepted.
-
-### Step 10: Preload load balancers
-
-```rust
-crate::core::gateway::backends::preload_load_balancers(config_client.clone());
-```
-
-Iterates over all loaded routes and warms the LB selector (backend discovery + weight calculation) for each BackendRef, reducing first-request latency.
-
-### Step 11: Initialize all observability loggers
-
-```rust
-runtime.block_on(init_access_logger(&config.access_log))?;
-runtime.block_on(init_ssl_logger(&config.ssl_log))?;
-runtime.block_on(init_tcp_logger(&config.tcp_log))?;
-runtime.block_on(init_tls_logger(&config.tls_log))?;
-runtime.block_on(init_udp_logger(&config.udp_log))?;
-```
-
-Five loggers handle HTTP access logs, SSL handshake logs, TCP connection logs, TLS route logs, and UDP logs respectively. Each logger configures its output target independently (file / stdout / LinkSys).
-
-### Step 12: Create the Pingora server (Phase 1 — configure listeners)
-
-```rust
-let pingora_server = runtime.block_on(async {
-    tokio::task::spawn_blocking(move || create_and_configure_server(config_client, &config))
-        .await
-        .expect("Failed to spawn blocking task")
-})?;
-```
-
-Phase 1 runs within the Tokio Runtime context (`spawn_blocking` ensures UDP listeners can use a Tokio UDP socket):
-
-1. **Create ServerConf**: read `threads` (default = CPU cores), `work_stealing` (default true), `grace_period_seconds` (default 30), `graceful_shutdown_timeout_seconds` (default 10), and `upstream_keepalive_pool_size` (default 128) from the YAML configuration.
-2. **Bootstrap**: `Server::new_with_opt_and_conf(None, server_conf)` + `pingora_server.bootstrap()`.
-3. **Create GatewayBase**: `GatewayBase::new(config_client)`.
-4. **Get the Gateway list**: `config_client.list_gateways().data`.
-5. **Configure listeners**: `gateway_base.configure_listeners(&mut pingora_server, gateways)`.
-
-`configure_listeners()` iterates over each Listener of each Gateway and, in order:
-- Looks up the associated GatewayClass and EdgionGatewayConfig.
-- Checks for port conflicts and the Conflicted state.
-- Parses the HTTP/2 annotation (`edgion.io/enable-http2`).
-- Builds a `ListenerContext` and calls `listener_builder::add_listener()` to add the Listener to the Pingora Server.
-
-### Step 13: Move the Tokio runtime to a background thread
-
-```rust
-std::thread::spawn(move || {
-    runtime.block_on(async {
-        std::future::pending::<()>().await;
-    });
-});
-```
-
-Moves ownership of the Tokio Runtime into a background thread. `std::future::pending()` keeps the thread alive permanently, ensuring all Tokio async tasks (gRPC Watch, Admin API, Metrics API, Health Check, etc.) keep running.
-
-### Step 14: Run the Pingora server (Phase 2 — blocking main loop)
-
-```rust
-run_server(pingora_server);
-// fn run_server(server: Server) { server.run_forever(); }
-```
-
-Phase 2 calls `server.run_forever()` on the main thread, starting the Pingora worker thread pool to accept connections and handle requests. This call blocks until a shutdown signal is received.
-
-## Two-phase Pingora integration
-
-| Phase | Function | Running thread | Responsibility |
-|-------|----------|----------------|----------------|
-| Phase 1 | `create_and_configure_server()` | Tokio Runtime (spawn_blocking) | Create ServerConf, bootstrap, configure all listeners |
-| Phase 2 | `run_server()` → `server.run_forever()` | Main thread | Start Pingora worker thread pool, begin accepting connections |
-
-Reason for the split: Phase 1 needs the Tokio context (UDP listener depends on a Tokio UDP socket), and Phase 2's `run_forever()` takes over thread control, so it must be invoked after the Tokio Runtime has been moved away.
-
-## Shutdown flow
-
-Shutdown relies on Pingora's built-in graceful shutdown mechanism:
-
-1. Pingora receives SIGTERM/SIGINT.
-2. Enter the grace period (default 30 seconds): existing connections continue to be served, `session.is_process_shutting_down()` returns true.
-3. In `early_request_filter`, disable keepalive: `session.set_keepalive(None)`.
-4. In `response_filter`, add the `Connection: close` response header.
-5. After the grace period expires, enter the graceful shutdown timeout (default 10 seconds), forcibly closing remaining connections.
-6. `run_forever()` returns, the main thread exits.
-7. The background Tokio thread terminates automatically when the process exits.
-
-## Known limitation: listener port set is frozen at startup
-
-Listener sockets are bound exactly once, during Phase 1 (`create_and_configure_server()` → `gateway_base.configure_listeners()`). The `Server` is then consumed by `run_forever()` (`cli/pingora.rs`), so nothing in the runtime path holds a handle that could `bind()`/`listen()` a new socket or drain an old one.
-
-When a Gateway resource changes at runtime, `GatewayHandler::partial_update()` (`runtime/handler.rs`) rebuilds only the routing data structures (the `ListenerGatewayInfoStore`/PGIS and the per-listener route managers). It does **not** touch listener sockets. The consequences:
-
-- **Adding a port** to a live Gateway updates routing but leaves the new port unbound — traffic to it is silently dropped.
-- **Removing a port** leaves its socket bound and accepting connections that route to nothing.
-- **TLS certificate updates are exempt**: they hot-reload via ArcSwap on the existing socket, so cert rotation works without restart.
-
-Therefore any change to the listener **port set** requires a full gateway process restart (e.g. a Kubernetes rolling restart). The `"Gateway updated (routes/TLS hot-reloaded; listener port add/remove requires a process restart)"` log line in `partial_update` reflects this.
-
-Lifting the limitation depends on Pingora's `Server` API gaining support for adding `Service`s after `run_forever()` has started; until then, restart is the documented operator workflow for port changes.
+| File | Responsibility |
+|------|----------------|
+| `edgion-gateway/src/cli/mod.rs` | startup order, security gates, services, runtime handoff, shutdown |
+| `edgion-gateway/src/cli/config.rs` | local config merge/defaults and management listener configuration |
+| `edgion-gateway/src/cli/pingora.rs` | ServerConf, listener construction, blocking Pingora run loop |
+| `edgion-gateway/src/runtime/server/listener_builder.rs` | protocol listener construction and backend capability checks |
+| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | conf-sync client identity hot reload |

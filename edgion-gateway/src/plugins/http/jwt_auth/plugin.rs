@@ -27,7 +27,10 @@ impl JwtAuth {
     /// Create from JwtAuthConfig with plugin namespace
     pub fn new(config: &JwtAuthConfig, _plugin_namespace: String) -> Self {
         JwtAuth {
-            store: JwtIssuerGroupStore::new(config.resolved_groups_by_iss.clone().unwrap_or_default()),
+            store: JwtIssuerGroupStore::new(
+                config.resolved_groups_by_iss.clone().unwrap_or_default(),
+                config.base64_secret,
+            ),
             config: config.clone(),
         }
     }
@@ -76,7 +79,7 @@ impl RequestFilter for JwtAuth {
                         let _ = session.set_ctx_var("jwt_claims", &claims_json);
                     }
                 }
-                self.hide_credentials_if_needed(session, source, plugin_log);
+                self.hide_credentials_if_needed(session, source);
                 PluginRunningResult::GoodNext
             }
             Err(_) => {

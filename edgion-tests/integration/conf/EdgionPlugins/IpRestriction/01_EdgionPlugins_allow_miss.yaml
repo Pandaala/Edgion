@@ -12,7 +12,7 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        ipSource: remoteAddr
+        ipSource: RemoteIp
         allow:
           - name: office
             cidrs:

@@ -1,0 +1,29 @@
+# Mutual-TLS LinkSys (clientCertificateRef) — P1#4.
+#
+# Connects to the mutual-TLS nginx terminator (https://127.0.0.1:19202) which
+# REQUIRES a client cert chaining to the mTLS client CA. caCertificateRefs trusts the
+# server cert (private CA); clientCertificateRef supplies the client identity
+# (valid-client.crt/key as a kubernetes.io/tls Secret). The handshake succeeds
+# only because a valid client cert is presented — es-mtls-noclient proves the
+# same endpoint rejects a connection with no client identity.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-mtls-test
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "https://127.0.0.1:19202"
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: es-backend-ca
+      clientCertificateRef:
+        name: es-client-cert
+    timeout:
+      connect: 5000
+      request: 30000

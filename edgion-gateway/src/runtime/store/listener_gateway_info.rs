@@ -142,7 +142,7 @@ impl GatewayListeners {
 /// Combines GatewayInfo (identity/metrics) with the Listener's hostname + allowedRoutes.
 #[derive(Clone, Debug)]
 pub struct ListenerEntry {
-    pub info: GatewayInfo,
+    pub info: Arc<GatewayInfo>,
     /// Listener hostname constraint (None = catch-all)
     pub hostname: Option<String>,
     /// AllowedRoutes from the Listener spec (for kind/namespace filtering)
@@ -157,7 +157,7 @@ pub struct ListenerEntry {
 /// maps can `load()` once and access both fields from the resulting Arc,
 /// guaranteed to belong to the same epoch.
 struct ListenerGatewayInfoSnapshot {
-    flat: HashMap<ListenerKey, Arc<Vec<GatewayInfo>>>,
+    flat: HashMap<ListenerKey, Arc<Vec<Arc<GatewayInfo>>>>,
     index: HashMap<ListenerKey, Arc<GatewayInfoIndex>>,
 }
 
@@ -186,9 +186,10 @@ impl ListenerGatewayInfoStore {
     /// Get all GatewayInfo contexts for a given listener key.
     ///
     /// Returns an empty Vec (behind Arc) if the key has no registered Gateways.
-    /// This is the hot-path call used in `pg_request_filter` per request.
+    /// Listener construction and diagnostics use this flat view; request route
+    /// matching uses `get_index` below.
     #[inline]
-    pub fn get(&self, key: &ListenerKey) -> Arc<Vec<GatewayInfo>> {
+    pub fn get(&self, key: &ListenerKey) -> Arc<Vec<Arc<GatewayInfo>>> {
         let snap = self.snapshot.load();
         snap.flat.get(key).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
     }
@@ -218,7 +219,7 @@ impl ListenerGatewayInfoStore {
     /// and builds both the flat port → Vec<GatewayInfo> mapping and the
     /// per-port GatewayInfoIndex for O(1) route matching lookups.
     pub fn rebuild(&self, gateways: &[Gateway]) {
-        let mut port_map: HashMap<ListenerKey, Vec<GatewayInfo>> = HashMap::new();
+        let mut port_map: HashMap<ListenerKey, Vec<Arc<GatewayInfo>>> = HashMap::new();
         let mut index_map: HashMap<ListenerKey, GatewayInfoIndex> = HashMap::new();
 
         for gateway in gateways {
@@ -251,6 +252,19 @@ impl ListenerGatewayInfoStore {
                 .map(|v| annotations::parse_plugin_ref_list(v, gateway_namespace.as_deref().unwrap_or("default")))
                 .unwrap_or_default();
 
+            // Precompute the gateway-layer DNS resolver candidate from the two
+            // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
+            // self-resolution path reads it off GatewayInfo without re-parsing.
+            let dns_resolver_candidate = {
+                let mut dns_ann: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+                for key in [annotations::DNS_RESOLVER, annotations::DNS_RESOLVER_REF] {
+                    if let Some(v) = gateway_annotations_map.get(key) {
+                        dns_ann.insert(key.to_string(), v.clone());
+                    }
+                }
+                edgion_common::dns::resolver_select::candidate_from_annotations(&dns_ann)
+            };
+
             for listener in listeners {
                 if is_listener_conflicted(gateway, &listener.name) {
                     continue;
@@ -261,7 +275,7 @@ impl ListenerGatewayInfoStore {
 
                 let addr = resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port);
                 let key = ListenerKey::new(addr, &listener.protocol);
-                let gi = GatewayInfo::new(
+                let gi = Arc::new(GatewayInfo::new(
                     gateway_namespace.clone(),
                     gateway_name.clone(),
                     Some(listener.name.clone()),
@@ -269,11 +283,12 @@ impl ListenerGatewayInfoStore {
                     metrics_test_type.clone(),
                     require_sni_host_match,
                     plugin_store_keys.clone(),
-                );
+                    dns_resolver_candidate.clone(),
+                ));
 
                 let gateway_key = gi.gateway_key();
                 let entry = ListenerEntry {
-                    info: gi.clone(),
+                    info: Arc::clone(&gi),
                     hostname: listener.hostname.clone(),
                     allowed_routes: listener.allowed_routes.clone(),
                 };
@@ -293,7 +308,7 @@ impl ListenerGatewayInfoStore {
         let listener_count = port_map.len();
         let total_entries: usize = port_map.values().map(|v| v.len()).sum();
 
-        let flat_arc_map: HashMap<ListenerKey, Arc<Vec<GatewayInfo>>> = port_map
+        let flat_arc_map: HashMap<ListenerKey, Arc<Vec<Arc<GatewayInfo>>>> = port_map
             .into_iter()
             .map(|(key, infos)| (key, Arc::new(infos)))
             .collect();
@@ -545,5 +560,52 @@ mod tests {
             !store.get_index(&key).is_empty(),
             "Programmed=True listener should be registered in the index"
         );
+    }
+
+    #[test]
+    fn flat_and_index_share_the_same_gateway_info() {
+        let store = ListenerGatewayInfoStore::new();
+        let gateway = make_gateway(
+            "https",
+            vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
+        );
+        store.rebuild(&[gateway]);
+
+        let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let flat = store.get(&key);
+        let index = store.get_index(&key);
+        let indexed = index.get("default/test-gw", "https").unwrap();
+
+        assert_eq!(flat.len(), 1);
+        assert!(Arc::ptr_eq(&flat[0], &indexed.info));
+    }
+
+    #[test]
+    fn in_flight_gateway_info_survives_generation_replacement() {
+        let store = ListenerGatewayInfoStore::new();
+        let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let mut gateway = make_gateway(
+            "https",
+            vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
+        );
+        gateway.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            annotations::METRICS_TEST_KEY.to_string(),
+            "old-generation".to_string(),
+        )]));
+        store.rebuild(&[gateway.clone()]);
+        let old = Arc::clone(&store.get(&key)[0]);
+
+        gateway
+            .metadata
+            .annotations
+            .as_mut()
+            .unwrap()
+            .insert(annotations::METRICS_TEST_KEY.to_string(), "new-generation".to_string());
+        store.rebuild(&[gateway]);
+        let new = Arc::clone(&store.get(&key)[0]);
+
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert_eq!(old.metrics_test_key.as_deref(), Some("old-generation"));
+        assert_eq!(new.metrics_test_key.as_deref(), Some("new-generation"));
     }
 }

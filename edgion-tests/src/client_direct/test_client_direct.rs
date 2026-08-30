@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
             runner.add_suite(Box::new(suites::GrpcTestSuite));
         }
         Commands::Websocket => {
-            runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(false)));
         }
         Commands::Tcp => {
             runner.add_suite(Box::new(suites::TcpTestSuite));
@@ -141,7 +141,7 @@ async fn main() -> Result<()> {
         Commands::All => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
-            runner.add_suite(Box::new(suites::WebSocketTestSuite));
+            runner.add_suite(Box::new(suites::WebSocketTestSuite::new(false)));
             runner.add_suite(Box::new(suites::TcpTestSuite));
             runner.add_suite(Box::new(suites::UdpTestSuite));
         }

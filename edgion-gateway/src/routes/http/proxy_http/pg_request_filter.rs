@@ -1,4 +1,6 @@
-use super::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
+use super::{
+    resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy,
+};
 use crate::ctx::NormalizedHostname;
 use crate::plugins::http::get_global_plugin_store;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
@@ -12,13 +14,12 @@ use crate::{
     terminate_with_fallback,
 };
 use crate::{EdgionHttpContext, TlsConnId, TlsConnMeta};
-use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
 use edgion_resources::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
-use edgion_resources::EdgionStatus;
+use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::sync::Arc;
@@ -47,10 +48,7 @@ pub async fn request_filter(
     // Enabled by global requireSniHostMatch OR per-Gateway annotation edgion.io/require-sni-host-match.
     // Only applies to Gateway TLS (tls_matched_listener is None for HTTP/EdgionTls).
     if edgion_http.listener.protocol.eq_ignore_ascii_case("HTTPS") {
-        if let (Some(sni_listener_name), Some(gateway_key)) = (
-            ctx.request_info.tls_matched_listener.as_deref(),
-            ctx.request_info.tls_matched_gateway_key.as_deref(),
-        ) {
+        if let Some((sni_listener_name, gateway_key)) = ctx.request_info.gateway_tls_match() {
             if let Some(gw_listeners) = gateway_index.get_gateway(gateway_key) {
                 if let Some(sni_entry) = gw_listeners.get(sni_listener_name) {
                     let global_enabled = edgion_http
@@ -72,7 +70,7 @@ pub async fn request_filter(
                         };
 
                         if !host_matches_sni_listener || gw_listeners.has_more_specific(host, sni_hostname) {
-                            ctx.add_error(EdgionStatus::SniHostMismatch);
+                            ctx.record_error(EdgionErrorCode::SniHostMismatch);
                             end_response_421(session, ctx, &edgion_http.server_header_opts).await?;
                             return Ok(true);
                         }
@@ -84,7 +82,7 @@ pub async fn request_filter(
 
     if ctx.request_info.is_grpc_request {
         if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
-            ctx.add_error(EdgionStatus::Http2Required);
+            ctx.record_error(EdgionErrorCode::Http2Required);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Ok(true);
         }
@@ -100,7 +98,7 @@ pub async fn request_filter(
             && grpc_routes.has_routes()
             && ctx.request_info.discover_protocol.as_deref() == Some("grpc")
         {
-            ctx.add_error(EdgionStatus::RouteNotFound);
+            ctx.record_error(EdgionErrorCode::RouteNotFound);
             end_response_grpc_unimplemented(session, ctx, &edgion_http.server_header_opts).await?;
             // gRPC trailers-only response (HTTP 200 + grpc-status: 12, END_STREAM=true) already
             // written above. Return Ok(true) to signal response is fully handled.
@@ -113,14 +111,26 @@ pub async fn request_filter(
         let port_routes = edgion_http.http_route_manager.load_route_table();
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
-                ctx.gateway_info = result.matched_gateway;
+                ctx.gateway_info = Some(result.matched_gateway);
+                ctx.capture_matched_path_params(&result.route_unit.matched_info.m);
                 ctx.route_unit = Some(result.route_unit);
             }
             Err(_) => {
-                ctx.add_error(EdgionStatus::RouteNotFound);
+                ctx.record_error(EdgionErrorCode::RouteNotFound);
                 end_response_404(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Already sent error response, signal completion
             }
+        }
+    }
+
+    // Capture HTTPRoute ExtensionRefs before preflight so preflight ownership
+    // and every later plugin stage observe one request-coherent generation.
+    // GRPCRoute keeps its existing post-preflight capture timing.
+    if let Some(route_unit) = ctx.route_unit.as_ref() {
+        let plugin_store = get_global_plugin_store();
+        let keys = route_unit.plugin_runtime.ext_ref_keys();
+        if !keys.is_empty() {
+            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&plugin_store, keys));
         }
     }
 
@@ -138,9 +148,12 @@ pub async fn request_filter(
         if !has_native_cors {
             // Get CORS config dynamically from matched route's EdgionPlugins
             // This ensures we always get the latest config even if EdgionPlugin is updated
+            let route_ext_refs = ctx.resolved_route_ext_refs();
             let cors_config = if let Some(ref route_unit) = ctx.route_unit {
-                let namespace = &route_unit.matched_info.rsc.ns;
-                extract_cors_config_from_route_filters(&route_unit.rule.filters, namespace)
+                extract_cors_config_from_route_filters(
+                    &route_unit.rule.filters,
+                    route_ext_refs.as_deref().unwrap_or_default(),
+                )
             } else if let Some(_grpc_route_unit) = &ctx.grpc_route_unit {
                 // gRPC routes don't have CORS config yet, so None
                 None
@@ -166,40 +179,58 @@ pub async fn request_filter(
         }
     }
 
-    // Per-request resolve: populate ctx.resolved_* once here; later stages read
+    // Per-request resolve: populate the lazy plugin state once here; later stages read
     // directly without paying any format!() / store-lookup cost.
     // Fetch the global plugin store once and share &PluginStore across both
     // resolve calls to avoid redundant Arc::clone on the hot path.
-    if ctx.resolved_global_plugins.is_none() || ctx.resolved_route_ext_refs.is_none() {
-        let plugin_store = get_global_plugin_store();
+    let plugin_store = get_global_plugin_store();
+    let global_plugins = resolve_global_plugins(
+        &plugin_store,
+        edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
+    );
+    ctx.install_resolved_global_plugins(global_plugins);
 
-        if ctx.resolved_global_plugins.is_none() {
-            let resolved = resolve_global_plugins(
-                &plugin_store,
-                edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
-            );
-            ctx.resolved_global_plugins = Some(Arc::new(resolved));
+    if ctx.resolved_route_ext_refs().is_none() {
+        let keys = ctx
+            .grpc_route_unit
+            .as_ref()
+            .map(|unit| unit.plugin_runtime.ext_ref_keys())
+            .unwrap_or_default();
+        if !keys.is_empty() {
+            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&plugin_store, keys));
         }
+    }
 
-        if ctx.resolved_route_ext_refs.is_none() {
-            let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
-                (Some(unit), _) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
-                (_, Some(unit)) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
-                _ => Vec::new(),
-            };
-            ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
-        }
+    let gateway_plugin_keys = ctx
+        .gateway_info
+        .as_deref()
+        .map(|info| info.plugin_store_keys.as_slice())
+        .unwrap_or_default();
+    ctx.install_resolved_gateway_plugins(resolve_gateway_plugins(&plugin_store, gateway_plugin_keys));
+
+    let global_plugins = ctx.resolved_global_plugins();
+    let gateway_plugins = ctx.resolved_gateway_plugins();
+    let route_ext_refs = ctx.resolved_route_ext_refs();
+
+    let selected_waf = select_waf_owner(
+        global_plugins.as_deref().unwrap_or_default(),
+        gateway_plugins.as_deref().unwrap_or_default(),
+        route_ext_refs.as_deref().unwrap_or_default(),
+    );
+    if !ctx.select_waf(selected_waf) {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
     }
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
     // Reads the per-request snapshot populated above (zero format!/store cost).
-    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
+    if let Some(plugins) = global_plugins {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {
                 continue;
             }
             runtime.run_request_plugins(session, ctx).await;
-            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            if ctx.plugin_terminated() {
                 let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                 return Ok(true);
             }
@@ -207,23 +238,15 @@ pub async fn request_filter(
     }
 
     // Step 2b: Run Gateway-level plugins (edgion.io/edgion-plugins annotation), after
-    // GatewayClass-global and before route-level. Resolve once into the per-request snapshot.
-    if ctx.resolved_gateway_plugins.is_none() {
-        let keys = ctx.gateway_info.plugin_store_keys.clone();
-        let resolved = if keys.is_empty() {
-            Vec::new()
-        } else {
-            resolve_gateway_plugins(&get_global_plugin_store(), &keys)
-        };
-        ctx.resolved_gateway_plugins = Some(Arc::new(resolved));
-    }
-    if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(Arc::clone) {
+    // GatewayClass-global and before route-level. The snapshot was resolved
+    // before WAF winner election above.
+    if let Some(plugins) = gateway_plugins {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {
                 continue;
             }
             runtime.run_request_plugins(session, ctx).await;
-            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+            if ctx.plugin_terminated() {
                 let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                 return Ok(true);
             }
@@ -233,20 +256,27 @@ pub async fn request_filter(
     // Step 3: Run route-level plugins based on matched route type
     if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
         grpc_route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+        if ctx.plugin_terminated() {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
         route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
-        if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+        if ctx.plugin_terminated() {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     }
 
-    set_x_real_ip(session, ctx);
-    append_x_forwarded_for(session, ctx);
+    // Request-stage plugins have run, but this is NOT the exit point for
+    // `in_request_body_stage`: two more request-plugin stages still run after
+    // this function returns -- the backendRef-scoped chain in
+    // `pg_upstream_peer.rs::upstream_peer` (HTTP and gRPC) -- and Pingora has
+    // not started pumping the downstream body upstream yet at that point.
+    // The marker is cleared later, at the tail of `upstream_request_filter`
+    // (`pg_upstream_request_filter.rs`), which is the true boundary right
+    // before body proxying begins. See `in_request_body_stage`'s doc for the
+    // full lifecycle.
 
     Ok(false)
 }
@@ -260,40 +290,17 @@ async fn build_request_metadata(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
+    // Snapshot whether the client declared a body, BEFORE any plugin runs.
+    // See `snapshot_body_declared` for why this must not be deferred.
+    snapshot_body_declared(session, ctx);
+
     let req_header = session.req_header();
     let raw_path = req_header.uri.path().to_string();
     let raw_query = req_header.uri.query().map(str::to_string);
     let path_norm_cfg = get_path_normalization_config();
 
     // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
-    if ctx.request_info.discover_protocol.is_none() {
-        // Check for WebSocket
-        if let Some(upgrade) = req_header.headers.get("upgrade") {
-            if let Ok(upgrade_str) = upgrade.to_str() {
-                if upgrade_str.eq_ignore_ascii_case("websocket") {
-                    ctx.request_info.discover_protocol = Some("websocket".to_string());
-                }
-            }
-        }
-
-        // Check for gRPC/gRPC-Web (if not WebSocket)
-        if ctx.request_info.discover_protocol.is_none() {
-            if let Some(ct) = req_header.headers.get("content-type") {
-                if let Ok(ct_str) = ct.to_str() {
-                    // Media type matching is case-insensitive (RFC 9110 §8.3.1);
-                    // gRPC-Web must be tested first since its prefix also
-                    // satisfies the native gRPC prefix check.
-                    if super::is_grpc_web_content_type(ct_str) {
-                        ctx.request_info.discover_protocol = Some("grpc-web".to_string());
-                        ctx.request_info.is_grpc_request = true;
-                    } else if super::is_grpc_content_type(ct_str) {
-                        ctx.request_info.discover_protocol = Some("grpc".to_string());
-                        ctx.request_info.is_grpc_request = true;
-                    }
-                }
-            }
-        }
-    }
+    detect_request_protocol(req_header, ctx);
 
     // Parse client-supplied `grpc-timeout` deadline. The gRPC-over-HTTP/2 spec
     // expects servers / intermediaries to honour it; the parsed deadline is
@@ -302,7 +309,7 @@ async fn build_request_metadata(
     // missing, or overflowing headers fall through to route-level
     // `request_timeout` behaviour. `checked_add` guards against an upper-bound
     // value (e.g. `99999999H` from a hostile client) overflowing `Instant`.
-    if ctx.request_info.is_grpc_request && ctx.request_info.grpc_client_deadline.is_none() {
+    if ctx.request_info.is_grpc_request && ctx.request_info.grpc_client_deadline().is_none() {
         if let Some(raw) = req_header.headers.get("grpc-timeout") {
             if let Some(deadline) = raw
                 .to_str()
@@ -310,26 +317,30 @@ async fn build_request_metadata(
                 .and_then(parse_grpc_timeout)
                 .and_then(|dur| ctx.start_time.checked_add(dur))
             {
-                ctx.request_info.grpc_client_deadline = Some(deadline);
+                ctx.request_info.set_grpc_client_deadline(deadline);
             }
         }
     }
 
-    // Extract client_addr and client_port (TCP connection address).
-    // as_inet() avoids the to_string() -> parse() round trip; UDS downstream
-    // is not a real scenario for the HTTP gateway, so falling back to empty
-    // string for non-inet addresses is acceptable.
-    let inet = session.client_addr().and_then(|a| a.as_inet());
-    ctx.request_info.client_addr = inet.map(|s| s.ip().to_string()).unwrap_or_default();
-    ctx.request_info.client_port = inet.map(|s| s.port()).unwrap_or(0);
+    // Preserve both transport identities. Pingora's `peer_addr()` may contain
+    // the accepted PROXY-protocol source, while `raw_peer_addr()` always names
+    // the physical previous hop.
+    let raw = session
+        .as_downstream()
+        .digest()
+        .and_then(|d| d.socket_digest.as_ref())
+        .and_then(|d| d.raw_peer_addr());
+    let addrs = crate::util::resolve_transport_client_addrs(session.client_addr(), raw, "");
+    ctx.request_info.downstream_peer_ip = addrs.remote_ip;
+    ctx.request_info.direct_peer_ip = addrs.direct_peer_ip;
+    ctx.request_info.direct_peer_port = addrs.direct_peer_port;
 
-    // Extract remote_addr (real client IP, considering trusted proxies).
-    // extract_real_ip accepts a bare IP string as well as "ip:port".
-    ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
-        extractor.extract_real_ip(&ctx.request_info.client_addr, req_header)
+    let resolved = if let Some(extractor) = &edgion_http.real_ip_extractor {
+        extractor.extract_real_ip(&ctx.request_info.downstream_peer_ip, req_header)
     } else {
-        ctx.request_info.client_addr.clone()
+        ctx.request_info.downstream_peer_ip.clone()
     };
+    ctx.request_info.remote_ip = crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved);
 
     // Generate x_trace_id before any early-return guards so 400/4xx access-log
     // entries carry a trace id that can be correlated with tls.log.
@@ -354,7 +365,7 @@ async fn build_request_metadata(
         .map(|s| s.reject_duplicate_host)
         .unwrap_or(true);
     if reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
-        ctx.add_error(EdgionStatus::DuplicateHostHeader);
+        ctx.record_error(EdgionErrorCode::DuplicateHostHeader);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
     }
@@ -390,27 +401,35 @@ async fn build_request_metadata(
     if let Some(digest) = session.as_downstream().digest() {
         if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
             if let Some(meta) = ssl_digest.extension.get::<TlsConnMeta>() {
-                ctx.request_info.tls_id = meta.tls_id.clone();
-                ctx.request_info.sni = meta.sni.clone();
-                ctx.request_info.client_cert_info = meta.client_cert_info.clone();
                 // Extract Gateway TLS listener info for 421 Misdirected Request detection.
                 // Only set for Gateway TLS (not EdgionTls, which has no listener concept).
-                if let Some(ref matched) = meta.matched {
-                    if matched.rsc.kind == "Gateway" {
-                        ctx.request_info.tls_matched_listener = matched.section.clone();
-                        ctx.request_info.tls_matched_gateway_key =
-                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name));
-                    }
-                }
+                let (matched_listener, matched_gateway_key) = meta
+                    .matched
+                    .as_ref()
+                    .filter(|matched| matched.rsc.kind == "Gateway")
+                    .map(|matched| {
+                        (
+                            matched.section.clone(),
+                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name)),
+                        )
+                    })
+                    .unwrap_or((None, None));
+                ctx.request_info.install_tls_info(
+                    meta.tls_id.clone(),
+                    meta.sni.clone(),
+                    meta.client_cert_info.clone(),
+                    matched_listener,
+                    matched_gateway_key,
+                );
             } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
                 // Backward compatibility for connections created before metadata upgrade.
-                ctx.request_info.tls_id = Some(tls_id.0.to_string());
+                ctx.request_info.set_tls_id(tls_id.0.to_string());
             }
         }
     }
 
     if let Some(status) = apply_path_normalization_entry(ctx, &raw_path, raw_query, path_norm_cfg) {
-        ctx.add_error(status);
+        ctx.record_error(status);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
     }
@@ -431,7 +450,7 @@ async fn build_request_metadata(
     // tenant isolation. `end_response_400` already routes gRPC requests to
     // `grpc-status 3` (INVALID_ARGUMENT) trailers via `send_grpc_trailers_only`.
     if ctx.request_info.hostname.is_empty() {
-        ctx.add_error(EdgionStatus::HostMissing);
+        ctx.record_error(EdgionErrorCode::HostMissing);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
     }
@@ -441,7 +460,7 @@ async fn build_request_metadata(
         if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
             let xff_len = existing_xff.len();
             if xff_len > security_config.x_forwarded_for_limit {
-                ctx.add_error(EdgionStatus::XffHeaderTooLong);
+                ctx.record_error(EdgionErrorCode::XffHeaderTooLong);
                 end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Response sent
             }
@@ -449,6 +468,78 @@ async fn build_request_metadata(
     }
 
     Ok(false) // Continue processing
+}
+
+/// Snapshot whether the client declared a request body, BEFORE any plugin runs.
+///
+/// This must not be deferred to the body gate. `is_body_empty()` is pingora's
+/// transport-aware predicate (H1: RFC 9112 6.3; h2: END_STREAM / content-length
+/// 0), but on H1 it derives framing from the LIVE header map via
+/// `init_body_reader()`. The gate runs mid-chain, so an earlier plugin removing
+/// `Content-Length` would make a bodied request look empty. Taken here, the
+/// header map is still the client's, and the H1 framing is pinned at the one
+/// moment when pinning it is correct.
+///
+/// Extracted so the derivation is directly testable: an inversion here would
+/// make a bodied request look bodyless and silently skip body inspection.
+///
+/// Also marks entry into the request-processing stage (`in_request_body_stage`)
+/// -- see that field's doc for why this is the paired entry point and where the
+/// matching exit write lives -- and snapshots whether the DOWNSTREAM method was
+/// `HEAD` (`method_is_head`), which the response-side admission predicate reads
+/// instead of the live request header a request-stage plugin can rewrite via
+/// `set_upstream_method`. All three writes belong here for the same reason:
+/// this is the one point that runs before any plugin can mutate the request.
+fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
+    ctx.request_info.body_declared = Some(!session.is_body_empty());
+    ctx.request_info.in_request_body_stage = true;
+    ctx.request_info.method_is_head = session.req_header().method == http::Method::HEAD;
+}
+
+/// Detect WebSocket / gRPC / gRPC-Web from the request's `Upgrade` and
+/// `Content-Type` headers, when no protocol has already been discovered
+/// upstream of this call. A no-op once `discover_protocol` is already set.
+///
+/// WebSocket is checked first: only an exact (case-insensitive) `Upgrade:
+/// websocket` token match sets it -- a comma-separated upgrade list (e.g.
+/// `Upgrade: websocket, h2c`) or an unrecognized single token (e.g. `Upgrade:
+/// foo`) leaves `discover_protocol` unset here, falling through to the
+/// gRPC/gRPC-Web content-type check. gRPC-Web is tested before native gRPC
+/// since its media-type prefix also satisfies the gRPC prefix check (RFC 9110
+/// §8.3.1 media types are case-insensitive).
+///
+/// Extracted from `build_request_metadata` so protocol detection is directly
+/// unit-testable against a bare `RequestHeader` -- see
+/// `protocol_detection_tests` -- following the same extraction precedent as
+/// `snapshot_body_declared`.
+fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut EdgionHttpContext) {
+    if ctx.request_info.discover_protocol.is_some() {
+        return;
+    }
+
+    // Check for WebSocket
+    if let Some(upgrade) = req_header.headers.get("upgrade") {
+        if let Ok(upgrade_str) = upgrade.to_str() {
+            if upgrade_str.eq_ignore_ascii_case("websocket") {
+                ctx.request_info.discover_protocol = Some("websocket".to_string());
+            }
+        }
+    }
+
+    // Check for gRPC/gRPC-Web (if not WebSocket)
+    if ctx.request_info.discover_protocol.is_none() {
+        if let Some(ct) = req_header.headers.get("content-type") {
+            if let Ok(ct_str) = ct.to_str() {
+                if super::is_grpc_web_content_type(ct_str) {
+                    ctx.request_info.discover_protocol = Some("grpc-web".to_string());
+                    ctx.request_info.is_grpc_request = true;
+                } else if super::is_grpc_content_type(ct_str) {
+                    ctx.request_info.discover_protocol = Some("grpc".to_string());
+                    ctx.request_info.is_grpc_request = true;
+                }
+            }
+        }
+    }
 }
 
 /// Serve ACME HTTP-01 challenge response if there is an active challenge matching the request.
@@ -475,9 +566,9 @@ async fn try_serve_acme_challenge(
         None => return Ok(false),
     };
 
-    ctx.add_info(EdgionStatus::AcmeChallengeServed);
-    ctx.request_info.status = Some(200);
-    ctx.request_info.response_committed = true;
+    if !ctx.claim_final_response(200) {
+        return Ok(true);
+    }
 
     let mut resp = ResponseHeader::build(200, None)?;
     edgion_http.server_header_opts.apply_to_response(&mut resp);
@@ -486,6 +577,7 @@ async fn try_serve_acme_challenge(
 
     session.write_response_header(Box::new(resp), false).await?;
     session.write_response_body(Some(key_auth), true).await?;
+    ctx.record_info(EdgionInfoCode::AcmeChallengeServed);
 
     Ok(true)
 }
@@ -512,16 +604,16 @@ fn apply_path_normalization_entry(
     raw_path: &str,
     raw_query: Option<String>,
     cfg: &PathNormalizationConfig,
-) -> Option<EdgionStatus> {
+) -> Option<EdgionErrorCode> {
     ctx.request_info.entry_raw_path = raw_path.to_string();
     ctx.request_info.entry_raw_query = raw_query;
 
     if cfg.reject_escaped_slashes && contains_escaped_slash(raw_path) {
-        return Some(EdgionStatus::PathEscapedSlashRejected);
+        return Some(EdgionErrorCode::PathEscapedSlashRejected);
     }
 
     if cfg.reject_invalid_percent_encoding && has_invalid_percent_encoding(raw_path) {
-        return Some(EdgionStatus::PathInvalidPercentEncoding);
+        return Some(EdgionErrorCode::PathInvalidPercentEncoding);
     }
 
     ctx.request_info.normalized_current_path = normalize_path(raw_path, cfg).unwrap_or_else(|| raw_path.to_string());
@@ -529,39 +621,10 @@ fn apply_path_normalization_entry(
     None
 }
 
-/// Append client IP to X-Forwarded-For header (inline for performance)
-///
-/// This function always appends the client IP to maintain the proxy chain,
-/// regardless of trusted proxy configuration.
-#[inline]
-fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
-    // client_addr is already IP only (without port)
-    let client_ip = &ctx.request_info.client_addr;
-
-    let req_header_mut = session.req_header_mut();
-    if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
-        let mut new_xff = String::with_capacity(existing_xff.len() + 2 + client_ip.len());
-        new_xff.push_str(existing_xff);
-        new_xff.push_str(", ");
-        new_xff.push_str(client_ip);
-        let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
-    } else {
-        let _ = req_header_mut.insert_header("X-Forwarded-For", client_ip);
-    }
-}
-
-/// Set X-Real-IP header with extracted remote_addr (inline for performance)
-///
-/// This header contains the real client IP address after trusted proxy extraction.
-#[inline]
-fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
-    let req_header_mut = session.req_header_mut();
-    let _ = req_header_mut.insert_header("X-Real-IP", &ctx.request_info.remote_addr);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::LocalObjectReference;
     use pingora_http::RequestHeader;
 
     #[test]
@@ -607,7 +670,7 @@ mod tests {
 
         let status = apply_path_normalization_entry(&mut ctx, "/admin%2Fsecret", Some("trace=1".to_string()), &cfg);
 
-        assert_eq!(status, Some(EdgionStatus::PathEscapedSlashRejected));
+        assert_eq!(status, Some(EdgionErrorCode::PathEscapedSlashRejected));
         assert_eq!(ctx.request_path(), "/admin%2Fsecret");
         assert_eq!(ctx.request_uri(), "/admin%2Fsecret?trace=1");
     }
@@ -623,6 +686,192 @@ mod tests {
         assert_eq!(ctx.request_path(), "/admin//../secret");
         assert_eq!(ctx.path(), "/secret");
     }
+
+    #[test]
+    fn cors_extension_ref_scan_skips_missing_ref_and_finds_later_config() {
+        let filters = Some(vec![
+            HTTPRouteFilter {
+                filter_type: HTTPRouteFilterType::ExtensionRef,
+                request_header_modifier: None,
+                response_header_modifier: None,
+                request_redirect: None,
+                url_rewrite: None,
+                request_mirror: None,
+                cors: None,
+                external_auth: None,
+                extension_ref: None,
+            },
+            HTTPRouteFilter {
+                filter_type: HTTPRouteFilterType::ExtensionRef,
+                request_header_modifier: None,
+                response_header_modifier: None,
+                request_redirect: None,
+                url_rewrite: None,
+                request_mirror: None,
+                cors: None,
+                external_auth: None,
+                extension_ref: Some(LocalObjectReference {
+                    group: "edgion.io".to_string(),
+                    kind: "EdgionPlugins".to_string(),
+                    name: "cors".to_string(),
+                    resolved_namespace: None,
+                }),
+            },
+        ]);
+        let mut runtime = crate::plugins::runtime::PluginRuntime::new();
+        runtime.add_from_request_filters(
+            &[edgion_resources::resources::RequestFilterEntry::new(
+                edgion_resources::resources::EdgionPlugin::Cors(CorsConfig::default()),
+            )],
+            "default",
+            "default/cors",
+        );
+        let runtime = Arc::new(runtime);
+        let expected = runtime.cors_config_arc().expect("Cors config must be cached");
+
+        let actual = extract_cors_config_from_route_filters(&filters, &[Some(runtime)]);
+
+        assert!(actual.is_some_and(|config| Arc::ptr_eq(&config, &expected)));
+    }
+}
+
+/// Coverage for `snapshot_body_declared`, the `body_declared` snapshot taken
+/// at the top of `build_request_metadata`.
+///
+/// `build_request_metadata` itself cannot be driven from a unit test: it is a
+/// private `async fn` that takes `&EdgionHttpProxy`, and every field of that
+/// struct (access logger, gateway config, route managers, ...) is built only
+/// by the live listener bootstrap in `runtime/server/listener_builder.rs` —
+/// there is no test helper anywhere in this crate that constructs one, and
+/// hand-assembling all of it just to reach this one line would be far more
+/// scaffolding than the line under test.
+///
+/// Instead this drives a real `pingora_proxy::Session` off real HTTP/1.1
+/// request bytes over a `tokio::io::duplex` pair — the same pattern
+/// `session_adapter.rs`'s `test_session()` helper uses — and calls
+/// `snapshot_body_declared` directly against it, asserting on
+/// `ctx.request_info.body_declared`. Unlike the hand-set `body_declared` in
+/// `ctx.rs` / `session_adapter.rs`'s tests, this exercises pingora's real H1
+/// framing (`init_body_reader()`), so a dropped `!` in `snapshot_body_declared`
+/// would flip these assertions and fail.
+#[cfg(test)]
+mod body_declared_snapshot_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    /// Build a real HTTP/1.1 `Session` from literal request bytes.
+    ///
+    /// `pub(super)` so `protocol_detection_tests` (a sibling module) can reuse
+    /// it instead of duplicating the duplex-pair plumbing.
+    pub(super) async fn session_from_request(raw_request: &[u8]) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(raw_request)
+            .await
+            .expect("write request into duplex pair");
+        drop(client); // header (and body, if any) bytes are already buffered
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("client must not have closed before sending the request");
+        session
+    }
+
+    #[tokio::test]
+    async fn post_with_content_length_and_body_declares_body_true() {
+        let mut session =
+            session_from_request(b"POST /submit HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert_eq!(ctx.request_info.body_declared, Some(true));
+    }
+
+    #[tokio::test]
+    async fn get_with_no_content_length_or_transfer_encoding_declares_body_false() {
+        let mut session = session_from_request(b"GET /status HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert_eq!(ctx.request_info.body_declared, Some(false));
+    }
+
+    /// The `method_is_head` half of the snapshot, off real H1 request bytes:
+    /// the response-side admission predicate reads this field instead of the
+    /// plugin-mutable live header, so an inverted comparison here would put the
+    /// hole straight back (see `RequestInfo::method_is_head`).
+    #[tokio::test]
+    async fn head_request_snapshots_method_is_head() {
+        let mut session = session_from_request(b"HEAD /status HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert!(ctx.request_info.method_is_head);
+    }
+
+    #[tokio::test]
+    async fn non_head_request_snapshots_method_is_head_false() {
+        let mut session = session_from_request(b"GET /status HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert!(!ctx.request_info.method_is_head);
+    }
+}
+
+/// Coverage for `detect_request_protocol`'s `Upgrade` handling.
+///
+/// This is the property `session_adapter.rs`'s (now-removed) tautological
+/// `request_admission_unknown_upgrade_token_buffers` test claimed to cover
+/// but never actually exercised (it encoded no `Upgrade` header at all). The
+/// real property lives here, at the source of `discover_protocol`: only an
+/// exact `Upgrade: websocket` token sets it; an unrecognized token or a
+/// comma-list containing `websocket` must not.
+#[cfg(test)]
+mod protocol_detection_tests {
+    use super::body_declared_snapshot_tests::session_from_request;
+    use super::*;
+
+    #[tokio::test]
+    async fn upgrade_websocket_sets_discover_protocol() {
+        let session = session_from_request(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+    }
+
+    #[tokio::test]
+    async fn upgrade_unknown_token_does_not_set_websocket() {
+        let session = session_from_request(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: foo\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_ne!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+    }
+
+    #[tokio::test]
+    async fn upgrade_comma_list_does_not_set_websocket() {
+        // A comma-separated Upgrade list is not an exact "websocket" token
+        // match -- treating it as one would let a client smuggle a body past
+        // the websocket-handshake shape checks in `request_admission`.
+        let session = session_from_request(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket, h2c\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_ne!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+    }
 }
 
 /// Extract CORS configuration dynamically from route filters
@@ -634,26 +883,28 @@ mod tests {
 /// path avoids deep-cloning the full `CorsConfig` per request.
 fn extract_cors_config_from_route_filters(
     filters: &Option<Vec<HTTPRouteFilter>>,
-    namespace: &str,
+    resolved: &[Option<Arc<crate::plugins::runtime::PluginRuntime>>],
 ) -> Option<Arc<CorsConfig>> {
     let filters = filters.as_ref()?;
+    let mut extension_index = 0;
 
     for filter in filters {
         if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
             continue;
         }
 
-        let ext_ref = filter.extension_ref.as_ref()?;
+        let Some(ext_ref) = filter.extension_ref.as_ref() else {
+            continue;
+        };
+        let runtime = resolved.get(extension_index).and_then(Option::as_ref);
+        extension_index += 1;
 
         // Check if it's EdgionPlugins
         if ext_ref.kind != "EdgionPlugins" || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io") {
             continue;
         }
 
-        let key = format!("{}/{}", namespace, ext_ref.name);
-        let cors = get_global_plugin_store()
-            .with_plugin(&key, |c| c.plugin_runtime.cors_config_arc())
-            .flatten();
+        let cors = runtime.and_then(|runtime| runtime.cors_config_arc());
         if cors.is_some() {
             return cors;
         }

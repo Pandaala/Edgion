@@ -1,0 +1,33 @@
+# query_source_reads_entry_not_rewritten_uri: `from: query` must resolve
+# against the entry-time raw query (`ctx.request_info.entry_raw_query`), never
+# a post-rewrite re-parse of the live session query.
+#
+# ProxyRewrite injects a brand-new query param (`rewritten_only`) that the
+# client never sent — it appears only in the upstream-bound URI, after
+# ProxyRewrite runs. The client's own `orig_param` survives untouched
+# (ProxyRewrite always preserves + appends the original query verbatim).
+#
+#   - `orig_param` is present at entry -> its accessLogExtern field
+#     (src_orig_q) must be present in `ext` with the client's value.
+#   - `rewritten_only` does NOT exist at entry (only after the rewrite) -> its
+#     accessLogExtern field (src_rewritten_q) must be ABSENT from `ext`. If a
+#     future change swapped `entry_raw_query` for a post-rewrite re-parse,
+#     this field would suddenly appear — that's the regression this guards.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-query-rewrite
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: "/rewritten-target?rewritten_only=rewritten-value"
+  accessLogExtern:
+    - key: src_orig_q
+      from: query
+      name: orig_param
+    - key: src_rewritten_q
+      from: query
+      name: rewritten_only

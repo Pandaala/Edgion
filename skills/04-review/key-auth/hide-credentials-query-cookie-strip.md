@@ -13,9 +13,11 @@ closed: 2026-05-30
 `KeyAuth::hide_credentials` now strips the authenticating key from all
 request-borne sources: `Header` (remove header), `Ctx` (remove ctx var),
 `Query` (rewrite the request URI without the matched parameter), and `Cookie`
-(re-serialize the `Cookie` header without the matched cookie). `Webhook`
-deliberately remains a no-op because webhook keys are resolved server-side and
-never travel in the forwarded request.
+(re-serialize the `Cookie` header without the matched cookie). Variants that
+`extract_key` already ignores (`RemoteIp`, `Path`, `Method`, …) fall through
+`_ => {}`. `KeyGet::Webhook` is gone — the former Webhook no-op arm is not a
+live contract. If KeyAuth reads a ctx var written by `WebhookKeyGet`,
+`hideCredentials` strips that ctx var (existing `Ctx` arm).
 
 Re-reports of the form "`hideCredentials` silently no-ops for query/cookie /
 the doc over-promises" are **not accepted** — the gap was closed in
@@ -23,15 +25,22 @@ the doc over-promises" are **not accepted** — the gap was closed in
 `hide_credentials` has explicit `KeyGet::Query` / `KeyGet::Cookie` arms
 (`strip_query_param` / `strip_cookie`) before re-reporting.
 
+The two helpers now live in
+`edgion-gateway/src/plugins/http/common/auth_common.rs` and are shared with
+`jwt_auth`; their doc comments carry the decoded-vs-raw key asymmetry, the
+multi-line `Cookie` data-loss hazard, and the `set_request_header`
+replace-all-lines assumption that this entry records.
+
 ## Core Rationale
 
 **1. It was a silent failure of a declared security control.**
 
 Operators set `hideCredentials: true` to keep the API key out of the upstream
 request (and out of upstream access logs / log aggregators). Before the fix,
-`Query`, `Cookie`, and `Webhook` all fell into a `_ => {}` arm, so the raw
-`?api_key=...` query and the raw `Cookie` header were forwarded verbatim. No
-error, no warning — a silently ineffective security feature.
+`Query` and `Cookie` (and the deleted `KeyGet::Webhook` variant) all fell into
+a `_ => {}` arm, so the raw `?api_key=...` query and the raw `Cookie` header
+were forwarded verbatim. No error, no warning — a silently ineffective
+security feature.
 
 **2. Stripping must not override the path-forwarding decision.**
 
@@ -58,18 +67,19 @@ error, no warning — a silently ineffective security feature.
   line + `set_request_header` (which is `insert_header` = replace-all) would
   drop unrelated cookies carried on other `Cookie` field lines.
 
-**3. `Webhook` staying a no-op is correct, not an oversight.**
+**3. There is no `KeyGet::Webhook` arm to strip.**
 
-The webhook source is resolved by a remote call; the key never appears in the
-forwarded request headers/URI, so there is nothing to strip. Re-reports flagging
-the `Webhook` arm as an unfixed no-op are not accepted.
+The variant is gone. Re-reports that a Webhook `hide_credentials` arm is
+missing are not accepted because the variant does not exist. Webhook-resolved
+values reach KeyAuth only as `KeyGet::Ctx` (written by `WebhookKeyGet`); the
+existing `Ctx` arm strips that var.
 
 ## Fix Suggestions Not Accepted
 
 - "Add a `tracing::warn!` when query/cookie stripping is requested" — data-plane
   hot path; Iron rule forbids it. The fix is to actually strip, not to log.
-- "Also strip the `Webhook` source" — webhook keys never reach the upstream;
-  nothing to strip.
+- "Also strip the `Webhook` source" / "add a missing Webhook arm" — the
+  variant is gone; webhook-resolved values are `Ctx` and already stripped.
 - "Decode-and-re-encode the surviving query pairs via `form_urlencoded`" — would
   alter operator-supplied encoding of unrelated params; preserving the raw pair
   text is intentional.
@@ -91,8 +101,9 @@ Re-open only if:
 ## Reference Cases
 
 - `fr-auth2-02` (2026-05-30) — Opus-confirmed P3 Security; fixed (code + doc).
-- Code: `edgion-gateway/src/plugins/http/key_auth/plugin.rs` — `hide_credentials`,
-  `strip_query_param`, `strip_cookie`; `PluginSession::set_request_query`
+- Code: `edgion-gateway/src/plugins/http/key_auth/plugin.rs` — `hide_credentials`;
+  `edgion-gateway/src/plugins/http/common/auth_common.rs` — `strip_query_param`,
+  `strip_cookie` (shared with `jwt_auth`); `PluginSession::set_request_query`
   (`runtime/traits/session.rs` + `runtime/session_adapter.rs`).
 - Docs: `docs/en/.../edgion-plugins/key-auth.md` &
   `docs/zh-CN/.../edgion-plugins/key-auth.md` "Behavior Details" now enumerate

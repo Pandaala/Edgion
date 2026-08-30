@@ -43,11 +43,11 @@ fn test_resp_set_status_conditional() {
 
 #[test]
 fn test_resp_set_status_invalid_code() {
-    let source = r#"resp.set_status(999)"#;
-    let mut session = MockPluginSession::new();
-    // Should get a runtime error for invalid status code
-    session.expect_set_response_status().times(0);
-    let result = run(source, session);
-    // With Deny policy, runtime error → 500
-    assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+    for status in [103, 999] {
+        let source = format!("resp.set_status({status})");
+        let mut session = MockPluginSession::new();
+        session.expect_set_response_status().times(0);
+        let result = run(&source, session);
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+    }
 }

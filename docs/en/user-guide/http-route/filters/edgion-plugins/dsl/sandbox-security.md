@@ -25,6 +25,7 @@ The following limits are tracked independently on each request and do not interf
 | Max function calls | `maxCallCount` | 500 | 1 | 100,000 | Total number of built-in function calls |
 | Max stack depth | `maxStackDepth` | 128 | 1 | 1,024 | Value stack depth |
 | Max string length | `maxStringLen` | 8,192 | 1 | 1,048,576 | Maximum bytes in a string concatenation result |
+| Max body scan passes | `maxBodyScanPasses` | 4 | 1 | 16 | Cumulative raw bytes scanned, measured against the resolved physical request-body cap |
 
 ### Limit Details
 
@@ -48,6 +49,33 @@ The VM uses a stack to evaluate expressions. Deeply nested expressions — such 
 
 Limits the maximum byte length of strings produced by concatenation operations. If the concatenated string exceeds this value, the VM raises a `StringTooLong` error. This limit also acts as an indirect constraint on functions that process string data, such as `json_get()`. Note that this limit applies to strings produced at runtime and does not affect string literals in the compile-time constant pool, which are governed by a separate compile-time limit.
 
+It does not cap the opaque Body itself. It does cap strings returned by
+`Body.read`, `Body.read_all`, and selected or serialized JSON values.
+
+**maxBodyScanPasses (Cumulative Request-Body Scans)**
+
+The VM gives one script execution a cumulative scan budget equal to the
+resolved gateway physical request-body cap multiplied by
+`maxBodyScanPasses`. Metadata-only `byte_len()` consumes no scan bytes. Scans
+fetch source data in chunks of up to 64 KiB and charge every fetched chunk. An
+early-exit predicate may therefore charge the complete final chunk even when
+it matches near that chunk's beginning. Failed or rolled-back scans retain the
+charge for chunks fetched before failure. This conservative accounting avoids
+small-read and per-callback overhead and applies identically to memory,
+spill-file, and mutation-segment sources.
+
+`req.body.sha256()` lazily caches only the 32-byte digest on the current
+immutable Body generation. Its first successful call scans normally; repeated
+calls for the same generation consume zero scan bytes. Any successful Body
+mutation publishes a new generation with an empty digest cache. Failed scans
+and failed mutations never populate a new cache entry.
+
+`req.body.md5()` and `req.body.hmac_sha256(key)` are intentionally uncached and
+consume actual scan bytes on every call. MD5 is legacy interoperability only,
+including in FIPS builds. Body HMAC adds no persistent key/MAC cache and is a
+generation API, not an inbound verification API: normal DSL equality is not
+constant-time.
+
 ### Configuration Example
 
 ```yaml
@@ -63,6 +91,7 @@ spec:
         maxCallCount: 200
         maxStackDepth: 64
         maxStringLen: 4096
+        maxBodyScanPasses: 4
         errorPolicy: deny
 ```
 
@@ -110,19 +139,23 @@ When a script fails, the error is silently discarded and the request continues t
 
 Note: The `ignore` policy applies only to unexpected errors. If a script explicitly calls `deny()` or `terminate()`, those calls are part of the script's normal logic and are not affected by `errorPolicy` — they execute with their defined semantics regardless.
 
+Request-body storage, scan-budget, range, and mutation failures are classified internally as `BodyAccess`. They always fail closed with HTTP 500 and the fixed client body `Request body processing failed`, regardless of `errorPolicy`. This is a hard safety boundary, not a fourth configurable DSL policy or a new project-wide failure-policy shape; operational detail is logged without being returned to the client.
+
 **deny**
 
 When a script fails, the gateway returns HTTP 500 and aborts request processing. This is a fail-close policy, appropriate for security-critical scenarios such as authorization checks and access control, ensuring that a script failure never results in a request being mistakenly passed through.
 
 **denyWith**
 
-Similar to `deny`, but allows customizing the returned HTTP status code and response body. `status` must be in the range 100–599; `body` is a plain-text string. Use this when the client needs to receive a specific error format.
+Similar to `deny`, but allows customizing the returned HTTP status code and response body. `status` must be in the range 200–599; `body` is a plain-text string. Use this when the client needs to receive a specific error format.
 
 In production, use `deny` or `denyWith` for security-related scripts (permission checks, rate-limit marking, etc.) and keep `ignore` for enhancement scripts (adding debug headers, setting context values).
 
 ## Runtime Error Types
 
-The following error types are raised by the VM at runtime. When triggered, they are handled according to `errorPolicy`.
+The following error types are raised by the VM at runtime. They are handled
+according to `errorPolicy` except for the fixed hard-failure `BodyAccess`
+boundary described below.
 
 | Error Type | Trigger Condition | Description |
 |------------|------------------|-------------|
@@ -135,8 +168,8 @@ The following error types are raised by the VM at runtime. When triggered, they 
 | `StackOverflow` | Stack depth limit exceeded | Expression nesting is too deep |
 | `StringTooLong` | String length limit exceeded | Concatenation result exceeds `maxStringLen` |
 | `RegexError` | Regex failure | Regex parsing or execution failed |
-| `HttpCallError` | `http.call()` argument validation failed | Invalid URL scheme or SSRF-blocked address; the call returns `status = 0` and does **not** raise an error |
-| `ApiError` | API call failure | An exception occurred in the PluginSession interface |
+| `ApiError` | API call or argument validation failed | Includes PluginSession failures and invalid URL/method/headers or a direct IP literal rejected by the `http.call()` SSRF precheck; a DNS-resolved address rejected at dial time returns `status = 0` |
+| `BodyAccess` | Request-body storage, scan, range, mutation, or `http.call` streaming failure | Fixed generic fail-close response; bypasses `errorPolicy` |
 
 `TypeError` is the most common runtime error, typically arising when a script operates on a value that may be `nil` — for example, performing string operations on a request header that does not exist. It is recommended to perform `nil` checks on values read from external sources (such as `req.header()` and `ctx.get()`) within the script.
 
@@ -156,11 +189,11 @@ Panic isolation is the last line of defense, providing protection when neither n
 
 The DSL's regex functionality is designed to defend against ReDoS (Regular Expression Denial of Service) attacks:
 
-**Compile-time pre-compilation**: Regex patterns used with the `.matches()` method are parsed and compiled during script compilation, and the compiled result is cached. Subsequent requests use the cached compiled regex directly, avoiding per-request regex compilation and eliminating compilation-phase latency.
+**Compile-time pre-compilation**: Regex patterns used with the `.matches()` method are compiled into a forward dense DFA during script compilation. The DFA is capped at 1 MiB and consumes the body incrementally, so matching does not require materializing the complete request body.
 
 **Syntax validation**: Invalid regex patterns cause a compile-time error, rather than failing at runtime. This surfaces regex errors at script load time rather than exposing them under production traffic.
 
-**Length limit**: Regex patterns are capped at 1,024 bytes, preventing excessively long patterns from consuming too much memory. Extremely complex patterns (such as those with many backreferences or deeply nested groups) could theoretically still cause long match times; the `maxSteps` limit serves as an additional safeguard in those cases.
+**Length and automaton limits**: Regex patterns are capped at 1,024 bytes and the compiled DFA at 1 MiB. The engine does not use backtracking; body input consumption is additionally bounded by `maxBodyScanPasses`. Unicode-aware word boundaries are not supported by the streaming matcher; use an explicit ASCII boundary such as `(?-u:\b)` when appropriate.
 
 The pattern arguments to `regex_find()` and `regex_replace()` are subject to the same 1,024-byte limit.
 
@@ -173,7 +206,7 @@ The DSL plugin can run in two phases. Available APIs differ between phases.
 | `requestPlugins` | `req.*`, `ctx.*`, `deny`, `next`, `terminate`, `grpc_error` | `resp.set_status` (returns `nil`, has no effect) | Runs before the request is forwarded |
 | `upstreamResponseFilterPlugins` | `req.*` (read-only), `resp.*`, `ctx.*`, `deny`, `next` | `grpc_error`, `terminate` | Runs during the response header phase |
 
-In the response phase, `req.*` functions are still callable, but mutation operations such as `req.set_header()` have no effect on a request that has already been forwarded — they are useful only for reading request information.
+In the response phase, `req.*` functions are still callable, but request-body reads can use only a body that was captured during the request phase. A late response-stage read never starts downstream capture. Request-body mutation methods are rejected during configuration validation outside `requestPlugins`; other request mutations such as `req.set_header()` cannot change a request that has already been forwarded.
 
 `grpc_error()` is only effective in the request phase, because gRPC status codes are conveyed via HTTP/2 trailers, and trailers can only be set before the response body is sent. Calling `grpc_error()` in the response phase degrades to `terminate()` behavior and produces a warning log entry.
 
@@ -183,15 +216,31 @@ Some built-in functions have their own parameter or result limits in addition to
 
 | Function | Limit | Description |
 |----------|-------|-------------|
-| `json_get` | Path up to 32 segments; JSON size bounded by `maxStringLen` | Guards against deeply nested path access |
+| `req.body.json_get` | Definite JSONPath up to 1,024 bytes and 32 segments; selected result bounded by `maxStringLen` | Selectively parses one value without building a complete JSON DOM |
+| `req.body.json_select` | 1–64 static named paths; names up to 256 bytes; per-value and live aggregate string payload bounded by `maxStringLen` | Selects several values with one complete parse and Body scan |
+| `req.body.read` / `read_all` | Non-negative range; returned string bounded by `maxStringLen` | Reads the memory-backed or spilled body transparently |
+| `req.body.matches` / other body scans | Total scanned bytes bounded by `maxBodyScanPasses × physical body cap` | Prevents repeated full-body scans |
+| Request-body mutation methods | Result bounded by the physical body cap and 4,096 mutation segments | Mutations are transactional and request-stage only |
 | `time_format` | Format string up to 256 characters | Prevents excessive resource consumption from overly long format strings |
 | `regex_find` / `regex_replace` | Pattern up to 1,024 bytes | Guards against ReDoS |
 | `req.header_names` / `resp.header_names` | Returns at most 256 header names | Guards against memory issues from requests with many headers |
-| `resp.set_status` | Status code must be in range 100–599 | Returns `ApiError` if out of range |
+| `resp.set_status` | Final status code must be in range 200–599 | Returns `ApiError` if out of range |
 | `range` | Generates at most 1,000 elements | Guards against large lists consuming excessive memory |
-| `http.call` | Timeout capped at `httpMaxTimeoutMs` (default 5,000 ms); response body capped at `httpMaxResponseBodyBytes` (default 1 MiB); only `http`/`https` schemes; private IPs blocked when `httpBlockPrivateIps: true` | Prevents gateway resource exhaustion and SSRF attacks |
+| `http.call` | Timeout capped at `httpMaxTimeoutMs` (default 5,000 ms); opaque `Body` capped by `min(httpMaxRequestBodyBytes, physical body cap)` (default 1 MiB, configured maximum 32 MiB); response capped at `httpMaxResponseBodyBytes` (default 1 MiB); private IPs blocked when configured | Prevents gateway resource exhaustion and SSRF attacks |
 
-The path segment limit for `json_get` (32 segments) refers to the number of levels in the path expression — for example, `"a.b.c.d"` has 4 segments. Paths deeper than 32 levels are extremely rare in real-world use cases, and this limit will not impact normal usage.
+When `req.body` is the third argument to `http.call`, the runtime pull-streams raw bytes
+from an immutable call-time snapshot without full materialization. Fetched bytes consume
+the cumulative body-scan budget. The caller cannot set `Content-Length` or
+`Transfer-Encoding`; an empty `Body` sends `Content-Length: 0`, while `nil` attaches no
+body. Opaque-Body calls return 3xx responses without following redirects. By contrast,
+`Str` and `Nil` calls retain the existing redirect behavior.
+
+`req.body.json_get()` accepts only a definite path rooted at `$`: `.member`, `["quoted member"]`, and non-negative `[index]` segments. Wildcards, recursive descent, filters, slices, unions, and dynamic paths are rejected at compile time.
+
+`req.body.json_select()` accepts a non-empty literal Map of unique output names
+to the same definite paths. It builds the shared-prefix plan during VM
+initialization, not per request. Use it instead of repeated `json_get` calls
+when several fields are needed.
 
 `req.header_names()` and `resp.header_names()` return a list of strings. When the actual number of headers exceeds 256, only the first 256 are returned without raising an error. If you need to access all headers, use `req.header()` directly with specific header names rather than iterating over the full list.
 

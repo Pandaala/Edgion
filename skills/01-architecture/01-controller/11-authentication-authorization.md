@@ -5,9 +5,9 @@ description: edgion-controller authentication + authorization architecture — t
 
 # 11 Authentication & Authorization (Controller)
 
-> **Authentication** answers *who are you* — a single pre-shared bearer token (Istio-style), Bearer header only.
+> **Authentication** answers *who are you* — bearer-token-only admin and scoped CLI credentials.
 > **Authorization** answers *what may you do* — a default-deny `(verb, kind)` RBAC engine.
-> Authentication is **token-only** (2026-06-12): the browser-login / username-password / OIDC admin stack was removed. An unrecognized or absent token reaches no handler; the request is `403` (or `503` when no token is configured at all). There is no `Role::Superuser` and no allow-all fallback — everything goes through policy.
+> Authentication is **token-only**: the browser-login / username-password / OIDC admin stack was removed. With tokens configured, an unrecognized or absent token gets `401`; a recognized token denied by policy gets `403`. With no token configured at all, business routes fail closed with `503`.
 
 This file is the architecture entry point for the Controller's auth stack. Configuration schemas live in
 [`../../02-features/02-config/00-controller-config.md`](../../02-features/02-config/00-controller-config.md)
@@ -30,9 +30,9 @@ Both paths converge on the **same** `authz_layer` and the same `Authorizer`. The
 Module: `edgion-controller/src/api/cli_token_middleware.rs`. This is the **sole** Admin API authentication layer.
 
 - **Bearer-only**: reads only the `Authorization: Bearer <token>` header (case-insensitive). There is no cookie/session concept and no interactive login.
-- **SHA-256 stored**: the lookup hashes the incoming token (`sha256_hex`) and compares against the `Authorizer` token map (`Authorizer::cli_lookup`). Raw tokens are never held in config or memory.
+- **SHA-256 lookup**: the incoming token is hashed and compared against the `Authorizer` token map, which stores hashes. Scoped CLI config stores hashes; the raw admin token temporarily exists in env/config parsing memory before startup hashes and registers it.
 - **One map, two sources**: both the local admin token (allow-all wildcard policy, reserved name `"admin"`) and the scoped Center `cli_tokens` live in the same map, so this one middleware authenticates both.
-- **Additive, no bypass**: a recognized token injects `Role::Restricted` + `CliTokenIdentity` (for deny-audit). An unrecognized / absent token injects nothing; the downstream `authz_layer` then `403`s the role-less request — except on the static public paths, which it skips. (There is no `AuthBypass` marker anymore — that was part of the removed session stack.)
+- **Additive, no bypass**: a recognized token injects `Role::Restricted` + `CliTokenIdentity`. An unrecognized/absent token injects nothing; `authz_layer` returns `401` with `WWW-Authenticate: Bearer` for the role-less request, except on static public paths.
 
 The local admin token is registered onto the `Authorizer` via `set_admin_token` (built by `build_admin_token_entry`, which rejects a blank/whitespace token → not configured) and merged into the live cli-token map by `Authorizer::apply` — so it **survives every reload** even though reloads rebuild the cli-token map purely from `config.cli_tokens`.
 
@@ -45,7 +45,7 @@ Federation requests are served by a **separate admin router instance** (`fed_rou
 
 ### Engine location
 
-The authz engine lives in `edgion-controller/src/authz/mod.rs` — **Controller-private**. It was relocated out of `common/authz` so the Center can never take a dependency on the Controller's policy/identity model. The shared config *data* types (`FedRbacConfig`, `FedAllowRule`) stay in `common/config` (they are referenced by `CenterClientConfig` there); only the engine is Controller-private.
+The authz engine lives in `edgion-controller/src/authz/mod.rs` — **Controller-private**. Federation RBAC config data (`FedRbacConfig`, `FedAllowRule`) also lives in `edgion-controller/src/config/mod.rs`; `edgion-common` carries neither this engine nor its Controller policy model.
 
 > **Center scoping**: The Center has been extracted to the separate EdgionCenter repository; see that repository for Center auth details. The Controller side has no Center-internal auth state.
 
@@ -65,10 +65,21 @@ There is a single role variant. `Restricted` is shared by the local admin token,
 
 ```
 get  list  list-keys  watch  create  update  delete
-failover  acme-trigger  reload  server-info  diagnostics  wipe-all  debug
+failover  acme-trigger  conf-sync-rotate  reload  server-info  diagnostics  wipe-all  debug
+access-self
 ```
 
 `kind` is usually a `ResourceKind` string (e.g. `HTTPRoute`), but some endpoints map to **synthetic** classifier labels that are not ResourceKinds — e.g. `RegionRoute` for the aggregate region-route / failover endpoints. An unknown/unclassifiable route is **denied** (`403`), never allowed through.
+
+#### `access-self` is inherent, not grantable
+
+`access-self` (`GET /api/v1/access`, see [02-admin-api.md](02-admin-api.md)) is the one verb that is **not** subject to `CenterPolicy`. It is deliberately outside the policy engine in both directions:
+
+- `CenterPolicy::permits` returns `false` for it unconditionally, so **no rule — not even `verbs: ["*"]` + `kinds: ["*"]` — can grant it**.
+- `Verb::from_str("access-self")` returns `None`, so an operator cannot name it in `cli_tokens` / `center.rbac` config at all.
+- `authz_layer` instead short-circuits it **after** the `Role` lookup, so it is available to every authenticated identity and to none that is unauthenticated.
+
+The ordering is the security property: a missing `Role` still returns `401` before the short-circuit is reached, so this is authenticated-only self-introspection, never a public endpoint. It reports only the caller's own effective access, so it grants no visibility an identity did not already have.
 
 ### CenterPolicy semantics
 
@@ -90,8 +101,10 @@ Module: `edgion-controller/src/fed_sync/default_policy.rs`. Applied **only when 
 
 - **Read** (`get` / `list` / `watch` / `list-keys`) on **every ResourceKind except `Secret`**. `Secret` is excluded so the default policy never exposes credentials to federation clients. (`EdgionTls` is *not* excluded — it is a link reference, not raw key material.)
 - **Write** (`create` / `update` / `delete`) on **`EdgionConfigData` only** (the region-route and ip-restriction handlers drive this kind).
-- **`get` / `list` / `failover`** on the synthetic **`RegionRoute`** label (aggregate read endpoints + the POST failover endpoint).
-- **Nothing else**: no `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
+- **`list` / `failover`** on the synthetic **`RegionRoute`** label. `get` is intentionally absent because no classifier route emits `(get, RegionRoute)`.
+- **`server-info`** on synthetic **`NonResource`** for read-only server identity/readiness checks.
+- **`reload`** on synthetic **`NonResource`** — the Center's reload button arrives as a proxied `POST /api/v1/reload`, classified `(reload, NonResource)`; the Command channel that used to carry it is gone.
+- **Nothing else**: no `diagnostics`, `wipe-all`, or `debug`.
 
 A compile-time exhaustiveness gate (`is_default_readable`) forces every new `ResourceKind` to make an explicit readable/excluded decision — adding a kind without updating it is a compile error.
 
@@ -108,14 +121,14 @@ IP allowlist                   (outermost — rejects unauthorized peers before 
           handler
 ```
 
-- **IP allowlist** (`edgion-controller/src/api/ip_allowlist.rs`) is mounted only when `allow_admin_ips` is non-empty; otherwise allow-all (backward compatible).
+- **IP allowlist** (`edgion-controller/src/api/ip_allowlist.rs`) is mounted only when `allow_admin_ips` is non-empty; otherwise the configured default is allow-all.
 - **`cache_control_no_store`** (`edgion-controller/src/api/mod.rs`) is cross-cutting and does not affect auth/authz semantics.
 - **`require_token_configured_gate`** returns `503` + a startup WARN when no token (admin or cli) is registered, so a tokenless business request on an unconfigured controller yields `503` ("configure a token") rather than a bare `401`. It exempts the static public paths so `/api/v1/auth/status` and the probes stay reachable to report `Initializing`. **Admin app only** — never on the shared fed router (whose Center identity does not come from the token map).
 - The public `GET /api/v1/auth/status` route is merged **after** the `authz_layer` `route_layer`, so it stays reachable without a token. `route_layer` (not `.layer`) means `authz_layer` never runs on the 404 fallback.
 
 ### authz_layer — the decision point
 
-`edgion-controller/src/api/authz_middleware.rs`. `authz_layer` reads the `Role` from request extensions (inserted by `cli_token_pre_authn` for a recognized token, or `inject_center_identity` for the fed path), classifies the request, and calls `Authorizer::authorize`. Allow → `next`; Deny or **missing role** → `403`. A skip set bypasses authz entirely (the static public set — `/health`, `/ready`, `/metrics`, `/api/v1/auth/status`); it NEVER references the operator-configurable `skip_paths`. There is no allow-all fallback and no role-assignment middleware — an unauthenticated (role-less) request to a business route is denied `403`.
+`edgion-controller/src/api/authz_middleware.rs`. `authz_layer` reads the `Role`, classifies the request, and calls `Authorizer::authorize`. Missing role → `401`; authenticated policy denial or unclassifiable route → `403`; allow → `next`. Static public paths bypass authz. There is no allow-all fallback or role-assignment middleware.
 
 ## CLI token workflow
 

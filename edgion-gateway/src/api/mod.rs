@@ -386,7 +386,7 @@ struct StoreStatsResponse {
     tls_store: TlsStoreStats,
     tls_cert_matcher: TlsCertMatcherStats,
     link_sys_store: LinkSysStoreStats,
-    policy_store: crate::lb::lb_policy::PolicyStoreStats,
+    lb_policies: std::collections::BTreeMap<String, String>,
     backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats,
     gateway_class_store: SimpleCountStats,
     edgion_gateway_config_store: SimpleCountStats,
@@ -394,10 +394,13 @@ struct StoreStatsResponse {
     service_store: SimpleCountStats,
     ep_slice_store: EpSliceStoreStats,
     health_status_store: SimpleCountStats,
-    circuit_breaker_store: SimpleCountStats,
+    outlier_detection_store: SimpleCountStats,
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
+    edgion_backend_store: EdgionBackendStoreStats,
+    ai_credential_outlier_store: SimpleCountStats,
+    adaptive_telemetry_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
     plugin_store_v2: PluginStoreStatsV2,
     stream_plugin_store_v2: PluginStoreStatsV2,
@@ -430,6 +433,33 @@ struct SimpleCountStats {
     count: usize,
 }
 
+/// Unified EdgionBackend runtime index stats.
+///
+/// The store is process-global and shared by every AI backend resource, so a
+/// bare total cannot tell a caller whether one specific backend compiled into
+/// the activatable index. `keys` names the resident entries so a test can
+/// assert its own backend directly instead of doing arithmetic on a total that
+/// other resources move underneath it.
+#[derive(Serialize)]
+struct EdgionBackendStoreStats {
+    count: usize,
+    keys: Vec<String>,
+}
+
+fn collect_ai_runtime_store_counts(
+    credential_outliers: &crate::ai::AiCredentialOutlierStore,
+    adaptive_telemetry: &crate::ai::AdaptiveTelemetryStore,
+) -> (SimpleCountStats, SimpleCountStats) {
+    (
+        SimpleCountStats {
+            count: credential_outliers.count(),
+        },
+        SimpleCountStats {
+            count: adaptive_telemetry.count(),
+        },
+    )
+}
+
 #[derive(Serialize)]
 struct ClientCachesStats {
     by_kind: std::collections::BTreeMap<String, usize>,
@@ -456,7 +486,7 @@ struct PluginStoreStatsV2 {
 
 /// Collect statistics from all derived stores for config-sync leak detection.
 async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<StoreStatsResponse>> {
-    let http_routes = crate::routes::http::get_global_route_manager().stats();
+    let http_routes = crate::routes::http::get_global_http_route_managers().stats();
     let grpc_routes = crate::routes::grpc::get_global_grpc_route_manager().stats();
     let tcp_routes = crate::routes::tcp::get_global_tcp_route_managers().stats();
     let udp_routes = crate::routes::udp::get_global_udp_route_managers().stats();
@@ -487,7 +517,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         resources: crate::link_sys::runtime::store::get_global_link_sys_store().count(),
     };
 
-    let policy_store = crate::lb::lb_policy::get_global_policy_store().stats();
+    let lb_policies = crate::backends::policy::get_backend_traffic_policy_store().lb_policy_snapshot();
 
     let backend_tls_policy = crate::backends::policy::get_global_backend_tls_policy_store().stats();
 
@@ -518,8 +548,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: hs_g.tracked_service_count(),
     };
 
-    let cb_g = crate::backends::circuit_breaker::store::get_circuit_breaker_store();
-    let circuit_breaker_store = SimpleCountStats {
+    let cb_g = crate::backends::outlier_detection::store::get_outlier_detection_store();
+    let outlier_detection_store = SimpleCountStats {
         count: cb_g.service_count(),
     };
 
@@ -532,6 +562,19 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let edgion_config_data_store = SimpleCountStats {
         count: crate::plugins::runtime::edgion_config_data::count_edgion_config_data(),
     };
+
+    let edgion_backend_store = {
+        let mut keys = crate::ai::global_edgion_backend_store().keys_all();
+        keys.sort_unstable();
+        EdgionBackendStoreStats {
+            count: keys.len(),
+            keys,
+        }
+    };
+    let (ai_credential_outlier_store, adaptive_telemetry_store) = collect_ai_runtime_store_counts(
+        crate::ai::get_ai_credential_outlier_store().as_ref(),
+        crate::ai::get_adaptive_telemetry_store().as_ref(),
+    );
 
     let link_sys_runtime = LinkSysRuntimeStats {
         redis_clients: crate::link_sys::runtime::store::redis_client_count(),
@@ -561,7 +604,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         tls_store,
         tls_cert_matcher,
         link_sys_store,
-        policy_store,
+        lb_policies,
         backend_tls_policy,
         gateway_class_store,
         edgion_gateway_config_store,
@@ -569,10 +612,13 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         service_store,
         ep_slice_store,
         health_status_store,
-        circuit_breaker_store,
+        outlier_detection_store,
         health_check_config_store,
         gateway_backend_tls_store,
         edgion_config_data_store,
+        edgion_backend_store,
+        ai_credential_outlier_store,
+        adaptive_telemetry_store,
         link_sys_runtime,
         plugin_store_v2,
         stream_plugin_store_v2,
@@ -1547,17 +1593,6 @@ async fn es_bulk_send(
     })))
 }
 
-/// Serve the admin API on the specified port.
-///
-/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown future,
-/// kept as a public entry point for callers that don't need graceful shutdown plumbing.
-pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Result<()> {
-    let addr_str = format!("0.0.0.0:{}", port);
-    // No token plumbing on this convenience entry point: fail-close (503) until a
-    // caller that resolves a token uses `serve_with_shutdown` directly.
-    serve_with_shutdown(config_client, &addr_str, None, std::future::pending::<()>()).await
-}
-
 /// Serve the admin API on the specified listen address with graceful shutdown support.
 ///
 /// `admin_token` is the resolved shared bearer token (env > config), or `None`
@@ -1703,8 +1738,151 @@ mod edgion_tls_scrub_tests {
 }
 
 #[cfg(test)]
+mod edgion_backend_admin_tests {
+    use super::*;
+    use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+    use edgion_resources::resources::edgion_backend::{
+        AiBackendDefaults, AiBackendSpec, AiCredential, AiCredentialPool, AiModel, AiProvider, EdgionBackend,
+        EdgionBackendSpec,
+    };
+    use edgion_resources::resources::edgion_plugins::OnRedisFailure;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    fn ai_backend(name: &str, endpoint: &str, credential: Option<&[u8]>) -> EdgionBackend {
+        let secret = credential.map(|value| Secret {
+            data: Some(BTreeMap::from([("api-key".to_string(), ByteString(value.to_vec()))])),
+            ..Default::default()
+        });
+        let spec = EdgionBackendSpec {
+            ai: AiBackendSpec {
+                provider: AiProvider::OpenAICompatible,
+                endpoint: Some(endpoint.to_string()),
+                allow_insecure_http: false,
+                credential_pool: AiCredentialPool {
+                    redis_ref: None,
+                    on_redis_failure: OnRedisFailure::Deny,
+                    credentials: vec![AiCredential {
+                        name: "primary".to_string(),
+                        weight: 1,
+                        credential: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "provider-key".to_string(),
+                                namespace: None,
+                            },
+                            secret,
+                        },
+                        limits: None,
+                    }],
+                },
+                models: vec![AiModel {
+                    name: "model-a".to_string(),
+                    aliases: vec![],
+                    public: true,
+                    pricing: None,
+                }],
+                defaults: AiBackendDefaults::default(),
+            },
+            reconcile_outcome: None,
+        };
+        let mut service = EdgionBackend::new(name, spec);
+        service.metadata.namespace = Some("ai-admin-test".to_string());
+        service
+    }
+
+    #[test]
+    fn configclient_redacts_ai_credential_and_retains_inactive_resources() {
+        let _store_guard = crate::ai::lock_global_ai_backend_store_for_test();
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid-ai".to_string(), "cname-ai".to_string());
+        let mut active = ai_backend("active", "https://ai.example.com/v1", Some(b"admin-private-key"));
+        let mut secondary = active.spec.ai.credential_pool.credentials[0].clone();
+        secondary.name = "secondary".to_string();
+        secondary.credential.secret = Some(Secret {
+            data: Some(BTreeMap::from([(
+                "api-key".to_string(),
+                ByteString(b"secondary-private-key".to_vec()),
+            )])),
+            ..Default::default()
+        });
+        active.spec.ai.credential_pool.credentials.push(secondary);
+
+        client.edgion_backends().reset(
+            vec![
+                active,
+                ai_backend("unresolved", "https://ai.example.com/v1", None),
+                ai_backend("invalid", "http://ai.example.com/v1", Some(b"invalid-private-key")),
+            ],
+            1,
+        );
+
+        let listed = list_client_resources(&client, ResourceKind::EdgionBackend);
+        assert_eq!(
+            listed.len(),
+            3,
+            "ClientCache must retain inactive resources for Admin visibility"
+        );
+        let active = listed
+            .iter()
+            .find(|value| value["metadata"]["name"] == "active")
+            .expect("active resource listed");
+        assert_eq!(
+            active["spec"]["ai"]["credentialPool"]["credentials"][0]["secret"],
+            "[redacted]"
+        );
+        assert_eq!(
+            active["spec"]["ai"]["credentialPool"]["credentials"][1]["secret"],
+            "[redacted]"
+        );
+        let serialized = serde_json::to_string(&listed).unwrap();
+        assert!(!serialized.contains("admin-private-key"));
+        assert!(!serialized.contains("secondary-private-key"));
+        assert!(!serialized.contains("invalid-private-key"));
+
+        let runtime = crate::ai::get_global_ai_backend_store();
+        assert_eq!(runtime.count(), 1, "only the valid, resolved resource is activatable");
+        assert!(runtime.get_by_key("ai-admin-test/active").is_some());
+        assert!(runtime.get_by_key("ai-admin-test/unresolved").is_none());
+        assert!(runtime.get_by_key("ai-admin-test/invalid").is_none());
+
+        client.edgion_backends().reset(Vec::new(), 2);
+        assert_eq!(runtime.count(), 0, "wipe must clear the derived runtime store");
+    }
+}
+
+#[cfg(test)]
 mod store_stats_tests {
     use super::*;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+
+    #[test]
+    fn ai_runtime_store_collector_reports_populated_stores() {
+        let credential_outliers = crate::ai::AiCredentialOutlierStore::new();
+        let adaptive_telemetry = crate::ai::AdaptiveTelemetryStore::new();
+        let target = PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "default".to_string(),
+            name: "provider".to_string(),
+        };
+        credential_outliers.configure_backend(target.clone(), None, ["primary".to_string()]);
+        let telemetry_key = crate::ai::AdaptiveTelemetryKey::new(
+            "route-uid".to_string(),
+            "rule".to_string(),
+            target,
+            "model".to_string(),
+        )
+        .unwrap();
+        adaptive_telemetry.reconcile_keys(&std::collections::HashSet::from([telemetry_key]));
+
+        let (credential_stats, telemetry_stats) =
+            collect_ai_runtime_store_counts(&credential_outliers, &adaptive_telemetry);
+        assert_eq!(credential_stats.count, 1);
+        assert_eq!(telemetry_stats.count, 1);
+    }
 
     #[test]
     fn store_stats_response_serializes() {
@@ -1751,10 +1929,7 @@ mod store_stats_tests {
             },
             tls_cert_matcher: TlsCertMatcherStats { listener_count: 0 },
             link_sys_store: LinkSysStoreStats { resources: 0 },
-            policy_store: crate::lb::lb_policy::PolicyStoreStats {
-                total_services: 0,
-                total_route_refs: 0,
-            },
+            lb_policies: std::collections::BTreeMap::new(),
             backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats {
                 policies: 0,
                 reverse_index_targets: 0,
@@ -1770,10 +1945,16 @@ mod store_stats_tests {
                 service_index_count: 0,
             },
             health_status_store: SimpleCountStats { count: 0 },
-            circuit_breaker_store: SimpleCountStats { count: 0 },
+            outlier_detection_store: SimpleCountStats { count: 0 },
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },
+            edgion_backend_store: EdgionBackendStoreStats {
+                count: 0,
+                keys: Vec::new(),
+            },
+            ai_credential_outlier_store: SimpleCountStats { count: 0 },
+            adaptive_telemetry_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
                 redis_clients: 0,
                 etcd_clients: 0,
@@ -1791,6 +1972,9 @@ mod store_stats_tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.is_object());
         assert!(json.get("client_caches").is_some());
+        assert!(json.get("edgion_backend_store").is_some());
+        assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
+        assert_eq!(json["adaptive_telemetry_store"]["count"], 0);
         assert!(json.get("plugin_store_v2").is_some());
         assert!(json.get("stream_plugin_store_v2").is_some());
         assert!(json.get("plugin_store").is_none());

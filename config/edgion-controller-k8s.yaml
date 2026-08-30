@@ -38,3 +38,19 @@ debug:
 conf_sync:
   # EventStore ring buffer default capacity for all resource types
   default_capacity: 200
+
+# ============================================================================
+# conf_sync Channel Security (mTLS)
+# ============================================================================
+# REQUIRED: omitting this section entirely makes the process REFUSE TO START
+# (fail-close, since 2026-07-14) -- the conf_sync channel carries resolved Secrets
+# (TLS private keys, backend credentials), so plaintext must be an explicit choice.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode), or skip_tls (plaintext).
+#
+# This is the KUBERNETES profile, so it uses auto_ca: the Controller's internal CA mints its
+# own in-memory server identity and provisions the Gateway client Secret
+# (`edgion-conf-sync-certs`) — no cert paths are needed on the Controller side. The Gateway
+# side needs `auto_ca: true` AND the mounted cert paths (see cicd/deploy/kubernetes/gateway/
+# configmap.yaml). Matches the shipped manifests in cicd/deploy/kubernetes/.
+conf_sync_security:
+  auto_ca: true

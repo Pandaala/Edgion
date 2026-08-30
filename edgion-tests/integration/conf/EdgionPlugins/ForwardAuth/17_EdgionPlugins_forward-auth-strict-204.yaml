@@ -1,6 +1,6 @@
-# ForwardAuth successStatusCodes test: custom list [204] only — excludes 200.
+# ForwardAuth success.statusCodes test: custom list [204] only — excludes 200.
 #
-# The auth server returns 200 for "Bearer valid-token". With successStatusCodes: [204],
+# The auth server returns 200 for "Bearer valid-token". With success.statusCodes: [204],
 # the gateway treats 200 as non-success and short-circuits, returning the auth
 # server's response (status 200 + auth body) to the client. The backend is NOT reached.
 #
@@ -20,7 +20,8 @@ spec:
           namespace: edgion-default
           port: 30040
         timeoutMs: 5000
-        successStatusCodes: [204]
+        success:
+          statusCodes: [204]
         request:
           path:
             template: "/verify"

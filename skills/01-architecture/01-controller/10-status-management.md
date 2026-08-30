@@ -45,17 +45,18 @@ control plane:
 |-----------|---------|
 | **Accepted** | Resource is syntactically/semantically valid and accepted by the Controller |
 | **ResolvedRefs** | All references to other objects (Secrets, Services, etc.) are resolved |
-| **PartiallyInvalid** | Some rules in the route have invalid backend refs but other rules are valid (HTTPRoute/GRPCRoute only) |
+| **PartiallyInvalid** | Part of a partially-resolvable collection is invalid while the rest stays usable. Not route-exclusive: route rules with invalid backend refs, inline CIDR / IpList entries, an EdgionBackend credential pool with unresolved credentials — see [§4.2](#partiallyinvalid-on-non-route-resources) |
+| **Conflicted** | Listener or policy conflicts detected by the Controller |
+| **Programmed** | Gateway/Gateway Listener processing state derived by the Gateway handler |
 
-### Conditions We Do NOT Set: Programmed and Ready
+### Ready Is Not Set; Programmed Is Gateway-Specific
 
-**Decision: not implemented.**
-
-`Programmed` and `Ready` require **data-plane feedback** to be accurate.
-Our Controller-Gateway architecture uses async gRPC config sync where
-Gateway actively pulls config via Watch/List. The Controller cannot confirm
-whether the Gateway has loaded any specific configuration. Setting these
-from the control plane would be misleading.
+The Controller does not set `Ready`, because it has no per-resource data-plane
+acknowledgement. It does set Gateway-level and listener-level `Programmed` in
+`GatewayHandler`: listener `Programmed=True` requires Accepted, no conflict, and
+resolved references; the gateway-level condition reflects controller-side
+processing/config publication semantics. Do not generalize that condition to
+other resources without a resource-specific contract.
 
 A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with design completed down to a file-level implementation plan), but it would have introduced an entirely new communication path, proto changes, delay queues, and so on. The complexity was too high, so it was decided not to implement.
 
@@ -66,16 +67,19 @@ A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with
 
 ### 4.1 Simple resources (flat status with conditions)
 
-**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy, EdgionConfigData
+**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
 
-**Implementation split of Condition-type choice** — both styles coexist in this repo:
+These Edgion status structs use
+`edgion_resources::resources::common::Condition` and the shared
+`status_utils::{condition_true, condition_false, update_condition}` helpers.
+Choose a condition type from the resource API contract and reuse the matching
+shared helpers; do not introduce handler-local duplicates based on the old split.
 
-| Style | Condition library used | Helpers used | Resources |
-|-------|-----------------------|--------------|-----------|
-| Internal `types::resources::common::Condition` | `status_utils::{accepted_condition, condition_false, update_condition}` | GatewayClass, EdgionGatewayConfig, LinkSys, BackendTLSPolicy |
-| `k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition` | Per-handler local `k8s_condition_true/false` + `update_k8s_condition` (with some duplication) | EdgionPlugins, EdgionStreamPlugins, EdgionAcme, EdgionConfigData |
-
-New resources should prefer `k8s_openapi::Condition` (aligned with the kube-rs ecosystem). The two styles of `update_condition`/`update_k8s_condition` behave equivalently: they refresh `last_transition_time` only when the status actually changes.
+**Not this pattern:** BackendTLSPolicy and EdgionBackendTrafficPolicy report
+GEP-2648 **per-ancestor** status (`status.ancestors[]`, one `PolicyAncestorStatus`
+per ancestor Gateway) instead of a single flat `conditions[]` — see the
+`ancestors_status_equal` row in [§7](#7-status-persistence) and
+[20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md#status-schema).
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
 populated in `update_status()` with the full list of supported Gateway API features (matching
@@ -163,19 +167,75 @@ in `validate()`. They belong in `update_status()` only, via `resolved_refs_error
 `find_invalid_rule_indices()`. Putting them in `validate()` would cause the entire route
 to be Accepted: False even when only some rules have bad backends.
 
+#### PartiallyInvalid on non-route resources
+
+`PartiallyInvalid` is not route-exclusive: any resource whose spec holds a collection that
+can be *partially* resolved may report it. `invalid_rule_indices` is the route-specific
+carrier, not part of the condition's contract — a non-route resource sets the condition
+without one, and reaches it through the shared
+`status_utils::partially_invalid_condition(entry_message, generation)` helper
+(`Some(msg)` → True/`RuleInvalid`, `None` → False/`AllRulesValid`).
+
+One documented reason outside that helper: `HTTPRoute::update_status` builds its
+`PartiallyInvalid` inline, and when an AI attachment/retry-cap violation already rejected
+the whole route (`Accepted=False/UnsupportedValue`) it clears a stale True to
+False/`UnsupportedValue` instead of False/`AllRulesValid` — the generic "all rules are
+valid" wording would contradict the `Accepted=False` beside it. See
+`skills/04-review/routing/ai-rule-accepted-escalates-only-when-nothing-serves.md`.
+
+Flat-status resources already using that helper: `EdgionPlugins` and `EdgionStreamPlugins`
+(bad inline IpRestriction / GlobalConnectionIpRestriction profile CIDR entries) and
+`EdgionConfigData` (bad IpList entries) — all three from `update_status()`, all with the
+shared `RuleInvalid` reason.
+
+**`EdgionBackend` differs on two axes** and is the reference case for both:
+
+1. **Resource-specific reason.** It is the first emitter to use its own reason,
+   `InvalidCredentials` (`status_utils.rs`), instead of the shared `RuleInvalid`.
+2. **Emitted from `parse()`, not `update_status()`.** Credential resolution is `async`, so
+   the `ResolvedRefs` + `PartiallyInvalid` pair is written in `parse()`; `update_status()`
+   handles only `Accepted`. This is the sole handler where that split applies — do not copy
+   it for a resource whose reference checks can run synchronously, where the
+   `update_status()` rule above still holds.
+
+It sets `PartiallyInvalid=True` when `resolved_count > 0` and at least one provider
+credential failed to resolve. The message is
+`Omitted credentials (N): <alias>(<reason>), …`, where `<alias>` is the credential name
+passed through `bounded_status_alias` — substituted with `credential[<index>]` when the name
+is empty, over `AI_CREDENTIAL_ALIAS_MAX_BYTES`, or not restricted-charset, so a malformed
+name cannot corrupt the status. That sanitizer is defense-in-depth for the lenient-admission
+path: `validate()` already rejects such names, but it is advisory — `parse()` runs on a
+resource with validation errors, so the substitution branch is reachable. Note it bounds each
+*alias*, not the *number* of entries (one per failed credential). Otherwise it falls back to
+`partially_invalid_condition(None, ..)` and the outcome is carried by `ResolvedRefs`:
+
+| Scenario | ResolvedRefs | PartiallyInvalid |
+|----------|--------------|------------------|
+| All credentials resolved | True | False (`AllRulesValid`) |
+| Some resolved, some failed | True | True (`InvalidCredentials`) |
+| None resolved | False | False (`AllRulesValid`) |
+
+New resources may follow this precedent, but they still draw from the fixed condition
+vocabulary — a partially-resolvable collection is a reason to reuse `PartiallyInvalid`, not
+to invent a new condition type.
+
 ### 4.3 Gateway (hybrid: gateway-level + per-listener)
 
 Gateway has both gateway-level conditions (Accepted, ListenersNotValid) and
-per-listener conditions (Accepted, ResolvedRefs, Conflicted). All conditions
+per-listener conditions (Accepted, ResolvedRefs, Conflicted, Programmed). The
+Gateway also carries gateway-level Programmed. All conditions
 respect `validation_errors`.
 
 ### 4.4 EdgionAcme (hybrid: Accepted condition + lifecycle fields)
 
 EdgionAcme has both a Gateway API-style `Accepted` condition and ACME-specific lifecycle fields (`phase` / `certificate_serial` / `last_renewal_time` / etc.):
 
-- **Handler** (`EdgionAcmeHandler::update_status`) writes only `status.conditions[Accepted]`, reflecting the spec validation result
+- **Handler parse** resolves account/DNS Secret material and writes `ResolvedRefs`
+- **Handler update_status** manages `Accepted`, reflecting the spec validation result
 - **Background AcmeService** independently updates `phase` and the timestamp fields via Server-Side Apply (field manager `edgion-acme-controller`). The AcmeService SSA patch uses `skip_serializing_if = "Vec::is_empty"` to skip `conditions`, so it does not clear the condition written by the handler
-- `last_failure_reason` is retained for legacy tooling
+- `last_failure_reason` still exists for old tooling, but that is pre-release
+  removal debt. New status consumers must use conditions; do not extend the
+  text field's contract.
 
 ### 4.5 Resources without status
 
@@ -273,9 +333,9 @@ state is unchanged.
 
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
-| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` | `status.conditions[]` |
+| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
 | **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
-| **Per-ancestor** | BackendTLSPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
+| **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
 | **Hybrid (lifecycle + conditions)** | EdgionAcme | Direct `Value` equality | All fields compared verbatim — conditions and lifecycle fields together |
 | **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |
@@ -332,7 +392,7 @@ standard conditions, no stale condition values survive re-processing.
 - [ ] **No duplicate checks**: if validate() already checks something, update_status uses `validation_errors` instead of re-checking
 - [ ] **No backend ref existence in validate()**: service-not-found and kind checks go in update_status only (via resolved_refs_errors + find_invalid_rule_indices), not in validate()
 - [ ] **No "route" in non-route contexts**: use `resource_ns`, `set_parent_conditions_full`, etc.
-- [ ] **No Programmed/Ready conditions**: permanently not implemented — requires data-plane feedback that is not available in current architecture
+- [ ] **No Ready condition** unless a real readiness signal exists; preserve Gateway/Gateway Listener Programmed semantics in `GatewayHandler`
 - [ ] **Status diff registration**: new resource kind added to `status_diff::status_semantically_changed()` match arms
 - [ ] **Status diff tests**: new resource kind has test cases in `status_diff.rs` covering no-change and changed scenarios
 
@@ -379,13 +439,11 @@ Removed "route" terminology from shared utilities: `set_route_parent_conditions_
 All per-parent handlers now clear `status.parents` when `parent_refs` is None,
 preventing stale parent statuses after spec changes.
 
-### 2026-03-17: Removed Programmed and Ready conditions
-Removed `Programmed` and `Ready` conditions from all resource handlers.
-These conditions require data-plane feedback to be accurate, but the
-Controller-Gateway architecture uses async gRPC sync without a status-back
-channel. Setting them from the control plane was misleading. Only `Accepted`
-and `ResolvedRefs` are now set — conditions the Controller can accurately
-determine.
+### 2026-03-17: Ready removed; later Gateway Programmed behavior supersedes the old blanket rule
+`Ready` remains absent because there is no resource-level data-plane acknowledgement.
+The later Gateway implementation deliberately restored controller-derived
+`Programmed` for Gateway and Gateway Listener status; use the current
+`GatewayHandler` contract rather than the historical blanket removal.
 
 ## 11. Related
 

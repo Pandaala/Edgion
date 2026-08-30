@@ -52,10 +52,6 @@ impl TcpRouteTable {
     pub fn route_count(&self) -> usize {
         self.routes.len()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.routes.is_empty()
-    }
 }
 
 impl Default for TcpRouteTable {
@@ -115,7 +111,6 @@ mod tests {
     fn test_empty_table() {
         let table = TcpRouteTable::new();
         assert!(table.match_route().is_none());
-        assert!(table.is_empty());
         assert_eq!(table.route_count(), 0);
     }
 }

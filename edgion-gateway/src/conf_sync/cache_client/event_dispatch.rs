@@ -20,6 +20,186 @@ struct ListResult {
     server_id: String,
 }
 
+const EDGION_BACKEND_KIND: &str = "EdgionBackend";
+
+fn is_edgion_backend<T: ResourceMeta>() -> bool {
+    T::kind_name() == EDGION_BACKEND_KIND
+}
+
+fn clear_backend_cache<T: ResourceMeta>(cache_data: &Arc<RwLock<CacheData<T>>>, sync_version: u64) {
+    let mut cache = cache_data.write();
+    cache.reset(Vec::new(), sync_version);
+    cache.set_not_ready();
+}
+
+fn valid_dns_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && value.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_kube_name(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 253 && value.split('.').all(valid_dns_label)
+}
+
+fn raw_backend_key(value: &serde_json::Value) -> Option<String> {
+    let metadata = value.as_object()?.get("metadata")?.as_object()?;
+    let namespace = metadata.get("namespace")?.as_str()?;
+    let name = metadata.get("name")?.as_str()?;
+    (valid_dns_label(namespace) && valid_kube_name(name)).then(|| format!("{namespace}/{name}"))
+}
+
+fn backend_event_parts(event: &serde_json::Value) -> Result<(ResourceChange, &serde_json::Value), ()> {
+    let event_object = event.as_object().ok_or(())?;
+    let event_type = event_object.get("type").and_then(serde_json::Value::as_str).ok_or(())?;
+    let change = match event_type {
+        "add" => ResourceChange::EventAdd,
+        "update" => ResourceChange::EventUpdate,
+        "delete" => ResourceChange::EventDelete,
+        _ => return Err(()),
+    };
+    let event_data = event_object.get("data").ok_or(())?;
+    Ok((change, event_data))
+}
+
+fn decode_list_payload<T: ResourceMeta>(data: &[u8]) -> Result<Vec<T>, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    if !is_edgion_backend::<T>() {
+        return serde_json::from_slice(data).map_err(|error| error.to_string());
+    }
+    let raw_resources: Vec<serde_json::Value> = serde_json::from_slice(data).map_err(|error| error.to_string())?;
+    if raw_resources.iter().any(|resource| raw_backend_key(resource).is_none()) {
+        return Err("backend list contains an unsafe resource identity".to_string());
+    }
+    raw_resources
+        .into_iter()
+        .map(|resource| serde_json::from_value(resource).map_err(|error| error.to_string()))
+        .collect()
+}
+
+fn publish_list_payload<T>(
+    cache_data: &Arc<RwLock<CacheData<T>>>,
+    data: &[u8],
+    sync_version: u64,
+) -> Result<usize, String>
+where
+    T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
+{
+    let mut resources: Vec<T> = match decode_list_payload(data) {
+        Ok(resources) => resources,
+        Err(error) => {
+            if is_edgion_backend::<T>() {
+                clear_backend_cache(cache_data, sync_version);
+            }
+            return Err(error);
+        }
+    };
+
+    for resource in resources.iter_mut() {
+        resource.pre_parse();
+        edgion_resources::resource::meta::set_sync_version(resource.meta_mut(), sync_version);
+    }
+    let count = resources.len();
+    cache_data.write().reset(resources, sync_version);
+    Ok(count)
+}
+
+fn mark_ready_after_list<T: ResourceMeta>(cache_data: &Arc<RwLock<CacheData<T>>>, is_ready: &mut bool) {
+    if !*is_ready {
+        cache_data.write().set_ready();
+        *is_ready = true;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackendWatchBatchOutcome {
+    Applied,
+    Unsafe,
+}
+
+fn apply_backend_watch_batch<T>(
+    cache_data: &Arc<RwLock<CacheData<T>>>,
+    events: Vec<serde_json::Value>,
+    response_sv: u64,
+) -> BackendWatchBatchOutcome
+where
+    T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
+{
+    let mut cache = cache_data.write();
+    for event in events {
+        let Ok((change, event_data)) = backend_event_parts(&event) else {
+            cache.reset(Vec::new(), response_sv);
+            cache.set_not_ready();
+            return BackendWatchBatchOutcome::Unsafe;
+        };
+        let Some(resource_key) = raw_backend_key(event_data) else {
+            cache.reset(Vec::new(), response_sv);
+            cache.set_not_ready();
+            return BackendWatchBatchOutcome::Unsafe;
+        };
+        let event_object = event.as_object().expect("validated backend event object");
+        let event_sv = event_object
+            .get("sync_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(response_sv);
+
+        match serde_json::from_value::<T>(event_data.clone()) {
+            Ok(mut resource) => {
+                resource.pre_parse();
+                edgion_resources::resource::meta::set_sync_version(resource.meta_mut(), event_sv);
+                match change {
+                    ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                        cache.insert(resource_key.clone(), resource);
+                        cache.add_compress_event(resource_key, change);
+                    }
+                    ResourceChange::EventDelete => {
+                        cache.remove(&resource_key);
+                        cache.add_compress_event(resource_key, change);
+                    }
+                    ResourceChange::InitAdd | ResourceChange::InitStart | ResourceChange::InitDone => {}
+                }
+            }
+            Err(_) => {
+                record_config_event_parse_error(T::kind_name());
+                cache.remove(&resource_key);
+                cache.add_compress_event(resource_key.clone(), ResourceChange::EventDelete);
+                tracing::error!(
+                    kind = T::kind_name(),
+                    key_name = %resource_key,
+                    error_class = "invalid_watch_resource",
+                    "Withdrew malformed backend watch resource"
+                );
+            }
+        }
+    }
+    BackendWatchBatchOutcome::Applied
+}
+
+fn apply_backend_watch_payload<T>(
+    cache_data: &Arc<RwLock<CacheData<T>>>,
+    data: &str,
+    response_sv: u64,
+) -> BackendWatchBatchOutcome
+where
+    T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
+{
+    let events = match serde_json::from_str::<Vec<serde_json::Value>>(data) {
+        Ok(events) => events,
+        Err(_) => {
+            record_config_event_parse_error(T::kind_name());
+            clear_backend_cache(cache_data, response_sv);
+            return BackendWatchBatchOutcome::Unsafe;
+        }
+    };
+    apply_backend_watch_batch(cache_data, events, response_sv)
+}
+
 impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> for ClientCache<T> {
     fn apply_change(&self, change: ResourceChange, resource: T, _sv: Option<u64>)
     where
@@ -90,30 +270,25 @@ where
             "Listing resources"
         );
 
-        let mut resources: Vec<T> = serde_json::from_str(&list_data.data).map_err(|e| {
-            tracing::error!(kind = T::kind_name(), error = %e, context = log_context, "Failed to parse list response");
-            tonic::Status::internal(format!("Failed to parse list response: {}", e))
-        })?;
-
-        for resource in resources.iter_mut() {
-            resource.pre_parse();
-            edgion_resources::resource::meta::set_sync_version(resource.meta_mut(), list_data.sync_version);
-        }
-
-        tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
-
-        let resource_keys: Vec<String> = resources.iter().map(|r| r.key_name()).collect();
-        tracing::debug!(
-            kind = T::kind_name(),
-            sync_version = list_data.sync_version,
-            resources = ?resource_keys,
-            "Resetting cache with resources"
-        );
-
-        {
-            let mut cache = cache_data.write();
-            cache.reset(resources, list_data.sync_version);
-        }
+        let count = match publish_list_payload(cache_data, &list_data.data, list_data.sync_version) {
+            Ok(count) => count,
+            Err(error) => {
+                if is_edgion_backend::<T>() {
+                    tracing::error!(
+                        kind = T::kind_name(),
+                        error_class = "invalid_list_payload",
+                        context = log_context,
+                        "Rejected backend list and cleared runtime state"
+                    );
+                    return Err(tonic::Status::internal("invalid EdgionBackend list payload"));
+                }
+                tracing::error!(kind = T::kind_name(), error = %error, context = log_context, "Failed to parse list response");
+                return Err(tonic::Status::internal(format!(
+                    "Failed to parse list response: {error}"
+                )));
+            }
+        };
+        tracing::info!(kind = T::kind_name(), count, "Parsed and published resources");
 
         Ok(ListResult {
             sync_version: list_data.sync_version,
@@ -137,23 +312,66 @@ where
             let mut backoff_secs = BACKOFF_INIT_SECS;
 
             let mut is_first_iteration = true;
+            // Set when the reload-generation token cancelled the previous cycle
+            // (cert reload or leader rotation). The channel swap is deliberate
+            // and already complete, so the next cycle must relist IMMEDIATELY at
+            // the initial backoff — sleeping at the current backoff (up to 32s)
+            // here is what would stretch a failover's per-kind resync tail past
+            // the acceptance budget (spec §7.2 item 5).
+            let mut generation_reloaded = false;
             loop {
                 // === Backoff before list ===
                 // Skip on first iteration to avoid delaying startup.
                 // Add jitter (0-3s) on retries to spread requests and prevent relist storms.
                 if !is_first_iteration {
-                    let jitter_ms = rand::rng().random_range(0..3000);
-                    let wait_duration =
-                        std::time::Duration::from_secs(backoff_secs) + std::time::Duration::from_millis(jitter_ms);
-                    tracing::info!(
-                        kind = T::kind_name(),
-                        backoff_secs = backoff_secs,
-                        jitter_ms = jitter_ms,
-                        "Waiting before list"
-                    );
-                    tokio::time::sleep(wait_duration).await;
+                    match resync_wait_secs(generation_reloaded, backoff_secs) {
+                        None => {
+                            generation_reloaded = false;
+                            backoff_secs = BACKOFF_INIT_SECS;
+                        }
+                        Some(wait_secs) => {
+                            let jitter_ms = rand::rng().random_range(0..3000);
+                            let wait_duration =
+                                std::time::Duration::from_secs(wait_secs) + std::time::Duration::from_millis(jitter_ms);
+                            tracing::info!(
+                                kind = T::kind_name(),
+                                backoff_secs = wait_secs,
+                                jitter_ms = jitter_ms,
+                                "Waiting before list"
+                            );
+                            // Selected on the CURRENT generation token (review
+                            // finding): a rotation/reload landing mid-backoff must
+                            // not wait out the remaining sleep (up to 32s) before
+                            // relisting on the already-swapped channel. A token
+                            // that is already cancelled resolves immediately.
+                            let sleep_token = crate::conf_sync::conf_client::current_reload_generation();
+                            tokio::select! {
+                                _ = tokio::time::sleep(wait_duration) => {}
+                                _ = sleep_token.cancelled() => {
+                                    tracing::info!(
+                                        kind = T::kind_name(),
+                                        "channel reinstalled during backoff; relisting immediately"
+                                    );
+                                    backoff_secs = BACKOFF_INIT_SECS;
+                                }
+                            }
+                        }
+                    }
                 }
                 is_first_iteration = false;
+
+                // Capture the reload-generation token BEFORE cloning the client so it
+                // governs both the list and the watch of this cycle. Invariant: token
+                // captured before client-clone ⟹ if the token is the new generation,
+                // the clone below happens after the reload's set_all_grpc_clients swap
+                // and reads the new client; if the token is the old generation, it is
+                // already cancelled (or will be shortly) and the select in the watch
+                // loop below breaks out to re-clone the new client. Capturing the token
+                // after the clone would let the reload complete during the RPC
+                // round-trip and hand us the new (uncancelled) token for the old
+                // client, leaking a stream on the retired channel. Mirrors the token-
+                // before-handle order in `run_leader_session` (grpc_client.rs).
+                let gen_token = crate::conf_sync::conf_client::current_reload_generation();
 
                 // Get gRPC conf_client — clone the handle out under a brief write-lock
                 // acquisition so we never hold the async write guard across the RPC.
@@ -175,54 +393,65 @@ where
 
                 // Perform list_and_reset to get latest sync version and server_id
                 // First list doesn't need to validate server_id (pass empty string)
-                let (from_version, current_server_id) =
-                    match Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "").await {
-                        Ok(list_result) => {
-                            // Reset backoff on success
-                            backoff_secs = BACKOFF_INIT_SECS;
+                // Selected on the generation token so an in-flight list against a
+                // dead/rotated-away peer does not burn its full timeout before the
+                // next cycle picks up the new channel (spec §7.2 item 5).
+                let list_outcome = tokio::select! {
+                    _ = gen_token.cancelled() => {
+                        tracing::info!(kind = T::kind_name(), "channel reinstalled during list; relisting on the new channel");
+                        generation_reloaded = true;
+                        continue;
+                    }
+                    r = Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "") => r,
+                };
+                let (from_version, current_server_id) = match list_outcome {
+                    Ok(list_result) => {
+                        // Reset backoff on success
+                        backoff_secs = BACKOFF_INIT_SECS;
 
-                            global_metrics().config_relist();
+                        global_metrics().config_relist();
 
-                            let count = {
-                                let cache = cache_data.read();
-                                cache.len()
-                            };
-                            tracing::info!(
-                                kind = T::kind_name(),
-                                count = count,
-                                sync_version = list_result.sync_version,
-                                server_id = %list_result.server_id,
-                                "List completed, starting watch"
-                            );
+                        let count = {
+                            let cache = cache_data.read();
+                            cache.len()
+                        };
+                        tracing::info!(
+                            kind = T::kind_name(),
+                            count = count,
+                            sync_version = list_result.sync_version,
+                            server_id = %list_result.server_id,
+                            "List completed, starting watch"
+                        );
 
-                            if let Some(client) = crate::conf_sync::get_global_config_client() {
-                                client.set_current_server_id(list_result.server_id.clone());
-                            }
-
-                            // Set ready after first successful list
-                            if !is_ready {
-                                let mut cache = cache_data.write();
-                                cache.set_ready();
-                                is_ready = true;
-                                tracing::info!(kind = T::kind_name(), "Cache is ready");
-                            }
-
-                            (list_result.sync_version, list_result.server_id)
+                        if let Some(client) = crate::conf_sync::get_global_config_client() {
+                            client.set_current_server_id(list_result.server_id.clone());
                         }
-                        Err(e) => {
-                            let error_message = e.message();
-                            if error_message.contains(WATCH_ERR_NOT_READY) {
-                                tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
-                            } else if error_message.contains(WATCH_ERR_SERVER_ID_MISMATCH) {
-                                tracing::warn!(kind = T::kind_name(), error = %e, "Server ID mismatch, will relist");
-                            } else {
-                                tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
-                            }
-                            // Increase backoff on failure
-                            backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
-                            continue;
+
+                        // Set ready after first successful list
+                        if !is_ready {
+                            mark_ready_after_list(&cache_data, &mut is_ready);
+                            tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
-                    };
+
+                        (list_result.sync_version, list_result.server_id)
+                    }
+                    Err(e) => {
+                        if is_edgion_backend::<T>() {
+                            is_ready = false;
+                        }
+                        let error_message = e.message();
+                        if error_message.contains(WATCH_ERR_NOT_READY) {
+                            tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
+                        } else if error_message.contains(WATCH_ERR_SERVER_ID_MISMATCH) {
+                            tracing::warn!(kind = T::kind_name(), error = %e, "Server ID mismatch, will relist");
+                        } else {
+                            tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
+                        }
+                        // Increase backoff on failure
+                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
+                        continue;
+                    }
+                };
 
                 // Watch block: perform watch operation, break to return to outer loop for re-list
                 'watch_block: {
@@ -260,8 +489,21 @@ where
                         }
                     };
 
+                    // gen_token was captured at the top of the outer cycle (before the
+                    // list-clone) so it governs both the list and this watch. When the
+                    // client TLS channel is hot-reloaded the token is cancelled,
+                    // breaking us out of the message loop so the outer loop re-clones
+                    // the (already-swapped) new channel and re-lists.
                     loop {
-                        match stream.message().await {
+                        let watch_msg = tokio::select! {
+                            _ = gen_token.cancelled() => {
+                                tracing::info!(kind = T::kind_name(), "channel reinstalled (TLS reload or rotation), breaking watch to reconnect");
+                                generation_reloaded = true;
+                                break 'watch_block;
+                            }
+                            msg = stream.message() => msg,
+                        };
+                        match watch_msg {
                             Ok(Some(watch_response)) => {
                                 // Check for server-side protocol errors first
                                 if !watch_response.err.is_empty() {
@@ -291,11 +533,26 @@ where
 
                                 let response_sv = watch_response.sync_version;
 
+                                if is_edgion_backend::<T>() {
+                                    if apply_backend_watch_payload(&cache_data, &watch_response.data, response_sv)
+                                        == BackendWatchBatchOutcome::Unsafe
+                                    {
+                                        is_ready = false;
+                                        tracing::error!(
+                                            kind = T::kind_name(),
+                                            error_class = "invalid_watch_batch",
+                                            "Rejected backend watch batch and cleared runtime state"
+                                        );
+                                        break 'watch_block;
+                                    }
+                                    continue;
+                                }
+
                                 let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                     Ok(events) => events,
-                                    Err(e) => {
+                                    Err(error) => {
                                         record_config_event_parse_error(T::kind_name());
-                                        tracing::error!(kind = T::kind_name(), error = %e, "Failed to parse watch response events");
+                                        tracing::error!(kind = T::kind_name(), error = %error, "Failed to parse watch response events");
                                         continue;
                                     }
                                 };
@@ -304,51 +561,54 @@ where
                                 // to coalesce O(N) lock acquisitions into one batch.
                                 let mut cache = cache_data.write();
                                 for event in events {
-                                    if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
-                                        if let Some(event_data) = event.get("data") {
-                                            let event_sv = event
-                                                .get("sync_version")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(response_sv);
+                                    let Some(event_object) = event.as_object() else {
+                                        continue;
+                                    };
+                                    let Some(event_type) = event_object.get("type").and_then(|value| value.as_str())
+                                    else {
+                                        continue;
+                                    };
+                                    let change = match event_type {
+                                        "add" => ResourceChange::EventAdd,
+                                        "update" => ResourceChange::EventUpdate,
+                                        "delete" => ResourceChange::EventDelete,
+                                        _ => continue,
+                                    };
+                                    let Some(event_data) = event_object.get("data") else {
+                                        continue;
+                                    };
+                                    let event_sv = event_object
+                                        .get("sync_version")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(response_sv);
 
-                                            match serde_json::from_value::<T>(event_data.clone()) {
-                                                Ok(mut resource) => {
-                                                    resource.pre_parse();
-                                                    edgion_resources::resource::meta::set_sync_version(
-                                                        resource.meta_mut(),
-                                                        event_sv,
-                                                    );
+                                    match serde_json::from_value::<T>(event_data.clone()) {
+                                        Ok(mut resource) => {
+                                            resource.pre_parse();
+                                            edgion_resources::resource::meta::set_sync_version(
+                                                resource.meta_mut(),
+                                                event_sv,
+                                            );
 
-                                                    tracing::debug!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
-                                                    let change = match event_type {
-                                                        "add" => ResourceChange::EventAdd,
-                                                        "update" => ResourceChange::EventUpdate,
-                                                        "delete" => ResourceChange::EventDelete,
-                                                        _ => continue,
-                                                    };
-
-                                                    let resource_key = resource.key_name();
-                                                    match change {
-                                                        ResourceChange::InitAdd
-                                                        | ResourceChange::EventAdd
-                                                        | ResourceChange::EventUpdate => {
-                                                            cache.insert(resource_key.clone(), resource);
-                                                            cache.add_compress_event(resource_key, change);
-                                                        }
-                                                        ResourceChange::EventDelete => {
-                                                            cache.remove(&resource_key);
-                                                            cache.add_compress_event(resource_key, change);
-                                                        }
-                                                        ResourceChange::InitStart | ResourceChange::InitDone => {
-                                                            // Signal events: not expected in watch stream
-                                                        }
-                                                    }
+                                            tracing::debug!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
+                                            let resource_key = resource.key_name();
+                                            match change {
+                                                ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                                                    cache.insert(resource_key.clone(), resource);
+                                                    cache.add_compress_event(resource_key, change);
                                                 }
-                                                Err(e) => {
-                                                    record_config_event_parse_error(T::kind_name());
-                                                    tracing::error!(error = %e, kind = T::kind_name(), "Failed to parse resource from watch event");
+                                                ResourceChange::EventDelete => {
+                                                    cache.remove(&resource_key);
+                                                    cache.add_compress_event(resource_key, change);
                                                 }
+                                                ResourceChange::InitAdd
+                                                | ResourceChange::InitStart
+                                                | ResourceChange::InitDone => {}
                                             }
+                                        }
+                                        Err(error) => {
+                                            record_config_event_parse_error(T::kind_name());
+                                            tracing::error!(error = %error, kind = T::kind_name(), "Failed to parse resource from watch event");
                                         }
                                     }
                                 }
@@ -380,6 +640,19 @@ where
     }
 }
 
+/// Pre-list wait decision (spec §7.2 item 5): `None` = the previous cycle ended
+/// because the reload-generation token was cancelled (cert reload / leader
+/// rotation) — the channel swap is deliberate and complete, so relist
+/// immediately and reset the backoff; `Some(secs)` = a real failure, sleep the
+/// current backoff (plus jitter at the call site).
+fn resync_wait_secs(generation_reloaded: bool, backoff_secs: u64) -> Option<u64> {
+    if generation_reloaded {
+        None
+    } else {
+        Some(backoff_secs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the `CacheEventDispatch` impl on `ClientCache`.
@@ -390,9 +663,60 @@ mod tests {
     //! gRPC channel). The full watch/relist/backoff loop in `start_watch` is
     //! deferred to integration coverage.
     use super::*;
-    use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+    use crate::ai::AiBackendStore;
+    use edgion_common::conf_sync::proto::{ListRequest, ListResponse, WatchResponse};
+    use edgion_common::conf_sync::traits::{CacheEventDispatch, ConfHandler, ResourceChange};
+    use edgion_resources::resources::EdgionBackend;
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::core::ObjectMeta;
+    use std::collections::{HashMap, HashSet};
+
+    struct RecordingBackendHandler {
+        store: Arc<AiBackendStore>,
+        full_set_sizes: parking_lot::Mutex<Vec<usize>>,
+        partial_removes: parking_lot::Mutex<Vec<HashSet<String>>>,
+    }
+
+    impl RecordingBackendHandler {
+        fn new(store: Arc<AiBackendStore>) -> Self {
+            Self {
+                store,
+                full_set_sizes: parking_lot::Mutex::new(Vec::new()),
+                partial_removes: parking_lot::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ConfHandler<EdgionBackend> for RecordingBackendHandler {
+        fn full_set(&self, data: &HashMap<String, Arc<EdgionBackend>>) {
+            self.full_set_sizes.lock().push(data.len());
+            self.store.full_set(data);
+        }
+
+        fn partial_update(
+            &self,
+            add: HashMap<String, Arc<EdgionBackend>>,
+            update: HashMap<String, Arc<EdgionBackend>>,
+            remove: HashSet<String>,
+        ) {
+            self.partial_removes.lock().push(remove.clone());
+            self.store.partial_update(add, update, remove);
+        }
+    }
+
+    fn backend_cache_with_handler() -> (
+        Arc<RwLock<CacheData<EdgionBackend>>>,
+        Arc<AiBackendStore>,
+        Arc<RecordingBackendHandler>,
+    ) {
+        let cache = Arc::new(RwLock::new(CacheData::new()));
+        let store = Arc::new(AiBackendStore::new());
+        let handler = Arc::new(RecordingBackendHandler::new(Arc::clone(&store)));
+        cache
+            .write()
+            .set_conf_processor_for_test(Box::new(Arc::clone(&handler)));
+        (cache, store, handler)
+    }
 
     fn make_cm(namespace: &str, name: &str) -> ConfigMap {
         ConfigMap {
@@ -493,5 +817,327 @@ mod tests {
             cached_keys(&cache),
             vec!["ns1/a".to_string(), "ns1/b".to_string(), "ns2/a".to_string()]
         );
+    }
+
+    #[test]
+    fn generation_cancel_relists_immediately_at_initial_backoff() {
+        // Spec §7.2 item 5: a generation-cancel (cert reload / rotation) must
+        // relist immediately (no sleep) — otherwise each kind sleeps at its
+        // current backoff (up to 32s) after a failover, blowing the resync
+        // budget. A real failure keeps sleeping at the current backoff.
+        assert_eq!(super::resync_wait_secs(true, 32), None, "reload: skip the sleep");
+        assert_eq!(super::resync_wait_secs(false, 8), Some(8), "failure: sleep the backoff");
+    }
+
+    #[test]
+    fn backend_watch_rejects_invalid_batch_json() {
+        assert!(serde_json::from_str::<Vec<serde_json::Value>>("not-json").is_err());
+    }
+
+    #[test]
+    fn backend_watch_rejects_non_object_event() {
+        assert!(backend_event_parts(&serde_json::json!("add")).is_err());
+    }
+
+    #[test]
+    fn backend_watch_rejects_missing_type() {
+        assert!(backend_event_parts(&serde_json::json!({"data": {}})).is_err());
+    }
+
+    #[test]
+    fn backend_watch_rejects_non_string_type() {
+        assert!(backend_event_parts(&serde_json::json!({"type": 1, "data": {}})).is_err());
+    }
+
+    #[test]
+    fn backend_watch_rejects_unknown_type() {
+        assert!(backend_event_parts(&serde_json::json!({"type": "replace", "data": {}})).is_err());
+    }
+
+    #[test]
+    fn backend_watch_rejects_missing_data() {
+        assert!(backend_event_parts(&serde_json::json!({"type": "add"})).is_err());
+    }
+
+    #[test]
+    fn backend_watch_accepts_recognized_event_envelopes() {
+        for (event_type, expected) in [
+            ("add", ResourceChange::EventAdd),
+            ("update", ResourceChange::EventUpdate),
+            ("delete", ResourceChange::EventDelete),
+        ] {
+            let event = serde_json::json!({"type": event_type, "data": {}});
+            assert_eq!(backend_event_parts(&event).unwrap().0, expected);
+        }
+    }
+
+    #[test]
+    fn backend_watch_uses_only_valid_exact_key_for_malformed_resource_withdrawal() {
+        assert_eq!(
+            raw_backend_key(&serde_json::json!({"metadata": {"namespace": "ns-1", "name": "backend.example"}})),
+            Some("ns-1/backend.example".to_string())
+        );
+        for unsafe_identity in [
+            serde_json::json!({}),
+            serde_json::json!({"metadata": {"name": "backend"}}),
+            serde_json::json!({"metadata": {"namespace": "", "name": "backend"}}),
+            serde_json::json!({"metadata": {"namespace": "ns", "name": "../backend"}}),
+        ] {
+            assert_eq!(raw_backend_key(&unsafe_identity), None);
+        }
+    }
+
+    fn valid_backend_json() -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackend",
+            "metadata": {"namespace": "ns-1", "name": "backend.example"},
+            "spec": {
+                "ai": {
+                    "provider": "OpenAI",
+                    "credentialPool": {
+                        "credentials": [{"name": "primary", "secretRef": {"name": "key"}}]
+                    },
+                    "models": [{"name": "model-a"}]
+                }
+            }
+        })
+    }
+
+    fn runtime_backend_json(name: &str) -> serde_json::Value {
+        let mut backend = valid_backend_json();
+        backend["metadata"]["name"] = serde_json::json!(name);
+        backend["spec"]["ai"]["credentialPool"]["credentials"][0]["secret"] = serde_json::json!({
+            "data": {"api-key": "c2VjcmV0"},
+            "type": "Opaque"
+        });
+        backend
+    }
+
+    #[test]
+    fn backend_list_validates_identity_before_typed_publication() {
+        let valid = serde_json::to_vec(&vec![valid_backend_json()]).unwrap();
+        let decoded = decode_list_payload::<EdgionBackend>(&valid).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].key_name(), "ns-1/backend.example");
+
+        for metadata in [
+            serde_json::json!({"name": "backend"}),
+            serde_json::json!({"namespace": "ns", "name": ""}),
+            serde_json::json!({"namespace": "Bad_Namespace", "name": "backend"}),
+            serde_json::json!({"namespace": "ns", "name": "../backend"}),
+        ] {
+            let mut unsafe_backend = valid_backend_json();
+            unsafe_backend["metadata"] = metadata;
+            let payload = serde_json::to_vec(&vec![unsafe_backend]).unwrap();
+            assert!(decode_list_payload::<EdgionBackend>(&payload).is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_resource_list_keeps_existing_identity_semantics() {
+        let payload = serde_json::to_vec(&vec![serde_json::json!({"metadata": {"name": "cm"}})]).unwrap();
+        assert_eq!(decode_list_payload::<ConfigMap>(&payload).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn kind_23_conf_sync_envelopes_require_nested_ai_spec() {
+        let request = ListRequest {
+            key: String::new(),
+            kind: EdgionBackend::kind(&()).to_string(),
+            expected_server_id: "server-a".to_string(),
+        };
+        assert_eq!(request.kind, "EdgionBackend");
+        assert_eq!(edgion_resources::ResourceKind::EdgionBackend as i32, 23);
+
+        let nested = valid_backend_json();
+        let nested_response = ListResponse {
+            data: serde_json::to_vec(&vec![nested.clone()]).unwrap().into(),
+            sync_version: 7,
+            server_id: "server-a".to_string(),
+        };
+        assert_eq!(
+            decode_list_payload::<EdgionBackend>(&nested_response.data)
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut flat = nested.clone();
+        flat["spec"] = flat["spec"]["ai"].take();
+        let flat_response = ListResponse {
+            data: serde_json::to_vec(&vec![flat.clone()]).unwrap().into(),
+            sync_version: 8,
+            server_id: "server-a".to_string(),
+        };
+        assert!(decode_list_payload::<EdgionBackend>(&flat_response.data).is_err());
+
+        let nested_watch = WatchResponse {
+            data: serde_json::to_string(&vec![serde_json::json!({"type": "update", "data": nested})]).unwrap(),
+            sync_version: 9,
+            err: String::new(),
+            server_id: "server-a".to_string(),
+        };
+        let nested_events: Vec<serde_json::Value> = serde_json::from_str(&nested_watch.data).unwrap();
+        let (_, nested_data) = backend_event_parts(&nested_events[0]).unwrap();
+        assert!(serde_json::from_value::<EdgionBackend>(nested_data.clone()).is_ok());
+
+        let flat_watch = WatchResponse {
+            data: serde_json::to_string(&vec![serde_json::json!({"type": "update", "data": flat})]).unwrap(),
+            sync_version: 10,
+            err: String::new(),
+            server_id: "server-a".to_string(),
+        };
+        let flat_events: Vec<serde_json::Value> = serde_json::from_str(&flat_watch.data).unwrap();
+        let (_, flat_data) = backend_event_parts(&flat_events[0]).unwrap();
+        assert!(raw_backend_key(flat_data).is_some());
+        assert!(serde_json::from_value::<EdgionBackend>(flat_data.clone()).is_err());
+    }
+
+    #[test]
+    fn backend_fail_close_clears_cache_version_and_readiness() {
+        let cache = Arc::new(RwLock::new(CacheData::<ConfigMap>::new()));
+        {
+            let mut data = cache.write();
+            data.insert("ns/a".to_string(), make_cm("ns", "a"));
+            data.set_ready();
+        }
+        clear_backend_cache(&cache, 42);
+        let data = cache.read();
+        assert!(data.is_empty());
+        assert!(!data.is_ready());
+        assert_eq!(data.sync_version(), 42);
+    }
+
+    #[test]
+    fn backend_list_failure_withdraws_runtime_and_valid_retry_restores_readiness() {
+        let (cache, store, handler) = backend_cache_with_handler();
+        let valid_payload = serde_json::to_vec(&vec![runtime_backend_json("backend-a")]).unwrap();
+        let mut loop_ready = false;
+
+        assert_eq!(publish_list_payload(&cache, &valid_payload, 10).unwrap(), 1);
+        mark_ready_after_list(&cache, &mut loop_ready);
+        assert!(cache.read().is_ready());
+        assert_eq!(store.keys(), vec!["ns-1/backend-a"]);
+
+        cache
+            .write()
+            .add_compress_event("ns-1/backend-a".to_string(), ResourceChange::EventUpdate);
+        assert_eq!(cache.read().compressed_event_count_for_test(), 1);
+
+        assert!(publish_list_payload(&cache, b"not-json", 11).is_err());
+        loop_ready = false;
+        assert!(cache.read().is_empty());
+        assert!(!cache.read().is_ready());
+        assert_eq!(cache.read().sync_version(), 11);
+        assert_eq!(cache.read().compressed_event_count_for_test(), 0);
+        assert_eq!(store.count(), 0, "empty full_set must withdraw the runtime snapshot");
+        assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0]);
+
+        assert_eq!(publish_list_payload(&cache, &valid_payload, 12).unwrap(), 1);
+        mark_ready_after_list(&cache, &mut loop_ready);
+        assert!(loop_ready);
+        assert!(cache.read().is_ready());
+        assert_eq!(cache.read().sync_version(), 12);
+        assert_eq!(store.keys(), vec!["ns-1/backend-a"]);
+        assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0, 1]);
+    }
+
+    #[test]
+    fn backend_watch_safe_typed_failure_withdraws_exact_key_only() {
+        let (cache, store, handler) = backend_cache_with_handler();
+        let initial = serde_json::to_vec(&vec![
+            runtime_backend_json("backend-a"),
+            runtime_backend_json("backend-b"),
+        ])
+        .unwrap();
+        publish_list_payload(&cache, &initial, 20).unwrap();
+        let mut loop_ready = false;
+        mark_ready_after_list(&cache, &mut loop_ready);
+
+        let mut malformed = runtime_backend_json("backend-a");
+        malformed["spec"] = malformed["spec"]["ai"].take();
+        let payload = serde_json::to_string(&vec![serde_json::json!({
+            "type": "update",
+            "sync_version": 21,
+            "data": malformed
+        })])
+        .unwrap();
+
+        assert_eq!(
+            apply_backend_watch_payload(&cache, &payload, 21),
+            BackendWatchBatchOutcome::Applied
+        );
+        assert!(
+            cache.read().is_ready(),
+            "a safe exact-key withdrawal does not poison the stream"
+        );
+        assert!(cache.read().get("ns-1/backend-a").is_none());
+        assert!(cache.read().get("ns-1/backend-b").is_some());
+        assert_eq!(cache.read().compressed_event_count_for_test(), 1);
+
+        assert!(CacheData::flush_compressed_events_for_test(&cache));
+        assert_eq!(store.keys(), vec!["ns-1/backend-b"]);
+        assert_eq!(cache.read().compressed_event_count_for_test(), 0);
+        assert_eq!(
+            &*handler.partial_removes.lock(),
+            &[HashSet::from(["ns-1/backend-a".to_string()])]
+        );
+    }
+
+    #[test]
+    fn backend_watch_unsafe_batch_aborts_later_events_and_relist_restores_runtime() {
+        let (cache, store, handler) = backend_cache_with_handler();
+        let initial = serde_json::to_vec(&vec![runtime_backend_json("backend-a")]).unwrap();
+        publish_list_payload(&cache, &initial, 30).unwrap();
+        let mut loop_ready = false;
+        mark_ready_after_list(&cache, &mut loop_ready);
+
+        cache
+            .write()
+            .add_compress_event("ns-1/backend-a".to_string(), ResourceChange::EventUpdate);
+        let batch = serde_json::to_string(&vec![
+            serde_json::json!({"type": "delete", "data": runtime_backend_json("backend-a")}),
+            serde_json::json!({"type": "replace", "data": {}}),
+            serde_json::json!({"type": "add", "data": runtime_backend_json("must-not-apply")}),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            apply_backend_watch_payload(&cache, &batch, 31),
+            BackendWatchBatchOutcome::Unsafe
+        );
+        loop_ready = false;
+        assert!(cache.read().is_empty());
+        assert!(!cache.read().is_ready());
+        assert_eq!(cache.read().sync_version(), 31);
+        assert_eq!(cache.read().compressed_event_count_for_test(), 0);
+        assert_eq!(store.count(), 0);
+        assert!(store.get_by_key("ns-1/must-not-apply").is_none());
+        assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0]);
+
+        let restored = serde_json::to_vec(&vec![runtime_backend_json("backend-restored")]).unwrap();
+        publish_list_payload(&cache, &restored, 32).unwrap();
+        mark_ready_after_list(&cache, &mut loop_ready);
+        assert!(loop_ready);
+        assert!(cache.read().is_ready());
+        assert_eq!(store.keys(), vec!["ns-1/backend-restored"]);
+        assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0, 1]);
+
+        assert_eq!(
+            apply_backend_watch_payload(&cache, "not-json", 33),
+            BackendWatchBatchOutcome::Unsafe
+        );
+        loop_ready = false;
+        assert!(cache.read().is_empty());
+        assert!(!cache.read().is_ready());
+        assert_eq!(store.count(), 0);
+        assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0, 1, 0]);
+
+        publish_list_payload(&cache, &restored, 34).unwrap();
+        mark_ready_after_list(&cache, &mut loop_ready);
+        assert!(loop_ready);
+        assert!(cache.read().is_ready());
+        assert_eq!(store.keys(), vec!["ns-1/backend-restored"]);
+        assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0, 1, 0, 1]);
     }
 }

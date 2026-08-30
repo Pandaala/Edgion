@@ -2,7 +2,7 @@
 
 本文档列出 EdgionDSL 所有内置函数，按功能分类组织。每个函数均给出完整签名、参数说明、返回值、限制条件和使用示例。
 
-**类型说明**：EdgionDSL 有 6 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
+**类型说明**：EdgionDSL 有 7 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`Body`（不透明的请求 body 句柄）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
 
 **阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作和 `grpc_error()` 仅在请求阶段有意义；`resp.*` 读写操作仅在响应阶段有效。
 
@@ -149,17 +149,17 @@ req.set_header("X-Session-Id", session)
 
 ---
 
-### req.client_ip
+### req.direct_peer_ip
 
-**签名**：`req.client_ip` → `Str`
+**签名**：`req.direct_peer_ip` → `Str`
 
-返回经过 `real-ip` 插件处理后的客户端 IP 地址。若未配置 `real-ip` 插件，则与 `req.remote_ip` 相同，返回直接连接的远端地址。
+返回下游物理传输对端（`DirectPeerIp`）。它不会被入站 PROXY Protocol 或转发 Header 处理改写。普通客户端身份、限流和实验分桶场景请使用 `req.remote_ip`。
 
 **返回值**：IP 地址字符串（IPv4 或 IPv6 格式）
 
 **示例**：
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") {
   req.set_header("X-Internal-Request", "true")
 }
@@ -171,14 +171,14 @@ if ip_in_cidr(ip, "10.0.0.0/8") {
 
 **签名**：`req.remote_ip` → `Str`
 
-返回 TCP 连接的直接对端 IP 地址，不经过任何代理头处理。这是底层连接的实际远端地址。
+返回当前请求层解析出的客户端身份（`RemoteIp`）。它从 L4 有效对端开始，并可能被可信代理的 `RealIp`/XFF 解析器更新。
 
 **返回值**：IP 地址字符串（IPv4 或 IPv6 格式）
 
 **示例**：
 ```
 let remote = req.remote_ip
-log("direct connection from: " + remote)
+log("resolved client: " + remote)
 ```
 
 ---
@@ -310,6 +310,99 @@ if ct != nil and regex_find(ct, "application/json") == nil {
 ```
 if not req.has_header("X-Request-Id") {
   req.set_header("X-Request-Id", uuid())
+}
+```
+
+---
+
+### req.body
+
+**签名**：`req.body` → `Body`
+
+返回被代理请求 body 的不透明句柄。句柄不包含字节、游标、文件描述符或存储路径。
+求值只检查 body 是否可用，不会把 body 读成连续字符串。无论当前逻辑版本位于内存、
+溢写文件还是修改分段中，所有操作看到的行为都相同。
+
+共享文本操作按流增量解码，结果与 `String::from_utf8_lossy` 相同：非法 UTF-8
+显示为 U+FFFD，跨存储 chunk 的未完整码点会保留到下一段。原始字节读取、哈希和
+修改仍针对原字节。
+
+**`Str` / `Body` 共享文本方法**：
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `.len()` | `Int` | Unicode 标量数量 |
+| `.is_empty()` | `Bool` | 逻辑文本是否为空 |
+| `.starts_with(s)` | `Bool` | 前缀判断 |
+| `.ends_with(s)` | `Bool` | 后缀判断 |
+| `.contains(s)` | `Bool` | 子串判断 |
+| `.matches("regex")` | `Bool` | 编译期流式正则判断 |
+
+**Body 专用读取**：
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `.byte_len()` | `Int` | 原始字节数，只读元数据 |
+| `.read(offset, max_bytes)` | `Str` | 先选原始字节范围，再单独进行 lossy 解码 |
+| `.read_all()` | `Str` | 显式读取并 lossy 解码完整 body |
+| `.sha256()` | `Str` | 原始字节的 64 字符小写 SHA-256；按不可变 Body 版本缓存 |
+| `.md5()` | `Str` | 原始字节的 32 字符小写遗留 MD5 checksum |
+| `.hmac_sha256(key)` | `Str` | 对原始字节生成 64 字符小写 HMAC-SHA-256 |
+| `.json_get("$.a[0]")` | 值或 `Nil` | 按编译期确定 JSONPath 选择 |
+| `.json_select({"name": "$.a"})` | `Map` | 一次解析选择多个命名的编译期路径 |
+
+`read`、`read_all` 和序列化后的 JSON 结果必须符合 `maxStringLen`。`read`
+最多返回 `max_bytes` 个源字节；offset 超过 body 会报错。
+
+Body 摘要和 MAC 方法扫描已经捕获的原始字节，不会在客户端上传过程中同步计算，也
+不会将 Body 转成字符串。`sha256()` 为每个不可变 Body 版本缓存一个 32 字节结果；
+`md5()` 和 `hmac_sha256(key)` 每次调用都会扫描，并消耗实际 Body 扫描字节。
+MD5 仅用于兼容遗留协议，不得用于认证、签名、密码存储或依赖抗碰撞性的安全场景。
+FIPS build 中保留该兼容 API，并不代表 MD5 是获批的安全算法。
+
+`Body.hmac_sha256(key)` 只接受精确 `Str`，不新增持久 key/MAC 缓存，并且只用于
+生成 MAC。普通 DSL `==` 不是 constant-time；不得用它验证攻击者提交的认证标签。
+入站签名验证应使用专用认证插件或外部验证器。
+
+**仅请求阶段可用的修改**：
+
+| 方法 | 效果 |
+|------|------|
+| `.clear()` | 将 body 替换为空 |
+| `.append(s)` | 追加精确 `Str` 参数 `s` 的 UTF-8 字节 |
+| `.prepend(s)` | 前置精确 `Str` 参数 `s` 的 UTF-8 字节 |
+| `.remove(start, end)` | 删除左闭右开的原始字节范围 |
+| `.replace(from, to)` | 从左到右替换所有不重叠的字面量字节匹配；两个参数都必须为 `Str` |
+
+修改成功返回 `nil`，原子发布，受网关物理请求 body 上限约束，最多保留 4,096
+个逻辑分段。空查找模式和非法范围会被拒绝。修改方法若不在 `requestPlugins`
+中，会在配置校验阶段被拒绝。
+
+**可用性与失败行为**：
+
+- 请求阶段脚本静态引用 `req.body` 时，使用唯一的共享、有界请求 body 捕获；未引用
+  的脚本没有捕获开销。
+- `upstreamResponseFilterPlugins` 中的脚本只能读取请求阶段
+  `RequestBodyBuffer` 已填充的缓存，绝不会启动晚捕获。
+- 已知无 body 的请求无需分配缓存，使用空 Body。
+- VM 执行前的 body gate 固定 fail-close：请求体超过上限时返回空响应体的 413，
+  捕获超时时返回空响应体的 408，拒绝捕获或其他捕获失败时返回空响应体的 500。
+- VM 开始执行后，声明或未知有 body 却缺少晚阶段缓存、存储 I/O、扫描预算耗尽、
+  分段上限和修改发布失败，都返回 HTTP 500 和通用响应
+  `Request body processing failed`，不受 `errorPolicy` 影响。
+- `Body` 为真值，但不能隐式转换，也不能传给 `to_str`。它不能直接拼接、记录日志、
+  插值、作为 Map key/header 值或传给其他字符串 API；应使用显式的有界读取。
+
+Body 与 String 无论左右顺序都按流比较逻辑文本。两个 Body 都指向当前请求 body，
+因此相等。对 Body 排序会产生类型错误。
+
+**示例**：
+
+```
+let body = req.body
+if !body.is_empty() and body.contains("token") {
+  req.set_header("X-Body-Preview", body.read(0, 128))
+  req.set_header("X-Body-SHA256", body.sha256())
 }
 ```
 
@@ -661,20 +754,32 @@ if ct != nil and regex_find(ct, "text/html") != nil {
 
 ---
 
+### resp.body
+
+不支持 `resp.body`。配置校验会拒绝引用它的脚本，因为被代理的上游响应体始终保持流式传输。需要处理响应时，请使用 DSL 的响应头操作；如果只需按 chunk 观测响应体，可以使用 Wasm 响应体插件。
+
+**示例**：
+```
+-- EdgionPlugins 校验会拒绝：
+let b = resp.body
+```
+
+---
+
 ## 响应修改（resp.*）
 
 ### resp.set_status
 
 **签名**：`resp.set_status(code)` → `Nil`
 
-修改发送给客户端的响应状态码。`code` 必须为 100 到 599 之间的整数，否则会触发运行时错误。
+修改发送给客户端的最终响应状态码。`code` 必须为 200 到 599 之间的整数，否则会触发运行时错误。
 
 **参数**：
-- `code`（Int）— HTTP 状态码，范围 100–599
+- `code`（Int）— 最终 HTTP 状态码，范围 200–599
 
 **返回值**：`nil`
 
-**限制**：`code` 必须为整数类型，且在 100–599 范围内；不在范围内时抛出运行时错误。
+**限制**：`code` 必须为整数类型，且在 200–599 范围内；不在范围内时抛出运行时错误。
 
 **示例**：
 ```
@@ -827,6 +932,9 @@ ctx.remove("temp_flag")
 
 > **注意（与 `max_string_len` 单位不一致）**：`len()` 返回的是 **Unicode 字符数**，而沙箱的 `max_string_len` 限制（默认 8192）以及相应的 `string too long (N bytes > L bytes)` 错误信息都是按 **UTF-8 字节** 度量的。对 ASCII 字符串两者相等；对含多字节字符（如中文、emoji）的字符串，字节长度最多可达字符数的 4 倍，因此 `len(s) < max_string_len` 这样的脚本守卫并不能保证后续的字符串拼接或内置函数调用一定能通过字节长度检查。
 
+`Body` 使用方法形式 `req.body.len()`。全局 `len(req.body)` 不会把 Body
+隐式转换为字符串。
+
 **示例**：
 ```
 let token = req.header("X-Api-Key")
@@ -868,12 +976,16 @@ if auth != nil and len(auth) > 7 {
 
 **签名**：`to_str(v)` → `Str`
 
-将任意类型转换为字符串：
+将标量和容器值转换为字符串：
 - `Str` → 原值
 - `Int` → 十进制表示
 - `Bool` → `"true"` 或 `"false"`
 - `Nil` → `"nil"`
 - `List` → `"[list]"`
+- `Map` → Map 的诊断表示
+
+`Body` 会被明确拒绝并产生类型错误。需要实际 body 字符串时，使用
+`read(offset, max_bytes)` 或 `read_all()`。
 
 **参数**：
 - `v`（任意类型）— 输入值
@@ -1178,6 +1290,12 @@ if hex_token != nil {
 
 计算字符串的 SHA-256 哈希值，返回 64 字符的小写十六进制摘要。
 
+对请求 Body 使用 `req.body.sha256()`。该方法从已经捕获的 Body 按流处理原始
+字节，不要求 body 符合 `maxStringLen`，也不会在客户端上传过程中同步计算摘要。
+每个不可变 Body 版本的第一次成功调用执行一次有界扫描，后续调用复用 32 字节
+摘要且不消耗 Body 扫描字节。Body 修改成功后会产生新版本，需要重新扫描一次。
+旧的 `sha256(req.body)` 会产生类型错误。
+
 **参数**：
 - `s`（Str）— 输入字符串
 
@@ -1199,7 +1317,9 @@ if key != nil {
 
 **签名**：`md5(s)` → `Str`
 
-计算字符串的 MD5 哈希值，返回 32 字符的小写十六进制摘要。注意 MD5 不适合安全场景（如密码存储），仅适合用于数据完整性校验或缓存键生成等非安全目的。
+计算字符串的 MD5 哈希值，返回 32 字符的小写十六进制摘要。MD5 已不具备抗碰撞
+安全性，不能提供对抗性完整性保证。它仅适用于遗留协议兼容、缓存键或偶发损坏
+检测；不要用于签名、认证、密码存储或攻击者可控的完整性判断。
 
 **参数**：
 - `s`（Str）— 输入字符串
@@ -1218,7 +1338,8 @@ req.set_header("X-Cache-Key", body_hash)
 
 **签名**：`hmac_sha256(key, data)` → `Str`
 
-使用 HMAC-SHA256 算法计算消息认证码，返回 64 字符的小写十六进制字符串。常用于验证请求签名。
+使用 HMAC-SHA256 生成消息认证码，返回 64 字符的小写十六进制字符串。若要处理
+请求 Body 的原始字节，请使用 `req.body.hmac_sha256(key)`。
 
 **参数**：
 - `key`（Str）— 密钥字符串
@@ -1226,23 +1347,28 @@ req.set_header("X-Cache-Key", body_hash)
 
 **返回值**：64 字符十六进制 HMAC 摘要
 
-**示例**：
+该函数只生成 MAC。普通 DSL `==` 不是 constant-time，因此不得使用任一 HMAC
+函数验证攻击者提交的标签。入站签名验证应使用专用认证插件或外部验证器。
+
+**示例——生成上游签名**：
 ```
 let secret = "my-secret-key"
 let timestamp = req.header("X-Timestamp")
-let signature = req.header("X-Signature")
-if timestamp == nil or signature == nil {
-  return deny(401, "missing signature headers")
-}
-let expected = hmac_sha256(secret, timestamp + ":" + req.path)
-if signature != expected {
-  return deny(401, "invalid signature")
+if timestamp != nil {
+  let signature = hmac_sha256(secret, timestamp + ":" + req.path)
+  req.set_header("X-Upstream-Signature", signature)
 }
 ```
 
 ---
 
 ## 正则表达式
+
+`.matches("pattern")` 同时适用于 `Str` 和 `Body`。它使用有界增量 DFA 和编译期
+字面量模式，因此匹配可跨存储 chunk，而无需物化 Body。流式方言会拒绝 DFA
+无法执行的构造，包括 Unicode 单词边界；可改用显式 ASCII 边界
+`(?-u:\b)`。`regex_find` 和 `regex_replace` 因为要返回或构造字符串，仍仅支持
+字符串。
 
 ### regex_find
 
@@ -1351,33 +1477,83 @@ req.set_header("X-Request-Time", date_str)
 
 ### json_get
 
-**签名**：`json_get(json_str, path)` → `Str | Int | Bool | Nil`
+**签名**：
 
-从 JSON 字符串中按点分隔路径提取值。路径格式为 `"field"` 或 `"parent.child.grandchild"`；对数组可用数字索引，如 `"items.0.name"`。若路径不存在或 JSON 解析失败，返回 `nil`。
+- `json_get(json_str, "$.path")` → `Str | Int | Bool | Nil`
+- `req.body.json_get("$.path")` → `Str | Int | Bool | Nil`
+
+使用编译期确定 JSONPath 从字符串或请求 Body 中选择值。支持的子集包括根 `$`、
+点成员（`$.user.name`）、引号成员（`$["name.with.dots"]`）和非负数组索引
+（`$.items[0].name`）。通配符、过滤器、递归下降、union、slice、负索引和动态
+路径均在编译期被拒绝。
 
 **参数**：
 - `json_str`（Str）— JSON 字符串
-- `path`（Str）— 点分隔的字段路径
+- `path`（Str 字面量）— 确定 JSONPath
 
 **返回值**：提取的值（`Str`、`Int`、`Bool` 或 `Nil`）
 
 **限制**：
-- JSON 字符串长度不得超过 `maxStringLen`（默认 8192 字节）
-- 路径最多支持 32 段，超出时触发运行时错误
+- 路径最多 1024 个 UTF-8 字节、32 段
+- 完整 JSON 文档会被校验，但 Body 输入只保留选中值，不构建完整 DOM
 - JSON 数字若可表示为 `i64` 则返回 `Int`，否则返回 `Str`；数组/对象节点返回其 JSON 字符串表示
+- 选中的字符串或序列化数组/对象必须符合 `maxStringLen`
+- 路径缺失、结构不匹配或 JSON 非法时返回 `nil`；请求 body 存储失败固定 fail-close
 
 **示例**：
 ```
 let payload = req.header("X-Jwt-Claims")
 if payload != nil {
-  let user_id = json_get(payload, "sub")
-  let role = json_get(payload, "role")
+  let user_id = json_get(payload, "$.sub")
+  let role = json_get(payload, "$.role")
   if user_id != nil {
     req.set_header("X-User-Id", to_str(user_id))
   }
   if role == "admin" {
     req.set_header("X-Is-Admin", "true")
   }
+}
+```
+
+---
+
+### req.body.json_select
+
+**签名**：
+`req.body.json_select({"outputName": "$.path", ...})` → `Map`
+
+通过一次完整 Body 扫描和一次 JSON 解析，从当前请求 Body 选择多个确定性
+JSONPath。参数必须是非空 Map 字面量，输出名和路径都不能在运行时动态计算。
+
+结果按声明顺序包含全部输出名。路径缺失、遍历结构不匹配和 JSON `null` 都转换为
+`Nil`。允许不同输出名使用相同路径，运行时只捕获一次。JSON 对象出现重复 key
+时使用最后一次，与 `json_get` 一致。
+
+**限制**：
+
+- 1–64 项，并继续受 `maxMapSize` 的更小值限制
+- 输出名必须唯一，最多 256 个 UTF-8 字节
+- 路径最多 1,024 个 UTF-8 字节、32 段
+- 每个选中字符串或序列化子树，以及实时保留的选中字符串总量，都受
+  `maxStringLen` 限制
+- 完整 JSON 文档仍会被校验；JSON 非法时返回所有值均为 `Nil` 的 Map
+- Body 存储和扫描预算故障仍固定 fail-close
+
+数字转换与 `json_get` 相同：可表示为 `i64` 的值返回 `Int`，其他数字使用其规范化
+`Str` 转换；不承诺保留原始数字 token 的精确拼写。
+
+脚本需要多个 Body 字段时应优先使用 `json_select`。重复调用 `json_get` 会分别解析
+和扫描完整 Body，并分别消耗一次 Body 扫描预算。
+
+```dsl
+let values = req.body.json_select({
+  "id": "$.user.id",
+  "name": "$.user.name",
+  "role": "$.user.role"
+})
+
+if values["id"] != nil {
+  req.set_header("X-User-Id", to_str(values["id"]))
 }
 ```
 
@@ -1394,7 +1570,7 @@ if payload != nil {
 **参数**：
 - `method`（Str）— HTTP 方法，如 `"GET"`、`"POST"`、`"PUT"`
 - `url`（Str）— 包含协议和主机名的完整 URL，如 `"https://api.example.com/v1/check"`
-- `body`（Str | Nil）— 请求体；不需要请求体时传 `nil`
+- `body`（Str | Body | Nil）— 字符串请求体、不透明的 `req.body`，或以 `nil` 表示无请求体
 - `timeout_ms`（Int，可选）— 单次调用超时（毫秒）；上限为 `httpMaxTimeoutMs`（默认 5000）
 - `headers`（Map，可选）— 附加请求头，以字符串键值对 `Map` 表示
 
@@ -1402,27 +1578,35 @@ if payload != nil {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | Int | HTTP 响应状态码；调用失败（超时、连接错误、SSRF 拦截等）时为 `0` |
+| `status` | Int | HTTP 响应状态码；网络、超时、连接时出站策略拦截或响应流失败时为 `0` |
 | `body` | Str | UTF-8 响应体；失败或响应体为空时为空字符串 |
 | `headers` | Map | 响应头；键为小写头名称，值为该头名称对应的最后一个值 |
 
-**此函数永远不会抛出运行时错误。** 网络故障、超时、SSRF 拦截均返回 `status = 0` 和空 body。
+网络故障、超时、响应流失败，以及连接时被策略拒绝的 DNS 解析地址返回 `status = 0`
+和空 body。无效参数、格式错误或不支持的 URL、被 SSRF 预检查拒绝的直接 IP 字面量，
+以及不透明 `Body` 调用中由调用方提供的分帧 Header 会抛出普通 DSL 运行时错误。
+不透明 Body 的访问、读取、扫描预算和大小限制失败会抛出固定 fail-close 的
+`BodyAccess` 错误。
 
 **限制**：
-- 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
-- 当 `httpBlockPrivateIps: true` 时，URL host 为回环、私有、链路本地 **IP 字面量**的请求返回 `status = 0`。该守卫**仅检查 URL host 字符串，不解析 DNS 域名**，因此解析到私有地址的域名不会被此开关拦截。域名形式的 SSRF 防护应以网络层出站控制（NetworkPolicy）为主。
-- 响应体截断在 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。两者中较小者生效，保证返回给脚本的 body 与其它 DSL 字符串值共享同一长度上限。截断为静默行为——调用仍成功，且依然不会抛出运行时错误。
+- 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）会抛出错误。
+- 当 `httpBlockPrivateIps: true` 时，会拦截回环、私有、链路本地和未指定地址。直接 IP 字面量在发送前检查；域名会在 DNS 解析后，对实际用于连接的地址执行检查，重定向跳转也采用相同规则。仍建议用网络层出站控制作为纵深防御。
+- 只有第三个参数接受不透明 `Body`，通常写作 `req.body`。运行时在调用开始时取得不可变逻辑快照，从内存、溢写文件和修改分段中拉取流式发送原始字节，不会先完整物化请求体。
+- 不透明 `Body` 大小上限为 `min(httpMaxRequestBodyBytes, 网关物理请求 body 上限)`。配置默认 1 MiB，可显式提高到最多 32 MiB。从快照实际拉取的字节计入累计 `maxBodyScanPasses` 预算。
+- 不透明 `Body` 调用的调用方 Header 不得包含 `Content-Length` 或 `Transfer-Encoding`，由运行时唯一控制请求分帧。空的不透明 `Body` 发送 `Content-Length: 0`；`nil` 不附加请求体。
+- 响应体截断在 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。两者中较小者生效，保证返回给脚本的 body 与其它 DSL 字符串值共享同一长度上限。截断为静默行为，调用仍成功。
 - 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
-- 全局客户端最多跟随 10 次重定向。当 `httpBlockPrivateIps: true` 时，同一 IP 字面量守卫会对**每一跳重定向**重新应用，因此跳到被阻断地址的 30x 会得到 `status = 0`，而非静默跟随。
+- `Str` 和 `Nil` 调用最多跟随 10 次重定向；当 `httpBlockPrivateIps: true` 时，每一跳都会应用直接 IP 字面量检查和连接时的 DNS 解析地址检查。不透明 `Body` 调用不跟随重定向，直接把 3xx 响应返回给脚本。
 
 **配置字段**（位于插件 `config` 块内）：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
+| `httpMaxRequestBodyBytes` | Integer | `1048576` | 不透明 `Body` 请求最大字节数，范围 `1`–`33554432`，并进一步受网关物理请求 body 上限约束 |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时截断 |
-| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地 IP 的出站调用（SSRF 防护）。仅检查 IP 字面量，不解析域名（见上方说明）。 |
+| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地/未指定 IP 的出站调用，包括在连接时检查域名解析结果 |
 
 **示例 — 调用健康检查端点并根据状态分支**：
 ```
@@ -1440,6 +1624,15 @@ let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-K
 let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
 if r["status"] != 200 {
   return deny(401, "auth check failed")
+}
+```
+
+**示例 — 不完整物化请求体，流式发送当前请求 body**：
+```
+let hdrs = {"Content-Type": req.content_type}
+let r = http.call("POST", "https://scanner.example.com/check", req.body, 2000, hdrs)
+if r["status"] != 200 {
+  return deny(403, "request rejected")
 }
 ```
 
@@ -1580,7 +1773,7 @@ if r["value"] == "on" {
 
 **示例 — 简单限流**：
 ```
-let r = redis.incr("cache", "rate:" + req.client_ip)
+let r = redis.incr("cache", "rate:" + req.remote_ip)
 if !r["ok"] {
   return deny(503, "service unavailable")
 }
@@ -1696,7 +1889,7 @@ if r["ok"] {
 
 **示例**：
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") or ip_in_cidr(ip, "172.16.0.0/12") or ip_in_cidr(ip, "192.168.0.0/16") {
   req.set_header("X-Private-Network", "true")
 } else {
@@ -1717,7 +1910,7 @@ if ip_in_cidr(ip, "10.0.0.0/8") or ip_in_cidr(ip, "172.16.0.0/12") or ip_in_cidr
 向客户端返回指定的 HTTP 错误响应并终止处理。`status` 为超出范围的整数时，自动降级为 500。`body` 为 `nil` 时响应体为空。
 
 **参数**：
-- `status`（Int）— HTTP 状态码，范围 100–599
+- `status`（Int）— 最终 HTTP 状态码，范围 200–599
 - `body`（Str | Nil）— 响应体字符串，传 `nil` 则无响应体
 
 **示例**：
@@ -1877,7 +2070,7 @@ if cl != nil and cl > 524288 {
 ```
 let sig = req.header("X-Signature")
 if sig == nil {
-  log_error("missing signature header, rejecting request from: " + req.client_ip)
+  log_error("missing signature header, rejecting request from: " + req.remote_ip)
   return deny(401, "signature required")
 }
 ```
@@ -1894,7 +2087,7 @@ if sig == nil {
 | `req.query(name)` | 请求读取 | `Str\|Nil` | 1 |
 | `req.query_string` | 请求读取 | `Str\|Nil` | 0 |
 | `req.cookie(name)` | 请求读取 | `Str\|Nil` | 1 |
-| `req.client_ip` | 请求读取 | `Str` | 0 |
+| `req.direct_peer_ip` | 请求读取 | `Str` | 0 |
 | `req.remote_ip` | 请求读取 | `Str` | 0 |
 | `req.path_param(name)` | 请求读取 | `Str\|Nil` | 1 |
 | `req.header_names` | 请求读取 | `List` | 0 |
@@ -1950,7 +2143,8 @@ if sig == nil {
 | `time_now()` | 时间 | `Int` | 0 |
 | `time_format(timestamp, format)` | 时间 | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
-| `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 2–5 |
+| `req.body.json_select({name: path, ...})` | JSON | `Map` | 1 个 Map |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 3–5 |
 | `ip_in_cidr(ip, cidr)` | 网络 | `Bool` | 2 |
 | `uuid()` | 工具 | `Str` | 0 |
 | `range(start, end)` | 工具 | `List` | 2 |

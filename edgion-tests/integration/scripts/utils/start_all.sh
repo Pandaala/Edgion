@@ -45,6 +45,11 @@ CONFIG_DIR="${WORK_DIR}/config"
 CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
 GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
+# conf_sync mTLS certs. Both binaries below run with the per-run WORK_DIR as
+# their work dir (via --work-dir, which outranks the config's `work_dir: "."`),
+# and the checked-in configs resolve certs/grpc/primary/... against it.
+source "${SCRIPT_DIR}/conf_sync_certs.sh"
+
 # serviceport
 TEST_SERVER_HTTP_PORT=30001
 CONTROLLER_ADMIN_PORT=12101
@@ -80,9 +85,9 @@ kill_all_processes() {
     log_section "Cleanupallprocess"
     
     #  kill allprocess
-    pkill -9 -f "edgion-controller" 2>/dev/null && log_info "alreadyStop edgion-controller" || true
-    pkill -9 -f "edgion-gateway" 2>/dev/null && log_info "alreadyStop edgion-gateway" || true
-    pkill -9 -f "test_server" 2>/dev/null && log_info "alreadyStop test_server" || true
+    pkill -9 -f "debug/edgion-controller" 2>/dev/null && log_info "alreadyStop edgion-controller" || true
+    pkill -9 -f "debug/edgion-gateway" 2>/dev/null && log_info "alreadyStop edgion-gateway" || true
+    pkill -9 -f "debug/test_server" 2>/dev/null && log_info "alreadyStop test_server" || true
     
     # portrelease
     sleep 2
@@ -213,6 +218,8 @@ start_test_server() {
         --udp-port 30011 \
         --auth-port 30040 \
         --ext-proc-port 30041 \
+        --transport-h1-port 30030 \
+        --transport-h2-port 30031 \
         --log-level info \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     
@@ -243,7 +250,7 @@ start_controller() {
 
     "${BIN_DIR}/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
-        --work-dir "$PROJECT_ROOT" \
+        --work-dir "$WORK_DIR" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
         --test-mode \
@@ -279,6 +286,7 @@ start_gateway() {
     EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
     "${BIN_DIR}/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
+        --work-dir "$WORK_DIR" \
         --integration-testing-mode \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
@@ -377,9 +385,14 @@ main() {
         exit 1
     fi
     
+    # : conf_sync mTLS certs (work dir = per-run WORK_DIR for both binaries)
+    log_section "conf_sync mTLS certificates"
+    conf_sync_distribute_certs "$WORK_DIR"
+    log_success "conf_sync certs ready: ${WORK_DIR}/certs/grpc/"
+
     # : Prepareconfigfile
     prepare_config
-    
+
     # : Startservice
     start_test_server
     start_controller

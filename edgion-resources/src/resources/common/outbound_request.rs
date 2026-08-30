@@ -3,7 +3,7 @@
 //! Defines the operator-facing request spec (`OutboundRequestSpec`) used by both
 //! the webhook plugin and (later) the forward_auth plugin, plus all supporting
 //! sub-types: `ListFields`, `PathSpec`, `MethodSpec`, `OriginField`, `CustomField`,
-//! `CustomSource`, and `PresencePolicy`.
+//! `CustomSource`, `PresencePolicy`, and `BodySpec`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,28 @@ pub struct OutboundRequestSpec {
     /// Cookies allow-list (origin + custom).
     #[serde(default)]
     pub cookies: ListFields,
+
+    /// Outbound request body. Omit to send no body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodySpec>,
+}
+
+/// Canary substituted for every variable by the config-time JSON lint.
+/// Non-numeric on purpose: an unquoted placeholder renders as a bare
+/// identifier, which fails JSON parsing.
+const BODY_LINT_CANARY: &str = "__edgion_canary__";
+
+/// Render `tpl` with every variable replaced by [`BODY_LINT_CANARY`].
+fn render_with_canary(tpl: &crate::resources::edgion_plugins::plugin_configs::CompiledTemplate) -> String {
+    use crate::resources::edgion_plugins::plugin_configs::TemplateSegment;
+    let mut out = String::with_capacity(tpl.hint_len());
+    for seg in tpl.segments() {
+        match seg {
+            TemplateSegment::Literal(s) => out.push_str(s),
+            TemplateSegment::Variable { .. } => out.push_str(BODY_LINT_CANARY),
+        }
+    }
+    out
 }
 
 impl OutboundRequestSpec {
@@ -52,7 +74,78 @@ impl OutboundRequestSpec {
         if self.args.forward_all || self.cookies.forward_all {
             return Some("forwardAll is only supported on headers; remove it from args/cookies".to_string());
         }
+        let explicit_framing_header = self
+            .headers
+            .origin
+            .iter()
+            .map(|field| field.name.as_str())
+            .chain(self.headers.custom.iter().map(|field| field.name.as_str()))
+            .find(|name| name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding"));
+        if let Some(name) = explicit_framing_header {
+            return Some(format!(
+                "request.headers must not configure proxy-managed framing header {name}; \
+                 the outbound client derives framing from the body actually sent"
+            ));
+        }
+        if let Some(err) = self.body_validation_error() {
+            return Some(err);
+        }
         None
+    }
+
+    /// Validate the `body` block: Content-Type conflicts, template compile
+    /// errors, and the canary-render JSON lint. Shared by webhook and
+    /// forward_auth via `validation_error`.
+    fn body_validation_error(&self) -> Option<String> {
+        use crate::resources::edgion_plugins::plugin_configs::CompiledTemplate;
+        let body = self.body.as_ref()?;
+
+        // json/form derive their Content-Type; an explicit header conflicts.
+        if matches!(body, BodySpec::Json { .. } | BodySpec::Form { .. }) {
+            let explicit_ct = self
+                .headers
+                .origin
+                .iter()
+                .map(|f| f.name.as_str())
+                .chain(self.headers.custom.iter().map(|f| f.name.as_str()))
+                .any(|n| n.eq_ignore_ascii_case("content-type"));
+            if explicit_ct {
+                return Some(
+                    "body type json/form auto-injects Content-Type; remove the explicit \
+                     Content-Type header (use body type raw to control it yourself)"
+                        .to_string(),
+                );
+            }
+        }
+
+        match body {
+            BodySpec::Json { template } => match CompiledTemplate::compile(template) {
+                Ok(tpl) => {
+                    let rendered = render_with_canary(&tpl);
+                    if let Err(e) = serde_json::from_str::<serde_json::Value>(&rendered) {
+                        return Some(format!(
+                            "body.template does not render valid JSON (every variable must sit \
+                             inside a JSON string; use body type raw for non-string payloads): {e}"
+                        ));
+                    }
+                    None
+                }
+                Err(e) => Some(format!("body.template: {e}")),
+            },
+            BodySpec::Form { fields } => {
+                for f in fields {
+                    if let CustomSource::Template(t) = &f.source {
+                        if let Err(e) = CompiledTemplate::compile(t) {
+                            return Some(format!("body.fields[{}]: {e}", f.name));
+                        }
+                    }
+                }
+                None
+            }
+            BodySpec::Raw { template } => CompiledTemplate::compile(template)
+                .err()
+                .map(|e| format!("body.template: {e}")),
+        }
     }
 
     /// Collect the raw var_names of every `${secretRef:...}` referenced across
@@ -79,6 +172,17 @@ impl OutboundRequestSpec {
                     scan(t);
                 }
             }
+        }
+        match &self.body {
+            Some(BodySpec::Json { template }) | Some(BodySpec::Raw { template }) => scan(template),
+            Some(BodySpec::Form { fields }) => {
+                for f in fields {
+                    if let CustomSource::Template(t) = &f.source {
+                        scan(t);
+                    }
+                }
+            }
+            None => {}
         }
         out
     }
@@ -161,7 +265,9 @@ pub enum PresencePolicy {
     /// Absent field is silently omitted (default).
     SkipIfMissing,
 
-    /// Absent field causes the call to fail (respects allowDegradation).
+    /// Absent field causes the call to fail. In forward_auth this surfaces as
+    /// fail-close (`statusOnError`); for the webhook connector `key_get`
+    /// returns `None` and the consuming plugin's fallback decides what happens.
     Required,
 
     /// Absent field triggers PluginLog alert but request continues.
@@ -201,6 +307,41 @@ pub enum CustomSource {
     /// Template interpolated at call time. May contain `${secretRef:ns/name:key}`
     /// to inject a controller-resolved Kubernetes Secret value.
     Template(String),
+}
+
+// ============================================================
+// BodySpec
+// ============================================================
+
+/// Outbound request body specification.
+///
+/// `json` and `raw` carry a `${type:name}` template; `form` carries structured
+/// fields so each value can be percent-encoded correctly. Design:
+/// docs/superpowers/specs/2026-07-13-webhook-dynamic-body-design.md.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+pub enum BodySpec {
+    /// JSON payload template. Variable values are JSON-string-escaped at eval
+    /// time, so every variable renders as (part of) a JSON string; the
+    /// config-time canary lint rejects templates whose skeleton is not valid
+    /// JSON, including unquoted placeholders. Content-Type: application/json
+    /// is auto-injected.
+    Json {
+        /// Literal JSON with `${type:name}` interpolation.
+        template: String,
+    },
+    /// Structured form fields, percent-encoded as
+    /// application/x-www-form-urlencoded (auto-injected Content-Type).
+    Form {
+        /// Form fields (literal `value` or `template` source).
+        fields: Vec<CustomField>,
+    },
+    /// Verbatim payload after interpolation. No Content-Type is injected; the
+    /// operator supplies one via `headers.custom` when needed.
+    Raw {
+        /// Payload template sent as-is after interpolation.
+        template: String,
+    },
 }
 
 // ============================================================
@@ -276,5 +417,211 @@ mod tests {
             spec.validation_error().is_none(),
             "headers.forwardAll should pass validation"
         );
+    }
+
+    #[test]
+    fn body_spec_parses_json_type() {
+        let spec: OutboundRequestSpec =
+            serde_yaml::from_str("body:\n  type: json\n  template: '{\"userId\": \"${ctx:userId}\"}'").unwrap();
+        match spec.body {
+            Some(BodySpec::Json { ref template }) => {
+                assert!(template.contains("${ctx:userId}"));
+            }
+            other => panic!("expected Json body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_spec_parses_form_fields() {
+        let yaml = r#"
+body:
+  type: form
+  fields:
+    - name: userId
+      template: "${ctx:userId}"
+    - name: source
+      value: edgion
+"#;
+        let spec: OutboundRequestSpec = serde_yaml::from_str(yaml).unwrap();
+        match spec.body {
+            Some(BodySpec::Form { ref fields }) => {
+                assert_eq!(fields.len(), 2);
+                assert!(matches!(fields[1].source, CustomSource::Value(_)));
+            }
+            other => panic!("expected Form body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_spec_parses_raw_type() {
+        let spec: OutboundRequestSpec =
+            serde_yaml::from_str("body:\n  type: raw\n  template: 'plain ${ctx:x}'").unwrap();
+        assert!(matches!(spec.body, Some(BodySpec::Raw { .. })));
+    }
+
+    #[test]
+    fn body_spec_rejects_unknown_type() {
+        let r: Result<OutboundRequestSpec, _> = serde_yaml::from_str("body:\n  type: xml\n  template: '<a/>'");
+        assert!(r.is_err(), "unknown body type must be rejected");
+    }
+
+    #[test]
+    fn body_spec_rejects_unknown_field() {
+        let r: Result<OutboundRequestSpec, _> =
+            serde_yaml::from_str("body:\n  type: json\n  template: '{}'\n  extra: nope");
+        assert!(r.is_err(), "unknown field on body must be rejected");
+    }
+
+    #[test]
+    fn body_defaults_to_none() {
+        let spec: OutboundRequestSpec = serde_yaml::from_str("args: {}").unwrap();
+        assert!(spec.body.is_none());
+    }
+
+    fn body_json(template: &str) -> Option<BodySpec> {
+        Some(BodySpec::Json {
+            template: template.to_string(),
+        })
+    }
+
+    #[test]
+    fn json_body_with_explicit_content_type_custom_rejected() {
+        let spec = OutboundRequestSpec {
+            body: body_json(r#"{"a": "${ctx:x}"}"#),
+            headers: ListFields {
+                custom: vec![CustomField {
+                    name: "content-type".to_string(),
+                    source: CustomSource::Value("text/plain".to_string()),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = spec.validation_error().expect("must reject CT conflict");
+        assert!(err.contains("Content-Type"), "got: {err}");
+    }
+
+    #[test]
+    fn form_body_with_explicit_content_type_origin_rejected() {
+        let spec = OutboundRequestSpec {
+            body: Some(BodySpec::Form { fields: vec![] }),
+            headers: ListFields {
+                origin: vec![OriginField {
+                    name: "Content-Type".to_string(),
+                    presence: PresencePolicy::SkipIfMissing,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(spec.validation_error().is_some(), "origin CT must also conflict");
+    }
+
+    #[test]
+    fn raw_body_with_explicit_content_type_allowed() {
+        let spec = OutboundRequestSpec {
+            body: Some(BodySpec::Raw {
+                template: "hello".to_string(),
+            }),
+            headers: ListFields {
+                custom: vec![CustomField {
+                    name: "Content-Type".to_string(),
+                    source: CustomSource::Value("text/csv".to_string()),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            spec.validation_error().is_none(),
+            "raw + explicit CT is the supported combo"
+        );
+    }
+
+    #[test]
+    fn explicit_content_length_header_is_rejected() {
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                custom: vec![CustomField {
+                    name: "Content-Length".to_string(),
+                    source: CustomSource::Value("9".to_string()),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = spec.validation_error().expect("Content-Length must be proxy-managed");
+        assert!(err.contains("Content-Length"), "got: {err}");
+    }
+
+    #[test]
+    fn explicit_transfer_encoding_origin_is_rejected() {
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                origin: vec![OriginField {
+                    name: "transfer-encoding".to_string(),
+                    presence: PresencePolicy::SkipIfMissing,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = spec
+            .validation_error()
+            .expect("Transfer-Encoding must be proxy-managed");
+        assert!(err.contains("transfer-encoding"), "got: {err}");
+    }
+
+    #[test]
+    fn json_body_canary_lint_accepts_quoted_placeholders() {
+        let spec = OutboundRequestSpec {
+            body: body_json(r#"{"userId": "${ctx:userId}", "caller": "edgion-gateway"}"#),
+            ..Default::default()
+        };
+        assert!(spec.validation_error().is_none());
+    }
+
+    #[test]
+    fn json_body_canary_lint_rejects_unquoted_placeholder() {
+        let spec = OutboundRequestSpec {
+            body: body_json(r#"{"count": ${ctx:n}}"#),
+            ..Default::default()
+        };
+        let err = spec.validation_error().expect("unquoted placeholder must be rejected");
+        assert!(err.contains("valid JSON"), "got: {err}");
+    }
+
+    #[test]
+    fn json_body_canary_lint_rejects_broken_skeleton() {
+        let spec = OutboundRequestSpec {
+            body: body_json(r#"{"a": "${ctx:x}""#), // missing closing brace
+            ..Default::default()
+        };
+        assert!(spec.validation_error().is_some());
+    }
+
+    #[test]
+    fn json_body_compile_error_rejected() {
+        let spec = OutboundRequestSpec {
+            body: body_json(r#"{"a": "${ctx:x"}"#), // unclosed ${
+            ..Default::default()
+        };
+        assert!(spec.validation_error().is_some());
+    }
+
+    #[test]
+    fn form_body_field_template_compile_error_rejected() {
+        let spec = OutboundRequestSpec {
+            body: Some(BodySpec::Form {
+                fields: vec![CustomField {
+                    name: "u".to_string(),
+                    source: CustomSource::Template("${ctx:x".to_string()),
+                }],
+            }),
+            ..Default::default()
+        };
+        assert!(spec.validation_error().is_some());
     }
 }

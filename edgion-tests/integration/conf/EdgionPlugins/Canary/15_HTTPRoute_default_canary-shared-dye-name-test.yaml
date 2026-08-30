@@ -1,0 +1,25 @@
+# backendRefs deliberately omits canary-app-v2, so canary-shared-dye-name's
+# activeProfile ("canary" -> canary-app-v2) is a misconfigured profile and
+# the entry takes its onInvalid=fallback branch.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-shared-dye-name-test
+  namespace: default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-shared-dye.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-shared-dye-name

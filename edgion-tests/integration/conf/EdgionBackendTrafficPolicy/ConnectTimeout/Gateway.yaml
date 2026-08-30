@@ -1,0 +1,19 @@
+# Gateway for the EdgionBackendTrafficPolicy/ConnectTimeout integration scenario
+# (per-backend connect-timeout override, spec:
+# docs/superpowers/specs/2026-07-22-per-backend-connect-timeout-design.md).
+# Plain HTTP listener; the client-facing hop carries no TLS for this scenario.
+# Port from ports.json key "EdgionBackendTrafficPolicy/ConnectTimeout".
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ct-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31943
+      allowedRoutes:
+        namespaces:
+          from: All

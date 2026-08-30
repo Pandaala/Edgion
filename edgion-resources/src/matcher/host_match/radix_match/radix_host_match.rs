@@ -39,11 +39,6 @@ impl<T> RadixHostMatchEngine<T> {
         self.hosts.len()
     }
 
-    /// Get direct access to the underlying radix tree for advanced usage
-    pub fn tree(&self) -> &RadixTree {
-        &self.tree
-    }
-
     /// Match a hostname and return the matched runtime.
     ///
     /// The caller MUST pass a pre-normalized (lowercased) hostname.

@@ -1,0 +1,33 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mutation-retry-shorter
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /payload
+              value: x
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mutation-retry-longer
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /payload
+              value: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

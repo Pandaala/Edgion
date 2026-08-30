@@ -1,0 +1,31 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-json-select
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "json-select"
+        maxBodyScanPasses: 1
+        source: |
+          let values = req.body.json_select({
+            "id": "$.user.id",
+            "idAlias": "$.user.id",
+            "name": "$.user.name",
+            "enabled": "$.enabled",
+            "missing": "$.missing",
+            "nullValue": "$.nullValue"
+          })
+          if values["id"] != 7 || values["idAlias"] != 7 {
+            return deny(422, "JSON multi-select integer mismatch")
+          }
+          if values["name"] != "alice" || values["enabled"] != true {
+            return deny(422, "JSON multi-select scalar mismatch")
+          }
+          if values["missing"] != nil || values["nullValue"] != nil {
+            return deny(422, "JSON multi-select Nil mismatch")
+          }
+        errorPolicy: deny

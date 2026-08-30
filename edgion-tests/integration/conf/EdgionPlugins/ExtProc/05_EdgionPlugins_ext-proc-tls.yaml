@@ -1,0 +1,34 @@
+# ExtProc over TLS (P0#1, Scenario A): the gateway's hand-built rustls ext_proc
+# connector dials the fake processor over HTTPS/h2 with a private CA.
+#
+# Fake TLS ext_proc gRPC server: 127.0.0.1:30042 (test_server --ext-proc-tls-port,
+# serving the backend server cert whose SAN covers 127.0.0.1).
+# grpcService.tls=true + validation.caCertificateRefs:[{kind:Secret,name:backend-ca}]
+# + verify (default on) → the bidi stream only establishes if the rustls connector completes the
+# TLS+h2 handshake trusting the private CA. Header mutation is then asserted over TLS.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-tls
+  namespace: edgion-default
+spec:
+  # Both phases over TLS: the controller resolves caCertificateRefs for request AND
+  # upstream-response stages, so both connectors complete the TLS+h2 handshake
+  # with the private CA and mutate a header.
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30042"
+          timeoutMs: 2000
+          tls:
+            enabled: true
+            validation:
+              caCertificateRefs:
+                - kind: Secret
+                  name: backend-ca
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false

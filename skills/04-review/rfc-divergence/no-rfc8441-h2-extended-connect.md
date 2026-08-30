@@ -61,6 +61,6 @@ supporting it is optional. No MUST/SHOULD is breached.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a3.md → V5` (CONFIRM, optional-extension qualification)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a3.md → V5` (CONFIRM, optional-extension qualification)
 - Related divergence: [[handshake-not-validated]] (defers WS-over-H2 to "tracked separately as ws-05"), [[origin-not-validated]]
 - Hot-path rule: `skills/03-coding/01-log-safety.md`

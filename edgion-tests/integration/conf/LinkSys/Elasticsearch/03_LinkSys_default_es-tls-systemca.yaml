@@ -1,0 +1,25 @@
+# Negative control for the CA REPLACE model (P0#3).
+#
+# Same TLS endpoint as es-tls-test (the nginx terminator with a PRIVATE-CA server
+# cert), but caSource: System — i.e. trust only the built-in public webpki roots.
+# The private backend CA is NOT among them, so the TLS handshake MUST fail and
+# the client never reaches a connected state. This is the proof that SecretRef
+# REPLACES (not augments) the public roots: with System roots alone the very same
+# endpoint is unreachable, whereas es-tls-test (private CA) connects.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-tls-systemca
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "https://127.0.0.1:19201"
+    tls:
+      enabled: true
+      validation:
+        wellKnownCACertificates: System
+    timeout:
+      connect: 5000
+      request: 30000

@@ -1,3 +1,4 @@
+use crate::ai::{get_adaptive_telemetry_store, run_adaptive_telemetry_ticker};
 use crate::api;
 use crate::cli::pingora::{create_and_configure_server, run_server};
 use crate::conf_sync::{ConfigClient, ConfigSyncClient};
@@ -26,6 +27,10 @@ use config::EdgionGatewayConfig;
     long_about = None
 )]
 pub struct EdgionGatewayCli {
+    /// Print compile-time Gateway capabilities in a machine-readable format and exit.
+    #[arg(long)]
+    pub print_build_capabilities: bool,
+
     #[command(flatten)]
     pub config: EdgionGatewayConfig,
 }
@@ -37,10 +42,10 @@ impl EdgionGatewayCli {
 
     /// Create ConfigSyncClient
     async fn create_config_sync_client(config: &EdgionGatewayConfig) -> Result<ConfigSyncClient> {
-        let server_addr_opt = config.server_addr();
-        let server_addr = server_addr_opt
-            .as_deref()
-            .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
+        let server_addrs = config.server_addrs();
+        if server_addrs.is_empty() {
+            bail!("server_addrs is required: provide --server-addr (repeatable) or set gateway.server_addrs in the config file");
+        }
 
         let security = &config.conf_sync_security;
         security
@@ -58,6 +63,23 @@ impl EdgionGatewayCli {
             );
         }
 
+        // Fail-close (2026-07-14): an omitted `conf_sync_security` refuses to start. The
+        // conf_sync client has the same guard (`ConfigSyncClient::new`); checking here too
+        // fails fast, before the cert-expiry watcher and the auto_ca retry loop.
+        security.ensure_transport_configured()?;
+
+        // conf_sync cert expiry safety net (observability only): re-reads the mounted
+        // client cert every tick (kubelet refreshes Secret mounts in place), exports the
+        // notAfter gauge, and WARN/ERRORs as expiry approaches. Spawned before the client
+        // (and its auto_ca retry loop) so the watch exists even while the provisioned
+        // Secret is still landing — a missing file is logged, not fatal.
+        {
+            use edgion_common::conf_sync::cert_expiry_watch as cert_watch;
+            if let Some(source) = cert_watch::file_source_from_tls(security.resolve_active_tls()) {
+                cert_watch::spawn_expiry_watch(cert_watch::sides::CLIENT, source);
+            }
+        }
+
         // Under auto_ca the gateway-client Secret is provisioned by the Controller and may
         // not exist yet at cold start (the mounted volume is `optional`). Rather than
         // crash-loop on a transient "cert file not found", retry within the startup-probe
@@ -71,7 +93,7 @@ impl EdgionGatewayCli {
             loop {
                 attempt += 1;
                 match ConfigSyncClient::new(
-                    server_addr,
+                    server_addrs.clone(),
                     "edgion-gateway".to_string(),
                     Duration::from_secs(10),
                     security,
@@ -100,7 +122,7 @@ impl EdgionGatewayCli {
         }
 
         let sync_client = ConfigSyncClient::new(
-            server_addr,
+            server_addrs,
             "edgion-gateway".to_string(),
             Duration::from_secs(10),
             security,
@@ -117,6 +139,13 @@ impl EdgionGatewayCli {
         config: &EdgionGatewayConfig,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
+        // One process-wide adaptive publisher. Request paths only update
+        // captured atomics; no per-request task is created.
+        tokio::spawn(run_adaptive_telemetry_ticker(
+            get_adaptive_telemetry_store(),
+            shutdown_rx.clone(),
+        ));
+
         // Start backend cleaner; stop it when the shutdown signal fires.
         let mut cleaner = BackendCleaner::new();
         cleaner.start();
@@ -340,9 +369,9 @@ impl EdgionGatewayCli {
         }
 
         // 4b. Install the process-wide Prometheus recorder eagerly, before any
-        // startup-time metric is emitted (e.g. the conf_sync client's
-        // plaintext_default / skip_tls system-error gauge during config-sync
-        // client construction, or the integration-testing-mode gauge below).
+        // startup-time metric is emitted (e.g. the conf_sync client's skip_tls
+        // system-error gauge during config-sync client construction, or the
+        // integration-testing-mode gauge below).
         // Reuses the gateway's MetricsConfig so custom histogram buckets are
         // preserved; install_global_recorder is OnceLock-guarded, so the metrics
         // server's later lazy install no-ops. Mirrors the controller's "1b" eager install.
@@ -355,15 +384,161 @@ impl EdgionGatewayCli {
             );
         }
 
-        // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
+        // 4c. FIPS: detect the host state, publish the gauges, enforce the
+        // startup requirement, and resolve the approved-profile policy.
+        // Placed after the Prometheus recorder is installed (4b) so the gauges
+        // are captured by the real exporter, and before any downstream subsystem
+        // is initialized so a required-but-missing FIPS module aborts early.
+        //
+        // The host FIPS state is informational: BoringSSL is linked statically,
+        // so the node's mode has no effect on our crypto. It drives the
+        // posture guardrail and the `fips_policy: auto` default only.
+        use crate::tls::fips_host::{self, HostFipsState};
+        use crate::tls::fips_profile;
+
+        let fips_available = fips_profile::fips_module_available();
+        // The detection-path override is production-unsafe (it is the sole input
+        // to detection, so it can suppress the posture signal entirely), and
+        // is honored only under the same integration-testing gate as the other
+        // production-unsafe modes.
+        let host_state = fips_host::detect_host_fips(integration_testing);
+
+        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_MODULE_ENABLED).set(if fips_available {
+            1.0
+        } else {
+            0.0
+        });
+        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_HOST_ENABLED)
+            .set(if host_state == HostFipsState::Enabled { 1.0 } else { 0.0 });
+        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_HOST_DETECT_ERROR)
+            .set(if host_state == HostFipsState::Unknown { 1.0 } else { 0.0 });
+
+        let require_fips = config.gateway.require_fips
+            || config::require_fips_env_enabled(std::env::var(config::REQUIRE_FIPS_ENV).ok().as_deref());
+
+        if let Err(msg) = config::check_fips_requirement(require_fips, fips_available) {
+            tracing::error!(target: "startup", "{msg}");
+            std::process::exit(1);
+        }
+
+        // Posture guardrail: a FIPS node running a binary without BoringSSL
+        // FIPS mode. WARN rather than exit, because `fips_enabled=1` is a
+        // node property the gateway's operator may not control; fail-fast is
+        // opt-in via `require_fips`.
+        if fips_host::host_fips_mismatch(host_state, fips_available) {
+            tracing::warn!(
+                target: "startup",
+                "host kernel reports FIPS mode but this binary was not built with \
+                 BoringSSL FIPS mode. Deploy a FIPS-mode build, or set require_fips \
+                 to fail closed. This signal does not establish CMVP compliance. \
+                 Alert on: fips_host_enabled == 1 and fips_module_enabled == 0"
+            );
+        }
+
+        // Resolve the policy mode: env > CLI/file > Auto. (`merge()` has already
+        // collapsed CLI over file into `config.gateway.fips_policy`.)
+        let configured = config.gateway.fips_policy;
+        let env_mode = match config::fips_policy_env_mode(std::env::var(config::FIPS_POLICY_ENV).ok().as_deref()) {
+            config::EnvPolicy::Set(mode) => Some(mode),
+            config::EnvPolicy::Unset => None,
+            config::EnvPolicy::Invalid(raw) => {
+                tracing::warn!(
+                    target: "startup",
+                    env = config::FIPS_POLICY_ENV,
+                    value = %raw,
+                    "ignoring an unrecognized FIPS policy value; expected auto, on, or off"
+                );
+                None
+            }
+        };
+
+        let mode = env_mode.or(configured).unwrap_or_default();
+        fips_profile::set_fips_policy_forced(fips_profile::resolve_policy(mode, host_state));
+
+        let policy_active = fips_profile::fips_policy_active();
+        ::metrics::gauge!(
+            crate::observe::metrics::registry::names::FIPS_POLICY_ACTIVE,
+            "module_enabled" => if fips_available { "true" } else { "false" },
+        )
+        .set(if policy_active { 1.0 } else { 0.0 });
+
+        tracing::info!(
+            target: "startup",
+            fips_module_enabled = fips_available,
+            fips_host_state = ?host_state,
+            require_fips,
+            fips_policy_mode = mode.as_str(),
+            fips_policy_active = policy_active,
+            "FIPS status resolved"
+        );
+
+        // 4d. Outbound egress: install the gateway-local defaults (block_private,
+        // DNS cache TTL) that `EgressResolver` falls back to when a resource does
+        // not set `target.blockPrivate` / an explicit TTL. Must run before any
+        // `ManagedOutboundClient` can be built.
+        let outbound_egress_block_private = config.gateway.outbound_egress_block_private
+            || config::outbound_block_private_env_enabled(
+                std::env::var(config::OUTBOUND_BLOCK_PRIVATE_ENV).ok().as_deref(),
+            );
+        let outbound_egress_dns_cache_ttl_ms = config::resolve_outbound_egress_dns_cache_ttl_ms(
+            config.gateway.outbound_egress_dns_cache_ttl_ms,
+            std::env::var(config::OUTBOUND_DNS_CACHE_TTL_MS_ENV).ok().as_deref(),
+        );
+        crate::plugins::http::common::outbound::egress::configure_egress_defaults(
+            outbound_egress_block_private,
+            Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
+        );
+
+        // 4e. Wasm OCI disk cache: unset dir => default under the work dir;
+        // empty string => disabled (memory-only module cache).
+        {
+            use crate::plugins::http::wasm::oci::cache::{configure_oci_disk_cache, OciDiskCacheConfig};
+            let cache_cfg = match config.gateway.wasm_oci_cache_dir.as_deref() {
+                Some("") => None,
+                other => Some(OciDiskCacheConfig {
+                    dir: edgion_resources::work_dir().resolve(other.unwrap_or("wasm-oci-cache")),
+                    ttl: Duration::from_secs(config.gateway.wasm_oci_cache_ttl_secs),
+                    purge_interval: Duration::from_secs(config.gateway.wasm_oci_cache_purge_interval_secs),
+                    max_bytes: config.gateway.wasm_oci_cache_max_bytes,
+                }),
+            };
+            configure_oci_disk_cache(cache_cfg);
+            crate::plugins::http::wasm::oci::configure_oci_pull(
+                Duration::from_secs(config.gateway.wasm_oci_pull_timeout_secs),
+                config.gateway.wasm_oci_pull_attempts,
+            );
+        }
+
+        // 5. Initialize RateLimit / cache / access-log sensitive global configurations
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
-        config::init_lru_cache_global_config(&config.lru_cache);
+        config::init_lru_cache_global_config(&config.lru_cache)
+            .map_err(|error| anyhow::anyhow!("Invalid lru_cache configuration: {error}"))?;
+        config::init_tiny_ufo_ttl_cache_global_config(&config.tiny_ufo_ttl_cache)
+            .map_err(|error| anyhow::anyhow!("Invalid tiny_ufo_ttl_cache configuration: {error}"))?;
         edgion_resources::sensitive::init_sensitive(config.access_log_sensitive.clone());
 
         // 6. Initialize AllEndpointStatus global configuration
         crate::plugins::http::all_endpoint_status::plugin::init_all_endpoint_status_global_config(
             &config.all_endpoint_status,
         );
+
+        // 6b. Initialize the GeoIP provider and, when configured, spawn the
+        // background updater. Never blocks on the network and never fails
+        // startup — see `crate::geoip::init` for the fail-open rationale.
+        //
+        // `crate::geoip::init` runs synchronously here, on the plain OS thread
+        // between two `runtime.block_on` calls — NOT inside the Tokio runtime
+        // context. When `update_url` is set, `GeoIpUpdater::spawn` calls
+        // `tokio::spawn`, which unconditionally panics ("there is no reactor
+        // running") without an entered runtime. `runtime.enter()` only sets
+        // the thread-local pointing at this runtime for the duration the guard
+        // is held; it does not block, and the runtime's own worker threads
+        // (already running once `Runtime::new()` returns) keep driving the
+        // spawned updater task for the rest of the process's life after the
+        // guard drops at the end of this scope.
+        let _geoip_runtime_guard = runtime.enter();
+        crate::geoip::init(&config.gateway.geoip);
+        drop(_geoip_runtime_guard);
 
         tracing::info!(
             component = "startup",
@@ -380,10 +555,56 @@ impl EdgionGatewayCli {
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
 
-        // 9. Get server info from Controller (includes supported kinds)
+        // 9. Get server info from Controller (includes supported kinds).
+        // Bootstrap rotation (spec §7.3): with multiple controllers (etcd HA) the
+        // first address may be a follower answering UNAVAILABLE — the previous
+        // single-shot call would crash-loop the gateway. Rotate through the list
+        // within a bounded budget (mirrors the auto_ca retry shape); do NOT loop
+        // forever inside block_on — the supervisor restart supplies "never give
+        // up". A single-address deployment retries the same address, which is a
+        // strict improvement over the previous instant hard-fail.
         let server_info = runtime
-            .block_on(sync_client.get_server_info())
-            .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
+            .block_on(async {
+                const MAX_ATTEMPTS: u32 = 20;
+                const ATTEMPT_PAUSE: Duration = Duration::from_secs(2);
+                let rotator = sync_client.rotator();
+                let mut tried: Vec<String> = Vec::new();
+                let mut attempt: u32 = 0;
+                loop {
+                    attempt += 1;
+                    let addr = sync_client.current_addr();
+                    match sync_client.get_server_info().await {
+                        Ok(info) => return Ok(info),
+                        Err(e) => {
+                            if !tried.contains(&addr) {
+                                tried.push(addr.clone());
+                            }
+                            if attempt >= MAX_ATTEMPTS {
+                                return Err(anyhow!(
+                                    "Failed to get server info after {attempt} attempts across {tried:?}: {e}"
+                                ));
+                            }
+                            tracing::warn!(
+                                component = "startup",
+                                attempt,
+                                max_attempts = MAX_ATTEMPTS,
+                                addr = %addr,
+                                error = %e,
+                                "bootstrap get_server_info failed; rotating to the next controller"
+                            );
+                            if let Err(re) = sync_client.rotate().await {
+                                tracing::warn!(component = "startup", error = %re, "bootstrap rotation failed");
+                            }
+                            if rotator.completed_full_lap() {
+                                rotator.backoff_after_lap().await;
+                            } else {
+                                tokio::time::sleep(ATTEMPT_PAUSE).await;
+                            }
+                        }
+                    }
+                }
+            })
+            .map_err(|e: anyhow::Error| anyhow!("Failed to get server info from Controller: {}", e))?;
 
         // 10. Initialize integration testing mode from CLI flag (already gated on
         // the env override at the top of this function).
@@ -422,12 +643,32 @@ impl EdgionGatewayCli {
         let sync_client_arc = Arc::new(sync_client);
         let sync_client_for_meta = sync_client_arc.clone();
         runtime.spawn(async move {
-            sync_client_for_meta.start_watch_server_meta().await;
+            sync_client_for_meta.run_leader_session().await;
         });
+
+        // 13b. Hot-reload the conf_sync client TLS identity (spec §6 T4): watch the
+        // active TLS set's file paths for in-place replacement (cert-manager renewal,
+        // Secret update). Only when a real file-backed mTLS set is active — plaintext
+        // and skip_tls have nothing to reload. Flipping `active` remains restart-bound.
+        if let Some(tls) = config.conf_sync_security.resolve_active_tls().filter(|t| !t.skip_tls) {
+            use crate::conf_sync::conf_client::cert_watch::{spawn_client_cert_watcher, CertPaths};
+            let paths = CertPaths {
+                cert: tls.cert_path(),
+                key: tls.key_path(),
+                ca: tls.ca_path(),
+            };
+            // Process-lifetime watcher: the gateway exits the process on shutdown,
+            // so a never-cancelled token is sufficient here.
+            let shutdown = tokio_util::sync::CancellationToken::new();
+            runtime.block_on(async {
+                spawn_client_cert_watcher(sync_client_arc.clone(), paths, shutdown);
+            });
+        }
 
         // 14. Initialize metrics configuration (global OnceLock for hot-path access)
         config::init_request_duration_config(config.metrics.request_duration.clone());
         config::init_backend_requests_config(config.metrics.backend_requests.clone());
+        config::init_genai_tokens_config(config.metrics.genai_tokens.clone());
 
         // 15. Initialize path normalization config (global OnceLock for hot-path access)
         edgion_resources::path_normalization::init_path_normalization_config(config.path_normalization.clone());

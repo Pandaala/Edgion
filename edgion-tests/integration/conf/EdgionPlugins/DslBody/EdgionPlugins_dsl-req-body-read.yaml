@@ -1,0 +1,106 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-req-body-read
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "req-body-read"
+        source: |
+          let mode = req.header("X-Body-Mode")
+          if mode == "inspect" {
+            if req.body.byte_len() != 14 {
+              return deny(422, "body byte length mismatch")
+            }
+            if req.body.len() != 13 {
+              return deny(422, "body text length mismatch")
+            }
+            if req.body.is_empty() {
+              return deny(422, "body unexpectedly empty")
+            }
+            if req.body.starts_with("alpha-") == false {
+              return deny(422, "body prefix mismatch")
+            }
+            if req.body.ends_with("-omega") == false {
+              return deny(422, "body suffix mismatch")
+            }
+            if req.body.contains("π-om") == false {
+              return deny(422, "body substring mismatch")
+            }
+            if req.body.matches("^alpha-π-omega$") == false {
+              return deny(422, "body regex mismatch")
+            }
+            if req.body != "alpha-π-omega" {
+              return deny(422, "body equality mismatch")
+            }
+            if "alpha-π-omega" != req.body {
+              return deny(422, "reverse body equality mismatch")
+            }
+            if req.body.read(6, 2) != "π" {
+              return deny(422, "body range mismatch")
+            }
+            if req.body.read_all() != "alpha-π-omega" {
+              return deny(422, "body full read mismatch")
+            }
+            if req.body.sha256() != "ee04b27ecbbd770d66cb864060c5b8f92c24c0e8316ca4006e272428ef3882c2" {
+              return deny(422, "body digest mismatch")
+            }
+          } else if mode == "json" {
+            if req.body.json_get("$.users[1].name") != "alice" {
+              return deny(422, "JSON string selection mismatch")
+            }
+            if req.body.json_get("$.enabled") != true {
+              return deny(422, "JSON boolean selection mismatch")
+            }
+            if req.body.json_get("$.missing") != nil {
+              return deny(422, "missing JSON selection mismatch")
+            }
+          } else if mode == "mutate" {
+            req.body.replace("dog", "fox")
+            req.body.prepend("[")
+            req.body.append("]")
+            req.body.remove(1, 5)
+          } else if mode == "bodyless-mutate" {
+            req.body.append("seed")
+          } else if mode == "spill-mutate" {
+            if req.body.byte_len() != 262144 {
+              return deny(422, "spilled body length mismatch")
+            }
+            if req.body.read(100000, 3) != "xxx" {
+              return deny(422, "spilled body range mismatch")
+            }
+            req.body.prepend("[")
+            req.body.append("]")
+            req.body.remove(1, 2)
+          } else if mode == "spill-scan" {
+            if req.body.byte_len() != 262144 {
+              return deny(422, "spilled scan body length mismatch")
+            }
+            if req.body.contains("needle") == false {
+              return deny(422, "spilled cross-chunk substring mismatch")
+            }
+            if req.body.matches("needle") == false {
+              return deny(422, "spilled cross-chunk regex mismatch")
+            }
+          } else if mode == "spill-json" {
+            if req.body.byte_len() <= 131072 {
+              return deny(422, "JSON body did not exceed the spill threshold")
+            }
+            if req.body.json_get("$.selected") != "{\"n\":1.0}" {
+              return deny(422, "spilled JSON selection mismatch")
+            }
+          } else {
+            if req.body.starts_with("xxxx") == false {
+              return deny(422, "spilled body prefix mismatch")
+            }
+            if req.body.ends_with("xxxx") == false {
+              return deny(422, "spilled body suffix mismatch")
+            }
+            if req.body.sha256() != "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310fbdb7e914e9" {
+              return deny(422, "body digest mismatch")
+            }
+          }
+        errorPolicy: deny

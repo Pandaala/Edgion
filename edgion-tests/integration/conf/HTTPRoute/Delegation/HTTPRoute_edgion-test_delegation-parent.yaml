@@ -1,0 +1,39 @@
+# Parent (root) route owned by the platform team.
+# Rule 1 is a plain rule proving delegation does not disturb siblings.
+# Rule 2 delegates /api/v1/billing to every HTTPRoute in the edgion-deleg
+# namespace (wildcard) and pins a mandatory header filter that children
+# must inherit.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: delegation-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+      namespace: edgion-test
+  hostnames:
+    - "delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /plain
+      backendRefs:
+        - name: test-http
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: "on"
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: "*"
+          namespace: edgion-deleg

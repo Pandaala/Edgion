@@ -1,116 +1,96 @@
 ---
-name: gateway-ssl-backends
-description: SSL backend implementations — two compilation features (BoringSSL and OpenSSL), interface abstraction, recommendations.
+name: gateway-tls-backends
+description: Gateway TLS backend boundary — BoringSSL is supported, rustls is a dormant future-development seam, and FIPS is an opt-in BoringSSL image feature.
 ---
 
-# SSL backends (BoringSSL / OpenSSL)
+# TLS build backends and capability boundaries
 
-## Overview
+## Cargo features
 
-Edgion Gateway supports two SSL backends through Cargo feature flags. The choice is made at compile time, and runtime behavior dispatches automatically via conditional compilation (`#[cfg(feature = "...")]`).
-
-## Feature flags
+`edgion-gateway` exposes two mutually exclusive TLS backend features, but only
+`boringssl` is a supported Gateway product/build target:
 
 ```toml
-[features]
-boringssl = [...]   # use BoringSSL as the TLS backend
-openssl = [...]     # use OpenSSL as the TLS backend
+default = ["allocator-jemalloc", "boringssl"]
+boringssl = ["pingora-core/boringssl", "pingora-proxy/boringssl", "dep:boring-sys", "dep:boring"]
+rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
+fips = ["boringssl", "boring/fips"]
 ```
 
-The two features are mutually exclusive: in conditional compilation, `#[cfg(all(feature = "openssl", not(feature = "boringssl")))]` ensures BoringSSL takes precedence.
+There is no gateway `openssl` feature or `tls/openssl` implementation. Do not introduce an
+OpenSSL fallback branch when changing TLS code.
 
-## BoringSSL backend
+The `rustls` feature is retained only as a future-development seam. It has no
+clean-build, CI, Docker, integration-test, or runtime capability contract.
 
-```
-edgion-gateway/src/tls/boringssl/
-├── mod.rs
-└── mtls_verify_callback.rs   # mTLS custom verify callback
-```
+## Capability boundary
 
-### Capability matrix
+| Capability | BoringSSL build | rustls feature |
+|------------|-----------------|--------------|
+| Gateway build/release/CI contract | Supported | Unsupported; a clean build is not guaranteed |
+| Plain HTTP and non-terminating data-plane paths | Supported | No product contract |
+| Custom HTTPS downstream termination and dynamic certificates | Supported | Unsupported |
+| TLSRoute terminate-to-TCP | Supported | Unsupported |
+| TLSRoute passthrough | Does not terminate TLS | No product contract |
+| EdgionTls SNI selection, per-connection minimum version/ciphers, mTLS allowlists, SSL ex_data | Supported by the BoringSSL-gated runtime | Unsupported |
+| Upstream BackendTLSPolicy | Supported | No parity contract |
+| Image-only BoringSSL FIPS mode | `fips` feature | Unsupported |
 
-| Capability | Status | Notes |
-|------------|--------|-------|
-| TLS termination | Full support | Certificate / key setup, ALPN (HTTP/2) |
-| mTLS client verification | Full support | CA verification, verify_depth |
-| SAN/CN allowlist | Full support | Custom verify callback |
-| SSL ex_data | Full support | Per-connection context passing |
-| Minimum TLS version | Full support | TLS 1.0 ~ 1.3 |
-| Cipher-suite configuration | Full support | `SSL_set_strict_cipher_list` |
-| TLS 1.3 cipher suites | Not configurable | Hardcoded by BoringSSL |
+The custom runtime is gated in `tls/runtime/mod.rs` and `tls/mod.rs`. Use
+BoringSSL for every Gateway deployment. Do not treat rustls-only compile errors,
+warnings, missing plugin portability, incomplete TLS behavior, Docker/CI gaps,
+or test-harness gaps as current findings. Future work is consolidated in
+`tasks/todo/rustls-gateway-tls-support.md` and starts only with explicit user
+authorization. Backend-independent uses of the `rustls` library are unaffected.
 
-### mTLS verify callback
+## BoringSSL implementation
 
-`mtls_verify_callback.rs` implements a custom certificate-verification callback that supports allowlist verification by SAN (Subject Alternative Name) and CN (Common Name). It activates when EdgionTls is configured with `allowed_sans` or `allowed_cns`.
+The BoringSSL path owns:
 
-### ex_data mechanism
+- the select-certificate, certificate, and handshake-complete callback chain;
+- SSL ex_data lifecycle and early-abort audit logging;
+- downstream mTLS certificate-chain and SAN/CN allowlist verification;
+- per-connection minimum TLS version and TLS 1.2 cipher configuration;
+- backend certificate SAN extraction/hooks used by upstream policy enforcement.
 
-BoringSSL's `SSL_set_ex_data` / `SSL_get_ex_data` are used to pass per-connection context (`SslCtx`) between `certificate_callback` and `handshake_complete_callback`. Includes:
+TLS 1.3 cipher suites cannot be restricted through BoringSSL's TLS 1.2 cipher-list API.
 
-- `SSL_get_ex_new_index`: register a custom index (once globally, via `LazyLock` + `Once`).
-- Register a `free_ssl_ctx` callback to handle memory release on SSL object destruction.
-- Thread safety: the index is stored in `AtomicI32`, initialized via `std::sync::Once`.
+## FIPS build and policy
 
-## OpenSSL backend
+`fips` is an explicit image-build feature, not a runtime Cargo default and not
+part of the ordinary release workflow. Boring 5 builds its bundled FIPS module
+source in dedicated Linux amd64 and arm64 builders, which then run the isolated
+module and TLS-profile verification. The FIPS-only source override pins Boring
+5.2.0's BoringSSL revision plus the upstream arm64 integrity-relocation fix;
+ordinary builders do not fetch or use that override. At startup:
 
-```
-edgion-gateway/src/tls/openssl/
-└── mod.rs   # placeholder module (currently empty)
-```
+- `require_fips: true` fails startup when BoringSSL FIPS mode is not present;
+- `fips_policy` is `auto | on | off` and resolves with environment (`EDGION_FIPS_POLICY`) over
+  CLI (`--fips-policy`) over config over `auto`;
+- `auto` follows `/proc/sys/crypto/fips_enabled` and tightens the downstream profile on a FIPS host;
+- a non-FIPS binary on a FIPS host emits a warning and exposes host/module metrics.
 
-### Capability matrix
+When enforcement is active and `EdgionTls.spec.ciphers` is absent, downstream TLS defaults to the
+approved TLS 1.2 cipher set in `fips_profile::FIPS_TLS12_CIPHERS` and the NIST P-curves P-256,
+P-384, and P-521. An explicit operator cipher list wins for TLS 1.2; the curve restriction remains
+active on a genuine FIPS build.
 
-| Capability | Status | Notes |
-|------------|--------|-------|
-| TLS termination | Basic support | Through Pingora's OpenSSL bindings |
-| mTLS client verification | Basic support | Standard OpenSSL verify chain |
-| SAN/CN allowlist | Not implemented | Requires a custom verify callback |
-| SSL ex_data | Not implemented | Callbacks return basic TlsConnMeta |
-| Minimum TLS version | Supported | Through `set_min_proto_version` |
-| Cipher-suite configuration | No-op | Ignored in `configure_ciphers` |
+Limitations:
 
-### Non-BoringSSL fallback
-
-When compiled with the OpenSSL backend:
-
-- `store_ssl_ctx` returns `false`, logging `"no boringssl exdata"`.
-- `take_ssl_ctx` returns `None`.
-- `handshake_complete_callback` returns a `TlsConnMeta` with basic info (SNI, port, timestamp).
-- BoringSSL FFI calls inside `configure_ciphers` are removed via conditional compilation.
-
-## Unified interface
-
-`backend_api.rs` provides a unified interface dispatched at compile time:
-
-```rust
-pub fn set_mtls_verify_callback(
-    ssl: &mut SslRef,
-    verify_mode: SslVerifyMode,
-    edgion_tls: &Arc<EdgionTls>,
-) -> Result<(), String>
-```
-
-- `#[cfg(feature = "boringssl")]`: calls `boringssl::mtls_verify_callback::set_verify_callback_with_whitelist`.
-- `#[cfg(all(feature = "openssl", not(feature = "boringssl")))]`: returns an error indicating it is not implemented.
-
-Other operations needing conditional compilation use `#[cfg]` attributes directly at the call sites — for example, `configure_ciphers` and `verify_depth` setup in `tls_pingora.rs`.
-
-## Module conditional compilation
-
-The entire `tls/runtime/backend/mod.rs` module is guarded by conditional compilation:
-
-```rust
-#![cfg(any(feature = "boringssl", feature = "openssl"))]
-```
-
-This ensures backend-related code is not compiled when no SSL backend is enabled.
+- BoringSSL TLS 1.3 suites cannot be restricted, so ChaCha20 can still negotiate.
+- Upstream gateway-to-backend cipher suites are not FIPS-restricted by this policy.
+- The runtime FIPS-mode signal and host-policy alignment do not establish CMVP
+  certificate scope, artifact provenance, or deployment compliance.
 
 ## Key source files
 
 | File | Responsibility |
 |------|----------------|
-| `edgion-gateway/src/tls/mod.rs` | Module entry, feature-flag conditional compilation |
-| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verify callback |
-| `edgion-gateway/src/tls/boringssl/mod.rs` | BoringSSL backend module (primary production backend) |
-| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | Unified backend API |
-| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | Conditionally compiled SSL ex_data operations |
+| `edgion-gateway/Cargo.toml` | TLS backend and FIPS features |
+| `edgion-gateway/src/tls/mod.rs` | TLS module feature gates |
+| `edgion-gateway/src/tls/runtime/mod.rs` | BoringSSL-only custom runtime boundary |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | Downstream callback implementation |
+| `edgion-gateway/src/tls/runtime/backend/` | BoringSSL backend certificate helpers |
+| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | mTLS allowlist callback |
+| `edgion-gateway/src/tls/fips_profile.rs` | Approved profile and tri-state policy resolution |
+| `edgion-gateway/src/tls/fips_host.rs` | Host-kernel FIPS detection |

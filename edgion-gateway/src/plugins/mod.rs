@@ -9,9 +9,9 @@ pub use runtime::conditions::{Condition, EvaluationResult, PluginConditions};
 pub use runtime::gateway_api_filters::RequestHeaderModifierFilter;
 pub use runtime::{
     EdgionPluginsLog, PluginLog, PluginRuntime, PluginSession, PluginSessionError, PluginSessionResult, RequestFilter,
-    StageLogs, UpstreamResponse, UpstreamResponseFilter,
+    StageLogs, UpstreamResponse, UpstreamResponseFilter, UpstreamResponseTrailer, UpstreamTrailerResult,
 };
 pub use stream::{
-    StreamContext, StreamPlugin, StreamPluginResult, StreamPluginRuntime, TlsRouteContext, TlsRoutePlugin,
+    StreamContext, StreamLayer, StreamPlugin, StreamPluginResult, StreamPluginRuntime, TlsRouteContext, TlsRoutePlugin,
     TlsRoutePluginRuntime,
 };

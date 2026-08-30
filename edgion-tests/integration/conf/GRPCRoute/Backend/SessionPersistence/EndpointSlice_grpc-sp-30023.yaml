@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: grpc-sp-eps-30023
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: grpc-sp-service
+addressType: IPv4
+ports:
+  - name: grpc
+    port: 30023
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

@@ -1,5 +1,4 @@
 use crate::api::{create_admin_router, serve_with_shutdown as serve_admin_api_with_shutdown};
-use crate::conf_mgr::conf_center::traits::CenterLifeCycle;
 use crate::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 use crate::config::EdgionControllerConfig;
@@ -162,6 +161,7 @@ impl EdgionControllerCli {
         probe_addr: SocketAddr,
         metrics_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
+        auto_ca_ns_sans: Option<(String, Vec<String>)>,
         config_file: Option<String>,
         authorizer: std::sync::Arc<crate::authz::Authorizer>,
         center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
@@ -214,7 +214,13 @@ impl EdgionControllerCli {
 
         // Create gRPC server with dynamic provider
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
-        let grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token);
+        let mut grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token.clone());
+        // Etcd mode: streams additionally scope to the current leadership term, so
+        // a demoted leader actively closes them (spec §6.1). K8s/FS return `None`
+        // and keep the process-token-only behavior (S2 zero-impact guard).
+        if let Some(slot) = conf_mgr.term_token_slot() {
+            grpc_server.set_term_token_slot(slot);
+        }
 
         // conf_sync auto-CA (K8s only): when enabled, the Controller's internal CA
         // ensures the CA Secret, provisions the gateway-client leaf Secret, and mints
@@ -222,14 +228,125 @@ impl EdgionControllerCli {
         // Idempotent on every startup; a concurrent create is adopted on a 409.
         // Phase 1 relies on this idempotent-adopt for split-brain safety; Phase 2 adds
         // the leader gate + rotation.
-        let auto_identity = if security.auto_ca {
-            let ns = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+        //
+        // Build the hot-reloadable server identity (spec §6 T3):
+        //  - auto_ca (K8s): from the provisioned in-memory identity
+        //  - file mode: from the configured active TLS file paths
+        //  - plaintext/skip_tls: none
+        use crate::conf_sync::conf_server::cert_watch::{spawn_server_cert_watcher, CertPaths};
+        use crate::conf_sync::conf_server::tls_identity::{global_handle, ServerIdentity, ServerIdentityHandle};
+
+        // Controller-side rotation validation (spec §5.2): run BEFORE the auto-CA
+        // branch below, which calls `provision()` and persists Secrets minted from
+        // the configured TTLs. An invalid or suspect schedule/TTL combo must abort
+        // startup before that side effect, not be silently tolerated until the
+        // first rotation attempt.
+        if let Some(rotation) = &security.rotation {
+            if security.auto_ca {
+                match crate::services::conf_sync_ca::cert_util::validate_schedule_controller(rotation) {
+                    Ok(warnings) if warnings.is_empty() => {}
+                    Ok(warnings) => {
+                        for warning in &warnings {
+                            tracing::warn!(component = "conf_sync_ca", "{warning}");
+                        }
+                        edgion_common::observe::system_metrics::mark_system_error(
+                            edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                            edgion_common::observe::system_metrics::reasons::CERT_ROTATION_CONFIG_SUSPECT,
+                        );
+                    }
+                    Err(e) => anyhow::bail!("invalid conf_sync_security.rotation: {e}"),
+                }
+            } else {
+                tracing::warn!(component = "conf_sync_ca", "rotation config ignored (auto_ca disabled)");
+            }
+        }
+
+        // Inputs for the per-replica server-identity reconciler, captured in the
+        // auto_ca branch below and consumed right after `global_handle().set(..)`.
+        let mut auto_ca_identity_sync: Option<(
+            kube::Client,
+            String,
+            Vec<String>,
+            edgion_common::conf_sync::config::ConfSyncRotationConfig,
+        )> = None;
+
+        let tls_handle: Option<Arc<ServerIdentityHandle>> = if security.auto_ca {
+            // ns/sans were already computed once by the caller (`run_after_logging`)
+            // so `rotation::init` could run before the ConfMgr leadership spawn
+            // (spec §6 T5 init-before-leadership fix); reuse them instead of
+            // recomputing.
+            let (ns, sans) = auto_ca_ns_sans
+                .clone()
+                .expect("auto_ca_ns_sans is Some whenever security.auto_ca is set (computed by the caller)");
             let client = kube::Client::try_default().await?;
-            let sans = crate::services::conf_sync_ca::server_sans_for(&ns);
-            Some(crate::services::conf_sync_ca::provision(client, &ns, sans).await?)
+            let rotation = security.rotation.clone().unwrap_or_default();
+            let id = crate::services::conf_sync_ca::provision(client.clone(), &ns, sans.clone(), &rotation).await?;
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                "conf_sync mTLS enabled for gRPC server (auto-CA, in-memory server cert)"
+            );
+            let h = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(
+                &id.cert_pem,
+                id.key_pem.as_str(),
+                &id.ca_cert_pem,
+            )?));
+            auto_ca_identity_sync = Some((client, ns, sans, rotation));
+            Some(h)
+        } else if let Some(tls) = security.resolve_active_tls().filter(|t| !t.skip_tls) {
+            let cert = tokio::fs::read_to_string(tls.cert_path()).await?;
+            let key = tokio::fs::read_to_string(tls.key_path()).await?;
+            let ca = tokio::fs::read_to_string(tls.ca_path()).await?;
+            tracing::info!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                "conf_sync mTLS enabled for gRPC server"
+            );
+            let h = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(&cert, &key, &ca)?));
+            // Hot-reload (spec §6 T3): watch the active TLS set's file paths for
+            // in-place replacement (e.g. cert-manager renewal, Secret update).
+            // Flipping `active` to a different set remains restart-bound.
+            spawn_server_cert_watcher(
+                CertPaths {
+                    cert: tls.cert_path(),
+                    key: tls.key_path(),
+                    ca: tls.ca_path(),
+                },
+                h.clone(),
+                grpc_shutdown_token.clone(),
+            );
+            Some(h)
         } else {
             None
         };
+        if let Some(h) = &tls_handle {
+            let _ = global_handle().set(h.clone());
+        }
+
+        // Per-replica server-identity reconciler (auto_ca only). Started
+        // UNCONDITIONALLY — leadership is deliberately NOT involved. Under
+        // `ha_mode: all-serve` every replica serves the conf_sync API (which
+        // streams resolved Secrets), so every replica must keep its own served
+        // leaf AND its client-CA verifier in sync with the current root, or an
+        // emergency CA re-key never revokes anything on the non-leaders. Mirrors
+        // istiod's `watchRootCertAndGenKeyCert`. Read-only on Secrets; the only
+        // mutation is this process's own in-memory identity handle.
+        if let Some((client, ns, sans, rotation)) = auto_ca_identity_sync {
+            crate::services::conf_sync_ca::start_identity_sync(client, ns, sans, rotation, grpc_shutdown_token.clone());
+        }
+
+        let grpc_listener = tokio::net::TcpListener::bind(grpc_addr).await?;
+
+        // conf_sync cert expiry safety net (observability only): watches the LIVE
+        // in-service server identity through the hot-swap handle, so the gauge and
+        // thresholds stay accurate across rotations and file reloads. This is the
+        // outside cross-check on the rotation pipeline; plaintext/skip_tls = nothing
+        // to watch.
+        if tls_handle.is_some() {
+            use edgion_common::conf_sync::cert_expiry_watch as cert_watch;
+            cert_watch::spawn_expiry_watch(
+                cert_watch::sides::SERVER,
+                cert_watch::CertSource::PemFn(crate::conf_sync::conf_server::tls_identity::live_server_cert_pem),
+            );
+        }
 
         // Dedicated probe listener (liveness/readiness) — own socket, no auth.
         {
@@ -291,7 +408,7 @@ impl EdgionControllerCli {
         // `tokio::time::timeout` ensures the countdown only begins after SIGTERM/SIGINT.
         let serve_fut = async {
             tokio::join!(
-                grpc_server.serve_with_shutdown(grpc_addr, &security, auto_identity.as_ref(), grpc_shutdown),
+                grpc_server.serve_with_shutdown(grpc_listener, &security, tls_handle.clone(), grpc_shutdown),
                 serve_admin_api_with_shutdown(
                     conf_mgr.clone(),
                     schema_validator,
@@ -366,6 +483,11 @@ impl EdgionControllerCli {
         // Initialize global controller config for runtime access (e.g., by ReferenceGrant validator)
         crate::config::init_controller_config(config.clone());
 
+        // Compile and install the plugin policy (fail-fast: aborts startup on
+        // a malformed `validation.plugin_policy` config). Must run right after
+        // `init_controller_config` and before any plugin resource is preparsed.
+        crate::config::plugin_policy::init_compiled_plugin_policy(config.validation.plugin_policy.as_ref())?;
+
         // Initialize test mode if enabled via CLI --test-mode
         // This affects: metrics test features
         edgion_common::test_mode::init_global_test_mode(self.config.test_mode);
@@ -403,6 +525,8 @@ impl EdgionControllerCli {
                 service: "edgion-controller",
                 idle_timeout_secs: 0,
                 histogram_buckets: &[],
+                cardinality_cap: config.metrics.cardinality_cap,
+                cardinality_mode: config.metrics.cardinality_mode,
             },
         ) {
             tracing::error!(
@@ -422,6 +546,7 @@ impl EdgionControllerCli {
         let abn_cfg = &config.metrics.resource_abnormal;
         if abn_cfg.enabled {
             crate::observe::status_metrics::set_hard_cap(abn_cfg.hard_cap);
+            crate::observe::status_metrics::set_status_conditions_threshold(abn_cfg.status_conditions_threshold);
             crate::observe::status_metrics::spawn_snapshot_loop(abn_cfg.tick_secs);
         } else {
             tracing::info!(
@@ -450,19 +575,71 @@ impl EdgionControllerCli {
         let conf_center_config = config.conf_center.clone();
         let conf_mgr = Arc::new(ConfMgr::create(conf_center_config).await?);
 
-        // 5. Spawn ConfMgr.start_with_shutdown() in background
-        // Pass the shutdown_handle so ConfMgr uses the same signal source
-        // This avoids duplicate signal handlers and ensures coordinated shutdown
+        // 4b. conf_sync auto-CA rotation (spec §6 T5): register the rotation
+        // parameters via `rotation::init` BEFORE the ConfMgr leadership spawn
+        // immediately below. That spawned task can win leadership and reach the
+        // caches-ready callback (center.rs), which calls `start_conf_sync_rotation`,
+        // well before this function's control flow reaches the auto-CA
+        // provisioning code inside `start_services` further down -- if `init()`
+        // hasn't run by then, `start_conf_sync_rotation` no-ops silently for the
+        // entire leadership term (rotation never starts). Only synchronously
+        // available inputs are needed here (POD_NAMESPACE, resolved SANs, rotation
+        // config), so there is no reason to wait for the async `provision()`
+        // round-trip. ns/sans are computed once here and reused by
+        // `start_services` for `provision()` (see `auto_ca_ns_sans`).
+        let auto_ca_ns_sans: Option<(String, Vec<String>)> = if config.conf_sync_security.auto_ca {
+            let ns = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+            let sans = crate::services::conf_sync_ca::server_sans_for(&ns);
+            let rotation = config.conf_sync_security.rotation.clone().unwrap_or_default();
+            crate::services::conf_sync_ca::rotation::init(ns.clone(), sans.clone(), rotation);
+            Some((ns, sans))
+        } else {
+            None
+        };
+
+        // 5. Spawn ConfMgr.start_with_shutdown() in background, wrapped in an
+        // inner task so a lifecycle PANIC is observed as a JoinError — a panic
+        // unwinds past any linear code after the .await and tokio would
+        // otherwise swallow it at the task boundary, reproducing exactly the
+        // "lifecycle-dead-but-process-alive" wedge the deadman exists for.
         let start_conf_mgr = conf_mgr.clone();
         let conf_mgr_shutdown = shutdown_handle.clone();
+        let deadman_shutdown = shutdown_handle.clone();
         tokio::spawn(async move {
-            if let Err(e) = start_conf_mgr.start_with_shutdown(conf_mgr_shutdown).await {
+            let lifecycle = tokio::spawn(async move { start_conf_mgr.start_with_shutdown(conf_mgr_shutdown).await });
+            let outcome = lifecycle.await;
+            match &outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "conf_mgr_start_error",
+                        error = %e,
+                        "ConfMgr start failed"
+                    );
+                }
+                Err(join_err) => {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "conf_mgr_lifecycle_panic",
+                        error = %join_err,
+                        "ConfMgr lifecycle task panicked"
+                    );
+                }
+            }
+            // Deadman: any end without an orderly shutdown is abnormal. Mark
+            // FIRST (sticky /health 503 backstop), then trigger shutdown so the
+            // lease is released within seconds instead of waiting ~30 s+ for
+            // kubelet's liveness failure threshold.
+            if !deadman_shutdown.is_shutdown() {
+                crate::api::mark_lifecycle_terminated();
                 tracing::error!(
                     component = COMPONENT_EDGION_CONTROLLER,
-                    event = "conf_mgr_start_error",
-                    error = %e,
-                    "ConfMgr start failed"
+                    event = "conf_mgr_lifecycle_terminated",
+                    "Control-plane lifecycle ended without a shutdown request; \
+                     marking deadman and triggering graceful shutdown"
                 );
+                deadman_shutdown.shutdown();
             }
         });
 
@@ -556,14 +733,6 @@ impl EdgionControllerCli {
         // on reload and ensures the prior task is awaited before a new one spawns,
         // preventing dual registration at Center.
         if let Some(center_config) = config.center.clone() {
-            let kinds: Vec<String> = conf_mgr
-                .runtime()
-                .processor_registry
-                .all_kinds()
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-
             // Build the fed router:
             //   1. Base admin router (routes + handlers, no auth).
             //   2. route_layer: authz_layer (innermost route_layer -- added first).
@@ -596,18 +765,16 @@ impl EdgionControllerCli {
             // `Clone`; the authz route_layer inside it shares the same
             // `Arc<Authorizer>`, so cloning the router per spawn is cheap and
             // correct -- all spawns see the same live policy.
-            let kinds_for_spawn = kinds;
             let conf_mgr_for_spawn = conf_mgr.clone();
             let authorizer_for_spawn = authorizer.clone();
 
             let spawn_client = move |rx: watch::Receiver<bool>| {
                 let router = fed_router.clone();
                 let cfg = center_config.clone();
-                let kinds = kinds_for_spawn.clone();
                 let conf_mgr = conf_mgr_for_spawn.clone();
                 let authorizer = authorizer_for_spawn.clone();
                 tokio::spawn(async move {
-                    crate::fed_sync::fed_client::run(cfg, kinds, rx, router, conf_mgr, authorizer).await;
+                    crate::fed_sync::fed_client::run(cfg, rx, router, conf_mgr, authorizer).await;
                 })
             };
 
@@ -619,6 +786,12 @@ impl EdgionControllerCli {
             let initial = initial_center_cfg_for_supervisor;
             let authorizer_for_supervisor = authorizer.clone();
 
+            // Leadership gate: the federation session at Center is keyed by
+            // `controller_id` (`cluster/name`), identical on every replica, so
+            // only the leader may hold it. `None` (FileSystem: no election)
+            // leaves the client gated on `center.enabled` alone.
+            let leader_signal = conf_mgr.leader_signal();
+
             let supervisor = crate::fed_sync::supervisor::FederationSupervisor::new(spawn_client);
             // Intentionally detached: run_supervisor lives for the process lifetime,
             // driven by the reload watch channel whose sender is stored in AdminState.
@@ -626,6 +799,7 @@ impl EdgionControllerCli {
                 supervisor,
                 initial,
                 reload_rx,
+                leader_signal,
                 authorizer_for_supervisor,
             ));
         }
@@ -638,6 +812,12 @@ impl EdgionControllerCli {
         let metrics_addr = parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
         let security = config.conf_sync_security.clone();
         security.validate()?;
+        // Fail-close (2026-07-14): an omitted `conf_sync_security` aborts startup here,
+        // BEFORE any listener is bound. The gRPC server has the same guard
+        // (`accept_skip_tls_or_refuse`), but it runs inside a `tokio::join!` with the
+        // Admin API, so an error there would not promptly stop the process — this is the
+        // check that turns the misconfiguration into a non-zero exit (`run()` -> `main`).
+        security.ensure_transport_configured()?;
 
         Self::start_services(
             conf_mgr,
@@ -647,6 +827,7 @@ impl EdgionControllerCli {
             probe_addr,
             metrics_addr,
             security,
+            auto_ca_ns_sans,
             config_file,
             authorizer,
             center_reload_tx,

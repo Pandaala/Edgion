@@ -1,0 +1,21 @@
+# Active HTTP health check for strict-sp-hc. Marks the unreachable
+# 192.0.2.1 endpoint down while its affinity token stays in the map.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: strict-sp-hc-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: strict-sp-hc
+  healthCheck:
+    active:
+      type: http
+      path: /test
+      interval: 1s
+      timeout: 500ms
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses:
+        - 200

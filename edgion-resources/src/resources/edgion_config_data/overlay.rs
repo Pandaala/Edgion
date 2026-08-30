@@ -9,7 +9,7 @@
 /// Signal returned by [`apply_override`] describing the outcome of overlay resolution.
 ///
 /// Consumers should forward the signal to the appropriate observability channel
-/// (access-log `EdgionStatus` or a Prometheus counter) when the outcome is not
+/// (access-log `EdgionErrorCode` or a Prometheus counter) when the outcome is not
 /// `Applied`. Do **not** emit `tracing::error!` / `tracing::warn!` from the data plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlaySignal {

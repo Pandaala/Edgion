@@ -1,0 +1,27 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - waf-dynamic.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/waf-dynamic
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: waf-dynamic
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+

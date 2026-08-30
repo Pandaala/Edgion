@@ -148,16 +148,17 @@ PID=$!; sleep 5; kill $PID 2>/dev/null; wait $PID 2>/dev/null
 # From the repo root, use cross to compile for linux amd64
 cross build --release --target x86_64-unknown-linux-gnu --bin edgion-gateway
 
-# Copy to all gateway pods
+# Stage and atomically install on all gateway pods
 for POD in $(kubectl get pods -n edgion-system -l app=edgion-gateway \
   -o jsonpath='{.items[*].metadata.name}'); do
   kubectl cp target/x86_64-unknown-linux-gnu/release/edgion-gateway \
-    edgion-system/$POD:/usr/local/edgion/edgion-gateway
-  kubectl exec -n edgion-system $POD -- chmod +x /usr/local/edgion/edgion-gateway
+    edgion-system/$POD:/tmp/edgion-gateway
+  kubectl exec -n edgion-system "$POD" -- sh -c \
+    'chmod +x /tmp/edgion-gateway && mv /tmp/edgion-gateway /usr/local/edgion/edgion-gateway'
 done
 
-# The restart loop in the deployment will pick up the new binary automatically
-# (kill the running process or wait for it to cycle)
+# Restart through the safe hot-replace workflow; never kill PID 1.
+# See skills/09-misc/03-dev-deploy-hot-replace.md.
 ```
 
 ### 8. Entering Gateway / Controller Pods

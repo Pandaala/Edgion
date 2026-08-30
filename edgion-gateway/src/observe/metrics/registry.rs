@@ -6,6 +6,8 @@
 use metrics::{counter, gauge, histogram, Counter, Gauge, Label};
 use std::sync::{LazyLock, OnceLock};
 
+use crate::plugins::StreamLayer;
+
 /// Metric names as constants for consistency
 pub mod names {
     pub const CTX_CREATED: &str = "edgion_ctx_created_total";
@@ -15,10 +17,6 @@ pub mod names {
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
     pub const TLS_LOG_DROPPED: &str = "edgion_tls_log_dropped_total";
     pub const UDP_LOG_DROPPED: &str = "edgion_udp_log_dropped_total";
-    // K8s Status update metrics
-    pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
-    pub const STATUS_UPDATE_FAILED: &str = "edgion_status_update_failed_total";
-    pub const STATUS_UPDATE_SKIPPED: &str = "edgion_status_update_skipped_total";
     // Config sync metrics (client side)
     pub const CONFIG_RELOAD_SIGNALS: &str = "edgion_config_reload_signals_total";
     pub const CONFIG_RELIST_TOTAL: &str = "edgion_config_relist_total";
@@ -28,16 +26,28 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
+    // Request-body spill/materialization I/O. Both labels have fixed enum-like
+    // values; request, route, and resource identity deliberately stay out.
+    pub const REQUEST_BODY_STORAGE_IO_FAILURES_TOTAL: &str = "edgion_request_body_storage_io_failures_total";
+    pub const REQUEST_BODY_STORAGE_IO_INFLIGHT: &str = "edgion_request_body_storage_io_inflight";
+    // Native WAF metrics. Every label is a closed enum-like set; resource
+    // names and rule identifiers deliberately stay in diagnostics instead.
+    pub const WAF_COMPILE_TOTAL: &str = "edgion_gateway_waf_compile_total";
+    pub const WAF_COMPILE_MICROSECONDS_TOTAL: &str = "edgion_gateway_waf_compile_microseconds_total";
+    pub const WAF_GENERATION_BYTES: &str = "edgion_gateway_waf_generation_bytes";
+    pub const WAF_RUNTIME_BYTES_ACTIVE: &str = "edgion_gateway_waf_runtime_bytes_active";
+    pub const WAF_BODY_BYTES_INSPECTED_TOTAL: &str = "edgion_gateway_waf_body_bytes_inspected_total";
+    pub const WAF_EXECUTION_TOTAL: &str = "edgion_gateway_waf_execution_total";
+    pub const WAF_EXECUTION_MICROSECONDS_TOTAL: &str = "edgion_gateway_waf_execution_microseconds_total";
+    // Optional GenAI token rate/trend counter. Fixed labels yield at most
+    // 2 directions x 3 providers x 2 usage sources = 12 series.
+    pub const GENAI_TOKENS_TOTAL: &str = "edgion_gateway_genai_tokens_total";
     // Request mirror metrics (counter only — per-request latency is captured
     // in the mirror access log `et` field; mirror is fire-and-forget and its
     // tail latency does not affect user traffic, so no histogram is carried).
     pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
     // End-to-end request duration histogram
     pub const GATEWAY_REQUEST_DURATION_MS: &str = "edgion_gateway_request_duration_ms";
-    // Controller: number of gateway instances connected via gRPC long-poll
-    pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
-    // Controller: schema validation failures from Admin API (non-K8s mode)
-    pub const SCHEMA_VALIDATION_ERRORS: &str = "edgion_controller_schema_validation_errors_total";
     // Circuit breaker metrics
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
@@ -50,6 +60,10 @@ pub mod names {
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
     // IP restriction: inline deny CIDR entries skipped by partial-good compilation (blacklist hole)
     pub const IP_DENY_ENTRIES_SKIPPED_TOTAL: &str = "edgion_ip_deny_entries_skipped_total";
+    // Config aggregation: a conflict silently fell back to a default (e.g. conflicting outbound CA defaults -> System)
+    pub const CONFIG_CONFLICT_TOTAL: &str = "edgion_config_conflict_total";
+    // Outbound: a caller-injected header was dropped for an invalid name/value (silent no-op)
+    pub const OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL: &str = "edgion_outbound_injected_header_skipped_total";
     // HTTP plugin: RegionRoute overlay resolution events (overlay_missing / overlay_type_mismatch)
     pub const REGION_ROUTE_OVERLAY_EVENTS_TOTAL: &str = "edgion_region_route_overlay_events_total";
     // Stream plugin: ConnectionRateLimit rejections
@@ -65,14 +79,97 @@ pub mod names {
     pub const LINK_SYS_HEALTH: &str = "edgion_link_sys_health";
     // Link-sys health flip counter (monotonic): exposes sub-scrape flapping the gauge cannot.
     pub const LINK_SYS_HEALTH_FLIPS_TOTAL: &str = "edgion_link_sys_health_flips_total";
-    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
+    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail / tls_san_mismatch)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
+    // Outbound TLS SAN pinning rejection, by plugin. The alerting signal for a
+    // misconfigured `validation.subjectAltNames` or a rotated peer certificate.
+    pub const OUTBOUND_TLS_SAN_MISMATCH_TOTAL: &str = "edgion_gateway_outbound_tls_san_mismatch_total";
     // Webhook key resolver: per-resolve failure counter by reason
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
+    // Egress resolver: outbound address rejected by the SSRF egress policy, by reason
+    pub const EGRESS_BLOCKED_TOTAL: &str = "edgion_outbound_egress_blocked_total";
+    // Upstream authority render: request-time authority the gateway refused to
+    // use, by reason ("render_empty" / "invalid_label").
+    pub const UPSTREAM_AUTHORITY_REJECTED_TOTAL: &str = "edgion_gateway_upstream_authority_rejected_total";
+    // Outbound call: terminal response accepted at the status layer but classified as
+    // failure by a `success.body` predicate — the "200 OK but error in the body" case.
+    pub const OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL: &str = "edgion_outbound_success_predicate_fail_total";
+    // Outbound call: a templated field (e.g. timeoutMsTemplate) failed to render to a
+    // usable value and silently fell back to its static default. The data plane must
+    // not log, so this counter is the only signal an operator gets.
+    pub const OUTBOUND_TEMPLATE_FALLBACK_TOTAL: &str = "edgion_outbound_template_fallback_total";
     // Access-log backfill: docs re-ingested into ES from the fallback file,
     // and lines that failed to backfill (kept for retry). Cold/failure-path.
     pub const ACCESS_LOG_BACKFILL_INGESTED_TOTAL: &str = "edgion_access_log_backfill_ingested_total";
     pub const ACCESS_LOG_BACKFILL_FAILED_TOTAL: &str = "edgion_access_log_backfill_failed_total";
+    // FIPS: 1 = BoringSSL reports FIPS mode in this binary, 0 = not present
+    // (non-FIPS build). Set once at startup. This mode signal does not establish
+    // CMVP certificate scope or build provenance.
+    pub const FIPS_MODULE_ENABLED: &str = "edgion_gateway_fips_module_enabled";
+    // 1 = the host kernel reports FIPS mode (/proc/sys/crypto/fips_enabled).
+    // Left operand of the compliance alert:
+    //   fips_host_enabled == 1 and fips_module_enabled == 0
+    pub const FIPS_HOST_ENABLED: &str = "edgion_gateway_fips_host_enabled";
+    // 1 = the host FIPS flag exists but could not be read (masked /proc). Both
+    // the guardrail and the fips_policy=auto default are inert in this state.
+    pub const FIPS_HOST_DETECT_ERROR: &str = "edgion_gateway_fips_host_detect_error";
+    // 1 = the approved cipher/curve profile is in effect on downstream
+    // listeners. Labeled `module_enabled="true|false"` by whether BoringSSL
+    // FIPS mode backs it. This is not a certification or compliance signal.
+    pub const FIPS_POLICY_ACTIVE: &str = "edgion_gateway_fips_policy_active";
+    // Wasm plugin host metrics. The `module` label is the human-readable
+    // source descriptor (file path / url / "inline:<sha8>"), NOT the raw
+    // cache key: bounded by the number of configured modules and readable.
+    pub const WASM_MODULE_LOAD_TOTAL: &str = "edgion_wasm_module_load_total";
+    pub const WASM_MODULE_COMPILE_DURATION_MS: &str = "edgion_wasm_module_compile_duration_ms";
+    pub const WASM_MODULE_EVICTED_TOTAL: &str = "edgion_wasm_module_evicted_total";
+    pub const WASM_INSTANCE_INSTANTIATE_TOTAL: &str = "edgion_wasm_instance_instantiate_total";
+    pub const WASM_INSTANCE_DISCARD_TOTAL: &str = "edgion_wasm_instance_discard_total";
+    pub const WASM_POOL_SIZE: &str = "edgion_wasm_pool_size";
+    pub const WASM_HOOK_DURATION_MS: &str = "edgion_wasm_hook_duration_ms";
+    pub const WASM_TRAP_TOTAL: &str = "edgion_wasm_trap_total";
+    pub const WASM_FAIL_MODE_TOTAL: &str = "edgion_wasm_fail_mode_total";
+    pub const WASM_CALLOUT_TOTAL: &str = "edgion_wasm_callout_total";
+    // Capacity/sizing gauges (multi-tenant sizing observability).
+    pub const WASM_MODULES_LOADED: &str = "edgion_wasm_modules_loaded";
+    pub const WASM_SHARED_DATA_BYTES: &str = "edgion_wasm_shared_data_bytes";
+    // A guest returned Action::Pause from the response-body hook, i.e. it expects
+    // the standard proxy-wasm cumulative-buffer semantics this host does not
+    // implement. Alert on this: such a guest silently observes only the current
+    // chunk, not the whole body.
+    pub const WASM_BODY_PAUSE_UNSUPPORTED_TOTAL: &str = "edgion_wasm_body_pause_unsupported_total";
+
+    // Plugin policy enforcement (controller allowlist/denylist, spec
+    // 2026-07-17). Labeled by qualified plugin name (bounded by policy size).
+    pub const PLUGIN_POLICY_BLOCKED_TOTAL: &str = "edgion_gateway_plugin_policy_blocked_total";
+    pub const PLUGIN_POLICY_BYPASSED_TOTAL: &str = "edgion_gateway_plugin_policy_bypassed_total";
+
+    // Retry budget enforcement (`EdgionBackendTrafficPolicy.retryConstraint`,
+    // spec 2026-07-21). No labels (D5): a per-service label would churn
+    // unboundedly on Service creation/deletion. Backend attribution comes
+    // from the per-request access log / `EdgionErrorCode`, already service-scoped.
+    pub const RETRY_BUDGET_DENIED_TOTAL: &str = "edgion_gateway_retry_budget_denied_total";
+    // Circuit-breaker admit-time CONCURRENCY-CAP shed (backends/circuit_breaker/mod.rs
+    // `CbPermit::try_acquire` returning None). This is NOT the outlier-detection
+    // ejection/rejection family above (`CB_EJECTIONS_TOTAL`, `CB_EJECTED_ENDPOINTS`,
+    // `CB_REJECTIONS_TOTAL`) — those trip on backend health; this one trips on a
+    // per-endpoint in-flight-count cap, independent of health. Labelled `service` only.
+    pub const CB_SHED_TOTAL: &str = "edgion_gateway_circuit_breaker_shed_total";
+
+    // GeoIP country restriction metrics.
+    pub const GEOIP_DB_LOADED: &str = "edgion_geoip_db_loaded";
+    pub const GEOIP_DB_BUILD_EPOCH: &str = "edgion_geoip_db_build_epoch_seconds";
+    pub const GEOIP_UPDATE_FAILED: &str = "edgion_geoip_update_failed_total";
+    pub const GEOIP_DENIED: &str = "edgion_geoip_denied_total";
+    /// Distinct from `GEOIP_UPDATE_FAILED`: that metric is about the
+    /// background updater task, never on the per-request hot path (see the
+    /// comment on the GeoIP metrics block below). A lookup panic happens
+    /// inside `GeoIpProvider::lookup`, which every geo-consuming request
+    /// calls — recording it under the updater's counter would be both
+    /// mislabeled (its name and reason set are about update *cycles*, not
+    /// per-request lookups) and would put a per-request event under a
+    /// nominally-cold metric.
+    pub const GEOIP_LOOKUP_PANIC: &str = "edgion_geoip_lookup_panic_total";
 }
 
 /// Global metrics singleton
@@ -81,6 +178,76 @@ static GLOBAL_METRICS: LazyLock<GatewayMetrics> = LazyLock::new(GatewayMetrics::
 /// Get the global metrics instance
 pub fn global_metrics() -> &'static GatewayMetrics {
     &GLOBAL_METRICS
+}
+
+pub fn record_request_body_storage_io_failure(operation: &'static str, reason: &'static str) {
+    counter!(
+        names::REQUEST_BODY_STORAGE_IO_FAILURES_TOTAL,
+        "operation" => operation,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
+pub fn adjust_request_body_storage_io_inflight(delta: f64) {
+    let metric = gauge!(names::REQUEST_BODY_STORAGE_IO_INFLIGHT);
+    if delta >= 0.0 {
+        metric.increment(delta);
+    } else {
+        metric.decrement(-delta);
+    }
+}
+
+/// Whether a provider reported token counts or Edgion estimated them from
+/// observed characters. Fixed enum values keep the metric label bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenAiUsageSource {
+    Reported,
+    Estimated,
+}
+
+impl GenAiUsageSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reported => "reported",
+            Self::Estimated => "estimated",
+        }
+    }
+}
+
+/// Record one finalized AI request's input and output token counts.
+///
+/// The disabled branch returns before invoking `counter!`, so the family is
+/// neither registered nor emitted by a default-configured Gateway. Provider
+/// and usage source are enums, direction is hard-coded, and model is
+/// deliberately absent: the complete family is bounded to twelve series.
+#[inline]
+pub fn record_genai_tokens(
+    enabled: bool,
+    provider: crate::ai::AiProviderLabel,
+    usage_source: GenAiUsageSource,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
+    if !enabled {
+        return;
+    }
+    let provider = provider.as_str();
+    let usage_source = usage_source.as_str();
+    counter!(
+        names::GENAI_TOKENS_TOTAL,
+        "direction" => "input",
+        "provider" => provider,
+        "usage_source" => usage_source,
+    )
+    .increment(input_tokens);
+    counter!(
+        names::GENAI_TOKENS_TOTAL,
+        "direction" => "output",
+        "provider" => provider,
+        "usage_source" => usage_source,
+    )
+    .increment(output_tokens);
 }
 
 /// Gateway metrics collection
@@ -114,23 +281,13 @@ pub struct GatewayMetrics {
     udp_log_dropped: OnceLock<Counter>,
     access_log_backfill_ingested: OnceLock<Counter>,
     access_log_backfill_failed: OnceLock<Counter>,
-    status_update_total: OnceLock<Counter>,
-    status_update_failed: OnceLock<Counter>,
-    status_update_skipped: OnceLock<Counter>,
     config_reload_signals: OnceLock<Counter>,
     config_relist_total: OnceLock<Counter>,
-    controller_connected_gateways: OnceLock<Gauge>,
-    schema_validation_errors: OnceLock<Counter>,
 }
 
 #[inline]
 fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) -> &'a Counter {
     slot.get_or_init(|| counter!(name))
-}
-
-#[inline]
-fn get_or_register_gauge<'a>(slot: &'a OnceLock<Gauge>, name: &'static str) -> &'a Gauge {
-    slot.get_or_init(|| gauge!(name))
 }
 
 impl GatewayMetrics {
@@ -153,13 +310,8 @@ impl GatewayMetrics {
             udp_log_dropped: OnceLock::new(),
             access_log_backfill_ingested: OnceLock::new(),
             access_log_backfill_failed: OnceLock::new(),
-            status_update_total: OnceLock::new(),
-            status_update_failed: OnceLock::new(),
-            status_update_skipped: OnceLock::new(),
             config_reload_signals: OnceLock::new(),
             config_relist_total: OnceLock::new(),
-            controller_connected_gateways: OnceLock::new(),
-            schema_validation_errors: OnceLock::new(),
         }
     }
 
@@ -168,12 +320,6 @@ impl GatewayMetrics {
     pub fn ctx_created(&self) {
         self.ctx_created.increment(1);
         self.ctx_active.increment(1.0);
-    }
-
-    /// Record a context destruction
-    #[inline]
-    pub fn ctx_destroyed(&self) {
-        self.ctx_active.decrement(1.0);
     }
 
     /// Record a dropped access log entry
@@ -224,25 +370,6 @@ impl GatewayMetrics {
         get_or_register_counter(&self.udp_log_dropped, names::UDP_LOG_DROPPED).increment(1);
     }
 
-    /// Record a successful K8s status update
-    #[inline]
-    pub fn status_update_success(&self) {
-        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
-    }
-
-    /// Record a failed K8s status update
-    #[inline]
-    pub fn status_update_failed(&self) {
-        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
-        get_or_register_counter(&self.status_update_failed, names::STATUS_UPDATE_FAILED).increment(1);
-    }
-
-    /// Record a skipped K8s status update (no change needed)
-    #[inline]
-    pub fn status_update_skipped(&self) {
-        get_or_register_counter(&self.status_update_skipped, names::STATUS_UPDATE_SKIPPED).increment(1);
-    }
-
     /// Record a reload signal received from controller
     #[inline]
     pub fn config_reload_signal(&self) {
@@ -265,32 +392,6 @@ impl GatewayMetrics {
     #[inline]
     pub fn add_response_bytes(&self, bytes: u64) {
         self.gateway_response_bytes.increment(bytes);
-    }
-
-    /// Record a gateway instance connected to controller via gRPC
-    #[inline]
-    pub fn gateway_connected(&self) {
-        get_or_register_gauge(
-            &self.controller_connected_gateways,
-            names::CONTROLLER_CONNECTED_GATEWAYS,
-        )
-        .increment(1.0);
-    }
-
-    /// Record a gateway instance disconnected from controller
-    #[inline]
-    pub fn gateway_disconnected(&self) {
-        get_or_register_gauge(
-            &self.controller_connected_gateways,
-            names::CONTROLLER_CONNECTED_GATEWAYS,
-        )
-        .decrement(1.0);
-    }
-
-    /// Record a schema validation error from Admin API (non-K8s mode)
-    #[inline]
-    pub fn schema_validation_error(&self) {
-        get_or_register_counter(&self.schema_validation_errors, names::SCHEMA_VALIDATION_ERRORS).increment(1);
     }
 }
 
@@ -371,11 +472,54 @@ pub fn status_group(status: Option<u16>) -> &'static str {
     }
 }
 
+/// Record one native WAF generation build and its wall-clock cost.
+///
+/// `result` is a closed set (`ok` / `error`). A cumulative microsecond
+/// counter keeps latency observable without adding an unsanctioned histogram.
+pub fn record_waf_compile(result: &'static str, elapsed_micros: u64) {
+    counter!(names::WAF_COMPILE_TOTAL, "result" => result).increment(1);
+    counter!(names::WAF_COMPILE_MICROSECONDS_TOTAL, "result" => result).increment(elapsed_micros);
+}
+
+/// Adjust retained bytes for live compiled WAF generations.
+/// Callers enforce +N/-N symmetry with an RAII lease.
+pub fn adjust_waf_generation_bytes(delta: i64) {
+    let metric = gauge!(names::WAF_GENERATION_BYTES);
+    if delta >= 0 {
+        metric.increment(delta as f64);
+    } else {
+        metric.decrement(delta.unsigned_abs() as f64);
+    }
+}
+
+/// Adjust request-owned WAF runtime memory. The request context owns the
+/// symmetric lifetime and refreshes the charge when scratch grows.
+pub fn adjust_waf_runtime_bytes_active(delta: i64) {
+    let metric = gauge!(names::WAF_RUNTIME_BYTES_ACTIVE);
+    if delta >= 0 {
+        metric.increment(delta as f64);
+    } else {
+        metric.decrement(delta.unsigned_abs() as f64);
+    }
+}
+
+/// Record bytes inspected by the streamed WAF body path.
+pub fn record_waf_body_bytes_inspected(direction: &'static str, bytes: usize) {
+    counter!(names::WAF_BODY_BYTES_INSPECTED_TOTAL, "direction" => direction)
+        .increment(u64::try_from(bytes).unwrap_or(u64::MAX));
+}
+
+/// Record cumulative WAF execution time for a fixed phase name.
+pub fn record_waf_execution_micros(phase: &'static str, elapsed_micros: u64) {
+    counter!(names::WAF_EXECUTION_TOTAL, "phase" => phase).increment(1);
+    counter!(names::WAF_EXECUTION_MICROSECONDS_TOTAL, "phase" => phase).increment(elapsed_micros);
+}
+
 /// Record a mirror request outcome.
 ///
 /// No latency histogram: mirror is fire-and-forget so its tail latency does
-/// not affect user traffic; the `channel_full` / `timeout` statuses on this
-/// counter are a sharper "mirror falling behind" signal than a percentile.
+/// not affect user traffic; the `body_abandoned` / `channel_full` / `timeout`
+/// statuses on this counter are sharper failure signals than a percentile.
 /// Per-request latency is in the mirror access log `et` field when
 /// `mirror_log` is enabled.
 #[inline]
@@ -556,6 +700,22 @@ pub fn record_ip_deny_entries_skipped(scope: &'static str) {
     counter!(names::IP_DENY_ENTRIES_SKIPPED_TOTAL, "scope" => scope).increment(1);
 }
 
+/// A config-aggregation conflict silently fell back to a default. `field` is a bounded
+/// constant `&'static str` naming which aggregate conflicted (for example,
+/// "outbound_ca" or "outbound_client_identity").
+/// Zero-event sentinel: it stays absent until an operator ships genuinely conflicting
+/// configs, at which point the resolved value is order-independent but non-obvious.
+pub fn record_config_conflict(field: &'static str) {
+    counter!(names::CONFIG_CONFLICT_TOTAL, "field" => field).increment(1);
+}
+
+/// A caller-injected outbound header (e.g. X-Forwarded-* from ForwardAuth) was dropped
+/// at request build because its name or value was invalid — the operator's configured
+/// header silently no-ops. Label-free zero-event sentinel.
+pub fn record_injected_header_skipped() {
+    counter!(names::OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL).increment(1);
+}
+
 /// Record a connection rejected by the ConnectionRateLimit stream plugin.
 ///
 /// `dimension` must be `"listener"` or `"source_ip"`.
@@ -610,24 +770,292 @@ pub fn record_rr_selector_truncated() {
 
 /// Record a LDAP auth plugin error event.
 ///
-/// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`.
-/// Fixed cardinality — safe as a label.
+/// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`,
+/// `"tls_san_mismatch"`. Fixed cardinality — safe as a label.
 pub fn record_ldap_auth_error(kind: &'static str) {
     counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
+}
+
+/// Record an outbound TLS SAN-pinning rejection.
+///
+/// `plugin` must be one of: `"ldap_auth"`, `"openid_connect"`.
+/// Fixed cardinality — safe as a label.
+pub fn record_outbound_tls_san_mismatch(plugin: &'static str) {
+    counter!(names::OUTBOUND_TLS_SAN_MISMATCH_TOTAL, "plugin" => plugin).increment(1);
 }
 
 /// Record a webhook key-resolver failure.
 ///
 /// `reason` must be one of: `"not_found"`, `"unhealthy"`, `"rate_limited"`,
-/// `"status_error"`, `"call_failed"`. Fixed cardinality — safe as a label.
+/// `"status_error"`, `"call_failed"`, `"authority_rejected"`. Fixed cardinality —
+/// safe as a label.
 pub fn record_webhook_resolve_error(reason: &'static str) {
     counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Record an outbound address rejected by the egress policy.
+///
+/// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
+pub fn record_egress_blocked(reason: &'static str) {
+    counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Record an upstream authority the gateway refused to use. `reason` is
+/// `"render_empty"` (the template produced nothing — usually a `${ctx:…}` written
+/// by a plugin that runs after `upstream_peer`) or `"invalid_label"` (the rendered
+/// label is not a valid DNS label — a broken template, or an attack).
+pub fn record_authority_rejected(reason: &'static str) {
+    counter!(names::UPSTREAM_AUTHORITY_REJECTED_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Record a response whose status was accepted but whose `success.body` predicate
+/// classified it as a failure — the "200 OK but error in the body" case, which is
+/// otherwise invisible (the data plane must not log).
+pub fn record_outbound_success_predicate_fail() {
+    counter!(names::OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL).increment(1);
+}
+
+/// Record a template field that failed to render to a usable value and fell back
+/// to its static default. `field` is `"timeout_ms"`.
+/// Fixed cardinality — safe as a label. The data plane must not log, so this
+/// counter is the only signal an operator gets for a silently-falling-back template.
+pub fn record_outbound_template_fallback(field: &'static str) {
+    counter!(names::OUTBOUND_TEMPLATE_FALLBACK_TOTAL, "field" => field).increment(1);
+}
+
+// ============================================================
+// Wasm plugin host metrics
+// ============================================================
+//
+// All Wasm metrics carry a `module` label: the human-readable source
+// descriptor produced by `WasmSourceSpec::metrics_label()` (file path, url,
+// or `inline:<sha8>`). Cardinality is bounded by the number of distinct
+// configured modules.
+
+/// Record a Wasm module load attempt outcome. `result` is `"ok"` or `"error"`.
+pub fn record_wasm_module_load(module: &str, result: &'static str) {
+    counter!(names::WASM_MODULE_LOAD_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
+}
+
+/// Record the wall-clock duration of one `Module::new` compilation.
+pub fn record_wasm_compile_duration(module: &str, ms: f64) {
+    histogram!(names::WASM_MODULE_COMPILE_DURATION_MS, "module" => module.to_string()).record(ms);
+}
+
+/// Record a module-cache entry eviction (refcount reached zero and the grace
+/// period elapsed without re-registration).
+pub fn record_wasm_module_evicted(module: &str) {
+    counter!(names::WASM_MODULE_EVICTED_TOTAL, "module" => module.to_string()).increment(1);
+}
+
+/// Record a fresh VM instantiation (pool miss).
+pub fn record_wasm_instance_instantiate(module: &str) {
+    counter!(names::WASM_INSTANCE_INSTANTIATE_TOTAL, "module" => module.to_string()).increment(1);
+}
+
+/// Record a VM discarded instead of returned to the pool.
+/// `reason` is `"poisoned"` or `"over_capacity"`.
+pub fn record_wasm_instance_discard(module: &str, reason: &'static str) {
+    counter!(names::WASM_INSTANCE_DISCARD_TOTAL, "module" => module.to_string(), "reason" => reason).increment(1);
+}
+
+/// Set the current pooled-instance count for a module.
+pub fn set_wasm_pool_size(module: &str, size: usize) {
+    gauge!(names::WASM_POOL_SIZE, "module" => module.to_string()).set(size as f64);
+}
+
+/// Record the duration of one guest hook invocation.
+/// `phase` is one of `"request_headers"`, `"response_headers"`,
+/// `"response_body"`, `"http_call_response"`, `"tick"`.
+pub fn record_wasm_hook_duration(module: &str, phase: &'static str, ms: f64) {
+    histogram!(names::WASM_HOOK_DURATION_MS, "module" => module.to_string(), "phase" => phase).record(ms);
+}
+
+/// Record a guest trap (or protocol violation that poisons the lease).
+pub fn record_wasm_trap(module: &str, phase: &'static str) {
+    counter!(names::WASM_TRAP_TOTAL, "module" => module.to_string(), "phase" => phase).increment(1);
+}
+
+/// Record a fail-mode decision taken by the Wasm plugin.
+/// `reason` is one of `"load"`, `"acquire"`, `"trap"`, `"not loaded"`,
+/// `"callout"`, `"no-resume"`; `mode` is `"open"` or `"close"`.
+pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
+    counter!(
+        names::WASM_FAIL_MODE_TOTAL,
+        "module" => module.to_string(),
+        "reason" => reason.to_string(),
+        "mode" => mode
+    )
+    .increment(1);
+}
+
+/// Record a guest-dispatched HTTP callout outcome. `result` is one of
+/// `"ok"`, `"error"`, `"denied"`, `"over_limit"`, `"tick_config_conflict"`
+/// (tick-phase dispatch left disabled: plugins sharing the module configure
+/// different callout allowlists).
+pub fn record_wasm_callout(module: &str, result: &'static str) {
+    counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
+}
+
+/// Set the number of compiled modules currently held in the global cache.
+/// Multiplied by `instancePoolSize` this bounds pooling-allocator sizing.
+pub fn set_wasm_modules_loaded(count: usize) {
+    gauge!(names::WASM_MODULES_LOADED).set(count as f64);
+}
+
+/// Set the current shared-data byte total for a module.
+pub fn set_wasm_shared_data_bytes(module: &str, bytes: usize) {
+    gauge!(names::WASM_SHARED_DATA_BYTES, "module" => module.to_string()).set(bytes as f64);
+}
+
+/// Record a guest returning `Action::Pause` from the response-body hook.
+///
+/// This host implements the body hook as a per-chunk read-only *window*, not the
+/// spec's cumulative buffer, so Pause cannot be honored. A guest that pauses is
+/// written against the standard buffering idiom and will silently observe only
+/// the current chunk instead of the whole body — alert on this counter.
+pub fn record_wasm_body_pause_unsupported(module: &str) {
+    counter!(names::WASM_BODY_PAUSE_UNSUPPORTED_TOTAL, "module" => module.to_string()).increment(1);
+}
+
+// ============================================================
+// Plugin policy enforcement metrics
+// ============================================================
+//
+// Emitted by `policy_filter::PolicyBlockFilter` / `PolicyBypassNote`
+// (edgion-gateway/src/plugins/runtime/policy_filter.rs) when a request's
+// chain contains a controller-stamped `PluginPolicyAction`. `plugin` is the
+// qualified name (`http/<TypeName>`); cardinality is bounded by the number
+// of distinct plugin types the operator's policy touches.
+
+/// A request was rejected because its chain contains a Block-stamped plugin.
+pub fn record_plugin_policy_blocked(plugin: &str) {
+    counter!(names::PLUGIN_POLICY_BLOCKED_TOTAL, "plugin" => plugin.to_string()).increment(1);
+}
+
+/// A request passed through a chain with a Bypass-stamped plugin skipped.
+pub fn record_plugin_policy_bypassed(plugin: &str) {
+    counter!(names::PLUGIN_POLICY_BYPASSED_TOTAL, "plugin" => plugin.to_string()).increment(1);
+}
+
+// ============================================================
+// Retry budget enforcement metrics
+// ============================================================
+//
+// Emitted when a retry is refused because the target service's
+// `retryConstraint` budget (percentage ceiling OR minimum-rate floor) is
+// exhausted. Label-less by design (D5): a per-service label would mint an
+// unbounded number of series as Services churn (create/delete), retained
+// server-side for the whole retention window. Which backend was throttled
+// is read from the per-request access log / `EdgionErrorCode`, both already
+// service-scoped.
+
+/// A retry attempt was refused by a `retryConstraint` budget.
+pub fn record_retry_budget_denied() {
+    counter!(names::RETRY_BUDGET_DENIED_TOTAL).increment(1);
+}
+
+// ============================================================
+// Circuit breaker concurrency-cap shed metric
+// ============================================================
+//
+// Distinct from the outlier-detection ejection/rejection family further
+// above (`CB_EJECTIONS_TOTAL` / `CB_EJECTED_ENDPOINTS` / `CB_REJECTIONS_TOTAL`,
+// which trip on backend health): this counter fires when
+// `backends::circuit_breaker::CbPermit::try_acquire` finds the chosen
+// endpoint already at its configured in-flight concurrency cap and the
+// request is shed before the upstream connect is attempted.
+
+/// A request was shed by the per-endpoint circuit-breaker concurrency cap.
+/// Labelled by `service` only — never per-endpoint or per-request — to stay
+/// low-cardinality.
+pub fn record_cb_shed(service_key: &str) {
+    counter!(names::CB_SHED_TOTAL, "service" => service_key.to_string()).increment(1);
+}
+
+// ============================================================
+// GeoIP country restriction metrics
+// ============================================================
+//
+// `set_geoip_db_loaded`, `set_geoip_db_build_epoch`, `record_geoip_update_failed`,
+// and `record_geoip_denied` are not on the per-request hot path (the first two
+// are process-lifecycle state, the latter two fire from the background updater
+// and from an L4 connection-filter deny path respectively), so all four follow
+// the cold free-function `gauge!`/`counter!` pattern (like `record_lb_panic_mode`
+// / `record_link_sys_health` above): the series is absent from `/metrics` until
+// the first call. `record_geoip_lookup_panic`, below, is the one exception in
+// this block — it fires from `GeoIpProvider::lookup`, which every geo-consuming
+// request calls; it uses the same cold-registration pattern anyway since a
+// panic inside the MMDB reader is expected to be exceedingly rare in practice.
+
+/// Set to 1 when a database is loaded, 0 otherwise.
+/// Alert on `edgion_geoip_db_loaded == 0` while geo rules are configured: that
+/// is the dangerous silent failure — the control is not running.
+pub fn set_geoip_db_loaded(loaded: bool) {
+    gauge!(names::GEOIP_DB_LOADED).set(if loaded { 1.0 } else { 0.0 });
+}
+
+/// The loaded database's build timestamp. Alert on staleness.
+pub fn set_geoip_db_build_epoch(epoch: u64) {
+    gauge!(names::GEOIP_DB_BUILD_EPOCH).set(epoch as f64);
+}
+
+/// `reason` is a bounded enum, never free text:
+/// fetch | encoding | size_cap | stall | validation | rename | disk | deadline.
+/// This is strictly about the background *update cycle*; a per-request MMDB
+/// lookup panic is a distinct, per-request event recorded by
+/// `record_geoip_lookup_panic` instead, not folded in here.
+pub fn record_geoip_update_failed(reason: &'static str) {
+    counter!(names::GEOIP_UPDATE_FAILED, "reason" => reason).increment(1);
+}
+
+/// A per-request MMDB lookup inside `GeoIpProvider::lookup` panicked (caught
+/// via `catch_unwind`) and degraded to `GeoLookup::NotFound`. Label-free: this
+/// is a data-integrity signal about the loaded database, not something to
+/// slice by request attributes.
+pub fn record_geoip_lookup_panic() {
+    counter!(names::GEOIP_LOOKUP_PANIC).increment(1);
+}
+
+/// L4 geo denials, which are never logged (see the design's §6.6).
+/// `layer` is stage1 | tcp | tls; `reason` is deny_country | allow_miss | db_unavailable.
+/// Neither label carries a client address.
+pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {
+    counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use metrics_exporter_prometheus::PrometheusBuilder;
+
+    #[test]
+    fn config_conflict_counter_increments() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_config_conflict("outbound_ca");
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_config_conflict_total") && rendered.contains("field=\"outbound_ca\""),
+                "config_conflict counter must render with field label, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn injected_header_skipped_counter_increments() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_injected_header_skipped();
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_outbound_injected_header_skipped_total"),
+                "injected_header_skipped counter must render, got:\n{rendered}"
+            );
+        });
+    }
 
     /// Verifies the hybrid registration policy:
     /// - Hot per-request handles register in `new()` and appear immediately (with value 0).
@@ -725,6 +1153,110 @@ mod tests {
         // route_namespace / backend_namespace must NOT appear under default cfg
         assert!(!labels.iter().any(|(k, _)| *k == "route_namespace"));
         assert!(!labels.iter().any(|(k, _)| *k == "backend_namespace"));
+    }
+
+    #[test]
+    fn geoip_metric_names_are_declared() {
+        assert_eq!(names::GEOIP_DB_LOADED, "edgion_geoip_db_loaded");
+        assert_eq!(names::GEOIP_DB_BUILD_EPOCH, "edgion_geoip_db_build_epoch_seconds");
+        assert_eq!(names::GEOIP_UPDATE_FAILED, "edgion_geoip_update_failed_total");
+        assert_eq!(names::GEOIP_DENIED, "edgion_geoip_denied_total");
+        assert_eq!(names::GEOIP_LOOKUP_PANIC, "edgion_geoip_lookup_panic_total");
+    }
+
+    /// Regression test: a lookup panic must land on its own dedicated metric,
+    /// never on `edgion_geoip_update_failed_total` — that counter's `reason`
+    /// label set is about the background update cycle, and folding a
+    /// per-request lookup panic into it would mislabel a per-request event as
+    /// an updater-cycle failure.
+    #[test]
+    fn geoip_lookup_panic_uses_its_own_metric_not_update_failed() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_geoip_lookup_panic();
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_geoip_lookup_panic_total"),
+                "lookup panic must render under its own metric, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("edgion_geoip_update_failed_total"),
+                "lookup panic must NOT touch edgion_geoip_update_failed_total, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn fips_metric_names_are_stable() {
+        // These names are load-bearing: the compliance alert
+        //   fips_host_enabled == 1 and fips_module_enabled == 0
+        // breaks silently if either is renamed.
+        assert_eq!(names::FIPS_MODULE_ENABLED, "edgion_gateway_fips_module_enabled");
+        assert_eq!(names::FIPS_HOST_ENABLED, "edgion_gateway_fips_host_enabled");
+        assert_eq!(names::FIPS_HOST_DETECT_ERROR, "edgion_gateway_fips_host_detect_error");
+        assert_eq!(names::FIPS_POLICY_ACTIVE, "edgion_gateway_fips_policy_active");
+    }
+
+    #[test]
+    fn genai_metric_disabled_does_not_register_family() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_genai_tokens(
+                false,
+                crate::ai::AiProviderLabel::OpenAi,
+                GenAiUsageSource::Reported,
+                11,
+                7,
+            );
+        });
+        assert!(!handle.render().contains(names::GENAI_TOKENS_TOTAL));
+    }
+
+    #[test]
+    fn genai_metric_has_exactly_twelve_fixed_series_and_no_model_label() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            for provider in [
+                crate::ai::AiProviderLabel::OpenAi,
+                crate::ai::AiProviderLabel::OpenAiCompatible,
+                crate::ai::AiProviderLabel::Anthropic,
+            ] {
+                for source in [GenAiUsageSource::Reported, GenAiUsageSource::Estimated] {
+                    record_genai_tokens(true, provider, source, 1, 2);
+                }
+            }
+        });
+
+        let rendered = handle.render();
+        let samples: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with(names::GENAI_TOKENS_TOTAL))
+            .collect();
+        assert_eq!(
+            samples.len(),
+            12,
+            "fixed label domains must yield twelve series:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("model="),
+            "model must never be a metric label:\n{rendered}"
+        );
+        for sample in samples {
+            assert!(sample.contains("direction=\"input\"") || sample.contains("direction=\"output\""));
+            assert!(
+                sample.contains("provider=\"openai\"")
+                    || sample.contains("provider=\"openai_compatible\"")
+                    || sample.contains("provider=\"anthropic\"")
+            );
+            assert!(sample.contains("usage_source=\"reported\"") || sample.contains("usage_source=\"estimated\""));
+            assert!(
+                sample.ends_with(" 1") || sample.ends_with(" 2"),
+                "counter must retain integer increments: {sample}"
+            );
+        }
     }
 }
 

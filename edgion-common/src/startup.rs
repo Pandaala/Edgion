@@ -1,5 +1,80 @@
+use std::borrow::Cow;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing_subscriber::EnvFilter;
+
+thread_local! {
+    /// Depth of trusted extension callbacks whose panic payload must never be
+    /// emitted. A depth counter makes nested adapters safe without swapping the
+    /// process-wide hook or allocating on the callback path.
+    static REDACT_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+struct RedactedPanicGuard;
+
+impl RedactedPanicGuard {
+    fn enter() -> Self {
+        REDACT_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self
+    }
+}
+
+impl Drop for RedactedPanicGuard {
+    fn drop(&mut self) {
+        REDACT_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Cow<'static, str> {
+    if REDACT_PANIC_DEPTH.with(Cell::get) > 0 {
+        return Cow::Borrowed("redacted extension panic");
+    }
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| Cow::Owned((*message).to_string()))
+        .or_else(|| payload.downcast_ref::<String>().cloned().map(Cow::Owned))
+        .unwrap_or_else(|| Cow::Borrowed("<non-string panic payload>"))
+}
+
+/// Opaque result of a panic caught at a redacted extension boundary.
+///
+/// The original payload is deliberately not exposed: it may contain request
+/// bytes or carry a destructor that panics again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RedactedPanic;
+
+fn drop_redacted_panic_payload(mut payload: Box<dyn std::any::Any + Send>) {
+    // A panic payload is arbitrary Rust and its destructor can panic. Consume
+    // it while the redaction scope is still active, retrying destruction of a
+    // nested panic payload. The final forget is a bounded last resort for a
+    // deliberately recursive destructor on an already exceptional path.
+    for _ in 0..4 {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {
+            Ok(()) => return,
+            Err(next) => payload = next,
+        }
+    }
+    std::mem::forget(payload);
+}
+
+/// Catch a panic from a trusted extension while forcing the canonical process
+/// panic hook to redact its payload.
+///
+/// This does not suppress the hook, location, thread, or backtrace. It only
+/// replaces the potentially request-derived payload with a fixed message. The
+/// thread-local guard is allocation-free and nests safely.
+pub fn catch_redacted_panic<F, R>(f: F) -> Result<R, RedactedPanic>
+where
+    F: FnOnce() -> R,
+{
+    let _guard = RedactedPanicGuard::enter();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => Ok(value),
+        Err(payload) => {
+            drop_redacted_panic_payload(payload);
+            Err(RedactedPanic)
+        }
+    }
+}
 
 /// Whether a `tracing` subscriber has been installed. Flipped to `true` by
 /// `mark_tracing_ready()` (called from `init_logging` once the subscriber is
@@ -60,12 +135,7 @@ pub fn install_panic_hook() {
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "<unknown>".to_string());
-        let payload = info.payload();
-        let message = payload
-            .downcast_ref::<&str>()
-            .map(|s| (*s).to_string())
-            .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        let message = panic_payload_message(info.payload());
         let thread = std::thread::current().name().unwrap_or("<unnamed>").to_string();
         let backtrace = std::backtrace::Backtrace::force_capture();
 
@@ -92,8 +162,76 @@ pub fn install_panic_hook() {
     }));
 }
 
-pub fn init_default_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
-        .init();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static PAYLOAD_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    struct PanickingPayloadDrop;
+
+    impl Drop for PanickingPayloadDrop {
+        fn drop(&mut self) {
+            PAYLOAD_DROPS.fetch_add(1, Ordering::Relaxed);
+            panic!("payload destructor detail must stay redacted");
+        }
+    }
+
+    #[test]
+    fn redacted_scope_hides_payload_and_restores_outer_behavior() {
+        let secret = String::from("authorization bearer body-secret");
+        assert_eq!(panic_payload_message(&secret), secret);
+
+        let observed = catch_redacted_panic(|| panic_payload_message(&secret));
+        assert_eq!(observed.unwrap(), "redacted extension panic");
+        assert_eq!(panic_payload_message(&secret), secret);
+    }
+
+    #[test]
+    fn redacted_scope_nests_without_leaking_depth() {
+        let secret = String::from("nested-secret");
+        let outer = catch_redacted_panic(|| {
+            let inner = catch_redacted_panic(|| panic_payload_message(&secret)).unwrap();
+            assert_eq!(inner, "redacted extension panic");
+            panic_payload_message(&secret)
+        })
+        .unwrap();
+        assert_eq!(outer, "redacted extension panic");
+        assert_eq!(panic_payload_message(&secret), secret);
+    }
+
+    #[test]
+    fn caught_payload_is_consumed_inside_scope_and_never_returned() {
+        PAYLOAD_DROPS.store(0, Ordering::Relaxed);
+        let result = catch_redacted_panic(|| -> () { std::panic::panic_any(PanickingPayloadDrop) });
+        assert_eq!(result, Err(RedactedPanic));
+        assert_eq!(PAYLOAD_DROPS.load(Ordering::Relaxed), 1);
+        assert_eq!(REDACT_PANIC_DEPTH.with(Cell::get), 0);
+    }
+
+    #[test]
+    fn installed_hook_redacts_extension_payload_in_subprocess() {
+        const CHILD_ENV: &str = "EDGION_REDACTED_PANIC_HOOK_CHILD";
+        const SECRET: &str = "authorization bearer request-body-secret";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            install_panic_hook();
+            assert_eq!(catch_redacted_panic(|| panic!("{SECRET}")), Err(RedactedPanic));
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "startup::tests::installed_hook_redacts_extension_payload_in_subprocess",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("redacted extension panic"), "stderr: {stderr}");
+        assert!(!stderr.contains(SECRET), "stderr leaked secret: {stderr}");
+    }
 }

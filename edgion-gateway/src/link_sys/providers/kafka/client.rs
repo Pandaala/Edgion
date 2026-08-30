@@ -13,13 +13,13 @@ use dashmap::DashMap;
 use rskafka::client::partition::UnknownTopicHandling;
 use rskafka::client::producer::aggregator::RecordAggregator;
 use rskafka::client::producer::BatchProducerBuilder;
-use rskafka::client::{ClientBuilder, SaslConfig};
+use rskafka::client::{ClientBuilder, Credentials, SaslConfig};
 use rskafka::record::Record;
 use tokio::sync::mpsc;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::lifecycle::LinkSysLifecycle;
-use crate::link_sys::LinkSysHealth;
+use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
 
 const DEFAULT_CHANNEL_SIZE: usize = 4096;
@@ -92,6 +92,26 @@ fn flip_log_allowed(last: &AtomicU64) -> bool {
     flip_log_allowed_at(last, now_ms, FLIP_LOG_MIN_INTERVAL_MS)
 }
 
+/// Build the rustls `ClientConfig` for the rskafka TLS connector.
+///
+/// Delegates custom-CA / client-mTLS / verify-gate resolution to the shared
+/// [`crate::link_sys::tls::build_rustls_client_config`]. That helper returns
+/// `None` when the operator supplied no custom CA and no client identity; unlike
+/// reqwest / fred, rskafka has **no implicit default TLS connector** — omitting
+/// `tls_config` yields a plaintext connection — so in that case we still build an
+/// explicit system-roots (built-in webpki) verifying config to honor
+/// `tls.enabled: true`.
+fn build_kafka_tls_config(tls: &TlsConfig) -> Result<rustls::ClientConfig> {
+    if let Some(cfg) = crate::link_sys::tls::build_rustls_client_config(tls)? {
+        return Ok(cfg);
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth())
+}
+
 pub struct KafkaLinkClient {
     name: String,
     config: KafkaClientConfig,
@@ -142,30 +162,25 @@ impl KafkaLinkClient {
     ) -> Result<rskafka::client::Client> {
         let mut builder = ClientBuilder::new(brokers.to_vec());
 
-        // TLS — TODO: rskafka 0.5 depends on rustls 0.21, while the rest of this
-        // project uses rustls 0.23.  The two `ClientConfig` types are not compatible
-        // across crate versions, so we cannot call
-        // `crate::link_sys::tls::build_rustls_client_config` (which returns a 0.23
-        // value) and pass it to `ClientBuilder::tls_config` (which expects 0.21).
-        // Once rskafka ships a release that targets rustls 0.23 this section should be
-        // replaced with:
-        //   if let Some(client_config) =
-        //       crate::link_sys::tls::build_rustls_client_config(tls_config)?
-        //   {
-        //       builder = builder.tls_config(Arc::new(client_config));
-        //   }
+        // TLS — rskafka 0.6 targets rustls 0.23 (matching the workspace), so the
+        // shared outbound resolver / builder can drive the connector directly:
+        // custom CA (REPLACE), client mTLS identity, and the verify gate all flow
+        // through `build_rustls_client_config` (provider_can_disable=false — the
+        // rustls connector always verifies, so verify=false is rejected there).
         if let Some(tls_config) = &config.tls {
-            let _ = tls_config; // suppress unused-variable warning
+            if tls_config.enabled {
+                builder = builder.tls_config(Arc::new(build_kafka_tls_config(tls_config)?));
+            }
         }
 
         // SASL/PLAIN — the resolved credential carries the password from the K8s Secret;
         // the username lives directly in the CRD spec.
         if let Some(sasl) = &config.sasl {
             if let CredentialState::Resolved(ResolvedCredential::Basic(basic)) = auth {
-                builder = builder.sasl_config(SaslConfig::Plain {
-                    username: sasl.username.clone(),
-                    password: basic.password.clone(),
-                });
+                builder = builder.sasl_config(SaslConfig::Plain(Credentials::new(
+                    sasl.username.clone(),
+                    basic.password.clone(),
+                )));
             }
         }
 
@@ -177,21 +192,6 @@ impl KafkaLinkClient {
 
     pub fn healthy(&self) -> bool {
         self.healthy.load(Ordering::Relaxed)
-    }
-
-    pub fn health_status(&self) -> LinkSysHealth {
-        let connected = self.healthy();
-        LinkSysHealth {
-            name: self.name.clone(),
-            system_type: "kafka".to_string(),
-            connected,
-            latency_ms: None,
-            error: if connected {
-                None
-            } else {
-                Some("not connected".to_string())
-            },
-        }
     }
 
     /// Non-blocking send to Kafka topic. Returns Err if not initialized or channel full.
@@ -507,5 +507,132 @@ mod tests {
         assert!(flip_log_allowed_at(&last, 0, 5_000));
         // `now_ms.max(1)` must have stored 1, not the forbidden 0 sentinel
         assert_eq!(last.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[cfg(test)]
+mod tls_config_tests {
+    use super::build_kafka_tls_config;
+    use edgion_resources::constants::secret_keys::tls as tls_keys;
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    fn install_provider() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+    }
+
+    fn gen_ca_leaf() -> (String, String, String) {
+        let ca = rcgen::generate_simple_self_signed(vec!["kafka-ca".into()]).unwrap();
+        let leaf = rcgen::generate_simple_self_signed(vec!["kafka.example.com".into()]).unwrap();
+        (ca.cert.pem(), leaf.cert.pem(), leaf.signing_key.serialize_pem())
+    }
+
+    fn secret(data: &[(&str, &[u8])]) -> Secret {
+        let m = data
+            .iter()
+            .map(|(k, v)| (k.to_string(), ByteString(v.to_vec())))
+            .collect::<BTreeMap<_, _>>();
+        Secret {
+            data: Some(m),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn ca_ref(name: &str) -> OutboundTlsLocal {
+        OutboundTlsLocal {
+            // Pin verify explicitly so the test does not depend on the shared
+            // process-global outbound default that other tests may mutate.
+            verify: Some(true),
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    group: String::new(),
+                    kind: "Secret".into(),
+                    name: name.into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn tls_with(outbound: OutboundTlsLocal, ca: Option<Vec<Secret>>, client: Option<Secret>) -> TlsConfig {
+        TlsConfig {
+            enabled: true,
+            outbound,
+            resolved_ca_certificates: ca,
+            resolved_client_certificate: client,
+        }
+    }
+
+    /// enabled TLS with no custom CA and no client identity must still yield a
+    /// verifying system-roots config (rskafka has no implicit default TLS).
+    #[test]
+    fn system_roots_fallback_when_no_material() {
+        install_provider();
+        let tls = tls_with(
+            OutboundTlsLocal {
+                verify: Some(true),
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert!(
+            build_kafka_tls_config(&tls).is_ok(),
+            "enabled TLS with no custom material must build a system-roots config"
+        );
+    }
+
+    #[test]
+    fn custom_ca_builds() {
+        install_provider();
+        let (ca, _c, _k) = gen_ca_leaf();
+        let tls = tls_with(
+            ca_ref("my-ca"),
+            Some(vec![secret(&[(tls_keys::CA_CERT, ca.as_bytes())])]),
+            None,
+        );
+        assert!(build_kafka_tls_config(&tls).is_ok());
+    }
+
+    #[test]
+    fn ca_and_client_mtls_builds() {
+        install_provider();
+        let (ca, cert, key) = gen_ca_leaf();
+        let tls = tls_with(
+            ca_ref("my-ca"),
+            Some(vec![secret(&[(tls_keys::CA_CERT, ca.as_bytes())])]),
+            Some(secret(&[("tls.crt", cert.as_bytes()), ("tls.key", key.as_bytes())])),
+        );
+        let cfg = build_kafka_tls_config(&tls).expect("CA + mTLS identity must build");
+        assert!(
+            cfg.client_auth_cert_resolver.has_certs(),
+            "client cert must be installed"
+        );
+    }
+
+    /// rskafka's rustls connector always verifies (provider_can_disable=false),
+    /// so verify=false must be rejected up front, never silently honored.
+    #[test]
+    fn verify_false_rejected() {
+        install_provider();
+        let tls = tls_with(
+            OutboundTlsLocal {
+                verify: Some(false),
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert!(build_kafka_tls_config(&tls).is_err());
     }
 }

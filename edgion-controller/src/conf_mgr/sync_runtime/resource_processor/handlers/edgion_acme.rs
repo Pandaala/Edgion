@@ -23,6 +23,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
 use crate::services::acme::notify_resource_changed;
 use edgion_resources::credentials::resolvers::{AcmeAccountResolver, DnsCredentialResolver};
+use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionAcme;
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::edgion_acme::{AcmeChallenge, EdgionAcmeStatus};
@@ -85,10 +86,26 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             errors.push("EdgionAcme: wildcard domains (*.example.com) require dns-01 challenge type".to_string());
         }
 
+        // Validate GEP-2257 duration fields. The CRD pattern guards the K8s
+        // path; this check covers FS mode and surfaces the error on the
+        // Accepted condition instead of a silent runtime fallback.
+        let renewal = &acme.spec.renewal;
+        let mut duration_fields = vec![
+            ("renewal.renewBefore", &renewal.renew_before),
+            ("renewal.checkInterval", &renewal.check_interval),
+            ("renewal.failBackoff", &renewal.fail_backoff),
+        ];
+
         // Validate provider name on DNS-01. The tagged enum already enforces
         // that http-01 and dns-01 cannot mix fields, so no "missing http01"
         // / "missing dns01" arms are needed.
-        if let AcmeChallenge::Dns01 { provider, .. } = &acme.spec.challenge {
+        if let AcmeChallenge::Dns01 {
+            provider,
+            propagation_timeout,
+            propagation_check_interval,
+            ..
+        } = &acme.spec.challenge
+        {
             match provider.as_str() {
                 "cloudflare" | "alidns" => {}
                 other => {
@@ -97,6 +114,16 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                         other
                     ));
                 }
+            }
+            duration_fields.push(("challenge.propagationTimeout", propagation_timeout));
+            duration_fields.push(("challenge.propagationCheckInterval", propagation_check_interval));
+        }
+
+        for (field, value) in duration_fields {
+            if parse_duration(value).is_err() {
+                errors.push(format!(
+                    "EdgionAcme: {field} must be a valid GEP-2257 duration (e.g. \"30s\", \"24h\"), got '{value}'"
+                ));
             }
         }
 
@@ -513,6 +540,21 @@ fn outcome_to_resolved_refs_action<T>(
             ))
         }
 
+        (ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { key, class }), Account) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                key = %key,
+                class = %class,
+                "ACME account Secret contains an invalid credential value"
+            );
+            Abort(condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID,
+                format!("credential value is invalid for key '{}': {}", key, class),
+                generation,
+            ))
+        }
+
         // ── Invalid::InvalidSecretType ────────────────────────────────────
         (ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }), Account) => {
             tracing::error!(
@@ -616,6 +658,21 @@ fn outcome_to_resolved_refs_action<T>(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::DECODE_ERROR,
                 format!("DNS credential decode failed for key '{}': {}", key, detail),
+                generation,
+            ))
+        }
+
+        (ResolveOutcome::Invalid(InvalidCredentialError::InvalidValue { key, class }), Dns { .. }) => {
+            tracing::error!(
+                edgion_acme = %resource_key,
+                key = %key,
+                class = %class,
+                "DNS credential Secret contains an invalid credential value"
+            );
+            Continue(condition_false(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::INVALID,
+                format!("DNS credential value is invalid for key '{}': {}", key, class),
                 generation,
             ))
         }

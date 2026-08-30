@@ -11,7 +11,7 @@ Use this skill to answer:
 - How to modify the `setup-rust` local action without simultaneously breaking `ci.yml` and `build-image.yml`
 - How to reproduce the CI / release build path locally as closely as possible
 
-## The four workflows
+## Workflow Inventory
 
 The repo currently has the following workflows under `.github/workflows/`:
 
@@ -19,8 +19,10 @@ The repo currently has the following workflows under `.github/workflows/`:
 |----------|---------|---------|
 | `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
 | `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
-| `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids `tracing::warn!/error!` on data-plane hot paths (function-level) |
+| `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids unapproved `tracing::*` macros on data-plane hot paths (function-level) |
+| `check-ssa-force.yml` | repository workflow trigger | Ensures every server-side apply uses forced `PatchParams`, subject to the script allowlist |
 | `check-edgion-config-data-overlay.yml` | `pull_request` + `push` to `main` | Three gates guarding the EdgionConfigData overlay refactor — see "EdgionConfigData overlay gates" below |
+| `supply-chain.yml` | `pull_request` + `push` to `main` + daily cron | `cargo deny check` against `deny.toml` (RustSec advisories, license allowlist, banned crates, source pinning). Cron runs advisories-only so new advisories surface without waiting for a PR; triage decisions live as commented `ignore` entries in `deny.toml`. Do NOT pass `--all-features` (TLS/allocator features are mutually exclusive) |
 | `docs.yml` | `push` to `main` touching `docs/**` (or `workflow_dispatch`) | VitePress build + GitHub Pages deploy |
 | `build-image.yml` | `workflow_dispatch` (manual only) | Cross-compile binaries, build/push runtime images, merge manifests, create release |
 
@@ -36,6 +38,8 @@ The repo currently has the following workflows under `.github/workflows/`:
 - [../../../.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
 - [../../../.github/workflows/build-image.yml](../../../.github/workflows/build-image.yml)
 - [../../../.github/workflows/check-english-only.yml](../../../.github/workflows/check-english-only.yml)
+- [../../../.github/workflows/check-ssa-force.yml](../../../.github/workflows/check-ssa-force.yml)
+- [../../../.github/workflows/check-gateway-no-tracing.yml](../../../.github/workflows/check-gateway-no-tracing.yml)
 - [../../../.github/workflows/docs.yml](../../../.github/workflows/docs.yml)
 - [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
 - [../../../cicd/docker/Dockerfile.runtime](../../../cicd/docker/Dockerfile.runtime)
@@ -46,19 +50,31 @@ The repo currently has the following workflows under `.github/workflows/`:
 
 `ci.yml` triggers on `push` / `pull_request` to `main` or `master`, in the following order:
 
-1. `check` -> `cargo check --workspace --all-targets`
-2. `fmt` -> `cargo fmt --all -- --check`
-3. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
-4. `clippy` -> `cargo clippy --workspace --all-targets`
-5. `test` -> `cargo test --all`
-6. `ci-success` -> aggregates the results of the previous five jobs to provide a stable check for branch protection
+1. `check` -> Pingora source-policy guard, then
+   `cargo check --locked --workspace --all-targets`
+2. `gateway-build` -> build the Gateway artifact, probe its compiled
+   capabilities, and verify every Pingora package resolves to the Edgion fork
+3. `fmt` -> `cargo fmt --all -- --check`
+4. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
+5. `clippy` -> `cargo clippy --locked --workspace --all-targets`
+6. `test` -> `cargo test --locked --all`
+7. `ci-success` -> aggregates the results of the previous six jobs to provide a stable check for branch protection
 
 Key facts:
 
-- The four Rust jobs `check`, `fmt`, `clippy`, and `test` each run the local action [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml) first
+- The five Rust jobs `check`, `gateway-build`, `fmt`, `clippy`, and `test`
+  each run the local action
+  [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
+  first
 - `agent-docs` only needs checkout + `python3 cicd/checks/validate_agent_docs.py`; it does not depend on Rust toolchain initialization
-- `fmt` does not install system dependencies and does not enable cargo cache; the other build-style Rust jobs install dependencies and enable cache
+- `fmt` does not install system dependencies and does not enable cargo cache;
+  the other build-style Rust jobs install dependencies and enable cache
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
+- Every resolving Cargo command uses `--locked`. The manifest follows the
+  Edgion Pingora `edgion_v3` branch, but CI always builds the exact commit in the
+  committed lockfile. `check_pingora_source_policy.py` also verifies that all
+  seven direct fork dependencies share that branch and the complete lockfile
+  family resolves to one commit.
 - `check` and `clippy` pass `--workspace` on purpose: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip the harness. `--workspace` gives it the same fast type-check + clippy signal that `cargo test --all` already exercises at compile time
 
 ## What the local `setup-rust` action does
@@ -90,7 +106,7 @@ When changing it, treat it as "shared infrastructure", not as a private script f
    - checkout
    - call `setup-rust`
    - cache only `~/.cargo/registry` and `~/.cargo/git`
-   - `cargo fetch`
+   - `cargo fetch --locked`
 
 2. `build-binaries`
    - `amd64` / `arm64` matrix
@@ -147,11 +163,17 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 
 ```bash
 cargo check --workspace --all-targets
-cargo fmt --all -- --check
+cargo fmt --all
 python3 cicd/checks/validate_agent_docs.py
 cargo clippy --workspace --all-targets
+python3 cicd/checks/check_ssa_force.py
 cargo test --all
 ```
+
+This block is the project quick/pre-commit sequence plus tests. Branch protection also
+uses independent workflows for English-only content, Gateway hot-path tracing,
+EdgionConfigData overlays, SSA force, and supply-chain checks. Inspect
+`.github/workflows/` before claiming full CI parity.
 
 ### Reproduce the release binary builds
 
@@ -164,14 +186,14 @@ different directory. The commands below mirror the `build-binaries` job exactly
 
 ```bash
 # amd64
-cargo build --profile production \
+cargo build --locked --profile production \
   -p edgion-gateway -p edgion-controller -p edgion-cli \
   --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target x86_64-unknown-linux-gnu
 
 # arm64
 rustup target add aarch64-unknown-linux-gnu
-cargo build --profile production \
+cargo build --locked --profile production \
   -p edgion-gateway -p edgion-controller -p edgion-cli \
   --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target aarch64-unknown-linux-gnu

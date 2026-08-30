@@ -1,0 +1,14 @@
+# SourceIp ConsistentHash keyed on the client source IP (no key field).
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ch-sourceip-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ch-sourceip-service
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      hashOn: sourceIp

@@ -14,8 +14,16 @@ spec:
           body: "gated"
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: X-Fault
-            value: "1"
+          anyOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: X-Fault
+              values: ["1"]
+            - name: explicit-fault-header
+              allOf:
+                - type: keyMatch
+                  key:
+                    type: header
+                    name: X-Fault
+                  values: ["1"]

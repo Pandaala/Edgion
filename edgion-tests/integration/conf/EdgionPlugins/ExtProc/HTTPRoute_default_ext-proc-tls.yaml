@@ -1,0 +1,27 @@
+# HTTPRoute for the ExtProc-over-TLS test (Scenario A: validation.caCertificateRefs SecretRef + verify).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ext-proc-tls-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ext-proc-tls.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ext-proc-tls
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

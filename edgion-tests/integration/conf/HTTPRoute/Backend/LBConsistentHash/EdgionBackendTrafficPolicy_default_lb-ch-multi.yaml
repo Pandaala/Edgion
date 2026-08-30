@@ -1,0 +1,16 @@
+# Header ConsistentHash for lb-ch-multi-service across 2 EndpointSlices,
+# keyed on header "x-user-id".
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ch-multi-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ch-multi-service
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      hashOn: header
+      key: x-user-id

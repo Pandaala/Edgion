@@ -1,8 +1,9 @@
-//! Process-global per-listener-port local rate gate (token bucket).
+//! Process-global local rate gate (token bucket), per plugin entry and listener port.
 //!
 //! This is Stage 1 of the connection-rate plugin: a dependency-free backstop
-//! that survives config hot-reload (keyed by listener port in a process-global
-//! registry) so a reload does not reset the bucket. No tracing on this path.
+//! that survives config hot-reload (keyed by entry scope + listener port in a
+//! process-global registry) so a reload does not reset the bucket. No tracing on
+//! this path.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -96,19 +97,36 @@ impl LocalRateGate {
     }
 }
 
-static LOCAL_GATES: LazyLock<Mutex<HashMap<u16, Arc<LocalRateGate>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Gates by owning plugin-entry scope, then by listener port.
+///
+/// The scope level is what keeps two `ConnectionRateLimit` entries active on one
+/// port from sharing a token bucket: they would otherwise not merely share the
+/// budget but rewrite each other's rate/interval through `update_params` on
+/// every connection. Keying by scope first also keeps the lookup allocation-free
+/// (`&str` borrows against the `String` key).
+///
+/// The registry has no eviction: a renamed resource, a reordered entry, or a
+/// delete/recreate leaves its old scope behind for the process lifetime. Each
+/// orphan is a handful of atomics plus a small port map, and the churn rate is
+/// operator config changes, so this is accepted rather than plumbing a removal
+/// hook from the stream plugin store.
+static LOCAL_GATES: LazyLock<Mutex<HashMap<String, HashMap<u16, Arc<LocalRateGate>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Look up (or create) the process-global gate for `listener_port`, updating its
-/// rate/interval to the latest config so hot-reload changes apply without losing
-/// the registry slot or the current token state.
-pub fn get_or_update_local_gate(listener_port: u16, rate: u64, interval_ms: u64) -> Arc<LocalRateGate> {
+/// Look up (or create) the process-global gate for `scope` + `listener_port`,
+/// updating its rate/interval to the latest config so hot-reload changes apply
+/// without losing the registry slot or the current token state. The scope is
+/// stable across a reload of the same entry, so the token state survives it.
+pub fn get_or_update_local_gate(scope: &str, listener_port: u16, rate: u64, interval_ms: u64) -> Arc<LocalRateGate> {
     let mut map = LOCAL_GATES.lock().unwrap();
-    if let Some(g) = map.get(&listener_port) {
+    if let Some(g) = map.get(scope).and_then(|ports| ports.get(&listener_port)) {
         g.update_params(rate, interval_ms);
         return g.clone();
     }
     let g = Arc::new(LocalRateGate::new(rate, interval_ms));
-    map.insert(listener_port, g.clone());
+    map.entry(scope.to_string())
+        .or_default()
+        .insert(listener_port, g.clone());
     g
 }
 
@@ -142,13 +160,41 @@ mod tests {
     #[test]
     fn update_params_changes_rate_without_losing_registry_entry() {
         let port = 65000u16;
-        let g1 = get_or_update_local_gate(port, 1, 1000);
+        let scope = "default/esp-a/#0:";
+        let g1 = get_or_update_local_gate(scope, port, 1, 1000);
         let t0 = 2_000_000u64;
         assert!(g1.try_acquire_at(t0));
         assert!(!g1.try_acquire_at(t0));
         // hot reload raises the rate; same registry slot, new capacity applies
-        let g2 = get_or_update_local_gate(port, 5, 1000);
+        let g2 = get_or_update_local_gate(scope, port, 5, 1000);
         assert!(Arc::ptr_eq(&g1, &g2));
         assert!(g2.try_acquire_at(t0)); // capacity raised to 5, more tokens available
+    }
+
+    #[test]
+    fn gates_are_isolated_per_entry_scope_on_one_port() {
+        // Two ConnectionRateLimit entries can be active on one listener port
+        // (two TLSRoutes with different SNIs, or a listener-level plus a
+        // route-level attachment). They must not share a bucket, and must not
+        // rewrite each other's rate through update_params.
+        let port = 65001u16;
+        let a = get_or_update_local_gate("default/esp-a/#0:", port, 1, 1000);
+        let b = get_or_update_local_gate("default/esp-b/#0:", port, 9, 1000);
+        assert!(!Arc::ptr_eq(&a, &b));
+
+        let t0 = 3_000_000u64;
+        assert!(a.try_acquire_at(t0));
+        assert!(!a.try_acquire_at(t0), "entry A must keep its own rate of 1");
+        // B's budget is untouched by A having exhausted its own.
+        assert!(b.try_acquire_at(t0));
+        assert!(b.try_acquire_at(t0));
+    }
+
+    #[test]
+    fn one_scope_keeps_separate_gates_per_port() {
+        let scope = "default/esp-c/#0:";
+        let p1 = get_or_update_local_gate(scope, 65002, 1, 1000);
+        let p2 = get_or_update_local_gate(scope, 65003, 1, 1000);
+        assert!(!Arc::ptr_eq(&p1, &p2));
     }
 }

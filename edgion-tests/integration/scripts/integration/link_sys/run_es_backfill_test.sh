@@ -36,6 +36,9 @@ NC='\033[0m'
 # -- Paths -------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
+CONF_SYNC_UTILS="${SCRIPT_DIR}/../../utils/conf_sync_certs.sh"
+# shellcheck source=../../utils/conf_sync_certs.sh
+source "$CONF_SYNC_UTILS"
 
 ES_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/elasticsearch"
 CONF_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf"
@@ -232,9 +235,9 @@ cleanup() {
                 kill "$(cat "${PID_DIR}/${svc}.pid")" 2>/dev/null || true
             fi
         done
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
-        pkill -f test_server 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
+        pkill -f debug/test_server 2>/dev/null || true
         log_info "Stopping Elasticsearch container..."
         cd "$ES_DIR" && docker compose down --timeout 10 2>/dev/null || true
         log_info "Cleanup done"
@@ -251,9 +254,9 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
-pkill -9 -f test_server 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
+pkill -9 -f debug/test_server 2>/dev/null || true
 sleep 2
 log_success "Old processes cleaned up"
 
@@ -282,6 +285,11 @@ done
 # =============================================================================
 log_section "Preparing work directory"
 mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
+
+# conf_sync is mTLS by default (the checked-in config/edgion-*.yaml carry the cert
+# paths, work-dir relative). Both binaries below run with WORK_DIR as their work
+# dir, so the cert set has to land there.
+conf_sync_distribute_certs "$WORK_DIR"
 if [ -d "${PROJECT_ROOT}/config/crd" ]; then
     cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
     log_success "CRD schemas copied"
@@ -293,7 +301,7 @@ fi
 GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway-es-backfill.yaml"
 cat > "$GATEWAY_CONFIG" <<EOF
 gateway:
-  server_addr: "http://127.0.0.1:12151"
+  server_addrs: ["https://127.0.0.1:12151"]
 
 logging:
   log_dir: "logs"
@@ -317,6 +325,7 @@ access_log:
 ssl_log:
   enabled: false
 EOF
+conf_sync_security_block client >> "$GATEWAY_CONFIG"
 log_success "Custom gateway config written: ${GATEWAY_CONFIG}"
 
 # =============================================================================

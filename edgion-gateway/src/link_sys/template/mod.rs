@@ -7,4 +7,4 @@
 
 pub mod engine;
 
-pub use engine::{evaluate_template, resolve_var};
+pub use engine::{evaluate_template, evaluate_template_bounded, TemplateEvaluationError};

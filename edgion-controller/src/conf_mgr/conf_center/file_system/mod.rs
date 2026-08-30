@@ -48,7 +48,7 @@ mod storage;
 pub use center::FileSystemCenter;
 pub use config::FileSystemConfig;
 pub use controller::FileSystemController;
-pub use event::{FileSystemEvent, ResourceEvent};
+pub use event::FileSystemEvent;
 pub use file_watcher::FileSystemWatcher;
 pub use path_registry::{ConflictReport, ForgetOutcome, PathRegistry, RecordOutcome, ResourceKey};
 pub use resource_controller::FileSystemResourceController;

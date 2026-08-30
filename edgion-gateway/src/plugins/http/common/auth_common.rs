@@ -1,12 +1,96 @@
 //! Shared authentication utilities for Edgion request auth plugins.
 
 use bytes::Bytes;
+use edgion_resources::uri_utils::url_decode;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::plugins::runtime::PluginSession;
+
+/// Remove a named parameter from the forwarded request query string.
+///
+/// Surviving pairs retain their original encoding, and only the query is
+/// rewritten so the upstream stage still controls raw-vs-normalized path
+/// forwarding.
+///
+/// The parameter name is compared against the percent-decoded key so the match
+/// mirrors how `KeyGet::Query` (`get_query_param`) extracted it. The
+/// `url_decode` call is load-bearing, not a redundant allocation: simplifying it
+/// to a raw string compare would silently stop hiding a credential sent as
+/// `api%5Fkey=...`. [`strip_cookie`] deliberately compares raw keys instead —
+/// each helper matches the extractor it undoes.
+pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
+    let Some(query) = session.get_query() else {
+        return;
+    };
+    let mut removed = false;
+    let remaining: Vec<&str> = query
+        .split('&')
+        .filter(|pair| {
+            if pair.is_empty() {
+                return false;
+            }
+            let raw_key = pair.split('=').next().unwrap_or("");
+            let keep = url_decode(raw_key) != name;
+            removed |= !keep;
+            keep
+        })
+        .collect();
+
+    if !removed {
+        return;
+    }
+    let new_query = remaining.join("&");
+    let _ = session.set_request_query(&new_query);
+}
+
+/// Remove a named cookie from every forwarded `Cookie` header line.
+///
+/// HTTP/2 may split cookies across multiple fields, so all lines are collected
+/// before the survivors are written back as one field — or the header is removed
+/// entirely if none survive. Re-serializing all lines into one avoids the data
+/// loss that a single-line read + replace-all write would cause when the request
+/// carries multiple `Cookie` fields.
+///
+/// Cookie-name matching is a raw key comparison on the trimmed `name=value`
+/// pair (split on the first `=`), mirroring `get_cookie`. The asymmetry with
+/// [`strip_query_param`] — decoded key there, raw key here — is deliberate:
+/// each side matches the extractor it undoes.
+///
+/// Assumes `PluginSession::set_request_header` has replace-all-lines semantics
+/// (today it does — the adapter routes it through `insert_header`). Were it to
+/// become append semantics, every surviving cookie would be duplicated.
+pub fn strip_cookie(session: &mut dyn PluginSession, name: &str) {
+    let mut survivors: Vec<String> = Vec::new();
+    let mut saw_cookie = false;
+    for (header_name, value) in session.request_headers() {
+        if !header_name.eq_ignore_ascii_case("cookie") {
+            continue;
+        }
+        saw_cookie = true;
+        for pair in value.split(';') {
+            let trimmed = pair.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let key = trimmed.split('=').next().unwrap_or("");
+            if key != name {
+                survivors.push(trimmed.to_string());
+            }
+        }
+    }
+
+    if !saw_cookie {
+        return;
+    }
+    if survivors.is_empty() {
+        let _ = session.remove_request_header("Cookie");
+    } else {
+        let _ = session.set_request_header("Cookie", &survivors.join("; "));
+    }
+}
 
 /// Build and send a 401/403 auth error response for the gateway plane (Pingora).
 ///
@@ -243,7 +327,8 @@ pub fn set_claims_headers(
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_quoted_string, resolve_claim_path, Claims};
+    use super::{escape_quoted_string, resolve_claim_path, strip_cookie, strip_query_param, Claims};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
     use serde_json::json;
 
     #[test]
@@ -296,5 +381,92 @@ mod tests {
         assert_eq!(value.get("sub").and_then(|v| v.as_str()), Some("user-1"));
         assert_eq!(value.get("exp").and_then(|v| v.as_u64()), Some(123));
         assert_eq!(value.get("email").and_then(|v| v.as_str()), Some("u1@example.com"));
+    }
+
+    #[test]
+    fn strip_query_param_removes_named_keeps_others() {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_get_query()
+            .return_const(Some("api_key=secret&foo=bar".to_string()));
+        session
+            .expect_set_request_query()
+            .withf(|query| query == "foo=bar")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        strip_query_param(&mut session, "api_key");
+    }
+
+    #[test]
+    fn strip_query_param_only_param_clears_query() {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_get_query()
+            .return_const(Some("api_key=secret".to_string()));
+        session
+            .expect_set_request_query()
+            .withf(|query| query.is_empty())
+            .times(1)
+            .returning(|_| Ok(()));
+
+        strip_query_param(&mut session, "api_key");
+    }
+
+    #[test]
+    fn strip_query_param_without_match_leaves_query_untouched() {
+        let mut session = MockPluginSession::new();
+        session.expect_get_query().return_const(Some("a=1&&b=2&".to_string()));
+        session.expect_set_request_query().times(0);
+
+        strip_query_param(&mut session, "api_key");
+    }
+
+    #[test]
+    fn strip_cookie_removes_named_keeps_others() {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_request_headers()
+            .returning(|| vec![("Cookie".to_string(), "api_key=secret; other=1".to_string())]);
+        session
+            .expect_set_request_header()
+            .withf(|name, value| name == "Cookie" && value == "other=1")
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        strip_cookie(&mut session, "api_key");
+    }
+
+    #[test]
+    fn strip_cookie_only_cookie_removes_header() {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_request_headers()
+            .returning(|| vec![("Cookie".to_string(), "api_key=secret".to_string())]);
+        session
+            .expect_remove_request_header()
+            .withf(|name| name == "Cookie")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        strip_cookie(&mut session, "api_key");
+    }
+
+    #[test]
+    fn strip_cookie_merges_multiple_cookie_lines() {
+        let mut session = MockPluginSession::new();
+        session.expect_request_headers().returning(|| {
+            vec![
+                ("Cookie".to_string(), "api_key=secret; a=1".to_string()),
+                ("cookie".to_string(), "b=2".to_string()),
+            ]
+        });
+        session
+            .expect_set_request_header()
+            .withf(|name, value| name == "Cookie" && value == "a=1; b=2")
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        strip_cookie(&mut session, "api_key");
     }
 }

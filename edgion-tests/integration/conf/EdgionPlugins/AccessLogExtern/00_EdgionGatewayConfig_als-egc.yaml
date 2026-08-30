@@ -1,0 +1,70 @@
+# Dedicated EdgionGatewayConfig for this suite's own Gateway (als-gateway),
+# instead of overlaying the shared, cluster-scoped base EdgionGatewayConfig
+# (see edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml).
+#
+# EdgionGatewayConfig is cluster-scoped and a full `run_integration.sh` run
+# loads every conf directory in one process, so two same-named overlays of
+# that shared resource (this suite's former overlay and
+# EdgionPlugins/GlobalPluginsSnapshot's) would silently clobber each other's
+# globalPluginsRef depending on apply order — passing in isolation, failing
+# in the full run. This mirrors the fix already used by
+# HTTPRoute/Backend/DnsResolution's dns-res-egc: bring a private chain
+# (EdgionGatewayConfig -> GatewayClass -> Gateway) instead of overlaying the
+# shared resource.
+#
+# The base spec (edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml)
+# is duplicated verbatim below (values only; the base's Chinese-language
+# section comments are dropped per this repo's English-only rule for
+# newly-authored file content) so als-class's gateways behave identically to
+# every other suite's, plus the Tier 1 (GatewayClass-global) globalPluginsRef
+# this suite needs.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: als-egc
+spec:
+  server:
+    threads: 4
+    workStealing: true
+    gracePeriodSeconds: 30
+    gracefulShutdownTimeoutS: 10
+    upstreamKeepalivePoolSize: 128
+    downstreamKeepaliveRequestLimit: 1000
+
+  realIp:
+    trustedIps:
+      - name: private-ranges
+        cidrs:
+          - "127.0.0.0/8"
+          - "198.51.100.0/24"
+          - "192.168.0.0/16"
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+    realIpHeader: "X-Forwarded-For"
+
+  securityProtect:
+    xForwardedForLimit: 200
+    requireSniHostMatch: true
+    fallbackSni: "default.example.com"
+
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultIdleTimeout: 300s
+
+  tcpTimeout:
+    idleTimeout: 2s
+
+  # Tier 1 (GatewayClass-global): applied to every request on any Gateway
+  # using this GatewayClass, before Tier 2 (gateway annotation) and Tier 3
+  # (route ExtensionRef). Declaration-only — never executes a filter, so it
+  # is safe to leave active: no accessLogExtern field is emitted unless its
+  # source actually has a value for that request.
+  globalPluginsRef:
+    - name: als-global
+      namespace: edgion-default

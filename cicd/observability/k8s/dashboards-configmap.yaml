@@ -1,0 +1,367 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-dashboards
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  edgion-self.json: |
+    {
+      "title": "Edgion — Self",
+      "uid": "edgion-self",
+      "schemaVersion": 38,
+      "version": 1,
+      "editable": true,
+      "tags": ["edgion"],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0,
+            "label": "Datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Config-sync frozen (per gateway)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_system_error_state{component=\"conf_sync_client\",reason=\"confsync_disconnected\"}" }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Leader status",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_controller_leader" }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Leader-job liveness",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_controller_leader_job_alive" }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Reload duration (s)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_controller_reload_duration_seconds_last" }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Cert expiry countdown (days)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "(edgion_conf_sync_cert_expiry_timestamp_seconds - time()) / 86400" }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Wasm modules loaded",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_wasm_modules_loaded" }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Wasm pool size",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_wasm_pool_size" }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Abnormal resources",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_controller_resource_abnormal{err!=\"\"}" }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "Self cardinality overview (top-10)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "topk(10, count by (__name__)({__name__=~\"edgion_.*\"}))" }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "stat",
+          "title": "Cardinality guard active",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_metrics_cardinality_limit_active" }
+          ]
+        },
+        {
+          "id": 11,
+          "type": "timeseries",
+          "title": "Series rejected rate",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "rate(edgion_metrics_series_rejected_total[5m])" }
+          ]
+        }
+      ]
+    }
+  edgion-business.json: |
+    {
+      "title": "Edgion — Business",
+      "uid": "edgion-business",
+      "schemaVersion": 38,
+      "version": 1,
+      "editable": true,
+      "tags": ["edgion"],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0,
+            "label": "Datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Request rate",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(rate(edgion_backend_requests_total[5m]))" }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Error rate",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(rate(edgion_backend_requests_total{status=~\"5xx|failed\"}[5m])) / sum(rate(edgion_backend_requests_total[5m]))" }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "p99 latency (histogram; enable request_duration)",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])) by (le))" }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "LB panic mode",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_lb_panic_mode" }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Circuit-breaker rejections",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "rate(edgion_circuit_breaker_rejections_total[5m])" }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Circuit-breaker ejections",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "rate(edgion_circuit_breaker_ejections_total[5m])" }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Connection rate-limit rejections",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "rate(edgion_connection_rate_limit_rejected_total[5m])" }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Mirror outcomes",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (status) (rate(edgion_mirror_requests_total[5m]))" }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "Request/response bytes",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(rate(edgion_gateway_request_bytes_total[5m]))" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum(rate(edgion_gateway_response_bytes_total[5m]))" }
+          ]
+        }
+      ]
+    }
+  edgion-federation.json: |
+    {
+      "title": "Edgion — Federation",
+      "uid": "edgion-federation",
+      "schemaVersion": 38,
+      "version": 1,
+      "editable": true,
+      "tags": ["edgion"],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0,
+            "label": "Datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "type": "text",
+          "title": "",
+          "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+          "options": {
+            "mode": "markdown",
+            "content": "Aggregator/watch-error panels require EdgionCenter (separate repo); on a Controller-only deployment those series are absent."
+          }
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Active fed connections",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_fed_connections_active" }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Connection events",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (event) (rate(edgion_fed_connection_events_total[5m]))" }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Watch events",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "sum by (kind,direction) (rate(edgion_fed_watch_events_total[5m]))" }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "RBAC denied",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "rate(edgion_fed_rbac_denied_total[5m])" }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Kill-switch state",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "edgion_fed_kill_switch_state" }
+          ]
+        }
+      ]
+    }

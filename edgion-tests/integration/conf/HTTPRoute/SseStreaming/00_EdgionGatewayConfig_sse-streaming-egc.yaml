@@ -1,0 +1,10 @@
+# Dedicated configuration for the SSE streaming listener. Keeping compression
+# enablement on a private GatewayClass avoids changing every suite that uses the
+# shared `example-gateway` configuration during a full integration sweep.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: sse-streaming-egc
+spec:
+  server:
+    enableCompression: true

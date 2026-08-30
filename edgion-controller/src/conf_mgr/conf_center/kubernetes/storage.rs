@@ -4,19 +4,24 @@
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
 use super::version_detection::{
-    detect_reference_grant_version, probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion,
+    probe_backend_tls_policy_version, probe_reference_grant_version, probe_tls_route_version, BackendTLSPolicyVersion,
     ReferenceGrantVersion, TLSRouteVersion,
 };
+use crate::conf_mgr::conf_center::common::{ensure_expected_resource_version_value, merge_operator_update_values};
 use crate::conf_mgr::conf_center::traits::{
     CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey, ResourceKeyMeta, LAST_APPLIED_KEY,
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use kube::api::{DeleteParams, ListParams, Patch, PatchParams};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use kube::api::{DeleteParams, ListParams, Patch, PatchParams, Preconditions};
 use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::discovery::Scope;
 use kube::{Api, Client};
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 /// Kubernetes API based configuration writer
 ///
@@ -24,23 +29,34 @@ use serde_json::json;
 /// Uses dynamic client to support any resource type.
 pub struct KubernetesStorage {
     client: Client,
+    allowed_namespaces: BTreeSet<String>,
 }
 
 impl KubernetesStorage {
     /// Create a new KubernetesStorage with default client
-    pub async fn new() -> Result<Self> {
+    pub async fn new(allowed_namespaces: Vec<String>) -> Result<Self> {
         let client = Client::try_default().await?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            allowed_namespaces: allowed_namespaces.into_iter().collect(),
+        })
     }
 
-    /// Create a new KubernetesStorage with existing client
-    pub fn with_client(client: Client) -> Self {
-        Self { client }
-    }
-
-    /// Get the Kubernetes client
-    pub fn client(&self) -> &Client {
-        &self.client
+    /// Test-only constructor backed by an in-process stub transport.
+    ///
+    /// Lets a unit test build a `KubernetesCenter` without a cluster and
+    /// without a TLS stack. The stub service answers every request with an
+    /// empty 200; no test using this issues a request. Must be called from
+    /// within a Tokio runtime (`Client::new` spawns a buffer worker).
+    #[cfg(test)]
+    pub(super) fn new_unconnected_for_test() -> Self {
+        let service = tower::service_fn(|_req: http::Request<kube::client::Body>| async {
+            Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::empty()))
+        });
+        Self {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        }
     }
 
     /// Resolve ApiResource and Scope for a resource kind.
@@ -111,7 +127,9 @@ impl KubernetesStorage {
                     ))
                 }
             },
-            "ReferenceGrant" => match detect_reference_grant_version(&self.client).await {
+            "ReferenceGrant" => match probe_reference_grant_version(&self.client).await.map_err(|e| {
+                ConfWriterError::InternalError(format!("Failed to detect ReferenceGrant version: {}", e))
+            })? {
                 Some(ReferenceGrantVersion::V1Beta1) => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk(
                         "gateway.networking.k8s.io",
@@ -120,7 +138,7 @@ impl KubernetesStorage {
                     )),
                     Scope::Namespaced,
                 ),
-                _ => (
+                Some(ReferenceGrantVersion::V1) => (
                     ApiResource::from_gvk(&GroupVersionKind::gvk(
                         "gateway.networking.k8s.io",
                         "v1",
@@ -128,6 +146,11 @@ impl KubernetesStorage {
                     )),
                     Scope::Namespaced,
                 ),
+                None => {
+                    return Err(ConfWriterError::NotFound(
+                        "ReferenceGrant CRD not found (expected v1 or v1beta1)".to_string(),
+                    ))
+                }
             },
             "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client).await.map_err(|e| {
                 ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e))
@@ -157,6 +180,10 @@ impl KubernetesStorage {
             // Core resources
             "Secret" => (
                 ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
+                Scope::Namespaced,
+            ),
+            "ConfigMap" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "ConfigMap")),
                 Scope::Namespaced,
             ),
             "Service" => (
@@ -202,10 +229,25 @@ impl KubernetesStorage {
                 Scope::Namespaced,
             ),
             "LinkSys" => (api_resource("edgion.io", "v1", "LinkSys", "linksys"), Scope::Namespaced),
+            "EdgionBackend" => (
+                api_resource("edgion.io", "v1", "EdgionBackend", "edgionbackends"),
+                Scope::Namespaced,
+            ),
             // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
             // so `from_gvk` resolves correctly without a plural override.
             "EdgionAcme" => (
                 ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
+                Scope::Namespaced,
+            ),
+            // Non-conventional plural: naive pluralization would yield
+            // "edgionbackendtrafficpolicys", so an explicit plural is required.
+            "EdgionBackendTrafficPolicy" => (
+                api_resource(
+                    "edgion.io",
+                    "v1",
+                    "EdgionBackendTrafficPolicy",
+                    "edgionbackendtrafficpolicies",
+                ),
                 Scope::Namespaced,
             ),
             _ => {
@@ -218,28 +260,9 @@ impl KubernetesStorage {
         Ok((ar, scope))
     }
 
-    async fn backend_tls_policy_api_version(&self) -> Result<Option<&'static str>, ConfWriterError> {
-        let version = probe_backend_tls_policy_version(&self.client)
-            .await
-            .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e)))?;
-
-        Ok(match version {
-            Some(BackendTLSPolicyVersion::V1) => Some("gateway.networking.k8s.io/v1"),
-            Some(BackendTLSPolicyVersion::V1Alpha3) => Some("gateway.networking.k8s.io/v1alpha3"),
-            None => None,
-        })
-    }
-
-    async fn tls_route_api_version(&self) -> Result<Option<&'static str>, ConfWriterError> {
-        let version = probe_tls_route_version(&self.client)
-            .await
-            .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect TLSRoute version: {}", e)))?;
-
-        Ok(match version {
-            Some(TLSRouteVersion::V1) => Some("gateway.networking.k8s.io/v1"),
-            Some(TLSRouteVersion::V1Alpha3) => Some("gateway.networking.k8s.io/v1alpha3"),
-            None => None,
-        })
+    fn namespace_allowed(&self, namespace: Option<&str>) -> bool {
+        self.allowed_namespaces.is_empty()
+            || namespace.is_some_and(|namespace| self.allowed_namespaces.contains(namespace))
     }
 
     /// Create a dynamic API for the given kind and namespace (no Discovery call)
@@ -248,49 +271,48 @@ impl KubernetesStorage {
     /// * `kind` - Resource kind
     /// * `namespace` - For namespaced resources: Some(ns) = specific namespace, None = default namespace
     async fn dynamic_api(&self, kind: &str, namespace: Option<&str>) -> Result<Api<DynamicObject>, ConfWriterError> {
+        self.dynamic_api_and_resource(kind, namespace).await.map(|(api, _)| api)
+    }
+
+    /// Resolve the served GVK once and build the matching dynamic API. Mutation
+    /// paths retain the returned ApiResource and use that exact apiVersion for
+    /// request projection, preventing a second probe from choosing a different URL/GVK.
+    async fn dynamic_api_and_resource(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+    ) -> Result<(Api<DynamicObject>, ApiResource), ConfWriterError> {
         let (ar, scope) = self.resolve_api_resource(kind).await?;
 
         let api: Api<DynamicObject> = match scope {
             Scope::Namespaced => {
                 let ns = namespace.unwrap_or("default");
+                if !self.namespace_allowed(Some(ns)) {
+                    return Err(ConfWriterError::PermissionDenied(format!(
+                        "Namespace {ns} is outside conf_center.kubernetes.watch_namespaces"
+                    )));
+                }
                 Api::namespaced_with(self.client.clone(), ns, &ar)
             }
             Scope::Cluster => Api::all_with(self.client.clone(), &ar),
         };
 
-        Ok(api)
+        Ok((api, ar))
     }
 
-    async fn parse_dynamic_object(&self, kind: &str, content: &str) -> Result<DynamicObject, ConfWriterError> {
+    fn parse_dynamic_object(
+        &self,
+        kind: &str,
+        content: &str,
+        api_resource: &ApiResource,
+    ) -> Result<DynamicObject, ConfWriterError> {
         let mut value: serde_json::Value = serde_yaml::from_str(content).map_err(|e| ConfWriterError::ParseError {
             context: "Failed to parse YAML",
             source: e.into(),
         })?;
 
-        if kind == "BackendTLSPolicy" {
-            let Some(api_version) = self.backend_tls_policy_api_version().await? else {
-                return Err(ConfWriterError::NotFound(
-                    "BackendTLSPolicy CRD not found (expected v1 or v1alpha3)".to_string(),
-                ));
-            };
-
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("apiVersion".to_string(), json!(api_version));
-                obj.insert("kind".to_string(), json!("BackendTLSPolicy"));
-            }
-        }
-
-        if kind == "TLSRoute" {
-            let Some(api_version) = self.tls_route_api_version().await? else {
-                return Err(ConfWriterError::NotFound(
-                    "TLSRoute CRD not found (expected v1 or v1alpha3)".to_string(),
-                ));
-            };
-
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("apiVersion".to_string(), json!(api_version));
-                obj.insert("kind".to_string(), json!("TLSRoute"));
-            }
+        if matches!(kind, "BackendTLSPolicy" | "TLSRoute" | "ReferenceGrant") {
+            project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
         }
 
         serde_json::from_value(value).map_err(|e| ConfWriterError::ParseError {
@@ -299,22 +321,41 @@ impl KubernetesStorage {
         })
     }
 
-    /// Create a dynamic API that lists resources across ALL namespaces (no Discovery call)
-    ///
-    /// For cluster-scoped resources, behaves the same as `dynamic_api`.
-    /// For namespaced resources, uses `Api::all_with()` to list across all namespaces.
-    async fn dynamic_api_all_namespaces(&self, kind: &str) -> Result<Api<DynamicObject>, ConfWriterError> {
-        let (ar, _scope) = self.resolve_api_resource(kind).await?;
-        // Always use Api::all_with to list across all namespaces
-        Ok(Api::all_with(self.client.clone(), &ar))
-    }
-
     /// Map kube::Error to ConfWriterError with appropriate error types.
     /// Well-known API error codes are mapped to domain variants (String payload).
     /// All other errors are wrapped in `KubeError` with the original source preserved.
     fn map_kube_error(&self, e: kube::Error) -> ConfWriterError {
         map_kube_error(e)
     }
+}
+
+/// Project a canonical Gateway API document to the version served by the
+/// target cluster. ReferenceGrant v1 and v1beta1 have the same wire schema,
+/// so projection is an explicit GVK rewrite rather than a lossy re-shaping.
+fn project_gateway_api_version(value: &mut Value, kind: &str, api_version: &str) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("apiVersion".to_string(), json!(api_version));
+        obj.insert("kind".to_string(), json!(kind));
+    }
+}
+
+fn merge_dynamic_operator_update(
+    current: DynamicObject,
+    requested: DynamicObject,
+) -> Result<DynamicObject, ConfWriterError> {
+    let current = serde_json::to_value(current).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to serialize current Kubernetes resource for update",
+        source: source.into(),
+    })?;
+    let requested = serde_json::to_value(requested).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to serialize updated Kubernetes resource",
+        source: source.into(),
+    })?;
+    let merged = merge_operator_update_values(current, requested)?;
+    serde_json::from_value(merged).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to deserialize merged Kubernetes resource update",
+        source: source.into(),
+    })
 }
 
 /// Map kube::Error to ConfWriterError with appropriate error types.
@@ -329,7 +370,10 @@ fn map_kube_error(e: kube::Error) -> ConfWriterError {
             400 => return ConfWriterError::ValidationError(ae.message.clone()),
             403 => return ConfWriterError::PermissionDenied(ae.message.clone()),
             404 => return ConfWriterError::NotFound(ae.message.clone()),
-            409 => return ConfWriterError::AlreadyExists(ae.message.clone()),
+            // Kubernetes uses 409 for create collisions and optimistic-
+            // concurrency failures. Both remain HTTP 409, while the caller's
+            // method determines the operator-facing guidance.
+            409 => return ConfWriterError::Conflict(ae.message.clone()),
             410 => return ConfWriterError::StalePagination(ae.message.clone()),
             422 => return ConfWriterError::ValidationError(ae.message.clone()),
             _ => {}
@@ -369,6 +413,77 @@ fn project_partial_meta_to_key<K>(kind: &str, part: kube::core::PartialObjectMet
     }
 }
 
+const NAMESPACE_PAGE_TOKEN_PREFIX: &str = "edgion-ns-v2:";
+
+#[derive(Deserialize, Serialize)]
+struct NamespacePageToken {
+    kind: String,
+    namespaces: Vec<String>,
+    resource_version: String,
+    offset: usize,
+}
+
+fn paginate_namespaced<T>(
+    items: Vec<T>,
+    opts: Option<ListOptions>,
+    kind: &str,
+    allowed_namespaces: &BTreeSet<String>,
+    resource_version: Option<&str>,
+) -> Result<ListResult<T>, ConfWriterError> {
+    let Some(options) = opts else {
+        return Ok(ListResult {
+            items,
+            continue_token: None,
+        });
+    };
+    let namespaces = allowed_namespaces.iter().cloned().collect::<Vec<_>>();
+    let resource_version = resource_version.unwrap_or_default();
+    let offset = match options.continue_token {
+        Some(token) => {
+            let encoded = token.strip_prefix(NAMESPACE_PAGE_TOKEN_PREFIX).ok_or_else(|| {
+                ConfWriterError::StalePagination("Invalid namespace-scoped continue token".to_string())
+            })?;
+            let decoded = URL_SAFE_NO_PAD
+                .decode(encoded)
+                .map_err(|_| ConfWriterError::StalePagination("Invalid namespace-scoped continue token".to_string()))?;
+            let token: NamespacePageToken = serde_json::from_slice(&decoded)
+                .map_err(|_| ConfWriterError::StalePagination("Invalid namespace-scoped continue token".to_string()))?;
+            if token.kind != kind
+                || token.namespaces != namespaces
+                || token.resource_version != resource_version
+                || token.offset > items.len()
+            {
+                return Err(ConfWriterError::StalePagination(
+                    "Namespace-scoped result set changed while paginating".to_string(),
+                ));
+            }
+            token.offset
+        }
+        None => 0,
+    };
+    if options.limit == 0 {
+        return Ok(ListResult {
+            items: items.into_iter().skip(offset).collect(),
+            continue_token: None,
+        });
+    }
+    let end = offset.saturating_add(options.limit as usize).min(items.len());
+    let continue_token = (end < items.len()).then(|| {
+        let token = NamespacePageToken {
+            kind: kind.to_string(),
+            namespaces,
+            resource_version: resource_version.to_string(),
+            offset: end,
+        };
+        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&token).expect("page token serialization cannot fail"));
+        format!("{NAMESPACE_PAGE_TOKEN_PREFIX}{encoded}")
+    });
+    Ok(ListResult {
+        items: items.into_iter().skip(offset).take(end - offset).collect(),
+        continue_token,
+    })
+}
+
 #[async_trait]
 impl CenterApi for KubernetesStorage {
     async fn set_one(
@@ -378,9 +493,9 @@ impl CenterApi for KubernetesStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace).await?;
+        let (api, api_resource) = self.dynamic_api_and_resource(kind, namespace).await?;
 
-        let obj = self.parse_dynamic_object(kind, &content).await?;
+        let obj = self.parse_dynamic_object(kind, &content, &api_resource)?;
 
         // Use server-side apply
         let params = PatchParams::apply("edgion-controller").force();
@@ -407,9 +522,9 @@ impl CenterApi for KubernetesStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace).await?;
+        let (api, api_resource) = self.dynamic_api_and_resource(kind, namespace).await?;
 
-        let obj = self.parse_dynamic_object(kind, &content).await?;
+        let obj = self.parse_dynamic_object(kind, &content, &api_resource)?;
 
         // Use K8s API create (fails if resource already exists with 409)
         api.create(&Default::default(), &obj)
@@ -428,24 +543,32 @@ impl CenterApi for KubernetesStorage {
         Ok(())
     }
 
-    async fn update_one(
+    async fn update_one_if_version(
         &self,
         kind: &str,
         namespace: Option<&str>,
         name: &str,
         content: String,
+        expected_resource_version: Option<&str>,
     ) -> Result<(), ConfWriterError> {
-        let api = self.dynamic_api(kind, namespace).await?;
+        let (api, api_resource) = self.dynamic_api_and_resource(kind, namespace).await?;
 
-        let mut obj = self.parse_dynamic_object(kind, &content).await?;
+        let requested = self.parse_dynamic_object(kind, &content, &api_resource)?;
 
         // Get current resource to obtain resourceVersion (required for replace)
         let current = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
 
-        // Set resourceVersion from current object (required for optimistic concurrency)
-        if let Some(rv) = current.metadata.resource_version {
-            obj.metadata.resource_version = Some(rv);
-        }
+        let current_value = serde_json::to_value(&current).map_err(|source| ConfWriterError::ParseError {
+            context: "Failed to serialize current Kubernetes resourceVersion",
+            source: source.into(),
+        })?;
+        ensure_expected_resource_version_value(&current_value, expected_resource_version)?;
+
+        // Preserve the current status and Kubernetes-owned metadata, while
+        // replacing labels, annotations, and operator fields from the request.
+        // The merge starts from the request, so resolved fields in current.spec
+        // are deliberately not restored.
+        let obj = merge_dynamic_operator_update(current, requested)?;
 
         // Use K8s API replace (fails if resource doesn't exist with 404)
         api.replace(name, &Default::default(), &obj)
@@ -477,10 +600,22 @@ impl CenterApi for KubernetesStorage {
         Ok(content)
     }
 
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+    async fn delete_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        expected_resource_version: Option<&str>,
+    ) -> Result<(), ConfWriterError> {
         let api = self.dynamic_api(kind, namespace).await?;
 
-        let params = DeleteParams::default();
+        let params = DeleteParams {
+            preconditions: expected_resource_version.map(|version| Preconditions {
+                resource_version: Some(version.to_string()),
+                uid: None,
+            }),
+            ..DeleteParams::default()
+        };
         api.delete(name, &params).await.map_err(|e| self.map_kube_error(e))?;
 
         tracing::info!(
@@ -520,6 +655,7 @@ impl CenterApi for KubernetesStorage {
             "TLSRoute",
             "ReferenceGrant",
             "Secret",
+            "ConfigMap",
             "Service",
             "EndpointSlice",
             "EdgionTls",
@@ -529,6 +665,9 @@ impl CenterApi for KubernetesStorage {
             "BackendTLSPolicy",
             "EdgionConfigData",
             "LinkSys",
+            "EdgionAcme",
+            "EdgionBackendTrafficPolicy",
+            "EdgionBackend",
         ];
 
         let mut all_items = Vec::new();
@@ -574,10 +713,48 @@ impl CenterApi for KubernetesStorage {
     }
 
     async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        let api = self.dynamic_api_all_namespaces(kind).await?;
+        let (api_resource, scope) = self.resolve_api_resource(kind).await?;
+        let restrict_namespaces = scope == Scope::Namespaced && !self.allowed_namespaces.is_empty();
+
+        if restrict_namespaces {
+            let mut items = Vec::new();
+            let mut snapshot = Vec::new();
+            for namespace in &self.allowed_namespaces {
+                let api: Api<DynamicObject> = Api::namespaced_with(self.client.clone(), namespace, &api_resource);
+                let list = api
+                    .list(&ListParams::default())
+                    .await
+                    .map_err(|e| self.map_kube_error(e))?;
+                snapshot.push(format!(
+                    "{namespace}={}",
+                    list.metadata.resource_version.as_deref().unwrap_or_default()
+                ));
+                items.extend(list.items.into_iter().map(|obj| {
+                    let content = serde_yaml::to_string(&obj).unwrap_or_else(|e| {
+                        tracing::error!(
+                            component = "kubernetes_writer",
+                            kind = kind,
+                            name = ?obj.metadata.name,
+                            error = %e,
+                            "Failed to serialize object to YAML"
+                        );
+                        String::new()
+                    });
+                    ConfEntry {
+                        kind: kind.to_string(),
+                        namespace: obj.metadata.namespace.clone(),
+                        name: obj.metadata.name.clone().unwrap_or_default(),
+                        content,
+                    }
+                }));
+            }
+            items.sort_by(|a, b| (&a.namespace, &a.name).cmp(&(&b.namespace, &b.name)));
+            return paginate_namespaced(items, opts, kind, &self.allowed_namespaces, Some(&snapshot.join(",")));
+        }
+
+        let api: Api<DynamicObject> = Api::all_with(self.client.clone(), &api_resource);
 
         let mut lp = ListParams::default();
-
         if let Some(ref options) = opts {
             if options.limit > 0 {
                 lp = lp.limit(options.limit);
@@ -589,7 +766,7 @@ impl CenterApi for KubernetesStorage {
 
         let list = api.list(&lp).await.map_err(|e| self.map_kube_error(e))?;
 
-        let items = list
+        let items: Vec<ConfEntry> = list
             .items
             .into_iter()
             .map(|obj| {
@@ -689,7 +866,35 @@ impl CenterApi for KubernetesStorage {
         kind: &str,
         opts: Option<ListOptions>,
     ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
-        let api = self.dynamic_api_all_namespaces(kind).await?;
+        let (api_resource, scope) = self.resolve_api_resource(kind).await?;
+        let restrict_namespaces = scope == Scope::Namespaced && !self.allowed_namespaces.is_empty();
+
+        if restrict_namespaces {
+            let mut items = Vec::new();
+            let mut snapshot = Vec::new();
+            for namespace in &self.allowed_namespaces {
+                let api: Api<DynamicObject> = Api::namespaced_with(self.client.clone(), namespace, &api_resource);
+                let list = api
+                    .list_metadata(&ListParams::default())
+                    .await
+                    .map_err(|e| self.map_kube_error(e))?;
+                snapshot.push(format!(
+                    "{namespace}={}",
+                    list.metadata.resource_version.as_deref().unwrap_or_default()
+                ));
+                items.extend(
+                    list.items
+                        .into_iter()
+                        .map(|part| project_partial_meta_to_key(kind, part)),
+                );
+            }
+            items.sort_by(|a, b| {
+                (&a.metadata.namespace, &a.metadata.name).cmp(&(&b.metadata.namespace, &b.metadata.name))
+            });
+            return paginate_namespaced(items, opts, kind, &self.allowed_namespaces, Some(&snapshot.join(",")));
+        }
+
+        let api: Api<DynamicObject> = Api::all_with(self.client.clone(), &api_resource);
 
         let mut lp = ListParams::default();
         if let Some(ref options) = opts {
@@ -766,9 +971,56 @@ impl CenterApi for KubernetesStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::{Method, Response, StatusCode};
     use kube::api::ObjectMeta;
+    use kube::client::Body;
     use kube::core::PartialObjectMeta;
     use std::collections::BTreeMap;
+    use std::convert::Infallible;
+    use std::sync::{Arc, Mutex};
+    use tower::service_fn;
+
+    fn json_response(status: StatusCode, value: Value) -> Response<Body> {
+        Response::builder()
+            .status(status)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&value).expect("response JSON must serialize"),
+            ))
+            .expect("response must build")
+    }
+
+    fn not_found_response() -> Response<Body> {
+        json_response(
+            StatusCode::NOT_FOUND,
+            json!({
+                "apiVersion": "v1",
+                "kind": "Status",
+                "status": "Failure",
+                "message": "the server could not find the requested resource",
+                "reason": "NotFound",
+                "code": 404
+            }),
+        )
+    }
+
+    fn reference_grant_discovery_response() -> Response<Body> {
+        json_response(
+            StatusCode::OK,
+            json!({
+                "apiVersion": "v1",
+                "groupVersion": "gateway.networking.k8s.io/v1beta1",
+                "kind": "APIResourceList",
+                "resources": [{
+                    "name": "referencegrants",
+                    "singularName": "referencegrant",
+                    "namespaced": true,
+                    "kind": "ReferenceGrant",
+                    "verbs": ["create", "delete", "get", "list", "patch", "update", "watch"]
+                }]
+            }),
+        )
+    }
 
     #[test]
     fn project_partial_meta_strips_last_applied_and_preserves_others() {
@@ -847,5 +1099,455 @@ mod tests {
                 "unexpected message: {msg}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn delete_sends_kubernetes_resource_version_precondition() {
+        let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let captured = Arc::clone(&requests);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.expect("request body must be readable");
+                let value = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).expect("request body must be JSON")
+                };
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((parts.method.clone(), parts.uri.to_string(), value));
+                let response = if parts.uri.path() == "/apis/gateway.networking.k8s.io/v1" {
+                    not_found_response()
+                } else if parts.method == Method::GET {
+                    reference_grant_discovery_response()
+                } else {
+                    json_response(
+                        StatusCode::OK,
+                        json!({
+                            "apiVersion": "v1",
+                            "kind": "Status",
+                            "status": "Success",
+                            "code": 200
+                        }),
+                    )
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        };
+
+        storage
+            .delete_one_if_version("ReferenceGrant", Some("backend"), "allow-route", Some("42"))
+            .await
+            .expect("conditional Kubernetes delete must succeed");
+
+        let requests = requests.lock().unwrap();
+        let delete = requests
+            .iter()
+            .find(|(method, _, _)| method == Method::DELETE)
+            .expect("delete request must be captured");
+        assert_eq!(delete.2["preconditions"]["resourceVersion"], "42");
+    }
+
+    #[tokio::test]
+    async fn configmap_key_listing_is_limited_to_watched_namespaces_and_paginates_locally() {
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&paths);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                captured
+                    .lock()
+                    .expect("request capture lock must not be poisoned")
+                    .push(request.uri().path().to_string());
+                Ok::<_, Infallible>(json_response(
+                    StatusCode::OK,
+                    json!({
+                        "apiVersion": "meta.k8s.io/v1",
+                        "kind": "PartialObjectMetadataList",
+                        "metadata": {"resourceVersion": "7"},
+                        "items": [
+                            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "a-2", "namespace": "allowed"}},
+                            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "a-1", "namespace": "allowed"}}
+                        ]
+                    }),
+                ))
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::from(["allowed".to_string()]),
+        };
+
+        let first = storage
+            .list_keys_by_kind(
+                "ConfigMap",
+                Some(ListOptions {
+                    limit: 1,
+                    continue_token: None,
+                }),
+            )
+            .await
+            .expect("first page must succeed");
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].metadata.name, "a-1");
+        let token = first.continue_token.expect("first page must continue");
+
+        let second = storage
+            .list_keys_by_kind(
+                "ConfigMap",
+                Some(ListOptions {
+                    limit: 1,
+                    continue_token: Some(token),
+                }),
+            )
+            .await
+            .expect("second page must succeed");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].metadata.name, "a-2");
+        assert!(second.continue_token.is_none());
+        let paths = paths.lock().expect("request capture lock must not be poisoned");
+        assert_eq!(
+            paths.as_slice(),
+            [
+                "/api/v1/namespaces/allowed/configmaps",
+                "/api/v1/namespaces/allowed/configmaps"
+            ]
+        );
+    }
+
+    #[test]
+    fn namespace_pagination_rejects_foreign_tokens() {
+        let error = paginate_namespaced(
+            vec![1],
+            Some(ListOptions {
+                limit: 1,
+                continue_token: Some("kubernetes-token".to_string()),
+            }),
+            "ConfigMap",
+            &BTreeSet::from(["allowed".to_string()]),
+            Some("7"),
+        )
+        .expect_err("foreign tokens must be rejected");
+        assert!(matches!(error, ConfWriterError::StalePagination(_)));
+    }
+
+    #[test]
+    fn namespace_pagination_token_is_bound_to_query_and_snapshot() {
+        let namespaces = BTreeSet::from(["allowed".to_string()]);
+        let first = paginate_namespaced(
+            vec![1, 2],
+            Some(ListOptions {
+                limit: 1,
+                continue_token: None,
+            }),
+            "ConfigMap",
+            &namespaces,
+            Some("7"),
+        )
+        .expect("first page must succeed");
+        let token = first.continue_token.expect("first page must continue");
+
+        for (kind, resource_version) in [("Secret", "7"), ("ConfigMap", "8")] {
+            let error = paginate_namespaced(
+                vec![1, 2],
+                Some(ListOptions {
+                    limit: 1,
+                    continue_token: Some(token.clone()),
+                }),
+                kind,
+                &namespaces,
+                Some(resource_version),
+            )
+            .expect_err("token reuse across a query or snapshot must fail");
+            assert!(matches!(error, ConfWriterError::StalePagination(_)));
+        }
+    }
+
+    fn canonical_reference_grant_value() -> Value {
+        json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "ReferenceGrant",
+            "metadata": {
+                "name": "allow-route",
+                "namespace": "backend"
+            },
+            "spec": {
+                "from": [{
+                    "group": "gateway.networking.k8s.io",
+                    "kind": "HTTPRoute",
+                    "namespace": "frontend"
+                }],
+                "to": [{"group": "", "kind": "Service"}]
+            }
+        })
+    }
+
+    #[test]
+    fn create_projects_canonical_reference_grant_to_detected_v1beta1_gvk() {
+        let mut value = canonical_reference_grant_value();
+        project_gateway_api_version(&mut value, "ReferenceGrant", "gateway.networking.k8s.io/v1beta1");
+
+        let object: DynamicObject = serde_json::from_value(value).expect("projected object must deserialize");
+        let types = object.types.expect("projected object must retain type metadata");
+        assert_eq!(types.api_version, "gateway.networking.k8s.io/v1beta1");
+        assert_eq!(types.kind, "ReferenceGrant");
+        assert_eq!(object.data["spec"]["from"][0]["namespace"], "frontend");
+    }
+
+    #[test]
+    fn update_projection_keeps_v1beta1_and_preserves_server_fields() {
+        let mut requested = canonical_reference_grant_value();
+        requested["metadata"]["labels"] = json!({"edited": "true"});
+        requested["spec"]["to"] = json!([{"group": "", "kind": "Secret"}]);
+        project_gateway_api_version(&mut requested, "ReferenceGrant", "gateway.networking.k8s.io/v1beta1");
+
+        let current: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1beta1",
+            "kind": "ReferenceGrant",
+            "metadata": {
+                "name": "allow-route",
+                "namespace": "backend",
+                "uid": "uid-1",
+                "resourceVersion": "42",
+                "generation": 3,
+                "ownerReferences": [{
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "name": "owner",
+                    "uid": "owner-uid"
+                }],
+                "finalizers": ["edgion.io/finalizer"]
+            },
+            "spec": {
+                "from": [{
+                    "group": "gateway.networking.k8s.io",
+                    "kind": "HTTPRoute",
+                    "namespace": "old"
+                }],
+                "to": [{"group": "", "kind": "Service"}],
+                "runtimeOnly": "must-not-return"
+            },
+            "status": {"conditions": [{"type": "Accepted", "status": "True"}]}
+        }))
+        .expect("current object must deserialize");
+        let requested: DynamicObject = serde_json::from_value(requested).expect("projected request must deserialize");
+
+        let merged = merge_dynamic_operator_update(current, requested).expect("update merge must succeed");
+        let merged = serde_json::to_value(merged).expect("merged object must serialize");
+        assert_eq!(merged["apiVersion"], "gateway.networking.k8s.io/v1beta1");
+        assert_eq!(merged["metadata"]["resourceVersion"], "42");
+        assert_eq!(merged["metadata"]["uid"], "uid-1");
+        assert_eq!(merged["metadata"]["ownerReferences"][0]["name"], "owner");
+        assert_eq!(merged["metadata"]["finalizers"][0], "edgion.io/finalizer");
+        assert_eq!(merged["metadata"]["labels"]["edited"], "true");
+        assert_eq!(merged["spec"]["to"][0]["kind"], "Secret");
+        assert!(merged["spec"].get("runtimeOnly").is_none());
+        assert_eq!(merged["status"]["conditions"][0]["type"], "Accepted");
+    }
+
+    #[test]
+    fn stale_expected_resource_version_stops_kubernetes_replace() {
+        let current = json!({"metadata": {"resourceVersion": "42"}});
+        let error = ensure_expected_resource_version_value(&current, Some("41"))
+            .expect_err("stale Kubernetes update must conflict before replace");
+        assert!(matches!(error, ConfWriterError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn create_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
+        let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let captured = Arc::clone(&requests);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.expect("request body must be readable");
+                let value = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).expect("request body must be JSON")
+                };
+                captured
+                    .lock()
+                    .expect("request capture lock must not be poisoned")
+                    .push((parts.method.clone(), parts.uri.to_string(), value.clone()));
+
+                let response = if parts.uri.path() == "/apis/gateway.networking.k8s.io/v1" {
+                    not_found_response()
+                } else if parts.method == Method::GET && parts.uri.path() == "/apis/gateway.networking.k8s.io/v1beta1" {
+                    reference_grant_discovery_response()
+                } else {
+                    json_response(StatusCode::CREATED, value)
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        };
+
+        storage
+            .create_one(
+                "ReferenceGrant",
+                Some("backend"),
+                "allow-route",
+                serde_yaml::to_string(&canonical_reference_grant_value()).expect("fixture must serialize"),
+            )
+            .await
+            .expect("v1beta1 create must succeed");
+
+        let requests = requests.lock().expect("request capture lock must not be poisoned");
+        assert_eq!(requests.len(), 3, "one v1 probe, one v1beta1 probe, and one create");
+        let create = requests
+            .iter()
+            .find(|(method, _, _)| method == Method::POST)
+            .expect("create request must be captured");
+        assert_eq!(
+            create.1.trim_end_matches('?'),
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/backend/referencegrants"
+        );
+        assert_eq!(create.2["apiVersion"], "gateway.networking.k8s.io/v1beta1");
+        assert_eq!(create.2["kind"], "ReferenceGrant");
+    }
+
+    #[tokio::test]
+    async fn update_reuses_one_reference_grant_resolution_for_url_and_body_gvk() {
+        let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let captured = Arc::clone(&requests);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.expect("request body must be readable");
+                let value = if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).expect("request body must be JSON")
+                };
+                captured
+                    .lock()
+                    .expect("request capture lock must not be poisoned")
+                    .push((parts.method.clone(), parts.uri.to_string(), value.clone()));
+
+                let path = parts.uri.path();
+                let response = if path == "/apis/gateway.networking.k8s.io/v1" {
+                    not_found_response()
+                } else if parts.method == Method::GET && path == "/apis/gateway.networking.k8s.io/v1beta1" {
+                    reference_grant_discovery_response()
+                } else if parts.method == Method::GET {
+                    json_response(
+                        StatusCode::OK,
+                        json!({
+                            "apiVersion": "gateway.networking.k8s.io/v1beta1",
+                            "kind": "ReferenceGrant",
+                            "metadata": {
+                                "name": "allow-route",
+                                "namespace": "backend",
+                                "uid": "uid-1",
+                                "resourceVersion": "42",
+                                "finalizers": ["edgion.io/finalizer"]
+                            },
+                            "spec": canonical_reference_grant_value()["spec"].clone(),
+                            "status": {"conditions": [{"type": "Accepted", "status": "True"}]}
+                        }),
+                    )
+                } else {
+                    json_response(StatusCode::OK, value)
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        };
+        let mut requested = canonical_reference_grant_value();
+        requested["metadata"]["labels"] = json!({"edited": "true"});
+
+        storage
+            .update_one_if_version(
+                "ReferenceGrant",
+                Some("backend"),
+                "allow-route",
+                serde_yaml::to_string(&requested).expect("fixture must serialize"),
+                Some("42"),
+            )
+            .await
+            .expect("v1beta1 update must succeed");
+
+        let requests = requests.lock().expect("request capture lock must not be poisoned");
+        assert_eq!(
+            requests.len(),
+            4,
+            "one v1 probe, one v1beta1 probe, one get, and one replace"
+        );
+        let replace = requests
+            .iter()
+            .find(|(method, _, _)| method == Method::PUT)
+            .expect("replace request must be captured");
+        assert_eq!(
+            replace.1.trim_end_matches('?'),
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/backend/referencegrants/allow-route"
+        );
+        assert_eq!(replace.2["apiVersion"], "gateway.networking.k8s.io/v1beta1");
+        assert_eq!(replace.2["metadata"]["resourceVersion"], "42");
+        assert_eq!(replace.2["metadata"]["finalizers"][0], "edgion.io/finalizer");
+        assert_eq!(replace.2["status"]["conditions"][0]["type"], "Accepted");
+    }
+
+    #[tokio::test]
+    async fn reference_grant_probe_propagates_forbidden_without_fallback() {
+        let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = Arc::clone(&paths);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                captured
+                    .lock()
+                    .expect("request capture lock must not be poisoned")
+                    .push(request.uri().to_string());
+                Ok::<_, Infallible>(json_response(
+                    StatusCode::FORBIDDEN,
+                    json!({
+                        "apiVersion": "v1",
+                        "kind": "Status",
+                        "status": "Failure",
+                        "message": "referencegrants is forbidden",
+                        "reason": "Forbidden",
+                        "code": 403
+                    }),
+                ))
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        };
+
+        let err = storage
+            .create_one(
+                "ReferenceGrant",
+                Some("backend"),
+                "allow-route",
+                serde_yaml::to_string(&canonical_reference_grant_value()).expect("fixture must serialize"),
+            )
+            .await
+            .expect_err("forbidden probe must fail");
+        let message = match err {
+            ConfWriterError::InternalError(message) => message,
+            other => panic!("expected internal probe error, got {other:?}"),
+        };
+        assert!(message.to_ascii_lowercase().contains("forbidden"));
+        let paths = paths.lock().expect("request capture lock must not be poisoned");
+        assert_eq!(paths.len(), 1, "RBAC failure must not be treated as v1 absence");
+        assert_eq!(paths[0].trim_end_matches('?'), "/apis/gateway.networking.k8s.io/v1");
     }
 }

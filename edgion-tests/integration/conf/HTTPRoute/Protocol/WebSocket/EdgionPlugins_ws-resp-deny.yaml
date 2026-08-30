@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ws-resp-deny
+  namespace: edgion-test
+spec:
+  # A response-stage denial on a REAL protocol switch. The upstream has already
+  # answered 101, so the exchange can no longer carry a local reply — this is the
+  # one shape that must be enforced by the response-stage abort rather than by
+  # replacing the response. Before that abort existed the denial was a log line
+  # and the upgrade completed, i.e. a response-stage policy silently did nothing
+  # on exactly the traffic it was written to stop.
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "ws-resp-deny"
+        source: |
+          if resp.status == 101 {
+            return deny(403, "websocket denied at response stage")
+          }
+        errorPolicy: deny

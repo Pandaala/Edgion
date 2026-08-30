@@ -1,6 +1,11 @@
 work_dir: /usr/local/edgion
 
 server:
+  # gRPC listener for the Gateway conf_sync channel. It carries resolved Secrets (TLS
+  # private keys, backend credentials) to the data plane and is mTLS by default (see the
+  # conf_sync_security section below), so binding it on all interfaces is safe: a peer
+  # without a valid client certificate cannot complete the handshake. This lets you split
+  # the Controller and Gateway onto different hosts without editing this line.
   grpc_listen: "0.0.0.0:12151"
   admin_listen: "0.0.0.0:12101"
 
@@ -18,9 +23,65 @@ conf_center:
   type: file_system
   conf_dir: conf
 
+# ----------------------------------------------------------------------------
+# Etcd HA mode (multi-controller active-passive) -- ALTERNATIVE to file_system.
+# ----------------------------------------------------------------------------
+# Store/watch resources in a shared etcd cluster and run 2+ controllers for HA.
+# Leader election (etcd v3election + a self-managed lease keepalive) is ALWAYS ON:
+# exactly one controller becomes leader (runs the controllers + serves conf_sync);
+# standbys reject traffic and return 409 naming the leader on the Admin API.
+#
+# REQUIREMENTS (see docs/en/ops-guide/configuration/controller-config.md,
+# "[conf_center.leader_election] -- Etcd Mode"):
+#   * etcd must expose the v3election gRPC service (probed at startup; fail-fast if absent).
+#   * conf_sync mTLS needs MANUALLY-issued certs -- auto_ca is Kubernetes-only. The server
+#     cert SAN must cover EVERY controller's grpc_addr a gateway may fail over to, e.g.:
+#       edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
+#           --server-san 10.0.0.11 --server-san 10.0.0.12
+#   * grpc_addr / admin_addr must be routable non-loopback addresses (not 127.0.0.1/0.0.0.0).
+#
+# conf_center:
+#   type: etcd
+#   endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
+#   key_prefix: /edgion
+#   leader_election:
+#     identity: controller-a        # optional; human-facing (logs + 409 body) only
+#     grpc_addr: 10.0.0.11:12151    # this controller's reachable conf_sync gRPC address
+#     admin_addr: 10.0.0.11:12101   # this controller's reachable Admin HTTP address
+#     lease_duration_secs: 15
+#     renew_deadline_secs: 10
+#     retry_period_secs: 2
+
 debug:
   enabled: false
 
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
+
+# ============================================================================
+# conf_sync Channel Security
+# ============================================================================
+# REQUIRED: omitting this section entirely makes the process REFUSE TO START
+# (fail-close, since 2026-07-14) -- the conf_sync channel carries resolved Secrets
+# (TLS private keys, backend credentials), so plaintext must be an explicit choice.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode, below), or skip_tls (plaintext).
+#
+# File-mode mTLS is the standalone default. Generate the cert set (once) with:
+#
+#   edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
+#       --server-san 127.0.0.1 --server-san localhost
+#
+# That writes certs/grpc/primary/{ca,server,client}.{crt,key}. The Gateway loads the
+# matching client cert from the same set (see edgion-gateway.yaml).
+#
+# SPLITTING CONTROLLER AND GATEWAY ONTO DIFFERENT HOSTS? Add the Controller's reachable
+# host to the server cert: re-run gen-certs with an extra `--server-san <host-or-ip>`
+# (the value the Gateway's `server_addrs` dials), copy the client.crt/client.key/ca.crt to
+# the Gateway host, and point its `server_addrs` at this Controller. No plaintext ever
+# crosses the network -- the mTLS handshake protects the Secrets this channel carries.
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt   # Controller server certificate (PEM)
+    key: certs/grpc/primary/server.key    # Server private key (PEM)
+    ca: certs/grpc/primary/ca.crt         # CA used to verify the Gateway client certificate

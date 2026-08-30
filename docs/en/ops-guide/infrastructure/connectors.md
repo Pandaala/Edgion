@@ -78,31 +78,30 @@ Every backend accepts the same `tls` block for securing the connection.
 ```yaml
 tls:
   enabled: true
-  insecureSkipVerify: false
-  certs:
-    # CA and client certificates are public material and may be inlined.
-    caCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    clientCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    # The client private key (tls.key) must come from a Secret.
-    secretRef:
-      name: my-client-tls
+  verify: true                 # verify peer certificate (default true); false is honored (operator responsibility)
+  validation:                  # optional; omit to use built-in webpki root CAs
+    caCertificateRefs:         # list of CA cert refs; for LinkSys, only kind: Secret is supported
+      - kind: Secret
+        name: my-ca-bundle     # Secret must have a ca.crt key (type kubernetes.io/tls or Opaque)
+    wellKnownCACertificates: System  # alternatively, explicitly use built-in webpki roots
+    # Phase 1: hostname and subjectAltNames are schema-exposed but not enforced.
+    # Configuring them causes Accepted=False until Phase 2.
+  clientCertificateRef:
+    name: my-client-tls        # Secret holding tls.crt + tls.key for client mTLS
 ```
+
+> **Phase 1 CA ref limitation**: `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths. Inline CA (`caCert`) has been removed; use a Secret with a `ca.crt` key instead.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | Boolean | `false` | Enable TLS for the connection. For URLs that already imply TLS (`https://`, `rediss://`), this only adds custom CA / client-certificate handling. |
-| `insecureSkipVerify` | Boolean | `false` | Skip certificate verification. ⚠️ **Development and testing only.** Redis and Etcd do not support it — setting `true` rejects startup outright. |
-| `certs.caCert` | String | none | CA certificate PEM (public material; inlineable). |
-| `certs.clientCert` | String | none | Client certificate PEM for mTLS (public material; inlineable). |
-| `certs.secretRef` | Object | none | Secret reference supplying the client private key `tls.key`. **The private key must come from a Secret, never inline.** |
+| `verify` | Boolean | `true` | Verify the peer TLS certificate. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API). |
+| `validation` | Object | none | Optional trust anchor configuration. Omit to use built-in webpki root CAs. |
+| `validation.caCertificateRefs` | Array | none | List of CA certificate Secret refs (each: `{ kind: Secret, name, namespace }`). The Secret must have a `ca.crt` key. For LinkSys, only `kind: Secret` is supported in this release. A custom CA **replaces** the built-in roots. |
+| `validation.wellKnownCACertificates` | String | none | Explicitly use built-in webpki root CAs. Allowed value: `System`. |
+| `clientCertificateRef` | Object | none | Kubernetes Secret holding the client mTLS identity (`tls.crt` / `tls.key` keys). |
 
-⚠️ **The client private key must always be supplied through `certs.secretRef`.** Only the CA and client certificate (public material) may be inlined as PEM.
+The client mTLS identity (certificate + private key) must be provided via `clientCertificateRef`.
 
 ### Observability
 
@@ -266,9 +265,8 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      certs:
-        secretRef:
-          name: etcd-client-tls
+      clientCertificateRef:
+        name: etcd-client-tls
     namespace: "/my-app/"
 ```
 
@@ -278,7 +276,7 @@ spec:
 |-----------|------|---------|-------------|
 | `endpoints` | Array\<String\> | **Required** | Etcd endpoints; at least one. Example: `"https://etcd-1:2379"`. |
 | `auth` | Object | none | Authentication. The Secret typically provides both `username` and `password`. |
-| `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd does **not** support `insecureSkipVerify` — setting `true` rejects startup. |
+| `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd (like Redis) rejects `verify: false` in any environment. |
 | `namespace` | String | none | Etcd v3 key prefix. |
 | `userAgent` | String | none | HTTP User-Agent sent to etcd. Example: `"edgion-gateway/v1"`. |
 | `rejectOldCluster` | Boolean | none | Reject connecting to an outdated cluster. |
@@ -417,7 +415,9 @@ spec:
 
 ## Webhook connector
 
-A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (`target.backendRef`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
+> ⚠️ **Breaking: `successStatusCodes` has been replaced by `success.statusCodes`.** `successStatusCodes` is no longer a recognized runtime field. A webhook YAML that still sets it remains admitted, serde drops the field, and success falls back to "any 2xx". The Controller now reports the exact path through the advisory unknown-field warning, `UnknownConfigFields` condition, diagnostics/metric surfaces, and Admin API write/validate responses; the finding does not change `Accepted` or block sync. Audit every webhook LinkSys (and every ForwardAuth plugin, which shares this connection type) and migrate to the nested `success:` block now; see [Success](#success) below.
+
+A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (the `name`/`namespace`/`port`/`kind`/`group` fields set directly under `target`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -429,11 +429,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -450,31 +449,31 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     maxResponseBytes: 2048
 ```
 
 ### Target
 
-Every webhook references its backend through a single `backendRef`, the same `BackendObjectReference` shape that routes already use. There is no longer a `type: uri` / `type: service` choice — `backendRef` is the only target form.
+Every webhook references its backend by setting Service fields directly under `target` — the same field set (`group`/`kind`/`name`/`namespace`/`port`) as Gateway API's `BackendObjectReference`, flattened with no nested wrapper key. There is no longer a `type: uri` / `type: service` choice, and there is no `backendRef` key — the flat Service fields (or the `url` form below) are the only target shapes.
 
 ```yaml
 target:
-  backendRef:
-    group: ""              # optional; defaults to the core API group
-    kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice (empty defaults to Service)
-    name: webhook-backend
-    namespace: production  # optional; defaults to the LinkSys namespace
-    port: 8080             # required
+  group: ""              # optional; defaults to the core API group
+  kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice (empty defaults to Service)
+  name: webhook-backend
+  namespace: production  # optional; defaults to the LinkSys namespace
+  port: 8080             # required
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target.backendRef.group` | String | core (`""`) | API group of the referenced object. |
-| `target.backendRef.kind` | String | `Service` | Target kind. Allowed: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, or empty (defaults to `Service`). |
-| `target.backendRef.name` | String | **Required** | Kubernetes Service name. |
-| `target.backendRef.namespace` | String | LinkSys namespace | Service namespace. |
-| `target.backendRef.port` | Integer | **Required** | Service port; must be greater than 0. A missing port is rejected at admission with `Accepted=False`. |
+| `target.group` | String | core (`""`) | API group of the referenced object. |
+| `target.kind` | String | `Service` | Target kind. Allowed: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, or empty (defaults to `Service`). |
+| `target.name` | String | **Required** | Kubernetes Service name. |
+| `target.namespace` | String | LinkSys namespace | Service namespace. |
+| `target.port` | Integer | **Required** | Service port; must be greater than 0. A missing port is rejected at admission with `Accepted=False`. |
 
 Resolution by kind:
 
@@ -482,7 +481,97 @@ Resolution by kind:
 - `ServiceEndpointSlice`: explicit form of the same EndpointSlice resolution.
 - `ServiceClusterIp`: resolved via the Service ClusterIP DNS name (kube-proxy).
 
-`kind: ExternalName` and `ServiceImport` are **not** supported as webhook targets and are rejected at admission with a descriptive `Accepted=False` message. To reach an external endpoint, create a proxy Service (for example a `LoadBalancer` Service, or a `ClusterIP` Service fronted by an ingress controller) that routes to the external host, then reference that Service by name. See [Migration from the old schema](#migration-from-the-old-schema).
+`kind: ExternalName` and `ServiceImport` are **not** supported as webhook targets and are rejected at admission with a descriptive `Accepted=False` message. To reach an external endpoint, create a proxy Service (for example a `LoadBalancer` Service, or a `ClusterIP` Service fronted by an ingress controller) that routes to the external host, then reference that Service by name — or use the URL target below instead.
+
+### URL target (external services)
+
+Instead of the Service fields, a webhook can address an arbitrary external URL directly:
+
+```yaml
+target:
+  url: https://api.example.com
+  blockPrivate: true       # optional; URL targets only, see "Egress policy" below
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target.url` | String | none | External URL target. **Origin only**: `scheme://host[:port]` — no path, query, fragment, or credentials. Mutually exclusive with `target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group`. |
+| `target.blockPrivate` | Boolean | `false` (inherits the gateway-local default) | URL targets only. See [Egress policy](#egress-policy-ssrf-protection). |
+
+**Origin-only, and why.** `target.url` must not carry a path, query string, fragment, or embedded
+credentials — setting any of those is rejected at admission with `Accepted=False`. The outbound path
+is decided exclusively by `request.path.template` (see [Outbound request](#outbound-request) below),
+which already composes correctly with `healthCheck.active.path` and a consumer's `pathOverride`. If
+`target.url` also carried a path, every one of those composition rules would need a second, competing
+definition of "the base path" — origin-only removes the ambiguity instead of documenting around it.
+`https://api.example.com` with `request.path.template: /v1/check` is the canonical shape.
+
+**Mutually exclusive with the Service fields.** Setting both `target.url` and any of
+`target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group` is rejected at
+admission — a webhook addresses either an external URL or a Kubernetes Service, never both.
+
+**`http://` + `tls.enabled: true` is rejected.** If `target.url` starts with `http://` (case-insensitive
+scheme check) and the connection's `tls.enabled` is `true`, admission fails with `Accepted=False`.
+This is deliberate: a URL target's scheme already decides plaintext vs. TLS, so an explicit
+`tls.enabled: true` alongside `http://` would either be silently ignored or silently downgrade the
+operator's TLS intent — neither is acceptable, so it is rejected instead of guessed.
+
+**Dedicated connection pool.** A URL target always builds its own `reqwest::Client` — including when
+no `tls` block is set at all — and never falls back to the shared process-global HTTP client that
+other consumers use. This is what lets each URL target own its own DNS resolution and address cache
+(see [Egress policy](#egress-policy-ssrf-protection)); it also means URL targets do not share
+connection-pool exhaustion or health state with unrelated webhooks.
+
+### Egress policy (SSRF protection)
+
+A URL target is addressed by hostname, so — unlike a Service target, which is resolved via
+Kubernetes EndpointSlice — the gateway performs its own DNS resolution and must classify the
+result before connecting. Two enforcement points implement one policy, so the behavior is the same
+whether `target.url` names a hostname or an IP literal:
+
+- **Always blocked**: loopback (`127.0.0.0/8`, `::1`) and link-local addresses, which includes the
+  cloud-metadata address `169.254.169.254` and its whole `169.254.0.0/16` segment.
+- **Blocked when `target.blockPrivate: true`**: RFC1918 private ranges (`10/8`, `172.16/12`,
+  `192.168/16`) and unique-local (`fd00::/8`) addresses, in addition to the always-blocked classes.
+- **Default (`blockPrivate` unset or `false`)**: private ranges are allowed, matching the long-standing
+  behavior for Service targets — most webhooks legitimately point at an internal artifact repository
+  or SaaS reachable only over a private network.
+
+A rejected address surfaces as a connect failure for that call (WebhookKeyGet writes no value, same
+as any other webhook failure). Rejections increment the
+`edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` counter, but only
+on the **hostname** path (`EgressResolver`, which records all three reasons). On the **IP-literal**
+path, only `reason="private"` is ever recorded: the `dial_url` `blockPrivate` check records that
+metric, but the loopback/link-local rejection there goes through the shared backend guard
+(`validate_endpoint_backend_addr`) that predates this metric and does not touch it. So a dashboard
+or alert built on this counter sees full coverage for a hostname target but is blind to
+loopback/link-local rejections when `target.url` is an IP literal.
+
+**Gateway-local default.** When a webhook does not set `target.blockPrivate` explicitly, the effective
+value comes from the gateway's own configuration:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for `target.blockPrivate` when a webhook omits it. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
+| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | How long a URL target's resolved-and-classified addresses are cached before being re-resolved. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
+
+**Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always
+overrides the gateway-local default — a cluster administrator who wants the stricter posture
+everywhere flips `outbound_egress_block_private`; an individual webhook that needs to reach an internal
+`10.x` artifact repository can still opt out with `target.blockPrivate: false`, and vice versa.
+
+**No command-line flag, on purpose.** Both settings are config-file / environment-variable only —
+there is no `--outbound-egress-block-private` CLI flag. The gateway's config-merge logic only carries
+a small, fixed set of fields from the CLI into a file-loaded configuration, and `--config-file`
+defaults to a real path in the common deployment, so a flag here would silently have no effect in
+that path. Set these via the gateway config file or the `EDGION_*` environment variables instead.
+
+**This is defense-in-depth, not the primary control.** `target.blockPrivate` and
+`outbound_egress_block_private` narrow what an already-privileged LinkSys/EdgionPlugins write can reach;
+they are not a substitute for network-level isolation. The primary egress control remains a
+Kubernetes `NetworkPolicy` on the Gateway Pod restricting which external IPs/ports it may reach at
+all — the code-layer guard exists because a URL target lets an operator name an arbitrary external
+host by hostname, something a NetworkPolicy alone cannot evaluate at request-authoring time.
 
 ### Outbound request
 
@@ -561,9 +650,9 @@ If you instead want the **current** (possibly rewritten) view of a header, use a
 |--------|-----------------------------------|-------------|
 | `skipIfMissing` (default) | The field is silently omitted from the outbound request; no log. | Optional enrichment where absence is normal. |
 | `warnIfMissing` | The field is omitted, a PluginLog alert is written, and the request continues. | Fields that *should* be present — you want visibility without failing the call. |
-| `required` | The webhook call is treated as failed. `statusOnError` / `allowDegradation` then apply exactly as for any other webhook failure. | Fields the backend cannot function without. |
+| `required` | The webhook call is treated as failed: WebhookKeyGet writes no value, same as any other webhook failure. | Fields the backend cannot function without. |
 
-`presence` and `allowDegradation` are orthogonal and compose: `presence: required` decides whether a missing field *counts as a failure*; `allowDegradation` then decides whether that failure aborts the plugin chain (`false`, default) or silently skips the webhook and continues (`true`).
+`statusOnError` is declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read it**: on any failure — including a missing `presence: required` field — WebhookKeyGet writes no value (or its `default`), and the request continues. Setting this field on a webhook `LinkSys` has no effect; it is meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
 
 #### Custom field sources
 
@@ -602,7 +691,7 @@ Templates in `path.template`, `method.template`, and `custom[].template` reuse t
 | `${path}` / `${uri}` | Current (possibly rewritten) path / URI. |
 | `${requestPath}` / `${requestUri}` | Frozen entry-time path / URI. |
 | `${method}` | Current HTTP method. |
-| `${clientIp}` | Real client IP. |
+| `${remoteIp}` | Resolved client IP. |
 
 A `${ctx:X}` that names an undefined variable resolves to an empty string. To enforce presence, use `presence: required` on an origin field, or set the ctx variable in a ctx-set step before calling the webhook.
 
@@ -623,30 +712,97 @@ The following combinations are rejected at admission with `Accepted=False`:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `timeoutMs` | Integer | `5000` | Request timeout in milliseconds; must be greater than 0. |
+| `timeoutMsTemplate` | String | none | Template rendering a per-request timeout in milliseconds, e.g. `"${ctx:desired_timeout_ms}"`. Restricted to a trusted variable allow-list — see [Templates](#templates) below. |
 | `tls` | Object | none | TLS configuration; see [TLS](#tls). Defaults to the system CA bundle when unset. |
-| `successStatusCodes` | Array\<Integer\> | any 2xx | HTTP status codes treated as success. |
-| `maxResponseBytes` | Integer | `1024` | Maximum response body size to read in bytes. Clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB). |
+| `success` | Object | any 2xx | Success criteria: status codes plus optional JSON body predicates. **Replaces the removed `successStatusCodes`** — see [Success](#success) below. |
+| `maxResponseBytes` | Integer | `1024` | Maximum response body size to read in bytes. Clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB). Must be `>= 4096` when `success.body` predicates are set — see [Success](#success). |
 
 > **Removed fields.** `requestMethod`, `auth`, and `defaultHeaders` are deprecated. They are still accepted during a rolling upgrade but ignored at runtime, and the controller logs a WARN when it sees them. They will be removed in the next release — migrate before then. See [Migration from the old schema](#migration-from-the-old-schema).
+>
+> `successStatusCodes` is different: it is not on this deprecation path and has no runtime compatibility shim. It is ignored, but the Controller reports it through the advisory unknown-field surfaces described above. See [Success](#success) below.
 
-### Degradation and error handling
+### Success
+
+Replaces the old `successStatusCodes` field (removed; pre-release, no alias — see the warning at the top of this section). A response is classified as success only when **both** the status check and the optional body predicates pass:
+
+```yaml
+success:
+  statusCodes: [200]          # omitted -> any 2xx (200-299), same as before
+  body:                       # optional; ANDed with statusCodes
+    - pointer: "/code"        # RFC 6901 JSON Pointer into the parsed response body
+      equals: 0
+    - pointer: "/data/status"
+      in: ["ok", "accepted"]
+```
+
+Motivation: some backends always return `200 OK` and put the real outcome in the body, e.g. `{"code": -101, "message": "invalid user"}`. Without a body predicate, the gateway treats that as success and retry / degradation never trigger.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `allowDegradation` | Boolean | `false` | When `true`, a webhook failure is silently skipped and the consumer's fallback chain continues. When `false`, failure causes the lookup to fail. |
-| `statusOnError` | Integer | `503` | Status code returned when `allowDegradation=false` and the webhook is the sole source. Must be in `[200, 599]`. |
+| `success.statusCodes` | Array\<Integer\> | any 2xx | Status codes considered successful. Omitted → any 2xx (200-299). An explicit empty list (`statusCodes: []`) is **rejected at admission** rather than silently meaning "any 2xx" — the same effect as omitting the field with none of the visibility, which would let e.g. a Helm template that renders an empty list widen an auth allow-list unnoticed. |
+| `success.body` | Array\<Object\> | `[]` | JSON-Pointer body predicates, ANDed with the status check and with each other. |
+| `success.body[].pointer` | String | **Required** | RFC 6901 JSON Pointer into the parsed response body, e.g. `/code` or `/data/status`. |
+| `success.body[].equals` / `.notEquals` / `.exists` / `.in` | — | — | Exactly one operator per entry (admission-enforced at deserialize time — more than one, or none, fails to parse). `equals` / `notEquals` / `in` compare as strict `serde_json::Value` — **no type coercion**: `equals: 0` matches JSON `0` but not the string `"0"`. `exists: true/false` checks presence only. `in` takes a non-empty list of values. |
+
+**Non-JSON body → failure, not an error.** When any `success.body` predicate is configured and the response body is not valid JSON (wrong `Content-Type` or unparseable), the response is classified as a **failure** — no panic, no error surfaced to the caller.
+
+**Missing pointer → failure, except for `exists: false`.** When the body IS valid JSON but a predicate's `pointer` resolves to nothing, the predicate fails for `equals`/`notEquals`/`in` — you cannot assert an equality/membership claim about a field that isn't there. The one legitimate exception is `exists: false`, which is defined to *mean* "the pointer is absent" and therefore succeeds in exactly that case. For example, `{pointer: /error, notEquals: true}` against a `200 {"authenticated": false}` body (no `/error` key at all) is a **failure**, not a pass — a business error hiding behind a differently-named field must not be able to slip through a `notEquals` check aimed at a field it doesn't populate.
+
+**`maxResponseBytes` must be raised when using body predicates.** The default cap is 1024 bytes (1 KiB). If `success.body` is non-empty, admission requires `maxResponseBytes >= 4096`; otherwise the resource is rejected with `Accepted=False`. This exists because a body larger than the cap is truncated *before* classification — and a truncated body surfaces as a distinct `ResponseTooLarge` failure, **not** as "the predicate failed". Distinguish the two when debugging: a `ResponseTooLarge` failure means raise `maxResponseBytes`; a predicate failure means the backend's response genuinely did not match.
+
+**Not evaluated by passive health.** Passive health checks (`healthCheck.passive.failureStatusCodes`) still key off the HTTP status only — a business-level error in a 200 body does not trip the connector's health state or its circuit breaker.
 
 ### Retry
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `retry.maxRetries` | Integer | `1` | Maximum retries (not counting the initial call). |
-| `retry.retryDelayMs` | Integer | `100` | Delay between retries in milliseconds. |
-| `retry.retryOnTimeout` | Boolean | `true` | Retry on request timeout. |
-| `retry.retryOnConnectError` | Boolean | `true` | Retry on connection error. |
-| `retry.retryOnStatus` | Array\<Integer\> | `[]` | HTTP status codes that trigger a retry. |
+| `retry.maxRetries` | Integer | `1` | Maximum retries (not counting the initial call). Range `0..=10` — a larger value is rejected at admission (`Accepted=False`). This exists alongside `maxDelayMs`'s ceiling below: an unbounded `maxRetries` (e.g. 200) would still allow tens of minutes of inline `tokio::time::sleep` on a live data-plane request even with a capped per-attempt backoff. |
+| `retry.retryDelayMs` | Integer | `100` | **Base delay of the backoff curve** in milliseconds — not a fixed "retry interval". Under `backoffPolicy: fixed` it *is* the constant delay; under `exponential` (default) it is the first term of the curve. Must be greater than 0. |
+| `retry.backoffPolicy` | Enum | `exponential` | `exponential` \| `fixed`. `exponential`: `delay = min(maxDelayMs, retryDelayMs << (attempt-1))`. `fixed`: `delay = retryDelayMs` (constant every attempt). |
+| `retry.maxDelayMs` | Integer | `1000` | Per-attempt backoff ceiling in milliseconds, applied **before** jitter. Range `1..=10000` — a larger value is rejected at admission (`Accepted=False`). The retry sleep blocks a live client request inline on the data-plane path, so this is a hard safety cap, not a tuning knob for waiting out an outage (that is the health-check / circuit-breaker's job). |
+| `retry.jitter` | Boolean | `true` | Add 50–100% jitter to each backoff delay (`d = uniform(d/2 ..= d)`, applied *after* the `maxDelayMs` cap, so the result never exceeds it). Protects against thundering-herd retries. |
+| `retry.honorRetryAfter` | Boolean | `false` | Opt-in. When the response status is `429` or `503` **and** that status is already listed in `retryOnStatus`, honor the response's `Retry-After` header (both `delta-seconds` and HTTP-date forms) in place of the computed backoff. A parsed value `<= maxDelayMs` is used as this attempt's delay; a value `> maxDelayMs` makes the gateway **stop retrying** and return the backend's response as-is — it does not retry immediately and does not error. An absent or unparseable `Retry-After` falls back to the computed backoff. `honorRetryAfter` changes *when* a retry happens, never *whether* one happens. |
+| `retry.retryOnTimeout` | Boolean | **per-consumer — see below** | Retry on request timeout. |
+| `retry.retryOnConnectError` | Boolean | `true` | Retry on connection error (refused, reset). A connect failure means the request never reached the backend, so retrying is always idempotency-safe — this default is unaffected by the consumer split below. |
+| `retry.retryOnStatus` | Array\<Integer\> | `[]` | HTTP status codes that trigger a retry. Status retry stays opt-in. |
+| `retry.retryOnBodyFailure` | Boolean | `false` | Retry when a `success.body` predicate (see [Success](#success)) classifies the response as a failure. Default off: a business error like `{"code": -101}` will still be `-101` on the tenth attempt — retrying it is pure waste. Enable only when you know the body failure is transient. |
 
 When `retry` is omitted, the webhook fails immediately on the first error.
+
+> **`retryOnTimeout` default changed and is now per-consumer: webhook `false`, ForwardAuth `true`.** A timeout means the outcome is *unknown* — the backend may have already fully processed the request. Webhook calls are overwhelmingly non-idempotent POSTs (send a notification, charge a card, write an audit record), so retrying a timed-out webhook risks double execution — hence `false`. ForwardAuth calls are idempotent authorization checks, where retrying a transient timeout is a genuine availability win — hence `true`. **This is a real behavior change** for any webhook LinkSys that sets a `retry:` block and previously relied on the old unconditional `true` default; an operator can always override the field explicitly. `retryOnConnectError` is unaffected (`true` for both, unchanged) because a connect failure is always safe to retry.
+
+### Templates
+
+One connection-level field can be driven by the same per-request template engine used in `request.*` (see [Template variables](#template-variables)) — but with a **much narrower variable allow-list** than `request.*`. It is compiled and validated at admission; a malformed template, or one that references a disallowed variable type, is rejected with `Accepted=False`.
+
+> ⚠️ **Only `${ctx:...}`, `${remoteIp}`, `${matchedHttpRoute:...}`, and `${matchedGrpcRoute:...}` are accepted in `timeoutMsTemplate`.** `${header:...}`, `${query:...}`, `${cookie:...}`, `${path}`, `${uri}`, `${requestPath}`, `${requestUri}`, `${method}`, and `${secretRef:...}` are all rejected at admission for this field specifically (they remain fully allowed in `request.*`). The field is security-sensitive: `timeoutMsTemplate` sets the auth-service call deadline. A client-controlled source would let an attacker pin the deadline to a value so small the call always times out (a reliable denial of service).
+
+```yaml
+timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # falls back to timeoutMs
+```
+
+**Rule: the template wins when it renders to a parseable value; otherwise fall back to the static field.**
+
+| Parameter | Renders to | Fallback | Notes |
+|-----------|-----------|----------|-------|
+| `timeoutMsTemplate` | `u64` milliseconds | `timeoutMs` | A non-numeric, empty, or below-floor render falls back. The floor is `MIN_OUTBOUND_TIMEOUT_MS` = 50 ms (a render below that is treated the same as zero/empty). The rendered value is **clamped to 60000 ms (60 s)** on the upper end regardless. |
+
+Every silent fallback increments `edgion_outbound_template_fallback_total{field="timeout_ms"}` — see [Observability metrics](#observability-metrics) below, since the data plane cannot log the fallback via `tracing`.
+
+**Total blocking time.** The retry sleep and the outbound call are both inline on the request path, so the worst-case block is `(effective_timeout × max_attempts) + Σ backoffs`, each term bounded independently: `timeoutMsTemplate` by the 60 s clamp (and, on the low end, the 50 ms floor), backoff by `maxDelayMs` and its 10 s hard ceiling, and `maxRetries` itself by its own 10-attempt ceiling (see [Retry](#retry) above).
+
+Neither field can redirect the outbound connection — there is no templated `target.url` in this release — and, with the variable allow-list above, neither field can be driven by anything the client sends on the request that reaches this call.
+
+### Observability metrics
+
+The webhook connector (and the ForwardAuth plugin, which shares the same `ExternalHttpConnection`) emits two Prometheus counters for outcomes that would otherwise be invisible on the data plane (which cannot log via `tracing`):
+
+| Metric | Labels | Fires when |
+|--------|--------|-----------|
+| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` | A `timeoutMsTemplate` render failed to parse (or rendered to zero/empty) and the connection fell back to the static field. |
+| `edgion_outbound_success_predicate_fail_total` | none | A response's status was accepted by `success.statusCodes` but a `success.body` predicate classified it as a failure — the "200 OK but error in the body" case. |
+
+See [Metrics](../observability/metrics.md) for the general Prometheus reference (scrape config, cardinality, Gateway metrics listener).
 
 ### Rate limit
 
@@ -691,11 +847,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service              # resolves ready endpoints from EndpointSlice
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service              # resolves ready endpoints from EndpointSlice
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -710,10 +865,9 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: ServiceClusterIp     # resolves via the ClusterIP DNS name (kube-proxy)
-        name: key-service
-        port: 8080
+      kind: ServiceClusterIp     # resolves via the ClusterIP DNS name (kube-proxy)
+      name: key-service
+      port: 8080
     request:
       method:
         template: POST
@@ -727,8 +881,7 @@ Forward selected values from the frozen incoming request, unchanged. With `path`
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
+    target: { kind: Service, name: authz, port: 8080 }
     request:
       headers:
         origin:
@@ -750,8 +903,7 @@ Inject static values the operator controls.
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: audit-sink, port: 8080 }
+    target: { kind: Service, name: audit-sink, port: 8080 }
     request:
       method:
         template: POST
@@ -771,8 +923,7 @@ Inject a credential from a Secret. The `prefix` builds the full header value (`B
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: key-service, port: 8080 }
+    target: { kind: Service, name: key-service, port: 8080 }
     request:
       method:
         template: POST
@@ -799,8 +950,7 @@ Compute outbound values from incoming request data and gateway context at call t
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: enrich, port: 8080 }
+    target: { kind: Service, name: enrich, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -813,7 +963,7 @@ spec:
           - name: X-Forwarded-Path
             template: "${requestPath}"     # frozen entry-time path
           - name: X-Client-Ip
-            template: "${clientIp}"
+            template: "${remoteIp}"
 ```
 
 #### 6. Presence policies (required / skipIfMissing / warnIfMissing)
@@ -822,16 +972,13 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
-    allowDegradation: false        # required-field failure surfaces statusOnError
-    statusOnError: 503
+    target: { kind: Service, name: authz, port: 8080 }
     request:
       headers:
         origin:
           - name: X-Trace-Id                       # default: skipIfMissing
           - name: X-User-Id
-            presence: required                     # missing → call fails → 503
+            presence: required                     # missing → WebhookKeyGet writes no value
           - name: X-Org-Id
             presence: warnIfMissing                # missing → PluginLog alert, continues
 ```
@@ -842,8 +989,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-resolver, port: 8080 }
+    target: { kind: Service, name: user-resolver, port: 8080 }
     request:
       path:
         template: "/v1/users/lookup"
@@ -868,8 +1014,7 @@ metadata:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-service, port: 8080 }
+    target: { kind: Service, name: user-service, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -881,16 +1026,22 @@ spec:
           - name: X-User-Id
             template: "${ctx:user_id}"
 ---
-# Consuming plugin (ctx-set) on an HTTPRoute filter
-type: ctx-set
-vars:
-  - { name: user_id, template: "${header:X-User-Id}" }
-  - { name: action, value: "get-user" }
-  - name: resolved_user
-    from:
-      type: webhook
-      webhookRef: production/user-resolver
-      pathOverride: "/special/path"   # honored only because allowOverride: true
+# Consuming plugins on an HTTPRoute filter.
+# CtxSet MUST run first: webhook templates read ${ctx:user_id} / ${ctx:action}.
+- type: CtxSet
+  config:
+    vars:
+      - { name: user_id, template: "${header:X-User-Id}" }
+      - { name: action, value: "get-user" }
+- type: WebhookKeyGet
+  config:
+    vars:
+      - name: resolved_user
+        webhookRef: production/user-resolver
+        pathOverride: "/special/path"   # honored only because allowOverride: true
+        extract:
+          source: body
+          path: "data.user"
 ```
 
 #### Example: Resilient webhook with retry and health checks
@@ -905,11 +1056,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -922,12 +1072,13 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    allowDegradation: false
-    statusOnError: 503
     retry:
       maxRetries: 1
-      retryDelayMs: 100
-      retryOnTimeout: true
+      retryDelayMs: 100          # base delay of the backoff curve, not a fixed interval
+      backoffPolicy: exponential # exponential (default) | fixed
+      maxDelayMs: 1000           # per-attempt ceiling, range 1..=10000
+      jitter: true               # 50-100% jitter, applied after the maxDelayMs cap
+      retryOnTimeout: false      # webhook default; forward_auth defaults to true instead
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
     rateLimit:
@@ -948,8 +1099,8 @@ The webhook schema changed in this release. Old fields are accepted during a rol
 
 | Old | New |
 |-----|-----|
-| `target.type: uri` + `target.uri` | `target.backendRef` to a (proxy) Service — raw URLs are no longer supported |
-| `target.type: service` + `target.name/port` | `target.backendRef.{kind,name,namespace,port}` (drop the `type` tag) |
+| `target.type: uri` + `target.uri` | flat Service fields (`target.name`/`target.port`/...) to a (proxy) Service — raw URLs are no longer supported |
+| `target.type: service` + `target.name/port` | `target.{kind,name,namespace,port}` set directly under `target` (drop the `type` tag) |
 | `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | `request.headers.custom` with `secret:` (use `prefix:` for `Bearer `/`Basic `) |
 | `defaultHeaders` (static map) | `request.headers.custom` with `value:` per entry |
 | `requestMethod: POST` | `request.method.template: POST` (old default was `GET`) |
@@ -981,11 +1132,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service        # for an external endpoint, point this at a proxy Service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service        # for an external endpoint, point this at a proxy Service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -1001,7 +1151,7 @@ spec:
               prefix: "Bearer "
 ```
 
-Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
+Consumer-side, `pathSuffix` and `forwardHeaders` are removed. The operator-facing consumer is the `WebhookKeyGet` plugin (not a KeyGet `type: webhook` source):
 
 ```yaml
 # Old
@@ -1013,13 +1163,23 @@ Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
         pathSuffix: "/special/path"
         forwardHeaders: ["X-Tenant-Id", "X-User-Id"]
 
-# New — declare path/headers on the webhook resource; consumer only overrides the path
-- type: key-auth
+# New — declare path/headers on the webhook resource; WebhookKeyGet writes ctx;
+# KeyAuth (or any later plugin) reads { type: ctx, name: … }.
+# WebhookKeyGet MUST run before KeyAuth; a reversed list is a silent auth bypass.
+- type: WebhookKeyGet
   config:
-    keys:
-      - type: webhook
+    vars:
+      - name: resolved_key
         webhookRef: production/user-resolver
         pathOverride: "/special/path"   # honored only if allowOverride: true on the webhook
+        extract:
+          source: body
+          path: "data.key"
+- type: KeyAuth
+  config:
+    keySources:
+      - type: ctx
+        name: resolved_key
 ```
 
 > **External endpoints.** `target.type: uri` and `kind: ExternalName` are not supported. Front the external host with a proxy Service (LoadBalancer, or ClusterIP behind an ingress controller) and reference that Service by name.
@@ -1027,13 +1187,13 @@ Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
 ### Webhook troubleshooting
 
 **Webhook not resolving / "webhook not found".**
-Verify the `target.backendRef`: the named Service must exist in the resolved namespace and the `port` must be set and valid. A LinkSys with `Accepted=False` is not loaded into the gateway runtime, so any consumer calling it hits the same "webhook unavailable" path. Run `kubectl get linksys <name> -o yaml` and read the `Accepted` condition message.
+Verify the Service fields under `target` (`name`/`namespace`/`port`/`kind`): the named Service must exist in the resolved namespace and the `port` must be set and valid. A LinkSys with `Accepted=False` is not loaded into the gateway runtime, so any consumer calling it hits the same "webhook unavailable" path. Run `kubectl get linksys <name> -o yaml` and read the `Accepted` condition message.
 
 **`Accepted=False` on a `kind` value.**
 Only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, and empty are valid. `ExternalName` and `ServiceImport` are rejected — use a proxy Service instead.
 
-**Required-field error / unexpected `statusOnError`.**
-An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure. Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive). To degrade instead of failing, set `allowDegradation: true`; to merely log, use `presence: warnIfMissing`.
+**Required-field error / key resolves to nothing.**
+An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure: WebhookKeyGet writes no value (or its `default`). Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive), or use `presence: warnIfMissing` to merely log instead of failing.
 
 **Template variable resolves to empty.**
 `${ctx:NAME}` returns empty when the variable was never set. Ensure a ctx-set step sets it before the webhook is called, and check the `${type:name}` spelling. To enforce presence, prefer `presence: required` on an `origin` field over a template.
@@ -1130,7 +1290,7 @@ spec:
 
 ### 3. TLS-secured Etcd with mTLS client certificate
 
-The CA and client certificate are inlined (public material); the client private key comes from a Secret.
+The CA bundle is provided via a Secret ref (`validation.caCertificateRefs`). The client certificate and private key come from a separate Secret (`clientCertificateRef`). Note: inline CA (`caCert`) is no longer supported in this release; use a Secret with a `ca.crt` key instead.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1149,24 +1309,19 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      certs:
-        caCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        clientCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        secretRef:
-          name: etcd-client-tls
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: etcd-ca-bundle   # Secret with ca.crt key; e.g. kubectl create secret generic etcd-ca-bundle --from-file=ca.crt=ca.pem
+      clientCertificateRef:
+        name: etcd-client-tls
 ```
 
 ## FAQ
 
 ### Q1: Why does my LinkSys report `Accepted=False/Invalid`?
 
-**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target.backendRef` with a missing/zero `port` or an unsupported `kind` (only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty are allowed), or a webhook `request` with conflicting fields (the same name in both `origin` and `custom`, a duplicate name within a list, or both `headers.origin[name: Cookie]` and a `cookies.*` list). The status `message` concatenates the specific errors.
+**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target` Service reference with a missing/zero `port` or an unsupported `kind` (only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty are allowed), or a webhook `request` with conflicting fields (the same name in both `origin` and `custom`, a duplicate name within a list, or both `headers.origin[name: Cookie]` and a `cookies.*` list). The status `message` concatenates the specific errors.
 
 ### Q2: My credentials look correct, but `ResolvedRefs` is `False`. Why?
 
@@ -1181,9 +1336,9 @@ spec:
 
 **A**: No. The auth and TLS structs enable `deny_unknown_fields`, so inline sensitive fields (`username`, `password`, `bearerToken`, `apiKeyId`, `hmacKey`, `clientKey`, ...) cause parsing to fail rather than being ignored. Always use a `secretRef`.
 
-### Q4: Why does setting `insecureSkipVerify: true` break my Redis or Etcd connector?
+### Q4: Can I disable TLS verification (`verify: false`) for Redis or Etcd?
 
-**A**: Redis and Etcd clients do not support skipping verification — setting `true` rejects startup outright. This is intentional, to avoid a configuration where the field appears set but verification still happens. To connect to a backend with a private CA, provide the CA via `tls.certs.caCert` or a `ca.crt` Secret key instead.
+**A**: No. Redis and Etcd clients do not support disabling certificate verification — `verify: false` is rejected at startup for these connectors in any environment. This is intentional: to connect to a backend with a private CA, use `tls.validation.caCertificateRefs` pointing to a Secret with a `ca.crt` key instead.
 
 ### Q5: What happens to active connections when I rotate a Secret?
 
@@ -1209,3 +1364,4 @@ If you run into problems:
 - [mTLS Configuration](./mtls.md)
 - [Redis-backed Rate Limit](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)
 - [Access Log](../observability/access-log.md)
+- [Metrics](../observability/metrics.md)

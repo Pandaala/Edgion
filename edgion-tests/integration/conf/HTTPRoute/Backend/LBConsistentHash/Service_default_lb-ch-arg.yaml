@@ -1,0 +1,11 @@
+# Query-arg ConsistentHash backend Service. Split from lb-ch-service (see the
+# cookie Service comment for the per-Service single-hashOn rationale).
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-ch-arg-service
+  namespace: edgion-default
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP

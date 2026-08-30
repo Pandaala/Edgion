@@ -54,7 +54,7 @@ spec:
     gracefulShutdownTimeoutS: 10            # uint64
     upstreamKeepalivePoolSize: 128          # uint32
     errorLog: ""                            # string, optional
-    enableCompression: false                # bool, downstream response compression
+    enableCompression: false                # bool, gzip known-length downstream responses
     downstreamKeepaliveRequestLimit: 1000   # uint32, 0 = unlimited
 
   # ─── HTTP timeouts ───
@@ -67,6 +67,11 @@ spec:
       defaultConnectTimeout: "5s"
       defaultRequestTimeout: "60s"
       defaultIdleTimeout: "300s"
+
+  # ─── L4 TCP relay timeouts (UDP is unaffected) ───
+  tcpTimeout:
+    idleTimeout: "1h"
+    connectTimeout: "10s"
 
   # ─── Max retries ───
   maxRetries: 3                             # uint32, max upstream connection retries
@@ -93,28 +98,55 @@ spec:
     requireSniHostMatch: true               # bool, HTTPS listener-level 421 Misdirected Request detection
     fallbackSni: ""                         # string?, fallback value when the client provides no SNI
     tlsProxyLogRecord: true                 # bool, record TLS proxy connection logs
+    allowLoopbackUpstream: false            # bool, explicit loopback upstream opt-in
+    rejectDuplicateHost: true               # bool, reject duplicate HTTP/1.1 Host fields
+
+  # ─── Request-body buffering policy ───
+  requestBody:
+    enabled: true
+    defaultMemoryBufferSize: "128KiB"
+    # maxMemoryBufferSize: "1MiB"            # optional effective override
+    defaultMaxBodySize: "32MiB"
+    # maxBodySize: "64MiB"                   # optional effective override
+    storageOperationTimeout: "5s"            # admission + one file operation
 
   # ─── Global plugins ───
   globalPluginsRef:                         # Vec<PluginReference>, applied to all routes
     - name: "global-cors"
       namespace: "edgion-system"            # default "default"
 
+  # ─── Access log extension masking whitelist ───
+  accessLogExtern:
+    unmaskedKeys:
+      header:     [user-agent, origin, content-type, content-length, accept, x-request-id]  # default set
+      respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]   # default set
+      query: []                             # default empty; key names are 100% business-defined
+      cookie: []                            # default empty
+      ctx: []                               # default empty
+
   # ─── Preflight policy ───
   preflightPolicy:
     mode: "cors-standard"                   # "cors-standard" | "all-options"
-    statusCode: 204                         # uint16, response status when no CORS plugin is present
-
-  # ─── ReferenceGrant validation ───
-  enableReferenceGrantValidation: false     # bool
-
-  # ─── Path normalization ───
-  pathNormalization:
-    rejectEscapedSlashes: false             # bool, whether requests containing %2F / %5C are rejected with 400. Default false.
-    rejectInvalidPercentEncoding: false     # bool, whether requests with invalid percent-encoding (invalid hex or non-UTF-8 after decoding) are rejected with 400. Default false.
+    statusCode: 204                         # final HTTP status (200-599) when no CORS plugin is present
 
   # ─── LinkSys global configuration ───
   linkSys:
     webhookMaxResponseBytes: 16384          # usize, hard upper bound for webhook response body (default 16 KiB)
+
+  # ─── Cluster-wide outbound TLS defaults for plugins and LinkSys ───
+  outboundTls:
+    verify: true
+    validation:
+      wellKnownCACertificates: System
+      # hostname: api.example.com
+      # caCertificateRefs: [{ kind: ConfigMap, name: corporate-ca }]
+    # clientCertificateRef: { kind: Secret, name: outbound-client }
+
+  # ─── Data-plane ExternalName DNS fallback ───
+  dnsResolver:
+    servers: ["1.1.1.1:53"]                # Mutually exclusive with linkSysRef
+    # linkSysRef: { namespace: edgion-system, name: corporate-httpdns }
+    cacheTtl: "5s"
 ```
 
 ## spec Field Details
@@ -129,7 +161,7 @@ spec:
 | `gracefulShutdownTimeoutS` | `u64` | `10` | Shutdown timeout |
 | `upstreamKeepalivePoolSize` | `u32` | `128` | Upstream connection pool |
 | `errorLog` | `String?` | — | Pingora error log |
-| `enableCompression` | `bool` | `false` | Downstream response compression |
+| `enableCompression` | `bool` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed |
 | `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Maximum requests per downstream connection |
 
 ### spec.httpTimeout.client
@@ -148,13 +180,20 @@ spec:
 | `defaultRequestTimeout` | `Duration` | `60s` | Total request timeout (including retries) |
 | `defaultIdleTimeout` | `Duration` | `300s` | Connection pool idle timeout |
 
+### spec.tcpTimeout
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `idleTimeout` | `Duration` | `1h` | Established L4 relay inactivity timeout; `0s` disables it. Applies to TCP, TLS termination, and TLS passthrough, not UDP. |
+| `connectTimeout` | `Duration` | `10s` | Upstream TCP connection bound; `0s` delegates to the OS bound. |
+
 ### spec.loadBalancing
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `panicThreshold` | `u8` | `0` | Global panic threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + circuit-breaker filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables panic mode. The per-Service `edgion.io/panic-threshold` annotation overrides this global default. Prometheus gauge `edgion_lb_panic_mode{service}` = 1 while panic mode is engaged. |
+| `panicThreshold` | `u8` | `0` | Global panic threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + outlier-detection filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables panic mode. A per-Service `EdgionBackendTrafficPolicy`'s `spec.loadBalancer.panicThreshold` overrides this global default for its target Service(s). Prometheus gauge `edgion_lb_panic_mode{service}` = 1 while panic mode is engaged. |
 
-> Default `0` matches Istio's Kubernetes default. Enable (e.g. `50`) only for services with larger backend pools (≈ ≥ 5 endpoints); see the annotation reference for the full rationale.
+> Default `0` matches Istio's Kubernetes default. Enable (e.g. `50`) only for services with larger backend pools (≈ ≥ 5 endpoints); see [03-resources/20-edgion-backend-traffic-policy.md](../03-resources/20-edgion-backend-traffic-policy.md) for the full rationale and the per-Service override.
 
 ### spec.realIp
 
@@ -177,26 +216,32 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `fallbackSni` | `String?` | — | Fallback hostname when the client does not provide SNI |
 | `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `bool` | `false` | Explicitly allow loopback upstream; link-local / metadata are not allowed |
+| `rejectDuplicateHost` | `bool` | `true` | Reject HTTP/1.1 requests containing multiple Host field lines with 400. |
+
+### spec.requestBody
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `true` | Runtime capture switch. When false, body-aware plugins receive the normal unimplemented read error; bodyless reads remain empty. |
+| `defaultMemoryBufferSize` | `String` | `128KiB` | Default bytes retained in memory before disk spill. |
+| `maxMemoryBufferSize` | `String?` | unset | Effective business override for the memory spill threshold. Falls back to `defaultMemoryBufferSize`. |
+| `defaultMaxBodySize` | `String` | `32MiB` | Default physical complete-body cap. |
+| `maxBodySize` | `String?` | unset | Effective business override for the physical body cap. Falls back to `defaultMaxBodySize`; per-plugin `body.maxBodySize` may tighten it further for that plugin only. |
+| `storageOperationTimeout` | `String` | `5s` | Non-zero GEP-2257 duration bounding storage-I/O admission plus one spill, replay, materialization, or snapshot file operation. |
+
+All sizes must be positive human-readable byte sizes. The effective memory
+threshold must not exceed the effective body cap. The Gateway resolves these
+values when publishing an `EdgionGatewayConfig` update. Each new request copies
+the resolved boolean, integer, and duration fields from an immutable snapshot;
+it never parses sizes/durations or takes a blocking lock. Storage deadline
+expiry is a gateway-local storage failure, not a downstream read timeout.
 
 ### spec.preflightPolicy
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `String` | `cors-standard` | `cors-standard`: OPTIONS + Origin + ACRM; `all-options`: all OPTIONS requests |
-| `statusCode` | `u16` | `204` | Preflight response status code when no CORS plugin is present |
-
-### spec.pathNormalization
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `rejectEscapedSlashes` | `bool` | `false` | Reject requests containing `%2F` / `%5C` directly with 400. Can be enabled in high-security scenarios (where literal `/` characters in the path are not allowed). Note: this affects legitimate APIs (e.g., base64 URL parameters containing `/`). |
-| `rejectInvalidPercentEncoding` | `bool` | `false` | Reject requests with invalid percent-encoding (invalid hex or non-UTF-8 after decoding) directly with 400. Once enabled, captures abnormal inputs such as IIS-style overlong UTF-8 (`%c0%ae`), broadening the security guarantee scope. |
-
-**Important notes**:
-
-- **No `enabled` field** — path normalization is Edgion's default behavior and **cannot be disabled**.
-- **No per-Gateway / per-Listener override** — these two switches are global.
-- For the security guarantee scope see the URI normalization architecture doc: [../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md).
+| `mode` | `String` | `cors-standard` | Global selection: `cors-standard` selects OPTIONS + Origin + ACRM; `all-options` selects all OPTIONS. A route CORS filter still decides local response ownership. |
+| `statusCode` | `u16` | `204` | Final preflight response status (200-599) when no CORS plugin is present |
 
 ### spec.linkSys
 
@@ -205,6 +250,25 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `webhookMaxResponseBytes` | `usize` | `16384` | Hard upper bound for the LinkSys webhook response body (bytes). All webhook call response sizes are clamped to `min(per-resource maxResponseBytes, this value)`. When larger responses are needed (e.g., a plugin calling an external API that returns a sizable JSON), increase both values together. |
 
 > Modifications take effect immediately via `EdgionGatewayConfig` partial-update; no Gateway restart is required.
+
+### spec.outboundTls
+
+Cluster-wide default for plugin and LinkSys outbound TLS. `verify` defaults to `true`.
+`validation` selects well-known roots or referenced Secret/ConfigMap CA bundles and may
+add hostname/SAN constraints. `clientCertificateRef` supplies an outbound mTLS identity.
+Controller-resolved certificate material stays out of the CRD schema and is redacted in
+Admin output while remaining available to conf_sync.
+
+### spec.dnsResolver
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `linkSysRef` | `LinkSysRef?` | — | Namespaced httpdns LinkSys reference. |
+| `servers` | `Vec<String>?` | — | Inline `ip[:port]` DNS servers. |
+| `cacheTtl` | `Duration` | `5s` | Data-plane ExternalName resolution cache TTL. |
+
+`linkSysRef` and `servers` are mutually exclusive and validated at ingest. This is the
+data-plane fallback; Controller-side resolution uses Controller YAML.
 
 ### spec.globalPluginsRef
 
@@ -215,6 +279,87 @@ globalPluginsRef:
 ```
 
 Global plugins are applied to all routes and execute before route-level plugins.
+
+### spec.accessLogExtern
+
+The masking whitelist for `AccessLogExtern`-declared access-log fields
+(`EdgionPlugins.spec.accessLogExtern`). Platform-owned: it lives here —
+cluster-scoped, next to `globalPluginsRef` — rather than in a namespaced
+resource, so a tenant who owns a route and its own `EdgionPlugins` cannot
+widen masking for the fleet. See
+[`../../03-coding/observability/00-access-log.md`](../../03-coding/observability/00-access-log.md)
+for the full `AccessLogExtern` design.
+
+```yaml
+accessLogExtern:
+  unmaskedKeys:
+    header:     [user-agent, origin, content-type, content-length, accept, x-request-id]
+    respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+    query:      []
+    cookie:     []
+    ctx:        []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `unmaskedKeys.header` | `Vec<String>` | `[user-agent, origin, content-type, content-length, accept, x-request-id]` | Request header names logged in clear. Matched case-insensitively. |
+| `unmaskedKeys.respHeader` | `Vec<String>` | `[content-type, content-length, cache-control, retry-after, x-request-id]` | Response header names logged in clear. Matched case-insensitively. |
+| `unmaskedKeys.query` | `Vec<String>` | `[]` | Query parameter names logged in clear. Case-sensitive. |
+| `unmaskedKeys.cookie` | `Vec<String>` | `[]` | Cookie names logged in clear. Case-sensitive. |
+| `unmaskedKeys.ctx` | `Vec<String>` | `[]` | Ctx-var names logged in clear. Case-sensitive. |
+
+**Keyed by source type, not a flat list**: `user-agent` as a header is
+harmless, but a cookie of the same name is a different object — a flat list
+could not distinguish them.
+
+**Why `query`/`cookie`/`ctx` default empty and `header`/`respHeader` don't.**
+The header/respHeader defaults are fields every access log already effectively
+carries and that identify no one: content negotiation plus `x-request-id` for
+correlation. `referer` and `location` are deliberately excluded even though
+they are common in other gateways' combined-log defaults — `referer` is
+someone else's full URL, often carrying a session id in its query, and
+`location` can carry OAuth implicit-flow tokens or presigned-URL signatures.
+`query`/`cookie`/`ctx` default to empty because their key names are entirely
+business-defined; there is no name that is universally safe across clusters
+(`page` looks harmless until the next tenant uses it for something else).
+
+**Omitting a list keeps that list's default, it does not empty it.**
+`UnmaskedKeys` is `#[serde(default)]` at the container level, so each
+*missing* list is independently filled from `UnmaskedKeys::default()` —
+which is non-empty for `header`/`respHeader`. So
+`accessLogExtern: {unmaskedKeys: {ctx: [tenant_id]}}` — the natural way to
+write "only `tenant_id` is unmasked" — also keeps the default 6 request
+headers and 5 response headers unmasked. To unmask only `tenant_id`, list
+every category explicitly and write `header: []` (and `respHeader: []`) to
+drop the header defaults.
+
+**A whitelist hit bypasses masking; a miss does not drop the field** — it
+still emits the key, rendered per `access_log_sensitive.mode` (see
+[`01-gateway-config.md`](01-gateway-config.md#access_log_sensitive)). Category
+1 sources (`routeLabel`/`routeAnnotation`) bypass this whitelist entirely and
+are always clear — they are operator-authored route configuration, not
+request data.
+
+**Hard blocklist is separate from this whitelist and is not configurable
+here.** Names like `authorization`, `set-cookie`, `x-api-key` (`header`), and
+`jwt_claims`/`oidc_claims`/`jwe_payload` (`ctx`) cannot be named regardless of
+this whitelist — widening them requires a code change, not a CR edit.
+Enforcement is two-part: a declaration naming a blocked key is **reported**
+on the resource's `Accepted=False` status condition at `EdgionPlugins`
+ingest (admission is lenient — the resource still lands in the cache
+conf_sync serves to the gateway), and then actually **dropped at gateway
+load** by `compile_plugins`'s `retain()`
+(`edgion-gateway/src/plugins/http/plugin_store.rs`), which discards any
+declared field whose `validation_error()` is `Some` before the spec is
+stored. The drop, not the report, is what keeps the key out of the log.
+
+**Scope caveat.** `bound_listeners` dedup (`runtime/server/base.rs`) skips a
+listener already bound at the same addr/protocol, so when two Gateways of
+different GatewayClasses share an addr:port, the first Gateway's
+`EdgionGatewayConfig` — including this whitelist — wins for that listener.
+The whitelist is therefore effectively **per-listener**, not per-Gateway.
+Document this in deployment topology; there is no mechanism enforcing
+per-Gateway isolation here.
 
 ## Differences from Gateway YAML Configuration
 
@@ -228,6 +373,9 @@ Global plugins are applied to all routes and execute before route-level plugins.
 
 Do not use `EdgionGatewayConfig` to solve these problems:
 
-- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway YAML.
+- Which Controller the Gateway process connects to: that is `server_addrs` in the Gateway YAML.
 - Gateway Admin / Metrics ports: that is the process startup layer.
-- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller YAML.
+- Path-normalization rejection switches: those are `path_normalization` in Gateway YAML
+  and require restart. They are not CRD fields; adding them here would be pruned by the
+  Kubernetes structural schema.
+- Whether the Controller uses file_system, etcd, or kubernetes: that is `conf_center` in the Controller YAML.

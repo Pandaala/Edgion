@@ -321,18 +321,11 @@ impl TlsStore {
         );
     }
 
-    /// Returns all TLS certificates (valid and invalid) as a snapshot.
-    ///
-    /// Lock-free: clones Arc pointers from the current snapshot.
-    pub fn list_all(&self) -> Vec<Arc<EdgionTls>> {
-        let snapshot = self.tls_data.load();
-        snapshot.values().map(|entry| entry.tls.clone()).collect()
-    }
-
     /// Returns true if a certificate with the given key ("namespace/name") exists,
     /// regardless of validity.
     ///
     /// Lock-free: O(1) hash lookup on the current snapshot.
+    #[cfg(test)]
     pub fn contains(&self, key: &str) -> bool {
         let snapshot = self.tls_data.load();
         snapshot.contains_key(key)
@@ -342,21 +335,10 @@ impl TlsStore {
     /// or `None` if no such entry exists.
     ///
     /// Lock-free: O(1) hash lookup on the current snapshot. Result is cloned.
+    #[cfg(test)]
     pub fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
         let snapshot = self.tls_data.load();
         snapshot.get(key).map(|entry| entry.validation.clone())
-    }
-
-    /// Returns (key, validation_result) pairs for every certificate that failed validation.
-    ///
-    /// Lock-free: O(n) iteration over the current snapshot. Results are cloned.
-    pub fn get_invalid_certs(&self) -> Vec<(String, CertValidationResult)> {
-        let snapshot = self.tls_data.load();
-        snapshot
-            .iter()
-            .filter(|(_, entry)| !entry.validation.is_valid)
-            .map(|(key, entry)| (key.clone(), entry.validation.clone()))
-            .collect()
     }
 
     /// Returns `(valid_count, invalid_count)` for all stored certificates.
@@ -372,27 +354,6 @@ impl TlsStore {
         let total = snapshot.len();
         let invalid = snapshot.values().filter(|entry| !entry.validation.is_valid).count();
         (total - invalid, invalid)
-    }
-
-    /// Returns the first valid certificate matching `hostname` (supports wildcard matching).
-    ///
-    /// Lock-free: O(n) iteration over the current snapshot. Early return on first match.
-    pub fn get_tls_by_host(&self, hostname: &str) -> Option<Arc<EdgionTls>> {
-        let snapshot = self.tls_data.load();
-
-        for entry in snapshot.values() {
-            // Only return valid certificates
-            if !entry.validation.is_valid {
-                continue;
-            }
-
-            // Check if hostname matches
-            if entry.tls.matches_hostname(hostname) {
-                return Some(entry.tls.clone());
-            }
-        }
-
-        None
     }
 }
 

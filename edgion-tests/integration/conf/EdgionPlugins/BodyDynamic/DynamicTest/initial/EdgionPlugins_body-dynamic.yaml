@@ -1,0 +1,31 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: initial
+    - enable: true
+      type: Dsl
+      config:
+        name: body-dynamic-json-select
+        maxBodyScanPasses: 1
+        source: |
+          let values = req.body.json_select({
+            "version": "$.version",
+            "discard": "$.discard"
+          })
+          if values["version"] != "initial" || values["discard"] != nil {
+            return deny(422, "initial JSON multi-select mismatch")
+          }
+        errorPolicy: deny

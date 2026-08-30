@@ -19,6 +19,7 @@ spec:
     sessionPersistence:
       sessionName: x-session-id
       type: Header
+      absoluteTimeout: 1h
     backendRefs:
     - name: sp-service
       port: 8080

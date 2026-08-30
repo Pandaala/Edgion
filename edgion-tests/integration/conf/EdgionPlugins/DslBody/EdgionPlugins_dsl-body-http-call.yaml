@@ -1,0 +1,60 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-body-http-call
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "body-http-call"
+        source: |
+          let mode = req.header("X-Body-Mode")
+          if mode == "http-call-mutate" {
+            req.body.prepend("[")
+            req.body.append("]")
+          }
+
+          let expected_digest = req.header("X-Expected-Body-Sha256")
+          let expected_length = req.header("X-Expected-Body-Length")
+          if mode == "http-call-timeout" {
+            let result = http.call("POST", "http://127.0.0.1:30001/body-slow", req.body, 10)
+            if result["status"] != 0 {
+              return deny(502, "body call did not time out")
+            }
+          } else if mode == "http-call-redirect" {
+            let result = http.call("POST", "http://127.0.0.1:30001/body-redirect", req.body, 3000)
+            if result["status"] != 307 {
+              return deny(502, "body call followed redirect")
+            }
+          } else {
+            let result = http.call(
+              "POST",
+              "http://127.0.0.1:30001/body-digest",
+              req.body,
+              3000,
+              {"Content-Type": "application/octet-stream"}
+            )
+            if result["status"] != 200 {
+              return deny(502, "body call failed")
+            }
+
+            let headers = result["headers"]
+            if headers["x-body-sha256"] != expected_digest {
+              return deny(502, "body call digest mismatch")
+            }
+            if headers["x-body-len"] != expected_length {
+              return deny(502, "body call length mismatch")
+            }
+            if headers["x-content-length"] != expected_length {
+              return deny(502, "body call framing mismatch")
+            }
+            if headers["x-transfer-encoding"] != "absent" {
+              return deny(502, "body call used transfer encoding")
+            }
+          }
+          resp.set_header("X-Body-Call", "ok")
+        errorPolicy: deny
+        httpMaxTimeoutMs: 3000
+        httpMaxRequestBodyBytes: 1048576

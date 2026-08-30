@@ -1,0 +1,11 @@
+# SourceIp ConsistentHash backend Service. Its own target Service because the
+# per-Service EdgionBackendTrafficPolicy carries a single hashOn dimension.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-ch-sourceip-service
+  namespace: edgion-default
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP

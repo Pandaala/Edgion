@@ -9,8 +9,8 @@ pub mod udp_log;
 
 pub use crate::link_sys::providers::local_file::LogType;
 // Re-export from edgion_common so gateway call sites remain stable.
-pub use buffer::{LogBuffer, ULogBuffer};
-pub use edgion_common::observe::{init_default, init_logging, SysLogConfig};
+pub use buffer::{LogBuffer, ULogBuffer, BUFFER_CAPACITY, ULOG_MAX_BUFFER};
+pub use edgion_common::observe::{init_logging, SysLogConfig};
 pub use logger_factory::{create_async_logger, create_sync_logger};
 pub use ssl_log::{init_ssl_logger, log_ssl};
 pub use tcp_log::{init_tcp_logger, log_tcp, TcpLogEntry};

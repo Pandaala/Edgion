@@ -15,6 +15,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::HandlerContext;
 #[derive(Clone, Copy)]
 pub(crate) enum ExpectedEntry {
     IpList,
+    RequestAccessUrlAllowList,
     RegionRouteOverride,
     Selector,
 }
@@ -24,6 +25,10 @@ impl ExpectedEntry {
         matches!(
             (self, data),
             (ExpectedEntry::IpList, ConfigEntry::IpList(_))
+                | (
+                    ExpectedEntry::RequestAccessUrlAllowList,
+                    ConfigEntry::RequestAccessUrlAllowList(_),
+                )
                 | (ExpectedEntry::RegionRouteOverride, ConfigEntry::RegionRouteOverride(_))
                 | (ExpectedEntry::Selector, ConfigEntry::Selector(_))
         )

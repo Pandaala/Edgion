@@ -33,10 +33,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseRewriteConfig {
-    /// New HTTP status code (100-599).
+    /// New final HTTP status code (200-599).
     ///
     /// Overrides the upstream response status code.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 200, max = 599))]
     pub status_code: Option<u16>,
 
     /// Response header operations.
@@ -98,10 +99,9 @@ impl ResponseRewriteConfig {
     /// Returns `Some(error)` if any field is invalid, `None` if all checks pass.
     /// Does not mutate `self`.
     pub fn check_fields(&self) -> Option<String> {
-        // Validate status code range
         if let Some(status) = self.status_code {
-            if !(100..=599).contains(&status) {
-                return Some(format!("Invalid status code: {}. Must be between 100 and 599.", status));
+            if !crate::http_status::is_valid_final_http_status(status) {
+                return Some(format!("Invalid status code: {}. Must be between 200 and 599.", status));
             }
         }
 
@@ -207,9 +207,16 @@ mod tests {
 
     #[test]
     fn test_response_rewrite_config_validate_status_range() {
-        // Test lower bound
+        // Informational responses cannot replace a final response.
         let config = ResponseRewriteConfig {
             status_code: Some(100),
+            ..Default::default()
+        };
+        assert!(config.check_fields().is_some());
+
+        // Test lower bound
+        let config = ResponseRewriteConfig {
+            status_code: Some(200),
             ..Default::default()
         };
         assert!(config.check_fields().is_none());

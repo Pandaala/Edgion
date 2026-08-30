@@ -70,9 +70,10 @@ Constraints to keep in mind:
 ### 5.1 Directory and naming alignment (P0)
 
 - Add same-named suite directories under `edgion-tests/k8s/conf` that match `edgion-tests/integration/conf`.
-- `LBPolicy` is split or mapped to:
-  - `HTTPRoute/Backend/LBRoundRobin`
-  - `HTTPRoute/Backend/LBConsistentHash`
+- LB algorithm scenarios are configured via an `EdgionBackendTrafficPolicy` manifest attached to the target
+  Service (not a route-level filter), so a suite is split or mapped to, e.g.:
+  - `EdgionBackendTrafficPolicy/LoadBalancer/RoundRobin`
+  - `EdgionBackendTrafficPolicy/LoadBalancer/ConsistentHash`
 - Add `EdgionPlugins/base` and all plugin subdirectories.
 
 ### 5.2 Resource-content conversion (P0)

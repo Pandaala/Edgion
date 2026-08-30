@@ -2,6 +2,10 @@
 examples/** linguist-vendored
 docs/** linguist-documentation
 skills/** linguist-documentation
+edgion-tests/** linguist-vendored
+cicd/** linguist-documentation
+config/** linguist-documentation
+tasks/** linguist-documentation
 
 # Separated unit-test files (see skills/05-testing/00-unit-testing.md): collapse
 # in GitHub PR diffs to keep reviewer/AI focus on production code. These are

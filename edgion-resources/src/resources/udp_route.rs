@@ -7,14 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::{ParentReference, RefDenied};
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
-
-/// API group for UDPRoute
-pub const UDP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for UDPRoute
-pub const UDP_ROUTE_KIND: &str = "UDPRoute";
 
 /// UDPRoute defines UDP rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -65,6 +58,7 @@ pub struct UDPBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend
@@ -78,11 +72,6 @@ pub struct UDPBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-
-    /// Parsed extension info (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
 
     /// Cross-namespace reference denial info
     /// Set by Controller when this backend's cross-namespace reference
@@ -103,6 +92,12 @@ use super::http_route::RouteParentStatus;
 #[serde(rename_all = "camelCase")]
 pub struct UDPRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live route). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }

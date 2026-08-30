@@ -1,5 +1,5 @@
 use crate::conf_mgr::ConfWriterError;
-use axum::http::StatusCode;
+use axum::http::{header::IF_MATCH, HeaderMap, StatusCode};
 use edgion_resources::ResourceKind;
 
 /// Helper function to validate a resource against its schema
@@ -169,6 +169,38 @@ where
     })
 }
 
+/// Report unknown keys in `content`'s `spec`, for the Admin API write path.
+/// This is the fourth ingress that hook covers: the raw body is
+/// right here at the handler, so no `Value` round-trip hook or gate is
+/// needed — unlike the Kubernetes watcher, this always runs.
+///
+/// Only resources wired to the advisory checker have a schema to check against;
+/// every other kind returns an empty list immediately.
+///
+/// Best-effort: the caller already parsed this exact `content` into the
+/// typed resource one line earlier (via `parse_resource_and_update_version`),
+/// so re-parsing it here as `Value` should never fail in practice — but if it
+/// does, this returns an empty list rather than failing the write, matching
+/// the non-fatal contract the FS/etcd loader seam uses. The write must never
+/// be blocked by this diagnostic: unknown-field detection warns, never rejects.
+pub fn unknown_field_warnings(kind: ResourceKind, content: &str) -> Vec<String> {
+    let schema = match kind {
+        ResourceKind::EdgionPlugins => edgion_resources::edgion_plugins_spec_schema(),
+        ResourceKind::EdgionStreamPlugins => edgion_resources::edgion_stream_plugins_spec_schema(),
+        ResourceKind::EdgionConfigData => edgion_resources::edgion_config_data_spec_schema(),
+        ResourceKind::LinkSys => edgion_resources::link_sys_spec_schema(),
+        _ => return Vec::new(),
+    };
+    let Ok(document) = parse_resource::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    let Some(spec) = document.get("spec") else {
+        return Vec::new();
+    };
+    let paths = edgion_resources::schema_check::unknown_key_paths(spec, schema);
+    crate::observe::unknown_fields_registry::bounded_unknown_field_paths(&paths)
+}
+
 /// Parse ResourceKind from string (case-insensitive)
 pub fn parse_kind(kind_str: &str) -> Result<ResourceKind, String> {
     ResourceKind::from_kind_name(kind_str).ok_or_else(|| format!("Unknown resource kind: {}", kind_str))
@@ -181,6 +213,58 @@ where
 {
     let version = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
     resource.meta_mut().resource_version = Some(version.to_string());
+}
+
+/// Resolve the optimistic-concurrency token for an update request.
+///
+/// A strong `If-Match` ETag takes precedence. The body resourceVersion is a
+/// compatibility fallback for clients that have not started sending the
+/// header yet.
+///
+/// `None` — no header and no body version — is the documented contract, not a
+/// concession to old clients: the write becomes unconditional and is
+/// last-writer-wins, so another client's update is silently discarded while
+/// this caller still receives `200`/`204`. Callers that want `409`-on-conflict
+/// must send the precondition from their own `GET`. `If-Match: *` also resolves
+/// to `None`; it means only "must exist", which the update/delete path already
+/// enforces via `ConfWriterError::NotFound`. Do not "fix" this into a `428` —
+/// see `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+pub fn expected_resource_version(headers: &HeaderMap, body: &str) -> Result<Option<String>, StatusCode> {
+    if let Some(value) = headers.get(IF_MATCH) {
+        let value = value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?.trim();
+        if value == "*" {
+            return Ok(None);
+        }
+        if value.starts_with("W/") || value.contains(',') || value.is_empty() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if value.starts_with('"') {
+            if !value.ends_with('"') || value.len() < 2 {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            let mut token = String::new();
+            let mut chars = value[1..value.len() - 1].chars();
+            while let Some(ch) = chars.next() {
+                if ch == '\\' {
+                    token.push(chars.next().ok_or(StatusCode::BAD_REQUEST)?);
+                } else {
+                    token.push(ch);
+                }
+            }
+            if token.is_empty() {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            return Ok(Some(token));
+        }
+        return Ok(Some(value.to_string()));
+    }
+
+    let resource: serde_yaml::Value = serde_yaml::from_str(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(resource
+        .get("metadata")
+        .and_then(|metadata| metadata.get("resourceVersion"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_string))
 }
 
 /// Parse resource and optionally update resource_version
@@ -215,5 +299,25 @@ mod tests {
     fn stale_pagination_maps_to_410() {
         let status = map_writer_error(ConfWriterError::StalePagination("expired".to_string()));
         assert_eq!(status, StatusCode::GONE);
+    }
+
+    #[test]
+    fn if_match_precedes_payload_resource_version() {
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_MATCH, r#""header-rv""#.parse().unwrap());
+        let body = r#"metadata: {resourceVersion: payload-rv}"#;
+        assert_eq!(
+            expected_resource_version(&headers, body).unwrap().as_deref(),
+            Some("header-rv")
+        );
+    }
+
+    #[test]
+    fn payload_resource_version_is_compatibility_fallback() {
+        let body = r#"metadata: {resourceVersion: payload-rv}"#;
+        assert_eq!(
+            expected_resource_version(&HeaderMap::new(), body).unwrap().as_deref(),
+            Some("payload-rv")
+        );
     }
 }

@@ -104,7 +104,10 @@ impl OpenidConnect {
             .await
         {
             Ok(v) => v,
-            Err(_) => return None,
+            Err(e) => {
+                super::token_exchange::note_oidc_san_mismatch(&e);
+                return None;
+            }
         };
         if !resp.status().is_success() {
             return None;

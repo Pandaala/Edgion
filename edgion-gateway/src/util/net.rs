@@ -1,93 +1,19 @@
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+
+pub(crate) use edgion_common::egress::{classify_ip, IpClass};
 
 /// Category of backend address blocked for security reasons.
 ///
-/// Stable, low-cardinality labels suitable for `edgion_status` / access log.
+/// Stable, low-cardinality labels suitable for request diagnostics / access log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockedBackendReason {
     /// 127.0.0.0/8 or ::1 — loopback
     Localhost,
     /// 169.254.0.0/16 (incl. cloud metadata 169.254.169.254) or fe80::/10
     LinkLocal,
-}
-
-/// Coarse classification of an IP address into the segments that matter for
-/// SSRF / egress policy. Low-cardinality and **policy-free**: each caller maps
-/// these classes to its own allow/block decision — see [`classify_backend_addr`]
-/// for the backend policy (allows private) and the DSL `is_ssrf_blocked_ip_literal`
-/// for the DSL policy (blocks private).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IpClass {
-    /// 127.0.0.0/8 or ::1
-    Loopback,
-    /// 169.254.0.0/16 (incl. cloud metadata 169.254.169.254) or fe80::/10
-    LinkLocal,
-    /// RFC1918 private (10/8, 172.16/12, 192.168/16)
-    Private,
-    /// RFC 4193 unique-local (fc00::/7)
-    UniqueLocal,
-    /// 0.0.0.0 or ::
-    Unspecified,
-    /// Anything else — globally routable / public.
-    Global,
-}
-
-/// Classify an IP address into a single [`IpClass`] segment.
-///
-/// This is the single source of truth for IP-segment classification shared by the
-/// backend validator and the DSL SSRF guard. It does **not** decide allow/block —
-/// callers map the returned class to their own policy.
-///
-/// IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is normalized to its embedded IPv4 and
-/// classified through the IPv4 rules. This normalization **must run before** the
-/// IPv6 segment-mask checks: `::ffff:127.0.0.1` is neither `::1` nor inside
-/// `fc00`/`fe80`, so without the early mapping it would fall through to `Global` —
-/// a silent SSRF bypass. Note `::` is not a mapped address (`to_ipv4_mapped()`
-/// returns `None` for it), so it correctly reaches the unspecified arm.
-#[inline]
-pub(crate) fn classify_ip(ip: IpAddr) -> IpClass {
-    match ip {
-        IpAddr::V4(v4) => classify_v4_class(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                classify_v4_class(v4)
-            } else if v6.is_loopback() {
-                IpClass::Loopback
-            } else if v6.is_unspecified() {
-                IpClass::Unspecified
-            } else {
-                let s0 = v6.segments()[0];
-                if (s0 & 0xfe00) == 0xfc00 {
-                    IpClass::UniqueLocal
-                } else if (s0 & 0xffc0) == 0xfe80 {
-                    IpClass::LinkLocal
-                } else {
-                    IpClass::Global
-                }
-            }
-        }
-    }
-}
-
-/// Classify an IPv4 address into an [`IpClass`]. Shared by the `IpAddr::V4` branch
-/// and the IPv4-mapped IPv6 path of [`classify_ip`]. The segments are disjoint, so
-/// the check order documents intent rather than resolving overlaps.
-#[inline]
-fn classify_v4_class(ip: Ipv4Addr) -> IpClass {
-    if ip.is_loopback() {
-        IpClass::Loopback
-    } else if ip.is_link_local() {
-        IpClass::LinkLocal
-    } else if ip.is_private() {
-        IpClass::Private
-    } else if ip.is_unspecified() {
-        IpClass::Unspecified
-    } else {
-        IpClass::Global
-    }
 }
 
 /// Classify whether a backend address should be rejected before dialing.

@@ -246,9 +246,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             let raw = v.trim();
             if !raw.is_empty() {
                 let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
-                let (ns, name) = parse_stream_plugin_ref(raw, gateway_ns);
-                let key = format!("{}/{}", ns, name);
-                ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
+                if let Ok(key) = resolve_gateway_stream_plugin_ref(raw, gateway_ns) {
+                    ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
+                }
             }
         }
 
@@ -275,6 +275,24 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let cross_ns_manager = &ctx.runtime().cross_ns_ref_mgr;
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
+        // Track a cross-namespace `edgion.io/dns-resolver-ref` (Gateway → httpdns
+        // LinkSys) so a ReferenceGrant add/remove requeues this Gateway. The grant
+        // check + annotation strip happen in `update_status` (which reports the
+        // denial via ResolvedRefs before stripping).
+        if let Some(v) = g
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(annotations::edgion::DNS_RESOLVER_REF))
+        {
+            if let Some(key) = edgion_common::dns::resolver_select::LinkSysKey::parse(v) {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
+                if key.namespace != gateway_ns {
+                    cross_ns_manager.add_ref(key.namespace, cross_ns_ref.clone());
+                }
+            }
+        }
+
         // Register listeners to ListenerPortManager (empty list clears stale registrations)
         let listener_ports: Vec<(String, ConflictKey, Option<String>)> = g
             .spec
@@ -296,6 +314,51 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ctx.runtime()
             .listener_port_manager
             .register_gateway(&gateway_key_for_port_mgr, &listener_ports);
+
+        // Resolve the Gateway-level default client identity used for upstream
+        // mTLS when a BackendTLSPolicy does not provide its own certificate.
+        if let Some(backend_tls) = g.spec.tls.as_mut().and_then(|tls| tls.backend.as_mut()) {
+            backend_tls.resolved_client_certificate = None;
+
+            if let Some(client_ref) = &backend_tls.client_certificate_ref {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("");
+                let client_ns = client_ref.namespace.as_deref().unwrap_or(gateway_ns);
+                let secret_key = format!("{client_ns}/{}", client_ref.name);
+
+                ctx.secret_ref_manager()
+                    .add_ref(secret_key.clone(), resource_ref.clone());
+
+                if client_ns != gateway_ns {
+                    cross_ns_manager.add_ref(client_ns.to_string(), cross_ns_ref.clone());
+                }
+
+                let valid_secret_ref = client_ref.kind.as_deref().unwrap_or("Secret") == "Secret"
+                    && is_core_api_group(client_ref.group.as_deref().unwrap_or(""));
+                let permitted = client_ns == gateway_ns
+                    || !is_reference_grant_validation_enabled()
+                    || ctx.runtime().ref_grant_store.check_reference_allowed(
+                        gateway_ns,
+                        "gateway.networking.k8s.io",
+                        "Gateway",
+                        client_ns,
+                        "",
+                        "Secret",
+                        Some(&client_ref.name),
+                    );
+
+                if valid_secret_ref && permitted {
+                    if let Some(secret) = ctx.runtime().secret_store.get(Some(client_ns), &client_ref.name) {
+                        backend_tls.resolved_client_certificate = Some(secret);
+                    } else {
+                        tracing::info!(
+                            gateway = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "Gateway backend client certificate Secret not found yet; it will be reprocessed when the Secret arrives"
+                        );
+                    }
+                }
+            }
+        }
 
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
@@ -603,6 +666,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Pre-compute stream plugin ref validation before taking a mutable borrow of gateway.
         let stream_plugin_ref_error = validate_gateway_stream_plugin_ref(gateway, _ctx.runtime());
         let plugin_ref_error = validate_gateway_plugin_ref(gateway, _ctx.runtime());
+        // Cross-namespace dns-resolver-ref grant denial (Gateway → httpdns LinkSys).
+        let dns_resolver_ref_error = validate_gateway_dns_resolver_ref(gateway, _ctx.runtime());
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -640,14 +705,33 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
-        // Gateway-level ResolvedRefs: merge stream-plugin and HTTP-plugin ref errors
-        // into a single shared condition — never emit two conditions of the same type.
+        // Gateway-level ResolvedRefs: merge stream-plugin, HTTP-plugin, and
+        // dns-resolver ref errors into a single shared condition — never emit two
+        // conditions of the same type. Reason precedence keeps the existing
+        // plugin-ref reasons; a dns-resolver-ref denial alone uses the standard
+        // RefNotPermitted reason.
         {
-            let merged = match (stream_plugin_ref_error.as_ref(), plugin_ref_error.as_ref()) {
-                (None, None) => None,
-                (Some(s), None) => Some((condition_reasons::INVALID_STREAM_PLUGINS_REF, s.clone())),
-                (None, Some(p)) => Some((condition_reasons::INVALID_PLUGINS_REF, p.clone())),
-                (Some(s), Some(p)) => Some((condition_reasons::INVALID_PLUGINS_REF, format!("{}; {}", s, p))),
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(s) = stream_plugin_ref_error.as_ref() {
+                parts.push(s.clone());
+            }
+            if let Some(p) = plugin_ref_error.as_ref() {
+                parts.push(p.clone());
+            }
+            if let Some(d) = dns_resolver_ref_error.as_ref() {
+                parts.push(d.clone());
+            }
+            let merged = if parts.is_empty() {
+                None
+            } else {
+                let reason = if plugin_ref_error.is_some() {
+                    condition_reasons::INVALID_PLUGINS_REF
+                } else if stream_plugin_ref_error.is_some() {
+                    condition_reasons::INVALID_STREAM_PLUGINS_REF
+                } else {
+                    condition_reasons::REF_NOT_PERMITTED
+                };
+                Some((reason, parts.join("; ")))
             };
             match merged {
                 None => {
@@ -660,7 +744,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     update_gateway_condition(conditions, cond);
                 }
                 Some((reason, message)) => {
-                    tracing::warn!(error = %message, "Gateway-level plugin ref unresolved");
+                    tracing::warn!(error = %message, "Gateway-level ref unresolved");
                     let cond = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
                     update_gateway_condition(conditions, cond);
                 }
@@ -816,6 +900,15 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         } else {
             // All listeners removed from spec: clear status listeners
             status.listeners = Some(Vec::new());
+        }
+
+        // Strip a denied cross-namespace `dns-resolver-ref` after conditions are
+        // reported, so the data plane never honors an unpermitted reference. Only
+        // the shipped/cached copy is mutated (status write-back touches the status
+        // subresource only), so the apiserver object keeps the annotation and a
+        // later ReferenceGrant re-enables it on the next reconcile.
+        if dns_resolver_ref_error.is_some() {
+            super::dns_resolver_guard::strip_dns_resolver_ref(&mut gateway.metadata.annotations);
         }
     }
 }
@@ -1565,15 +1658,15 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
     }
 }
 
-/// Parse `"namespace/name"` annotation value.
-/// Falls back to `gateway_ns` when the value contains no slash.
-/// Multi-slash values (e.g. `"a/b/c"`) yield `name = "b/c"`, which will never
-/// match a real resource key — callers treat this as not found.
-fn parse_stream_plugin_ref(value: &str, gateway_ns: &str) -> (String, String) {
-    if let Some((ns, name)) = value.split_once('/') {
-        (ns.to_string(), name.to_string())
+/// Resolve a Gateway-level StreamPlugins annotation to its store key.
+///
+/// Gateway attachments are same-namespace only. Route-level StreamPlugins
+/// references have a separate contract and continue to support qualified keys.
+fn resolve_gateway_stream_plugin_ref(value: &str, gateway_ns: &str) -> Result<String, String> {
+    if value.contains('/') {
+        Err("Gateway edgion-stream-plugins reference must be an unqualified resource name".to_string())
     } else {
-        (gateway_ns.to_string(), value.to_string())
+        Ok(format!("{}/{}", gateway_ns, value))
     }
 }
 
@@ -1592,8 +1685,10 @@ fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRun
         return None;
     }
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let (ns, name) = parse_stream_plugin_ref(annotation_value, gateway_ns);
-    let key = format!("{}/{}", ns, name);
+    let key = match resolve_gateway_stream_plugin_ref(annotation_value, gateway_ns) {
+        Ok(key) => key,
+        Err(error) => return Some(error),
+    };
     let exists = runtime
         .processor_registry
         .get("EdgionStreamPlugins")
@@ -1633,21 +1728,45 @@ fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -
     }
 }
 
+/// Returns `Some(error_message)` when the Gateway's `edgion.io/dns-resolver-ref`
+/// annotation points at an httpdns LinkSys in another namespace with no matching
+/// ReferenceGrant. `None` when the annotation is absent, same-namespace, or
+/// permitted. Same-namespace refs and trusted config are never gated.
+fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
+    use super::dns_resolver_guard::check_dns_resolver_ref_grant;
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let denial = check_dns_resolver_ref_grant(
+        gateway_ns,
+        "gateway.networking.k8s.io",
+        "Gateway",
+        gateway.metadata.annotations.as_ref(),
+        runtime,
+    )?;
+    Some(format!(
+        "dns-resolver-ref LinkSys '{}/{}' cross-namespace reference not permitted (no ReferenceGrant)",
+        denial.ref_namespace, denial.name
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        gateway_service_lookup_candidates, has_all_ca_refs_invalid, parse_stream_plugin_ref,
-        validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref, GatewayHandler, GatewayResolvedRefsError,
+        gateway_service_lookup_candidates, has_all_ca_refs_invalid, resolve_gateway_stream_plugin_ref,
+        validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
+        GatewayHandler, GatewayResolvedRefsError,
     };
-    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessorHandler};
+    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::constants::app::GATEWAY_NAME;
     use edgion_resources::prelude_resources::Gateway;
     use edgion_resources::resources::common::SecretObjectReference;
     use edgion_resources::resources::gateway::{
-        FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener,
+        FrontendTLSValidation, GatewayBackendTLS, GatewaySpec, GatewaySpecTLS, GatewayTLSConfig, GatewayTlsMode,
+        Listener as GatewayListener,
     };
-    use std::collections::BTreeMap;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
 
     fn make_test_gateway(ns: &str) -> Gateway {
@@ -1694,7 +1813,7 @@ mod tests {
     #[test]
     fn validate_stream_plugin_ref_missing_resource_returns_error() {
         let runtime = ControllerRuntime::default();
-        let gw = make_gateway_with_annotation("default", "default/my-stream");
+        let gw = make_gateway_with_annotation("default", "my-stream");
         let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
         assert!(result.is_some());
         assert!(result.unwrap().contains("default/my-stream"));
@@ -1709,25 +1828,67 @@ mod tests {
         assert!(result.unwrap().contains("my-ns/my-stream"));
     }
 
-    #[test]
-    fn parse_stream_plugin_ref_with_slash() {
-        let (ns, name) = parse_stream_plugin_ref("other-ns/my-plugin", "default");
-        assert_eq!(ns, "other-ns");
-        assert_eq!(name, "my-plugin");
+    fn make_gateway_with_dns_resolver_ref(ns: &str, reference: &str) -> Gateway {
+        let mut gw = make_test_gateway(ns);
+        let mut annotations = BTreeMap::new();
+        annotations.insert("edgion.io/dns-resolver-ref".to_string(), reference.to_string());
+        gw.metadata.annotations = Some(annotations);
+        gw
     }
 
     #[test]
-    fn parse_stream_plugin_ref_without_slash_uses_gateway_ns() {
-        let (ns, name) = parse_stream_plugin_ref("my-plugin", "default");
-        assert_eq!(ns, "default");
-        assert_eq!(name, "my-plugin");
+    fn validate_dns_resolver_ref_no_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_test_gateway("default");
+        assert!(validate_gateway_dns_resolver_ref(&gw, &runtime).is_none());
     }
 
     #[test]
-    fn parse_stream_plugin_ref_multi_slash_name_becomes_remainder() {
-        let (ns, name) = parse_stream_plugin_ref("a/b/c", "default");
-        assert_eq!(ns, "a");
-        assert_eq!(name, "b/c");
+    fn validate_dns_resolver_ref_same_namespace_is_allowed() {
+        // A same-namespace ref is never grant-gated.
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_dns_resolver_ref("app", "app/aliyun");
+        assert!(validate_gateway_dns_resolver_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_dns_resolver_ref_cross_namespace_without_grant_is_denied() {
+        // Empty ref_grant_store + default (enabled) validation → cross-ns denied.
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_dns_resolver_ref("app", "dns/aliyun");
+        let result = validate_gateway_dns_resolver_ref(&gw, &runtime);
+        assert!(
+            result.is_some(),
+            "cross-namespace ref without a ReferenceGrant must be denied"
+        );
+        let msg = result.unwrap();
+        assert!(msg.contains("dns/aliyun"), "message must name the ref, got: {msg}");
+        assert!(
+            msg.contains("not permitted"),
+            "message must state the denial, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_gateway_stream_plugin_ref_rejects_qualified_name() {
+        let error = resolve_gateway_stream_plugin_ref("other-ns/my-plugin", "default").unwrap_err();
+        assert!(error.contains("unqualified resource name"));
+    }
+
+    #[test]
+    fn resolve_gateway_stream_plugin_ref_uses_gateway_ns() {
+        assert_eq!(
+            resolve_gateway_stream_plugin_ref("my-plugin", "default").unwrap(),
+            "default/my-plugin"
+        );
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_rejects_qualified_name() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("default", "other-ns/my-plugin");
+        let error = validate_gateway_stream_plugin_ref(&gw, &runtime).unwrap();
+        assert!(error.contains("unqualified resource name"));
     }
 
     fn listener_with_ca_refs(refs: Vec<(&str, &str)>) -> GatewayListener {
@@ -1871,6 +2032,57 @@ mod tests {
         let refs_p2 = runtime.plugin_ref_mgr.get_refs("gw-ns/p2");
         assert_eq!(refs_p2.len(), 1, "expected one Gateway ref for gw-ns/p2");
         assert_eq!(refs_p2[0].resource_key(), "gw-ns/my-gateway");
+    }
+
+    #[tokio::test]
+    async fn gateway_backend_client_certificate_is_resolved_and_registered() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+
+        let mut secret = Secret::default();
+        secret.metadata.namespace = Some("gw-ns".to_string());
+        secret.metadata.name = Some("client-cert".to_string());
+        secret.data = Some(BTreeMap::from([
+            ("tls.crt".to_string(), ByteString(b"certificate".to_vec())),
+            ("tls.key".to_string(), ByteString(b"private-key".to_vec())),
+        ]));
+        runtime.secret_store.update(
+            HashMap::from([("gw-ns/client-cert".to_string(), secret)]),
+            &HashSet::new(),
+        );
+
+        let mut gw = make_test_gateway("gw-ns");
+        gw.metadata.name = Some("my-gateway".to_string());
+        gw.spec.tls = Some(GatewaySpecTLS {
+            backend: Some(GatewayBackendTLS {
+                client_certificate_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "client-cert".to_string(),
+                    namespace: None,
+                }),
+                resolved_client_certificate: None,
+            }),
+            frontend: None,
+        });
+
+        let handler = GatewayHandler::new(None, None);
+        let ProcessResult::Continue(parsed) = handler.parse(gw, &ctx).await else {
+            panic!("Gateway parse unexpectedly skipped the resource");
+        };
+
+        assert!(
+            parsed
+                .spec
+                .tls
+                .and_then(|tls| tls.backend)
+                .and_then(|backend| backend.resolved_client_certificate)
+                .is_some(),
+            "Gateway backend client certificate must be embedded for conf_sync"
+        );
+        let refs = runtime.secret_ref_manager.get_refs("gw-ns/client-cert");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].resource_key(), "gw-ns/my-gateway");
     }
 
     fn make_gateway_with_plugin_annotation(ns: &str, annotation_value: &str) -> Gateway {

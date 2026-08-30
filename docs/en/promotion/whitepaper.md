@@ -150,7 +150,7 @@ EdgionDSL's syntax is inspired by Rust and JavaScript conventions to minimize th
 **Variable declaration.** Both immutable and mutable variables are supported:
 
 ```
-let ip = req.client_ip()
+let ip = req.remote_ip()
 let mut count = 0
 count = count + 1
 ```
@@ -184,7 +184,7 @@ for name in req.header_names() {
 
 | Category | Count | Representative Functions |
 |----------|-------|--------------------------|
-| Request read | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.client_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
+| Request read | 15 | `req.header()`, `req.method()`, `req.path()`, `req.query()`, `req.cookie()`, `req.direct_peer_ip()`, `req.remote_ip()`, `req.path_param()`, `req.header_names()`, `req.scheme()`, `req.host()`, `req.uri()`, `req.content_type()`, `req.has_header()`, `req.query_string()` |
 | Request modify | 6 | `req.set_header()`, `req.append_header()`, `req.remove_header()`, `req.set_uri()`, `req.set_host()`, `req.set_method()` |
 | Response read | 3 | `resp.status()`, `resp.header()`, `resp.has_header()` |
 | Response modify | 3 | `resp.set_header()`, `resp.append_header()`, `resp.remove_header()` |
@@ -227,7 +227,7 @@ flowchart LR
 - **Namespace method resolution**: `req.header("X")` is compiled to `CallBuiltin(ReqHeader, 1)`, directly mapped to a built-in function ID
 - **Constant pool deduplication**: identical string and integer constants share a single constant pool entry
 
-**Stage 4: Bytecode.** The compilation artifact `CompiledScript` contains four fields: an instruction sequence (`code: Vec<OpCode>`), a constant pool (`constants: Vec<Constant>`), a local variable slot count (`local_count`), and a maximum loop nesting depth (`max_loop_depth`). Bytecode carries a version number (currently `BYTECODE_VERSION = 1`) and is serialized to base64-encoded JSON format for safe transmission between the Controller and Gateway and for persistent storage. Deserialization strictly validates version compatibility and payload size (maximum 256 KB decoded).
+**Stage 4: Bytecode.** The compilation artifact `CompiledScript` contains the format version, an instruction sequence (`code: Vec<OpCode>`), a constant pool (`constants: Vec<Constant>`), a local variable slot count (`local_count`), a maximum loop nesting depth (`max_loop_depth`), and optional source text for diagnostics. Bytecode currently uses `BYTECODE_VERSION = 3` and is serialized to base64-encoded JSON format for safe transmission between the Controller and Gateway and for persistent storage. Version 3 adds the statically bounded JSON multi-select plan; version 2 and older or unversioned payloads are rejected and must be recompiled. Deserialization strictly validates version compatibility and payload size (maximum 256 KB decoded).
 
 **Stage 5: Execution.** A stack-based VM executes bytecode instructions one by one. The instruction set includes stack operations (LoadConst, LoadNil, LoadTrue, LoadFalse, Pop), local variable operations (GetLocal, SetLocal), arithmetic, comparison, and logical operators, string methods (StartsWith, EndsWith, Contains, Matches), control-flow jumps, list operations, and built-in function calls.
 
@@ -303,7 +303,8 @@ return next()
 **Use case 3: Internal IP rate-limit bypass.** Determine from the client IP whether a request is internal; if so, mark it via a context variable so that a downstream RateLimit plugin can skip rate limiting:
 
 ```
-let ip = req.client_ip()
+// Deliberately use the physical peer for this network-origin bypass rule.
+let ip = req.direct_peer_ip()
 
 // Simple CIDR prefix matching for internal networks
 if ip.starts_with("10.") || ip.starts_with("192.168.") || ip.starts_with("172.") {
@@ -346,7 +347,7 @@ pub trait RequestFilter: Send + Sync {
 
 **UpstreamResponse (Upstream Response Phase, Async).** Executed after the complete upstream response has been received. Used for plugins that require complete response information to function, such as conditional logic based on response status codes.
 
-All phases share the same `PluginSession` trait as the session abstraction. `PluginSession` provides a unified read/write interface for requests and responses, including header reading (`header_value`, `get_path`, `get_query_param`, `get_cookie`), header modification (`set_request_header`, `set_response_header`, `remove_request_header`), context variables (`get_ctx_var`, `set_ctx_var`), client information (`client_addr`, `remote_addr`, `client_cert_info`), and other methods. This design ensures that the DSL engine and native Rust plugins share the same session interface, guaranteeing behavioral consistency.
+All phases share the same `PluginSession` trait as the session abstraction. `PluginSession` provides a unified read/write interface for requests and responses, including header reading (`header_value`, `get_path`, `get_query_param`, `get_cookie`), header modification (`set_request_header`, `set_response_header`, `remove_request_header`), context variables (`get_ctx_var`, `set_ctx_var`), client information (`direct_peer_ip`, `remote_ip`, `client_cert_info`), and other methods. This design ensures that the DSL engine and native Rust plugins share the same session interface, guaranteeing behavioral consistency.
 
 ### 5.2 Stream Plugin Framework
 
@@ -403,7 +404,7 @@ Edgion compresses the complete lifecycle of each request into a single line of J
 | `ts` | i64 | UTC timestamp in milliseconds (`chrono::Utc::now().timestamp_millis()`) |
 | `request_info` | RequestInfo | Request metadata: method, path, status, client IP, protocol, X-Trace-Id, etc. |
 | `match_info` | RouteMatchInfo | Route match result, supporting both HTTP and gRPC route types (`#[serde(untagged)]` enum) |
-| `errors` | \[EdgionStatus\] | List of errors accumulated during the request lifecycle |
+| `diagnostics` | `[{kind, code}]` | Ordered request diagnostics, including recovered failures and noteworthy information |
 | `backend_context` | BackendContext | Backend upstream information: service name, namespace, upstream IP/port, response body size, write wait time |
 | `stage_logs` | \[StageLogs\] | Execution logs for each plugin phase — which plugins were executed, how long they took, and what results they returned |
 | `conn_est` | bool | Whether the connection was successfully established |
@@ -503,7 +504,7 @@ Security is the primary responsibility of an API gateway. Edgion builds a multi-
 
 Edgion's TLS implementation covers the complete chain from certificate management to handshake control:
 
-**Multi-backend support.** Edgion supports three TLS backends through Cargo feature flags: `boringssl` (default, Google's maintained OpenSSL fork, widely used in production by Cloudflare and Google), and `openssl` (the traditional OpenSSL library). Both backends share a unified TLS Store abstraction layer (`store.rs`), so upper-layer code is unaware of the underlying implementation differences. In addition, the Pingora framework level also supports rustls as a pure-Rust TLS implementation, providing a deployment option with no C dependencies.
+**TLS backend.** Edgion Gateway uses BoringSSL as its supported TLS backend. The repository retains a rustls Cargo feature only as a future-development seam; it is not a supported build or deployment option.
 
 **Per-domain TLS control.** Through the `EdgionTls` CRD, operators can independently configure the TLS version range (TLS 1.2/1.3), cipher suite list, and ALPN protocols for each domain. Different domains can adopt different security policies — public-facing domains enforce TLS 1.3, while internal services allow TLS 1.2 for compatibility with legacy clients.
 
@@ -620,7 +621,7 @@ Edgion is under active development. The following are key priorities for the nea
 
 **Request Latency Histogram Enhancements.** Building on the existing `edgion_gateway_request_duration_ms` metric, introduce Native Histogram (Prometheus native histogram) support for higher-precision latency distribution data. Additional per-phase histograms will be added for upstream connection establishment time and TLS handshake time.
 
-**Federated Management Center.** Build a multi-cluster unified configuration synchronization platform (Edgion Center) that connects multiple Controller instances via gRPC bidirectional streams, enabling cross-cluster configuration distribution, state aggregation, and unified operations. The federated center exposes an HTTP Admin API for global configuration management and includes a built-in scheduler that periodically audits configuration consistency across clusters.
+**Federated Management Center.** Build a multi-cluster unified configuration synchronization platform (Edgion Center) that connects multiple Controller instances via gRPC bidirectional streams, enabling cross-cluster configuration distribution, state aggregation, and unified operations. The federated center exposes an HTTP Admin API for global configuration management; cluster state flows back through a reverse list/watch of the Center-writable configuration overlay and coalesced statistics reports, not through periodic polling.
 
 ---
 

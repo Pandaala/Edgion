@@ -481,7 +481,7 @@ impl EdgionConfigDataRefGrantTestSuite {
     // Scenario I-2b: activeProfileRef cross-namespace without grant
     //
     // EdgionPlugins 'ecd-active-profile-ref-cross-ns' (ns=edgion-test) has a
-    // GlobalAccessControl plugin with an activeProfileRef pointing to
+    // RequestAccessPolicy plugin with an activeProfileRef pointing to
     // EdgionConfigData 'ecd-active-selector' (type: Selector) in edgion-default.
     // No ReferenceGrant is present.
     // Expected: ResolvedRefs=False(RefNotPermitted) on the controller status.
@@ -494,7 +494,7 @@ impl EdgionConfigDataRefGrantTestSuite {
     fn test_active_profile_ref_no_grant_ref_not_permitted() -> TestCase {
         TestCase::new(
             "active_profile_ref_no_grant_ref_not_permitted",
-            "Cross-ns GlobalAccessControl activeProfileRef without ReferenceGrant → ResolvedRefs=False(RefNotPermitted)",
+            "Cross-ns RequestAccessPolicy activeProfileRef without ReferenceGrant → ResolvedRefs=False(RefNotPermitted)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

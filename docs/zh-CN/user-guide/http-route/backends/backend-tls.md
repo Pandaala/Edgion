@@ -12,7 +12,15 @@ Client → [TLS] → Gateway → [TLS] → Backend
 
 `BackendTLSPolicy` 是标准 Gateway API 资源（非 Edgion 扩展）。Edgion 内部将其作为 `gateway.networking.k8s.io/v1` 处理。对于只提供旧版 `v1alpha3` API 的集群，会通过回退机制接受并转换为同一内部模型；如果集群同时提供两个版本，建议优先使用 `v1`。
 
+## TLS 后端支持
+
+BoringSSL 是目前唯一受支持的 Gateway TLS 后端。保留的 rustls Cargo feature
+仅作为未来开发入口，不提供构建、部署或 `BackendTLSPolicy` 行为保证。本页记录的
+所有配置都应使用默认的 BoringSSL Gateway。
+
 ## 配置 BackendTLSPolicy
+
+以下自定义 CA 示例要求使用 BoringSSL Gateway。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -43,9 +51,9 @@ spec:
 | `targetRefs[].name` | String | **必填** | Service 名称 |
 | `targetRefs[].sectionName` | String | 无 | 可选的 Service 端口名称，用于将策略限定到单个端口 |
 | `validation.hostname` | String | **必填** | 用于 TLS SNI 和证书验证的主机名 |
-| `validation.caCertificateRefs` | Array\<Object\> | 无 | CA 引用（Secret 或 ConfigMap），与 `wellKnownCACertificates` 互斥 |
+| `validation.caCertificateRefs` | Array\<Object\> | 无 | CA 引用（Secret 或 ConfigMap），仅 BoringSSL 支持；与 `wellKnownCACertificates` 互斥 |
 | `validation.wellKnownCACertificates` | Enum | 无 | 设为 `System` 以信任系统 CA 包，与 `caCertificateRefs` 互斥 |
-| `validation.subjectAltNames` | Array\<Object\> | 无 | SAN 允许列表；若设置，后端证书必须至少匹配其中一项 |
+| `validation.subjectAltNames` | Array\<Object\> | 无 | 附加 SAN 允许列表；仅 BoringSSL 构建会执行。使用 BoringSSL 时，若设置，后端证书必须至少匹配其中一项 |
 | `validation.subjectAltNames[].type` | Enum | **必填** | 允许值：`Hostname` \| `URI` |
 | `validation.subjectAltNames[].hostname` | String | 无 | DNS 名称（`type: Hostname` 时），支持通配符（`*.example.com`） |
 | `validation.subjectAltNames[].uri` | String | 无 | 完整 URI（`type: URI` 时），例如 SPIFFE ID |
@@ -61,7 +69,7 @@ spec:
 
 CA 引用不存在或缺少 `ca.crt` 键时，`ResolvedRefs` 状态会被设为 `InvalidCACertificateRef`。
 
-## CA 证书 Secret
+## CA 证书 Secret（仅 BoringSSL）
 
 ```yaml
 apiVersion: v1
@@ -76,7 +84,11 @@ data:
 
 ## Subject Alternative Name 验证
 
-配置 `subjectAltNames` 后，Gateway 在 TLS 握手时验证后端证书的 SAN。不匹配则拒绝连接。
+> **TLS 后端能力限制**
+>
+> 附加 `subjectAltNames` 校验要求使用受支持的 BoringSSL Gateway 后端。
+
+使用 BoringSSL 时，配置 `subjectAltNames` 后，Gateway 会在 TLS 握手期间验证后端证书的 SAN。不匹配则拒绝连接。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -108,9 +120,9 @@ spec:
 - 任一条目匹配即通过
 - 不配置 `subjectAltNames` 时保持默认行为（仅使用 hostname 对 CA 进行验证）
 
-## 对后端的双向 TLS（mTLS）
+## 对后端的双向 TLS（mTLS，仅 BoringSSL）
 
-若要向后端提供客户端证书（mTLS），可通过 Edgion 扩展选项 `edgion.io/client-certificate-ref` 引用客户端证书 Secret。该 Secret 必须与 `BackendTLSPolicy` 位于同一命名空间。
+若要向后端提供客户端证书（mTLS），请使用 BoringSSL Gateway，并通过 Edgion 扩展选项 `edgion.io/client-certificate-ref` 引用客户端证书 Secret。该 Secret 必须与 `BackendTLSPolicy` 位于同一命名空间。
 
 > **🔌 Edgion 扩展**
 >
@@ -140,7 +152,7 @@ spec:
 
 ## 示例
 
-### 示例 1：使用私有 CA 的内部服务 TLS
+### 示例 1：使用私有 CA 的内部服务 TLS（仅 BoringSSL）
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

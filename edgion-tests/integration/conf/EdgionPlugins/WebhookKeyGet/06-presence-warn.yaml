@@ -3,8 +3,8 @@
 # An origin header (X-Trace-Id) with presence: warnIfMissing.
 # Test sends a request WITHOUT X-Trace-Id -> the field is omitted from the
 # outbound request, a PluginLog alert is written, and the request PROCEEDS
-# (webhook still resolves successfully). allowDegradation is irrelevant here:
-# warnIfMissing never escalates to a failure.
+# (webhook still resolves successfully): warnIfMissing never escalates to a
+# failure.
 # Backend via Service + EndpointSlice.
 apiVersion: v1
 kind: Service
@@ -59,8 +59,8 @@ spec:
           - name: X-Trace-Id
             presence: warnIfMissing
     timeoutMs: 5000
-    successStatusCodes: [200]
-    allowDegradation: false
+    success:
+      statusCodes: [200]
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1
@@ -69,18 +69,20 @@ metadata:
   name: wh6-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh6_user_id
+      from: ctx
+      name: wh6_user_id
   requestPlugins:
     - enable: true
-      type: CtxSet
+      type: WebhookKeyGet
       config:
         vars:
           - name: wh6_user_id
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh6-resolver"
-              extract:
-                source: body
-                path: "data.user_id"
+            webhookRef: "edgion-default/wh6-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
             default: "fallback-user"
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -88,8 +90,6 @@ kind: HTTPRoute
 metadata:
   name: wh6-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh6_user_id"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

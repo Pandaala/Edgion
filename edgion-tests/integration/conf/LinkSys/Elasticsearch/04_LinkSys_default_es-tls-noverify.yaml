@@ -1,0 +1,24 @@
+# verify=false is honored end-to-end for a provider that can disable it (P1#6 / M-A1).
+#
+# Same private-cert TLS endpoint as es-tls-test, but with NO CA configured and
+# verify: false. Elasticsearch uses the reqwest stack (provider_can_disable=true),
+# so the resolver honors verify=false (danger_accept_invalid_certs) instead of
+# rejecting it — there is no production/EDGION_ENV gate after M-A1. The handshake
+# therefore succeeds against the private (publicly-untrusted) cert WITHOUT a CA,
+# which is exactly what es-tls-systemca proves is impossible when verify stays on.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-tls-noverify
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "https://127.0.0.1:19201"
+    tls:
+      enabled: true
+      verify: false
+    timeout:
+      connect: 5000
+      request: 30000

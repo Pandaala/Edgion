@@ -3,10 +3,6 @@ kind: Service
 metadata:
   name: strict-sp-hc
   namespace: edgion-test
-  annotations:
-    edgion.io/health-check: "active:\n  type: http\n  path: /test\n  interval: 1s\n\
-      \  timeout: 500ms\n  healthyThreshold: 1\n  unhealthyThreshold: 1\n  expectedStatuses:\n\
-      \    - 200\n"
 spec:
   sessionAffinity: ClientIP
   ports:
@@ -15,4 +11,4 @@ spec:
     protocol: TCP
   selector:
     app: edgion-test-server
-    edgion.io/sticky-single: "true"
+    edgion.io/sticky-single: 'true'

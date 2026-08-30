@@ -105,6 +105,18 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local test_name="$1" haystack="$2" needle="$3"
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
+    if echo "$haystack" | grep -q "$needle"; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "$test_name (unexpectedly found '$needle')"
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        log_success "$test_name"
+    fi
+}
+
 assert_non_empty() {
     local test_name="$1" value="$2"
     TESTS_TOTAL=$((TESTS_TOTAL + 1))
@@ -362,6 +374,25 @@ RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/nons_noname/ping")
 assert_json_failure "PING non-existent client returns error" "$RESP"
 assert_contains "Error mentions 'not found'" "$RESP" "not found"
 
+# ── 8b. Outbound TLS verify=false is always rejected for Redis ──────────────
+# fred's rustls connector always verifies; the outbound-TLS resolver rejects
+# verify=false unconditionally (provider_can_disable=false). The reject happens
+# at connector construction, so the CRD still syncs but NO runtime client is
+# registered. Fixture: conf/LinkSys/Redis/02_LinkSys_default_redis-tls-reject.yaml
+log_info "─── 8b. TLS verify=false reject ───"
+REJECT_CLIENT="default_redis-tls-reject"
+
+RESP=$(gw_api GET "/configclient/LinkSys?namespace=default&name=redis-tls-reject")
+assert_json_success "redis-tls-reject CRD synced to Gateway (controller admission is lenient)" "$RESP"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/clients")
+assert_json_success "Redis clients endpoint reachable (reject check)" "$RESP"
+assert_not_contains "redis-tls-reject client NOT registered (verify=false refused)" "$RESP" "default/redis-tls-reject"
+
+RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/${REJECT_CLIENT}/ping")
+assert_json_failure "PING redis-tls-reject fails (client was never built)" "$RESP"
+assert_contains "redis-tls-reject ping error mentions 'not found'" "$RESP" "not found"
+
 # ── 9. RateLimitRedis plugin integration ───────────────────────────────────
 log_info "─── 9. RateLimitRedis Plugin ───"
 RESP=$(gw_api GET "/configclient/EdgionPlugins?namespace=edgion-default&name=rate-limit-redis-main")
@@ -370,6 +401,7 @@ assert_json_success "RateLimitRedis main plugin synced" "$RESP"
 RATE_KEY_MAIN="rlr-main-$(date +%s%N)"
 for i in 1 2 3; do
     gateway_http_request "/test/rate-limit-redis/allow/echo?req=${i}" \
+        -H "X-Rate-Apply: yes" \
         -H "X-Rate-Key: ${RATE_KEY_MAIN}"
     assert_eq "RateLimitRedis allow request ${i} status" "200" "$HTTP_STATUS"
     assert_eq "RateLimitRedis allow request ${i} limit header" "3" "$(get_resp_header "X-RateLimit-Limit")"
@@ -377,6 +409,7 @@ for i in 1 2 3; do
 done
 
 gateway_http_request "/test/rate-limit-redis/allow/echo?req=4" \
+    -H "X-Rate-Apply: yes" \
     -H "X-Rate-Key: ${RATE_KEY_MAIN}"
 assert_eq "RateLimitRedis over-limit request returns 429" "429" "$HTTP_STATUS"
 assert_contains "RateLimitRedis over-limit body message" "$HTTP_BODY" "Redis rate limit exceeded"
@@ -389,18 +422,21 @@ RATE_KEY_A="rlr-a-$(date +%s%N)"
 RATE_KEY_B="rlr-b-$(date +%s%N)"
 for i in 1 2 3; do
     gateway_http_request "/test/rate-limit-redis/allow/isolation-a?req=${i}" \
+        -H "X-Rate-Apply: yes" \
         -H "X-Rate-Key: ${RATE_KEY_A}"
     assert_eq "RateLimitRedis key A request ${i} status" "200" "$HTTP_STATUS"
 done
 gateway_http_request "/test/rate-limit-redis/allow/isolation-a?req=4" \
+    -H "X-Rate-Apply: yes" \
     -H "X-Rate-Key: ${RATE_KEY_A}"
 assert_eq "RateLimitRedis key A request 4 blocked" "429" "$HTTP_STATUS"
 gateway_http_request "/test/rate-limit-redis/allow/isolation-b?req=1" \
+    -H "X-Rate-Apply: yes" \
     -H "X-Rate-Key: ${RATE_KEY_B}"
 assert_eq "RateLimitRedis key B still allowed after key A exhausted" "200" "$HTTP_STATUS"
 
-gateway_http_request "/test/rate-limit-redis/allow/no-key"
-assert_eq "RateLimitRedis missing key allow policy" "200" "$HTTP_STATUS"
+gateway_http_request "/test/rate-limit-redis/allow/condition-bypass"
+assert_eq "RateLimitRedis false run condition bypasses limiter" "200" "$HTTP_STATUS"
 
 gateway_http_request "/test/rate-limit-redis/missing-deny/no-key"
 assert_eq "RateLimitRedis missing key deny policy" "429" "$HTTP_STATUS"

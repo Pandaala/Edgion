@@ -7,6 +7,7 @@ use crate::runtime::gateway_info::GatewayInfo;
 use crate::runtime::store::listener_gateway_info::{format_gateway_key, GatewayInfoIndex};
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::gateway::AllowedRoutes;
+use std::sync::Arc;
 
 /// Check if request hostname matches listener hostname constraint.
 ///
@@ -97,7 +98,7 @@ pub fn check_allowed_routes(
 /// 3. **Enforce HTTP Listener Isolation** — hostname matching + more-specific check
 /// 4. **AllowedRoutes** — namespace and kind filtering
 ///
-/// Returns `Some(GatewayInfo)` for the first matching gateway/listener,
+/// Returns the shared `Arc<GatewayInfo>` for the first matching gateway/listener,
 /// or `None` if no match is found.
 pub fn check_gateway_listener_match(
     parent_refs: &[ParentReference],
@@ -105,7 +106,7 @@ pub fn check_gateway_listener_match(
     request_hostname: &str,
     route_ns: &str,
     route_kind: &str,
-) -> Option<GatewayInfo> {
+) -> Option<Arc<GatewayInfo>> {
     for pr in parent_refs {
         let parent_ns = pr.namespace.as_deref().unwrap_or(route_ns);
         let gateway_key = format_gateway_key(parent_ns, &pr.name);
@@ -128,7 +129,7 @@ pub fn check_gateway_listener_match(
                 if !check_allowed_routes(&entry.allowed_routes, route_ns, route_kind, parent_ns) {
                     continue;
                 }
-                return Some(entry.info.clone());
+                return Some(Arc::clone(&entry.info));
             }
             continue;
         }
@@ -152,7 +153,7 @@ pub fn check_gateway_listener_match(
                 continue;
             }
 
-            return Some(entry.info.clone());
+            return Some(Arc::clone(&entry.info));
         }
     }
 

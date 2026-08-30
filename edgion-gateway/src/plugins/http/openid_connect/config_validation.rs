@@ -5,23 +5,23 @@ impl OpenidConnect {
         value.split(',').next().unwrap_or("").trim()
     }
 
+    /// Scheme used to expand a path-form `redirectUri` / `postLogoutRedirectUri`.
+    ///
+    /// Derived from the listener's real TLS state, never from `X-Forwarded-Proto`:
+    /// nothing strips or validates that header on this path, so trusting it would
+    /// let an anonymous request downgrade the callback URL advertised to the IdP.
+    /// This mirrors the `request_host` decision to ignore `X-Forwarded-Host`.
+    /// Deployments terminating TLS in front of the gateway must configure an
+    /// absolute URL instead. `https` stays the fallback when the connection state
+    /// is unavailable.
     pub(super) fn request_scheme(session: &dyn PluginSession) -> String {
-        if let Some(v) = session.header_value("x-forwarded-proto") {
-            let proto = Self::trim_forwarded_header(&v);
-            if !proto.is_empty() {
-                return proto.to_ascii_lowercase();
-            }
+        match session.downstream_is_tls() {
+            Some(false) => "http".to_string(),
+            _ => "https".to_string(),
         }
-        "https".to_string()
     }
 
     pub(super) fn request_host(session: &dyn PluginSession) -> Option<String> {
-        if let Some(v) = session.header_value("x-forwarded-host") {
-            let host = Self::trim_forwarded_header(&v);
-            if !host.is_empty() {
-                return Some(host.to_string());
-            }
-        }
         if let Some(v) = session.header_value("host") {
             let host = Self::trim_forwarded_header(&v);
             if !host.is_empty() {
@@ -31,24 +31,8 @@ impl OpenidConnect {
         None
     }
 
-    pub(super) fn callback_path(&self) -> String {
-        let configured = self
-            .config
-            .redirect_uri
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .unwrap_or("/.edgion/oidc/callback");
-        let raw_path = if configured.starts_with('/') {
-            configured.to_string()
-        } else if let Ok(url) = Url::parse(configured) {
-            url.path().to_string()
-        } else {
-            "/.edgion/oidc/callback".to_string()
-        };
-        // Normalize the path so config-side and request-side inhabit the same
-        // normalized space. See §3.5 of the URI normalization spec.
-        let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
-        normalize_config_path(&raw_path, path_cfg)
+    pub(super) fn callback_path(&self) -> &str {
+        &self.callback_path
     }
 
     pub(super) fn resolve_redirect_uri(&self, session: &dyn PluginSession) -> VerifyResult<String> {

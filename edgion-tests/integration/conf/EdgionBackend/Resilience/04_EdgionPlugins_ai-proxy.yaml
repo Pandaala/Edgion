@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-resilience-proxy
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: AiProxy
+      config:
+        backendSelection:
+          type: Priority

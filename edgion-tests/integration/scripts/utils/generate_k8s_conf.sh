@@ -218,7 +218,10 @@ main() {
     
     # 3.  YAML 
     while IFS= read -r -d '' file; do
-        ((total++))
+        # Use assignment, not `((total++))`: post-increment returns exit status 1
+        # when the old value is 0, which `set -e` (line 19) turns into a silent death
+        # on bash 5 (Linux/CI). bash 3.2 (macOS) does not enforce -e here.
+        total=$((total + 1))
         
         # 
         local rel_path="${file#$CONF_DIR/}"
@@ -227,7 +230,7 @@ main() {
         
         #  Endpoint/EndpointSlice
         if is_endpoint_resource "$file"; then
-            ((skipped_endpoint_like++))
+            skipped_endpoint_like=$((skipped_endpoint_like + 1))
             warn " Endpoint/EndpointSlice: $rel_path"
             continue
         fi
@@ -237,12 +240,12 @@ main() {
         
         #  Service
         if is_service "$file"; then
-            ((services++))
+            services=$((services + 1))
             process_service "$file" "$output_file" "$tool"
             info " Service: $rel_path ( selector)"
         else
             # 
-            ((copied++))
+            copied=$((copied + 1))
             cp "$file" "$output_file"
         fi
         

@@ -3,19 +3,307 @@
 //! Arguments are popped from the VM stack, results pushed back.
 //! Each builtin maps to exactly one PluginSession API call.
 
+use bytes::Bytes;
 use futures::StreamExt;
 use indexmap::IndexMap;
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::runtime::store::get_redis_client;
+use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
 use crate::plugins::runtime::{PluginLog, PluginSession};
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
-use super::value::Value;
-use super::vm::{Vm, VmState};
+use super::value::{BodyValue, Value};
+use super::vm::{body_access_error, RuntimeString, Vm, VmState};
+
+struct OpaqueBodyUpload {
+    body: reqwest::Body,
+    tracking: Arc<OpaqueBodyUploadState>,
+}
+
+struct OpaqueBodyUploadState {
+    len: u64,
+    fetched: AtomicU64,
+    read_error: Mutex<Option<BodyReadError>>,
+    cancelled: AtomicBool,
+    ambiguous_read_cancelled: AtomicBool,
+    reader: Mutex<OpaqueBodyReaderState>,
+    state_changed: Notify,
+}
+
+struct OpaqueBodyReaderState {
+    reader: Option<Box<dyn RequestBodySnapshotReader>>,
+    in_flight: bool,
+    finished: bool,
+    abort_handle: Option<tokio::task::AbortHandle>,
+}
+
+struct AbortTaskOnDrop<T> {
+    task: Option<tokio::task::JoinHandle<T>>,
+}
+
+impl<T> AbortTaskOnDrop<T> {
+    fn new(task: tokio::task::JoinHandle<T>) -> Self {
+        Self { task: Some(task) }
+    }
+
+    fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.task.as_ref().expect("task is present").abort_handle()
+    }
+
+    async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        let result = self.task.as_mut().expect("task is present").await;
+        self.task.take();
+        result
+    }
+}
+
+impl<T> Drop for AbortTaskOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+impl OpaqueBodyUploadState {
+    async fn cancel_and_release_reader(&self) {
+        self.cancelled.store(true, Ordering::Release);
+
+        loop {
+            let changed = self.state_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let settled_reader = {
+                let mut state = self.reader.lock();
+                if state.in_flight {
+                    if let Some(handle) = &state.abort_handle {
+                        handle.abort();
+                    }
+                    None
+                } else {
+                    state.finished = true;
+                    Some(state.reader.take())
+                }
+            };
+            if let Some(reader) = settled_reader {
+                drop(reader);
+                return;
+            }
+            changed.as_mut().await;
+        }
+    }
+}
+
+struct InFlightBodyReader {
+    shared: Arc<OpaqueBodyUploadState>,
+    reader: Option<Box<dyn RequestBodySnapshotReader>>,
+    settled: bool,
+}
+
+impl InFlightBodyReader {
+    fn reader_mut(&mut self) -> &mut dyn RequestBodySnapshotReader {
+        self.reader.as_deref_mut().expect("in-flight reader is present")
+    }
+
+    fn return_to_slot(mut self) {
+        let mut state = self.shared.reader.lock();
+        state.reader = self.reader.take();
+        state.in_flight = false;
+        state.abort_handle = None;
+        self.settled = true;
+        drop(state);
+        self.shared.state_changed.notify_waiters();
+    }
+
+    fn finish(mut self) {
+        let reader = self.reader.take();
+        drop(reader);
+        let mut state = self.shared.reader.lock();
+        state.in_flight = false;
+        state.finished = true;
+        state.abort_handle = None;
+        self.settled = true;
+        drop(state);
+        self.shared.state_changed.notify_waiters();
+    }
+}
+
+impl Drop for InFlightBodyReader {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+
+        let reader = self.reader.take();
+        drop(reader);
+        self.shared.ambiguous_read_cancelled.store(true, Ordering::Release);
+        let mut state = self.shared.reader.lock();
+        state.in_flight = false;
+        state.finished = true;
+        state.abort_handle = None;
+        drop(state);
+        self.shared.state_changed.notify_waiters();
+    }
+}
+
+async fn read_opaque_body_chunk_task(mut in_flight: InFlightBodyReader) -> Result<Option<Bytes>, BodyReadError> {
+    let shared = Arc::clone(&in_flight.shared);
+    let read_result = in_flight.reader_mut().next_chunk().await;
+
+    let mut output = None;
+    let mut stream_error = None;
+    match read_result {
+        Ok(Some(chunk)) => {
+            let chunk_len = if chunk.is_empty() {
+                None
+            } else {
+                u64::try_from(chunk.len()).ok()
+            };
+            match chunk_len
+                .and_then(|chunk_len| shared.fetched.load(Ordering::Relaxed).checked_add(chunk_len))
+                .filter(|total| *total <= shared.len)
+            {
+                Some(total) => {
+                    shared.fetched.store(total, Ordering::Relaxed);
+                    output = Some(chunk);
+                }
+                None => stream_error = Some(BodyReadError::Incomplete),
+            }
+        }
+        Ok(None) => {
+            if shared.fetched.load(Ordering::Relaxed) != shared.len {
+                stream_error = Some(BodyReadError::Incomplete);
+            }
+        }
+        Err(error) => stream_error = Some(error),
+    }
+
+    if let Some(error) = &stream_error {
+        *shared.read_error.lock() = Some(error.clone());
+    }
+    let was_cancelled = shared.cancelled.load(Ordering::Acquire);
+    if was_cancelled || output.is_none() {
+        in_flight.finish();
+    } else {
+        in_flight.return_to_slot();
+    }
+
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
+    if was_cancelled {
+        return Ok(None);
+    }
+    Ok(output)
+}
+
+async fn next_opaque_body_chunk(
+    shared: Arc<OpaqueBodyUploadState>,
+) -> Result<Option<(Bytes, Arc<OpaqueBodyUploadState>)>, BodyReadError> {
+    let in_flight = {
+        let mut state = shared.reader.lock();
+        if shared.cancelled.load(Ordering::Acquire) || state.finished {
+            let reader = state.reader.take();
+            state.finished = true;
+            drop(state);
+            drop(reader);
+            return Ok(None);
+        }
+        let Some(reader) = state.reader.take() else {
+            state.finished = true;
+            let error = BodyReadError::Incomplete;
+            *shared.read_error.lock() = Some(error.clone());
+            return Err(error);
+        };
+        state.in_flight = true;
+        InFlightBodyReader {
+            shared: Arc::clone(&shared),
+            reader: Some(reader),
+            settled: false,
+        }
+    };
+    if shared.cancelled.load(Ordering::Acquire) {
+        shared.ambiguous_read_cancelled.store(true, Ordering::Release);
+        in_flight.finish();
+        return Ok(None);
+    }
+
+    let task = AbortTaskOnDrop::new(tokio::spawn(read_opaque_body_chunk_task(in_flight)));
+    let abort_handle = task.abort_handle();
+    {
+        let mut state = shared.reader.lock();
+        if state.in_flight {
+            state.abort_handle = Some(abort_handle.clone());
+            if shared.cancelled.load(Ordering::Acquire) {
+                abort_handle.abort();
+            }
+        }
+    }
+
+    match task.join().await {
+        Ok(Ok(Some(chunk))) => Ok(Some((chunk, shared))),
+        Ok(Ok(None)) => Ok(None),
+        Ok(Err(error)) => Err(error),
+        Err(error) if error.is_cancelled() && shared.cancelled.load(Ordering::Acquire) => Ok(None),
+        Err(_) => {
+            let error = BodyReadError::Incomplete;
+            *shared.read_error.lock() = Some(error.clone());
+            Err(error)
+        }
+    }
+}
+
+fn opaque_body_state(reader: Box<dyn RequestBodySnapshotReader>) -> Arc<OpaqueBodyUploadState> {
+    let len = reader.len();
+    Arc::new(OpaqueBodyUploadState {
+        len,
+        fetched: AtomicU64::new(0),
+        read_error: Mutex::new(None),
+        cancelled: AtomicBool::new(false),
+        ambiguous_read_cancelled: AtomicBool::new(false),
+        reader: Mutex::new(OpaqueBodyReaderState {
+            reader: Some(reader),
+            in_flight: false,
+            finished: false,
+            abort_handle: None,
+        }),
+        state_changed: Notify::new(),
+    })
+}
+
+fn opaque_body_stream(
+    tracking: Arc<OpaqueBodyUploadState>,
+) -> impl futures::Stream<Item = Result<Bytes, BodyReadError>> + Send {
+    futures::stream::try_unfold(tracking, next_opaque_body_chunk)
+}
+
+fn opaque_body_upload(reader: Box<dyn RequestBodySnapshotReader>) -> OpaqueBodyUpload {
+    let tracking = opaque_body_state(reader);
+    let stream = opaque_body_stream(Arc::clone(&tracking));
+    OpaqueBodyUpload {
+        body: reqwest::Body::wrap_stream(stream),
+        tracking,
+    }
+}
+
+async fn settle_opaque_body_upload(tracking: &OpaqueBodyUploadState, reserved: u64) -> (u64, Option<BodyReadError>) {
+    tracking.cancel_and_release_reader().await;
+    let error = tracking.read_error.lock().clone();
+    let refund = if tracking.ambiguous_read_cancelled.load(Ordering::Acquire) {
+        0
+    } else {
+        let fetched = tracking.fetched.load(Ordering::Acquire);
+        reserved.saturating_sub(fetched)
+    };
+    (refund, error)
+}
 
 /// Build a `Map { ok: true, value: <val>, error: nil }` success response for redis.* builtins.
 fn redis_ok(value: Value) -> Value {
@@ -54,6 +342,11 @@ fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
 fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     check_string_len(&s, limit)?;
     Ok(Value::Str(s.into()))
+}
+
+#[cfg(test)]
+fn body_bytes_to_value(bytes: &[u8], limit: usize) -> Result<Value, RuntimeError> {
+    checked_value_str(String::from_utf8_lossy(bytes).into_owned(), limit)
 }
 
 /// Silently truncate `s` to at most `limit` UTF-8 bytes, walking back to the
@@ -105,24 +398,26 @@ impl Vm {
         match id {
             // ===== req.* read =====
             BuiltinId::ReqHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqMethod => checked_value_str(session.get_method().to_string(), self.limits.max_string_len),
             BuiltinId::ReqPath => checked_value_str(session.get_path().to_string(), self.limits.max_string_len),
             BuiltinId::ReqQuery => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqQueryString => checked_value_opt_str(session.get_query(), self.limits.max_string_len),
             BuiltinId::ReqCookie => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqClientIp => checked_value_str(session.client_addr().to_string(), self.limits.max_string_len),
-            BuiltinId::ReqRemoteIp => checked_value_str(session.remote_addr().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqDirectPeerIp => {
+                checked_value_str(session.direct_peer_ip().to_string(), self.limits.max_string_len)
+            }
+            BuiltinId::ReqRemoteIp => checked_value_str(session.remote_ip().to_string(), self.limits.max_string_len),
             BuiltinId::ReqPathParam => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqHeaderNames => {
@@ -153,50 +448,50 @@ impl Vm {
                 checked_value_opt_str(session.header_value("Content-Type"), self.limits.max_string_len)
             }
             BuiltinId::ReqHasHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 Ok(Value::Bool(session.header_value(&name).is_some()))
             }
 
             // ===== req.* mutation =====
             BuiltinId::ReqSetHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .set_request_header(&name, &value)
                     .map_err(|e| api_error("req.set_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqAppendHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .append_request_header(&name, &value)
                     .map_err(|e| api_error("req.append_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqRemoveHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 session
                     .remove_request_header(&name)
                     .map_err(|e| api_error("req.remove_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetUri => {
-                let uri = state.pop()?.into_string();
+                let uri = state.pop()?.runtime_string()?;
                 session
                     .set_upstream_uri(&uri)
                     .map_err(|e| api_error("req.set_uri", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetHost => {
-                let host = state.pop()?.into_string();
+                let host = state.pop()?.runtime_string()?;
                 session
                     .set_upstream_host(&host)
                     .map_err(|e| api_error("req.set_host", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::ReqSetMethod => {
-                let method = state.pop()?.into_string();
+                let method = state.pop()?.runtime_string()?;
                 session
                     .set_upstream_method(&method)
                     .map_err(|e| api_error("req.set_method", e))?;
@@ -209,11 +504,11 @@ impl Vm {
                 None => Ok(Value::Nil),
             },
             BuiltinId::RespHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_response_header(&name), self.limits.max_string_len)
             }
             BuiltinId::RespHasHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 Ok(Value::Bool(session.get_response_header(&name).is_some()))
             }
 
@@ -258,10 +553,13 @@ impl Vm {
                 let code = match &code_val {
                     Value::Int(n) => {
                         let c = *n;
-                        if !(100..=599).contains(&c) {
+                        if u16::try_from(c)
+                            .ok()
+                            .is_none_or(|status| !edgion_resources::http_status::is_valid_final_http_status(status))
+                        {
                             return Err(RuntimeError::ApiError {
                                 function: "resp.set_status".into(),
-                                message: format!("invalid status code: {} (must be 100-599)", c),
+                                message: format!("invalid final status code: {} (must be 200-599)", c),
                             });
                         }
                         c as u16
@@ -282,23 +580,23 @@ impl Vm {
 
             // ===== resp.* mutation =====
             BuiltinId::RespSetHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .set_response_header(&name, &value)
                     .map_err(|e| api_error("resp.set_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::RespAppendHeader => {
-                let value = state.pop()?.into_string();
-                let name = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let name = state.pop()?.runtime_string()?;
                 session
                     .append_response_header(&name, &value)
                     .map_err(|e| api_error("resp.append_header", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::RespRemoveHeader => {
-                let name = state.pop()?.into_string();
+                let name = state.pop()?.runtime_string()?;
                 session
                     .remove_response_header(&name)
                     .map_err(|e| api_error("resp.remove_header", e))?;
@@ -307,24 +605,24 @@ impl Vm {
 
             // ===== ctx.* =====
             BuiltinId::CtxGet => {
-                let key = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_ctx_var(&key), self.limits.max_string_len)
             }
             BuiltinId::CtxSet => {
-                let value = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
                 session.set_ctx_var(&key, &value).map_err(|e| api_error("ctx.set", e))?;
                 Ok(Value::Nil)
             }
             BuiltinId::CtxRemove => {
-                let key = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
                 session.remove_ctx_var(&key).map_err(|e| api_error("ctx.remove", e))?;
                 Ok(Value::Nil)
             }
 
             // ===== Utilities =====
             BuiltinId::Log => {
-                let msg = state.pop()?.into_string();
+                let msg = state.pop()?.runtime_string()?;
                 log.push_sensitive(&msg);
                 Ok(Value::Nil)
             }
@@ -403,7 +701,7 @@ impl Vm {
             }
             BuiltinId::ToStr => {
                 let v = state.pop()?;
-                let s = v.into_string();
+                let s = v.runtime_string()?;
                 check_string_len(&s, self.limits.max_string_len)?;
                 Ok(Value::Str(s.into()))
             }
@@ -416,27 +714,27 @@ impl Vm {
                 }
             }
             BuiltinId::ToUpper => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let result = s.to_uppercase();
                 check_string_len(&result, self.limits.max_string_len)?;
                 Ok(Value::Str(result.into()))
             }
             BuiltinId::ToLower => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let result = s.to_lowercase();
                 check_string_len(&result, self.limits.max_string_len)?;
                 Ok(Value::Str(result.into()))
             }
             BuiltinId::Base64Encode => {
                 use base64::Engine;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
                 check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded.into()))
             }
             BuiltinId::Base64Decode => {
                 use base64::Engine;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 match base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
                     Ok(bytes) => {
                         let decoded = String::from_utf8_lossy(&bytes).to_string();
@@ -455,7 +753,7 @@ impl Vm {
             }
             BuiltinId::UrlEncode => {
                 use std::fmt::Write as _;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let limit = self.limits.max_string_len;
                 // Build the encoded string incrementally and bail as soon as the running
                 // length crosses `max_string_len`, instead of collecting the full result
@@ -500,7 +798,7 @@ impl Vm {
             // for future maintainers considering a rename / semantics change. See
             // `skills/04-review/dsl-builtins/url-decode-form-semantics.md`.
             BuiltinId::UrlDecode => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let mut result = Vec::new();
                 let bytes = s.as_bytes();
                 let mut i = 0;
@@ -535,18 +833,18 @@ impl Vm {
             }
             BuiltinId::Sha256 => {
                 use sha2::Digest;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let hash = sha2::Sha256::digest(s.as_bytes());
                 checked_value_str(hex::encode(hash), self.limits.max_string_len)
             }
             BuiltinId::Md5 => {
                 use md5::Digest;
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let hash = md5::Md5::digest(s.as_bytes());
                 checked_value_str(hex::encode(hash), self.limits.max_string_len)
             }
             BuiltinId::Trim => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let trimmed = s.trim();
                 if trimmed.len() == s.len() {
                     Ok(Value::Str(s.into()))
@@ -555,8 +853,8 @@ impl Vm {
                 }
             }
             BuiltinId::Split => {
-                let delim = state.pop()?.into_string();
-                let s = state.pop()?.into_string();
+                let delim = state.pop()?.runtime_string()?;
+                let s = state.pop()?.runtime_string()?;
                 let estimated = if delim.is_empty() {
                     // split("") inserts "" at both ends: N chars → N+2 parts
                     s.chars().count() + 2
@@ -616,8 +914,8 @@ impl Vm {
                 use hmac::{Hmac, Mac};
                 type HmacSha256 = Hmac<sha2::Sha256>;
 
-                let data = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
+                let data = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
                 let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|e| RuntimeError::ApiError {
                     function: "hmac_sha256".into(),
                     message: format!("invalid key: {}", e),
@@ -626,81 +924,18 @@ impl Vm {
                 let result = hex::encode(mac.finalize().into_bytes());
                 checked_value_str(result, self.limits.max_string_len)
             }
-            BuiltinId::JsonGet => {
-                let path = state.pop()?.into_string();
-                let json_str = state.pop()?.into_string();
-                // Limit JSON parse size to prevent abuse
-                if json_str.len() > self.limits.max_string_len {
-                    return Err(RuntimeError::StringTooLong {
-                        len: json_str.len(),
-                        limit: self.limits.max_string_len,
-                    });
-                }
-                match serde_json::from_str::<serde_json::Value>(&json_str) {
-                    Ok(val) => {
-                        // Simple dot-notation path traversal with depth limit
-                        let mut current = &val;
-                        let segments: Vec<&str> = path.split('.').collect();
-                        if segments.len() > 32 {
-                            return Err(RuntimeError::ApiError {
-                                function: "json_get".into(),
-                                message: "path too deep (max 32 segments)".into(),
-                            });
-                        }
-                        for key in &segments {
-                            match current {
-                                serde_json::Value::Object(map) => {
-                                    current = match map.get(*key) {
-                                        Some(v) => v,
-                                        None => return Ok(Value::Nil),
-                                    };
-                                }
-                                serde_json::Value::Array(arr) => {
-                                    if let Ok(idx) = key.parse::<usize>() {
-                                        current = match arr.get(idx) {
-                                            Some(v) => v,
-                                            None => return Ok(Value::Nil),
-                                        };
-                                    } else {
-                                        return Ok(Value::Nil);
-                                    }
-                                }
-                                _ => return Ok(Value::Nil),
-                            }
-                        }
-                        match current {
-                            serde_json::Value::String(s) => checked_value_str(s.clone(), self.limits.max_string_len),
-                            serde_json::Value::Number(n) => {
-                                if let Some(i) = n.as_i64() {
-                                    Ok(Value::Int(i))
-                                } else {
-                                    Ok(Value::Str(n.to_string().into()))
-                                }
-                            }
-                            serde_json::Value::Bool(b) => Ok(Value::Bool(*b)),
-                            serde_json::Value::Null => Ok(Value::Nil),
-                            other => {
-                                let s = other.to_string();
-                                check_string_len(&s, self.limits.max_string_len)?;
-                                Ok(Value::Str(s.into()))
-                            }
-                        }
-                    }
-                    Err(_) => Ok(Value::Nil),
-                }
-            }
             BuiltinId::Uuid => {
                 let id = uuid::Uuid::new_v4().to_string();
                 Ok(Value::Str(id.into()))
             }
             BuiltinId::HexEncode => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 let encoded = hex::encode(s.as_bytes());
                 check_string_len(&encoded, self.limits.max_string_len)?;
                 Ok(Value::Str(encoded.into()))
             }
             BuiltinId::HexDecode => {
-                let s = state.pop()?.into_string();
+                let s = state.pop()?.runtime_string()?;
                 match hex::decode(&s) {
                     Ok(bytes) => {
                         let decoded = String::from_utf8_lossy(&bytes).to_string();
@@ -711,7 +946,7 @@ impl Vm {
                 }
             }
             BuiltinId::TimeFormat => {
-                let format = state.pop()?.into_string();
+                let format = state.pop()?.runtime_string()?;
                 if format.len() > 256 {
                     return Err(RuntimeError::ApiError {
                         function: "time_format".into(),
@@ -752,8 +987,8 @@ impl Vm {
                 }
             }
             BuiltinId::IpInCidr => {
-                let cidr_str = state.pop()?.into_string();
-                let ip_str = state.pop()?.into_string();
+                let cidr_str = state.pop()?.runtime_string()?;
+                let ip_str = state.pop()?.runtime_string()?;
                 let ip: std::net::IpAddr = match ip_str.parse() {
                     Ok(ip) => ip,
                     Err(_) => return Ok(Value::Bool(false)),
@@ -797,7 +1032,7 @@ impl Vm {
                 Ok(Value::Bool(result))
             }
             BuiltinId::Join => {
-                let delim = state.pop()?.into_string();
+                let delim = state.pop()?.runtime_string()?;
                 let list = state.pop()?;
                 match list {
                     Value::List(items) => {
@@ -813,12 +1048,12 @@ impl Vm {
                 }
             }
             BuiltinId::LogWarn => {
-                let value = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
                 log.push_sensitive(&value);
                 Ok(Value::Nil)
             }
             BuiltinId::LogError => {
-                let value = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
                 log.push_err_sensitive(&value);
                 Ok(Value::Nil)
             }
@@ -835,10 +1070,10 @@ impl Vm {
                 let value_count = total - 1;
                 let mut values: Vec<String> = Vec::with_capacity(value_count);
                 for _ in 0..value_count {
-                    values.push(state.pop()?.into_string());
+                    values.push(state.pop()?.runtime_string()?);
                 }
                 values.reverse();
-                let template = state.pop()?.into_string();
+                let template = state.pop()?.runtime_string()?;
                 let log_args: Vec<crate::plugins::runtime::log::LogArg<'_>> = values
                     .iter()
                     .map(|s| crate::plugins::runtime::log::LogArg::Sensitive(s.as_str()))
@@ -868,6 +1103,11 @@ impl Vm {
             | BuiltinId::RedisHExists => Err(RuntimeError::Internal {
                 message: format!("{:?} must be dispatched via call_builtin_redis, not call_builtin", id),
             }),
+
+            // proxy-body builtins are dispatched asynchronously by the VM before reaching call_builtin
+            BuiltinId::ReqBody | BuiltinId::RespBody => Err(RuntimeError::Internal {
+                message: format!("{:?} must be dispatched via call_builtin_body, not call_builtin", id),
+            }),
         }
     }
 
@@ -876,6 +1116,7 @@ impl Vm {
         &self,
         argc: u8,
         state: &mut VmState,
+        session: &mut dyn PluginSession,
         runtime: &DslRuntime,
     ) -> Result<Value, RuntimeError> {
         if !(3..=5).contains(&(argc as usize)) {
@@ -892,8 +1133,8 @@ impl Vm {
         let url_val = state.pop()?;
         let method_val = state.pop()?;
 
-        let method_str = method_val.into_string();
-        let url_str = url_val.into_string();
+        let method_str = method_val.runtime_string()?;
+        let url_str = url_val.runtime_string()?;
 
         // Reject non-http/https schemes to prevent file://, ftp://, etc.
         let parsed_url = match reqwest::Url::parse(&url_str) {
@@ -927,9 +1168,28 @@ impl Vm {
             }
         }
 
-        let body_str = match body_val {
-            Value::Nil => String::new(),
-            other => other.into_string(),
+        let (opaque_reader, body_str) = match body_val {
+            Value::Body(BodyValue::Request) => {
+                let known_bodyless = session.declares_body() == Some(false);
+                (
+                    Some(
+                        session
+                            .request_body_snapshot_reader(known_bodyless)
+                            .await
+                            .map_err(|error| body_access_error(error.to_string()))?,
+                    ),
+                    None,
+                )
+            }
+            Value::Str(value) => (None, Some(value)),
+            Value::Nil => (None, None),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Str, Body, or Nil",
+                    got: other.type_name(),
+                    operation: "http.call body",
+                });
+            }
         };
 
         let timeout_ms = match timeout_val {
@@ -960,22 +1220,28 @@ impl Vm {
             }
         };
 
-        // When block_private_ips is set, select the guarded client whose redirect
-        // policy re-applies is_ssrf_blocked_ip_literal to every hop.
-        let client = dsl_http_client(runtime.block_private_ips);
-        let mut builder = client
-            .request(method, &url_str)
-            .timeout(std::time::Duration::from_millis(timeout_ms));
-
-        if !body_str.is_empty() {
-            builder = builder.body(body_str);
-        }
-
+        let mut request_headers = Vec::new();
         if let Some(hv) = headers_val {
             match hv {
                 Value::Map(m) => {
-                    for (k, v) in m.iter() {
-                        builder = builder.header(k.as_str(), v.as_str());
+                    for (name, value) in m.iter() {
+                        if opaque_reader.is_some()
+                            && (name.eq_ignore_ascii_case("content-length")
+                                || name.eq_ignore_ascii_case("transfer-encoding"))
+                        {
+                            return Err(RuntimeError::ApiError {
+                                function: "http.call".into(),
+                                message:
+                                    "Content-Length and Transfer-Encoding are managed by http.call for Body payloads"
+                                        .to_string(),
+                            });
+                        }
+                        let value = value.try_as_str().map_err(|error| RuntimeError::TypeError {
+                            expected: "a value implicitly convertible to Str",
+                            got: error.got(),
+                            operation: "http.call headers_map",
+                        })?;
+                        request_headers.push((name.clone(), value.to_string()));
                     }
                 }
                 Value::Nil => {}
@@ -989,6 +1255,39 @@ impl Vm {
             }
         }
 
+        let is_opaque_body = opaque_reader.is_some();
+        // Opaque Body streams are intentionally not replayed across redirects.
+        let client = dsl_http_client(runtime.block_private_ips, !is_opaque_body);
+        let mut builder = client
+            .request(method, &url_str)
+            .timeout(std::time::Duration::from_millis(timeout_ms));
+
+        for (name, value) in request_headers {
+            builder = builder.header(name, value);
+        }
+
+        let mut body_accounting = None;
+        if let Some(reader) = opaque_reader {
+            let upload = opaque_body_upload(reader);
+            let OpaqueBodyUpload { body, tracking } = upload;
+            let physical_cap = session.ctx().request_body_config.max_body_size_bytes;
+            let configured_cap = u64::try_from(runtime.max_request_body_bytes)
+                .map_err(|_| body_access_error("http.call request Body limit cannot be represented as bytes"))?;
+            let effective_cap = configured_cap.min(physical_cap);
+            if tracking.len > effective_cap {
+                return Err(body_access_error(format!(
+                    "request Body exceeds http.call limit of {effective_cap} bytes"
+                )));
+            }
+            state.reserve_body_scan_exact(tracking.len, physical_cap, runtime.max_body_scan_passes)?;
+            builder = builder.body(body).header(reqwest::header::CONTENT_LENGTH, tracking.len);
+            body_accounting = Some((tracking.len, tracking));
+        } else if let Some(body) = body_str {
+            if !body.is_empty() {
+                builder = builder.body(body.to_string());
+            }
+        }
+
         let failure_map = || {
             let mut m = IndexMap::new();
             m.insert("status".to_string(), Value::Int(0));
@@ -997,8 +1296,21 @@ impl Vm {
             Value::Map(Box::new(m))
         };
 
-        let resp = match builder.send().await {
-            Ok(r) => r,
+        let send_result = builder.send().await;
+        if let Some((reserved, tracking)) = body_accounting {
+            // A response head can arrive before an HTTP/2 request body has
+            // finished. Release the snapshot independently of whether Hyper
+            // polls its Body again: Hyper may be blocked on flow-control
+            // capacity while holding one already-buffered chunk.
+            let (refund, read_error) = settle_opaque_body_upload(&tracking, reserved).await;
+            state.refund_body_scan_exact(refund);
+            if let Some(error) = read_error {
+                return Err(body_access_error(error.to_string()));
+            }
+        }
+
+        let resp = match send_result {
+            Ok(response) => response,
             Err(_) => return Ok(failure_map()),
         };
 
@@ -1071,6 +1383,37 @@ impl Vm {
     }
 }
 
+impl Vm {
+    /// Dispatch the proxy-body builtins (`req.body` / `resp.body`).
+    ///
+    /// This performs only a metadata availability check and returns an opaque
+    /// Body token. Availability failures use the VM's dedicated body-access
+    /// marker and are fixed fail-close, independent of `errorPolicy`.
+    pub(crate) async fn call_builtin_body(
+        &self,
+        id: BuiltinId,
+        _state: &mut VmState,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> Result<Value, RuntimeError> {
+        match id {
+            BuiltinId::ReqBody => {
+                let known_bodyless = session.declares_body() == Some(false);
+                session
+                    .request_body_available_len(known_bodyless)
+                    .map_err(|error| body_access_error(error.to_string()))?;
+                Ok(Value::Body(BodyValue::Request))
+            }
+            BuiltinId::RespBody => Err(body_access_error(
+                "proxied upstream response bodies remain streaming-only",
+            )),
+            other => Err(RuntimeError::Internal {
+                message: format!("{:?} is not a body builtin", other),
+            }),
+        }
+    }
+}
+
 /// Resolve a Redis client from the runtime store using the link alias.
 ///
 /// Looks up the alias in `runtime.redis_links` to get the "namespace/name" key,
@@ -1107,8 +1450,8 @@ impl Vm {
             // ===== Basic KV =====
             BuiltinId::RedisGet => {
                 // redis.get(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1128,9 +1471,9 @@ impl Vm {
                     return Ok(redis_err(format!("redis.set requires 3 or 4 arguments, got {}", argc)));
                 }
                 let ttl_ms_val = if argc == 4 { Some(state.pop()?) } else { None };
-                let value = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let value = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1154,8 +1497,8 @@ impl Vm {
             }
             BuiltinId::RedisDel => {
                 // redis.del(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1167,8 +1510,8 @@ impl Vm {
             }
             BuiltinId::RedisExists => {
                 // redis.exists(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1180,8 +1523,8 @@ impl Vm {
             }
             BuiltinId::RedisTtl => {
                 // redis.ttl(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1195,8 +1538,8 @@ impl Vm {
             BuiltinId::RedisExpire => {
                 // redis.expire(link, key, seconds)
                 let seconds_val = state.pop()?;
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let seconds = match &seconds_val {
                     Value::Int(n) => *n,
                     other => {
@@ -1217,8 +1560,8 @@ impl Vm {
             }
             BuiltinId::RedisIncr => {
                 // redis.incr(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1231,8 +1574,8 @@ impl Vm {
             BuiltinId::RedisIncrBy => {
                 // redis.incr_by(link, key, delta)
                 let delta_val = state.pop()?;
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let delta = match &delta_val {
                     Value::Int(n) => *n,
                     other => {
@@ -1255,9 +1598,9 @@ impl Vm {
             // ===== Hash =====
             BuiltinId::RedisHGet => {
                 // redis.hget(link, key, field)
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1273,10 +1616,10 @@ impl Vm {
             }
             BuiltinId::RedisHSet => {
                 // redis.hset(link, key, field, value)
-                let val = state.pop()?.into_string();
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let val = state.pop()?.runtime_string()?;
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1288,9 +1631,9 @@ impl Vm {
             }
             BuiltinId::RedisHDel => {
                 // redis.hdel(link, key, field)
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1302,8 +1645,8 @@ impl Vm {
             }
             BuiltinId::RedisHGetAll => {
                 // redis.hgetall(link, key)
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1332,9 +1675,9 @@ impl Vm {
             }
             BuiltinId::RedisHExists => {
                 // redis.hexists(link, key, field)
-                let field = state.pop()?.into_string();
-                let key = state.pop()?.into_string();
-                let link = state.pop()?.into_string();
+                let field = state.pop()?.runtime_string()?;
+                let key = state.pop()?.runtime_string()?;
+                let link = state.pop()?.runtime_string()?;
                 let client = match resolve_redis_client(&link, runtime) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
@@ -1354,7 +1697,7 @@ impl Vm {
             | BuiltinId::ReqQuery
             | BuiltinId::ReqQueryString
             | BuiltinId::ReqCookie
-            | BuiltinId::ReqClientIp
+            | BuiltinId::ReqDirectPeerIp
             | BuiltinId::ReqRemoteIp
             | BuiltinId::ReqPathParam
             | BuiltinId::ReqHeaderNames
@@ -1407,7 +1750,6 @@ impl Vm {
             | BuiltinId::Trim
             | BuiltinId::Split
             | BuiltinId::HmacSha256
-            | BuiltinId::JsonGet
             | BuiltinId::Uuid
             | BuiltinId::HexEncode
             | BuiltinId::HexDecode
@@ -1417,7 +1759,9 @@ impl Vm {
             | BuiltinId::LogWarn
             | BuiltinId::LogError
             | BuiltinId::LogFmt
-            | BuiltinId::HttpCall => Err(RuntimeError::Internal {
+            | BuiltinId::HttpCall
+            | BuiltinId::ReqBody
+            | BuiltinId::RespBody => Err(RuntimeError::Internal {
                 message: format!("{:?} must not be dispatched via call_builtin_redis", id),
             }),
         }
@@ -1426,7 +1770,8 @@ impl Vm {
 
 /// Return true if `host` is an IP literal that must be blocked to prevent SSRF
 /// (loopback / link-local / RFC 1918 private / RFC 4193 ULA / unspecified).
-/// Hostnames are NOT resolved here — callers rely on network-level egress controls for those.
+/// Hostnames are not resolved by this helper. Guarded clients use the shared
+/// `EgressResolver` to classify their resolved addresses at dial time.
 /// IPv6 zone IDs are stripped per RFC 6874 before parsing.
 ///
 /// Exposed `pub(crate)` so the guarded DSL HTTP client's redirect policy
@@ -1537,5 +1882,263 @@ mod truncate_tests {
         let out = truncate_to_max_string_len(s, 3);
         assert_eq!(out, "aé");
         assert_eq!(out.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::super::validator::{compile_dsl_source, ValidationLimits};
+    use super::super::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
+    use super::body_bytes_to_value;
+    use crate::plugins::http::dsl::lang::bytecode::CompiledScript;
+    use crate::plugins::http::dsl::runtime::DslRuntime;
+    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::{PluginLog, PluginSession};
+    use edgion_resources::filters::PluginRunningResult;
+
+    use super::RuntimeError;
+    use super::Value;
+
+    #[test]
+    fn body_bytes_to_value_decodes_utf8() {
+        let v = body_bytes_to_value(b"hello", 100).unwrap();
+        assert_eq!(v, Value::Str("hello".into()));
+    }
+
+    #[test]
+    fn body_bytes_to_value_lossy_on_invalid_utf8() {
+        // 0xFF is not valid UTF-8 → U+FFFD, not truncated.
+        let v = body_bytes_to_value(&[0x61, 0xFF, 0x62], 100).unwrap();
+        match v {
+            Value::Str(s) => {
+                assert!(s.starts_with('a') && s.ends_with('b'));
+                assert!(s.contains('\u{FFFD}'));
+            }
+            other => panic!("expected Str, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_bytes_to_value_rejects_oversize() {
+        let err = body_bytes_to_value(b"toolong", 3).unwrap_err();
+        assert!(matches!(err, RuntimeError::StringTooLong { .. }));
+    }
+
+    /// Mirrors the manual current-thread-runtime + `block_on(execute_safe(...))`
+    /// harness used throughout `dsl/tests/*` (e.g. `error_policy.rs`) —
+    /// `MockPluginSession` is not `Send`, so these tests use `#[test]`, not
+    /// `#[tokio::test]`.
+    #[test]
+    fn req_body_availability_failure_is_fixed_fail_close() {
+        let b64 = compile_dsl_source("let b = req.body", &ValidationLimits::default()).expect("compile failed");
+        let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+
+        let mut session = MockPluginSession::new();
+        session.expect_declares_body().return_const(Some(true));
+        session
+            .expect_request_body_available_len()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+        session.expect_record_outcome().return_const(());
+
+        let mut log = PluginLog::new("test");
+        let rt = DslRuntime::default();
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(execute_safe(
+                &vm,
+                &mut session as &mut dyn PluginSession,
+                &mut log,
+                &DslErrorPolicy::Ignore,
+                &rt,
+            ));
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: Some("Request body processing failed".to_string()),
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod opaque_body_stream_tests {
+    use super::{
+        opaque_body_state, opaque_body_stream, settle_opaque_body_upload, BodyReadError, RequestBodySnapshotReader,
+    };
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::{poll, StreamExt};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    struct ScriptedReader {
+        len: u64,
+        results: VecDeque<Result<Option<Bytes>, BodyReadError>>,
+    }
+
+    #[async_trait]
+    impl RequestBodySnapshotReader for ScriptedReader {
+        fn len(&self) -> u64 {
+            self.len
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            self.results.pop_front().unwrap_or(Ok(None))
+        }
+    }
+
+    #[tokio::test]
+    async fn midstream_snapshot_failure_is_recorded_after_fetched_bytes() {
+        let reader = ScriptedReader {
+            len: 8,
+            results: VecDeque::from([
+                Ok(Some(Bytes::from_static(b"abcd"))),
+                Err(BodyReadError::StorageFailure),
+            ]),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        assert_eq!(stream.next().await.unwrap().unwrap(), Bytes::from_static(b"abcd"));
+        assert!(matches!(
+            stream.next().await.unwrap(),
+            Err(BodyReadError::StorageFailure)
+        ));
+        assert_eq!(tracking.fetched.load(Ordering::Acquire), 4);
+        assert!(matches!(
+            tracking.read_error.lock().as_ref(),
+            Some(BodyReadError::StorageFailure)
+        ));
+        let (refund, error) = settle_opaque_body_upload(&tracking, 8).await;
+        assert_eq!(refund, 4);
+        assert!(matches!(error, Some(BodyReadError::StorageFailure)));
+    }
+
+    struct PendingReader {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for PendingReader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    #[async_trait]
+    impl RequestBodySnapshotReader for PendingReader {
+        fn len(&self) -> u64 {
+            1
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_stops_and_drops_a_pending_snapshot_reader() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = PendingReader {
+            dropped: Arc::clone(&dropped),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        let next = stream.next();
+        futures::pin_mut!(next);
+        assert!(poll!(next.as_mut()).is_pending());
+
+        let (refund, item) = tokio::join!(settle_opaque_body_upload(&tracking, 1), next.as_mut());
+        assert_eq!(refund, (0, None));
+        assert!(item.is_none());
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(tracking.ambiguous_read_cancelled.load(Ordering::Acquire));
+    }
+
+    struct FirstChunkThenPendingReader {
+        first: bool,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for FirstChunkThenPendingReader {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    #[async_trait]
+    impl RequestBodySnapshotReader for FirstChunkThenPendingReader {
+        fn len(&self) -> u64 {
+            128 * 1024
+        }
+
+        async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
+            if self.first {
+                self.first = false;
+                return Ok(Some(Bytes::from(vec![b'x'; 64 * 1024])));
+            }
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_reader_without_another_stream_poll() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = FirstChunkThenPendingReader {
+            first: true,
+            dropped: Arc::clone(&dropped),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        assert_eq!(stream.next().await.unwrap().unwrap().len(), 64 * 1024);
+        let (refund, error) = settle_opaque_body_upload(&tracking, 128 * 1024).await;
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(tracking.fetched.load(Ordering::Acquire), 64 * 1024);
+        assert!(!tracking.ambiguous_read_cancelled.load(Ordering::Acquire));
+        assert_eq!(refund, 64 * 1024);
+        assert_eq!(error, None);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_pending_stream_future_aborts_the_chunk_task() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let reader = PendingReader {
+            dropped: Arc::clone(&dropped),
+        };
+        let tracking = opaque_body_state(Box::new(reader));
+        let mut stream = Box::pin(opaque_body_stream(Arc::clone(&tracking)));
+
+        {
+            let next = stream.next();
+            futures::pin_mut!(next);
+            assert!(poll!(next.as_mut()).is_pending());
+        }
+        drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping the upload future must abort its chunk task");
+
+        let settled = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            settle_opaque_body_upload(&tracking, 1),
+        )
+        .await
+        .expect("dropped upload future must not leave in_flight stuck");
+
+        assert_eq!(settled, (0, None));
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(tracking.ambiguous_read_cancelled.load(Ordering::Acquire));
     }
 }

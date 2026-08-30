@@ -138,6 +138,13 @@ where
         let now = Instant::now();
         let is_live = self.nodes[tail].occupied && !self.nodes[tail].is_expired(now);
         self.remove_index(tail);
+
+        // remove_index() returns the released tail to the free list. Consume
+        // that slot here before handing it to the caller; otherwise the next
+        // allocation can reuse the same occupied node and corrupt the list.
+        debug_assert_eq!(self.free_head, Some(tail));
+        self.free_head = self.nodes[tail].next_free;
+        self.nodes[tail].next_free = None;
         (tail, is_live)
     }
 
@@ -669,6 +676,26 @@ mod tests {
 
         let s = cache.stats();
         assert_eq!(s.evictions, 1);
+    }
+
+    #[test]
+    fn test_repeated_full_capacity_evictions_preserve_node_pool_and_list() {
+        let cache = LocalLruCache::new(4);
+
+        for key in 0..128 {
+            cache.insert(key, key, None);
+            assert!(cache.len() <= cache.capacity());
+        }
+
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.get_keys(), vec![127, 126, 125, 124]);
+        for key in 0..124 {
+            assert_eq!(cache.get(&key), None);
+        }
+        for key in 124..128 {
+            assert_eq!(cache.get(&key), Some(key));
+        }
+        assert_eq!(cache.stats().evictions, 124);
     }
 
     #[test]

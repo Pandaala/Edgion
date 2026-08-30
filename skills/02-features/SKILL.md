@@ -37,8 +37,10 @@ description: Use when looking up configuration schemas, resource field definitio
 | Configure TLS certificates/mTLS | [03-resources/09-edgion-tls.md](03-resources/09-edgion-tls.md) |
 | Use automatic certificates (ACME) | [03-resources/17-acme.md](03-resources/17-acme.md) |
 | Look up the configuration of a plugin | [03-resources/13-edgion-plugins.md](03-resources/13-edgion-plugins.md) |
-| Configure health checks/load balancing | [03-resources/16-service-backends.md](03-resources/16-service-backends.md) |
+| Configure health checks/circuit breaking/load balancing | [03-resources/20-edgion-backend-traffic-policy.md](03-resources/20-edgion-backend-traffic-policy.md) |
+| Configure HTTPRoute AI backends, credential pools, and AiProxy selection | [03-resources/22-edgion-backend.md](03-resources/22-edgion-backend.md) |
 | Configure Access Log output | [04-observability/00-logging.md](04-observability/00-logging.md) |
+| Configure GeoIP database + restrict traffic by country/city | [02-config/01-gateway-config.md](02-config/01-gateway-config.md#geoip) (schema) and `docs/en/ops-guide/gateway/geoip.md` (operator guide + pitfalls) |
 | Integrate with Redis/ES and other external systems | [03-resources/18-link-sys.md](03-resources/18-link-sys.md) |
 | Look up the meaning of an annotation | [05-annotations/](05-annotations/SKILL.md) |
 
@@ -69,3 +71,4 @@ Edgion extension resources (API group: `edgion.io`):
 | EdgionAcme | `edgion.io/v1` | ACME automatic certificate management |
 | LinkSys | `edgion.io/v1` | External system connector |
 | EdgionConfigData | `edgion.io/v1` | Plugin metadata |
+| EdgionBackend | `edgion.io/v1` | AI provider endpoint, credential pool, model catalog, and typed HTTPRoute backend |

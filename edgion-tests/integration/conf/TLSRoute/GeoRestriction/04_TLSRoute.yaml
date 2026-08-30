@@ -1,0 +1,23 @@
+# TLSRoute carrying the edgion-stream-plugins annotation directly (not the
+# Gateway) -> Stage-2 lookup finds an empty tls_route_plugin_runtime and
+# falls back to the Stage-1 (`plugins`) runtime at layer="tls".
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: tls-geo-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tls-geo-deny"
+spec:
+  parentRefs:
+    - name: tls-geo-gw
+      namespace: edgion-test
+      sectionName: tls-geo
+      port: 31953
+  hostnames:
+    - "*.geo.example.com"
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

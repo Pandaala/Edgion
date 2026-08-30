@@ -6,11 +6,6 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::sync::Arc;
 
-use crate::plugins::http::cors::Cors;
-use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::traits::request_filter::RequestFilter;
-use crate::EdgionHttpContext;
 use edgion_resources::resources::edgion_gateway_config::{PreflightMode, PreflightPolicy};
 use edgion_resources::resources::CorsConfig;
 
@@ -51,29 +46,31 @@ impl PreflightHandler {
     pub async fn handle_preflight(
         &self,
         session: &mut Session,
-        ctx: &mut EdgionHttpContext,
+        ctx: &mut crate::EdgionHttpContext,
         cors_config: Option<&Arc<CorsConfig>>,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        // If CORS config exists, apply CORS headers and return success
-        if let Some(cors_config) = cors_config {
-            // Build an ad-hoc Cors plugin from the shared Arc — the route's
-            // PluginRuntime owns the canonical Arc<CorsConfig>, so this avoids
-            // a deep clone of the config per preflight request.
-            let cors_plugin = Cors::from_arc(Arc::clone(cors_config));
-            let mut plugin_log = PluginLog::new("PreflightHandler");
-
-            let mut adapter = PingoraSessionAdapter::new(session, ctx);
-
-            // Run CORS plugin logic (this will set headers and may terminate request)
-            let _result = cors_plugin.run_request(&mut adapter, &mut plugin_log).await;
-
-            return Ok(true);
+        // A route-level CORS plugin owns both local preflight responses and
+        // pass-through response headers. Let the normal plugin pipeline run it
+        // exactly once so queued operations such as `Vary: Origin` are not
+        // duplicated.
+        if cors_config.is_some() {
+            return Ok(false);
         }
 
         // No CORS config: return simple empty response
         let status = self.policy.as_ref().map(|p| p.status_code).unwrap_or(204);
-
+        if !edgion_resources::http_status::is_valid_final_http_status(status) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid preflight final status: {status}"),
+            )
+            .into());
+        }
         let resp = ResponseHeader::build(status, None)?;
+        if !ctx.claim_final_response(status) {
+            return Ok(true);
+        }
+
         session.write_response_header(Box::new(resp), true).await?;
         session.write_response_body(Some(Bytes::new()), true).await?;
 
@@ -88,34 +85,131 @@ impl PreflightHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pingora_http::RequestHeader;
+    use crate::ctx::PendingHeaderOp;
+    use crate::plugins::http::cors::Cors;
+    use crate::plugins::runtime::log::PluginLog;
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+    use crate::plugins::runtime::traits::request_filter::RequestFilter;
+    use crate::EdgionHttpContext;
+    use edgion_resources::filters::PluginRunningResult;
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
 
-    #[test]
-    fn test_preflight_detection_cors_standard() {
-        let _handler = PreflightHandler::new(Some(PreflightPolicy {
+    async fn session_from_request(raw_request: &[u8]) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(raw_request)
+            .await
+            .expect("write request into duplex pair");
+        drop(client);
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("client must not have closed before sending the request");
+        session
+    }
+
+    fn cors_config(preflight_continue: bool) -> Arc<CorsConfig> {
+        let mut config = CorsConfig {
+            allow_origins: "https://example.com".to_string(),
+            preflight_continue,
+            ..CorsConfig::default()
+        };
+        config.validate_and_init().expect("CORS test config is valid");
+        Arc::new(config)
+    }
+
+    #[tokio::test]
+    async fn test_preflight_detection_cors_standard() {
+        let handler = PreflightHandler::new(Some(PreflightPolicy {
             mode: PreflightMode::CorsStandard,
             status_code: 204,
         }));
+        let session = session_from_request(
+            b"OPTIONS / HTTP/1.1\r\nHost: test\r\nOrigin: https://example.com\r\nAccess-Control-Request-Method: POST\r\n\r\n",
+        )
+        .await;
 
-        // Create a mock session with OPTIONS + Origin + Access-Control-Request-Method
-        let mut req_header = RequestHeader::build("OPTIONS", b"/", None).unwrap();
-        req_header.insert_header("Origin", "https://example.com").unwrap();
-        req_header
-            .insert_header("Access-Control-Request-Method", "POST")
-            .unwrap();
-
-        // TODO: Need to create a proper Session for testing
-        // For now, this test is a placeholder
+        assert!(handler.is_preflight(&session));
     }
 
-    #[test]
-    fn test_preflight_mode_all_options() {
-        let _handler = PreflightHandler::new(Some(PreflightPolicy {
+    #[tokio::test]
+    async fn test_preflight_continue_runs_route_cors_once() {
+        let handler = PreflightHandler::new(Some(PreflightPolicy {
+            mode: PreflightMode::CorsStandard,
+            status_code: 204,
+        }));
+        let mut session = session_from_request(
+            b"OPTIONS / HTTP/1.1\r\nHost: test\r\nOrigin: https://example.com\r\nAccess-Control-Request-Method: GET\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+        let cors_config = cors_config(true);
+
+        assert!(handler.is_preflight(&session));
+        let response_sent = handler
+            .handle_preflight(&mut session, &mut ctx, Some(&cors_config))
+            .await
+            .expect("preflight handling should succeed");
+
+        assert!(!response_sent);
+
+        let cors = Cors::from_arc(Arc::clone(&cors_config));
+        let result = {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let mut plugin_log = PluginLog::new("Cors");
+            cors.run_request(&mut adapter, &mut plugin_log).await
+        };
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        let vary_origin_count = ctx
+            .pending_response_header_ops()
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    PendingHeaderOp::Append { name, value }
+                        if name.eq_ignore_ascii_case("vary") && value.eq_ignore_ascii_case("origin")
+                )
+            })
+            .count();
+        assert_eq!(vary_origin_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_mode_all_options_without_origin_passes_through() {
+        let handler = PreflightHandler::new(Some(PreflightPolicy {
             mode: PreflightMode::AllOptions,
             status_code: 204,
         }));
+        let mut session = session_from_request(b"OPTIONS / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+        let cors_config = cors_config(false);
 
-        // All OPTIONS requests should be detected as preflight
-        // Test logic would go here once we have proper Session mocking
+        assert!(handler.is_preflight(&session));
+        let response_sent = handler
+            .handle_preflight(&mut session, &mut ctx, Some(&cors_config))
+            .await
+            .expect("preflight handling should succeed");
+
+        assert!(!response_sent);
+    }
+
+    #[tokio::test]
+    async fn invalid_preflight_status_does_not_claim_response_ownership() {
+        let handler = PreflightHandler::new(Some(PreflightPolicy {
+            mode: PreflightMode::AllOptions,
+            status_code: 700,
+        }));
+        let mut session = session_from_request(b"OPTIONS / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        assert!(handler.handle_preflight(&mut session, &mut ctx, None).await.is_err());
+        assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
     }
 }

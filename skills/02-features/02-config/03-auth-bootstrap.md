@@ -1,4 +1,4 @@
-# Admin Token Bootstrap (Auth Bootstrap)
+# Admin Token Bootstrap (Controller and Gateway)
 
 Describes where the Controller's Admin API token comes from at startup and the options available to operators. Authentication is **token-only** (2026-06-12): a single Istio-style pre-shared bearer token. The former browser-login stack (username/password `local_auth` + OIDC `auth` admin) was removed.
 
@@ -9,6 +9,7 @@ Describes where the Controller's Admin API token comes from at startup and the o
 | Component | No token configured | With a token configured |
 |-----------|---------------------|-------------------------|
 | Controller | **Server starts + business routes always 503** + WARN log at startup | Admin API accepts the pre-shared bearer token (allow-all) |
+| Gateway | **Server starts + Admin API routes return 503** + WARN log at startup | Admin API accepts the configured shared bearer token |
 
 The operator must supply the token explicitly — there is **no auto-generation**.
 
@@ -29,7 +30,9 @@ The Controller resolves the admin token from two sources (highest precedence fir
 
 Inject `EDGION_ADMIN_TOKEN` via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`) in the controller Deployment.
 
-**RBAC prerequisite**: the Controller ServiceAccount needs only `secrets: [get, list, watch]` — the `create` verb is not required (no auto-generation).
+`secretKeyRef` is resolved by Kubernetes when the Pod is created; it does not require
+the Controller process or its ServiceAccount to call the Secret API. The Controller's
+separate resource-processing duties may still require Secret `get/list/watch` RBAC.
 
 ```bash
 # Read the current admin token
@@ -56,6 +59,27 @@ If neither source provides a non-blank token (and no `cli_tokens` are configured
 - The admin token maps to an **allow-all wildcard** (`*`/`*`) RBAC policy — it is a `Role::Restricted` carrying that policy, held on the `Authorizer` via `set_admin_token`. There is no separate "superuser" role.
 - It **survives reloads**: `Authorizer::apply` re-merges the admin-token entry into the cli-token map on every reload.
 - **Scoped, role-limited** tokens for automation are configured separately under `[cli_tokens]` (each with a fine-grained `rbac.allow` policy). See `skills/02-features/02-config/00-controller-config.md`.
+
+## Gateway: Providing the Admin Token
+
+The Gateway uses a separate shared bearer token for its own Admin API. Resolution is:
+
+1. `EDGION_GATEWAY_ADMIN_TOKEN` when non-blank (recommended: inject it with a
+   Kubernetes `secretKeyRef`).
+2. `gateway.admin_token` in a Secret-mounted Gateway config file.
+
+There is no CLI flag, which avoids placing the token in process arguments. A blank value
+is treated as unconfigured. Without a token the Gateway still starts, but Admin API
+business routes fail closed with `503`; probe endpoints remain on the separate probe
+listener. The Gateway token is not the Controller token and does not use Controller
+`cli_tokens` RBAC.
+
+```yaml
+gateway:
+  admin_token: "edg_..."
+```
+
+Do not store this field in a ConfigMap. Prefer the environment variable from a Secret.
 
 ## Admin API network exposure
 

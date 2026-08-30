@@ -41,8 +41,9 @@ spec:
       name: es-credentials
   tls:
     enabled: true
-    caSecretRef:
-      name: es-ca-cert
+    validation:
+      caCertificateRefs:
+      - name: es-ca-cert
   failedCache:
     type: file  # file / redis
     config:

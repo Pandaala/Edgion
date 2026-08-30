@@ -1,0 +1,33 @@
+# LinkSys Redis resource that MUST be rejected at connector construction.
+#
+# fred's rustls connector always verifies the server certificate; it exposes no
+# skip-verify API. The outbound-TLS resolver therefore rejects `verify: false`
+# for Redis unconditionally (provider_can_disable=false) — independent of any
+# environment. The Gateway logs "from_config failed" and never registers the
+# client, so:
+#   - the LinkSys CRD still syncs to the Gateway (controller admission is lenient)
+#   - NO runtime client appears under /api/v1/testing/link-sys/redis/clients
+#   - a ping against default_redis-tls-reject returns a "not found" failure
+#
+# The endpoint is intentionally bogus (no TLS Redis is served); the reject
+# happens before any connection attempt, so reachability is irrelevant.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-tls-reject
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "rediss://127.0.0.1:16379"
+    db: 0
+    tls:
+      enabled: true
+      verify: false
+    pool:
+      size: 2
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

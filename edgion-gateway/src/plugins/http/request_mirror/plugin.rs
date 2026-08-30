@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -6,52 +7,79 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
 use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
+use crate::ctx::{MirrorAbandonReason, MirrorCancellation};
 use crate::observe::metrics::record_mirror_metric;
-use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
+use crate::plugins::http::common::http_client::{
+    build_pooled_outbound_client, connection_listed_hop_by_hop, is_hop_by_hop_or_listed,
+};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{MirrorConfig, MirrorState};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::http_route::HTTPRequestMirrorFilter;
+use edgion_resources::resources::http_route::{HTTPRequestMirrorFilter, MirrorTuning};
 
 use super::mirror_log::{emit_mirror_log, new_entry};
 
 pub struct RequestMirrorPlugin {
     config: HTTPRequestMirrorFilter,
+    tuning: MirrorTuning,
     semaphore: Arc<Semaphore>,
     client: reqwest::Client,
 }
 
-impl RequestMirrorPlugin {
-    pub fn new(config: HTTPRequestMirrorFilter, default_namespace: String) -> Self {
-        let mut cfg = config;
-        if cfg.max_buffered_chunks == 0 {
-            cfg.max_buffered_chunks = 5;
+async fn wait_for_send_or_cancel<F>(send_result: F, mut cancel_rx: oneshot::Receiver<()>) -> Option<F::Output>
+where
+    F: Future,
+{
+    tokio::pin!(send_result);
+    tokio::select! {
+        biased;
+        cancelled = &mut cancel_rx => {
+            if cancelled.is_ok() {
+                None
+            } else {
+                Some(send_result.await)
+            }
         }
-        if cfg.max_concurrent == 0 {
-            cfg.max_concurrent = 1024;
+        result = &mut send_result => Some(result),
+    }
+}
+
+fn mirror_abandon_status(reason: &std::sync::atomic::AtomicU8) -> Option<&'static str> {
+    match MirrorCancellation::load_reason(reason) {
+        Some(MirrorAbandonReason::ChannelFull) => Some("channel_full"),
+        Some(MirrorAbandonReason::BodyAbandoned) => Some("body_abandoned"),
+        None => None,
+    }
+}
+
+impl RequestMirrorPlugin {
+    pub fn new(config: HTTPRequestMirrorFilter, tuning: MirrorTuning, default_namespace: String) -> Self {
+        let mut cfg = config;
+        let mut tuning = tuning;
+        if tuning.max_buffered_chunks == 0 {
+            tuning.max_buffered_chunks = 5;
+        }
+        if tuning.max_concurrent == 0 {
+            tuning.max_concurrent = 1024;
         }
         // Hard cap: channel_full_timeout_ms must not exceed 1000ms.
         // Values above 1s would add unacceptable back-pressure to main request body processing.
-        if cfg.channel_full_timeout_ms > 1000 {
+        if tuning.channel_full_timeout_ms > 1000 {
             tracing::warn!(
-                channel_full_timeout_ms = cfg.channel_full_timeout_ms,
+                channel_full_timeout_ms = tuning.channel_full_timeout_ms,
                 "channel_full_timeout_ms exceeds maximum (1000ms); clamping to 1000ms"
             );
-            cfg.channel_full_timeout_ms = 1000;
+            tuning.channel_full_timeout_ms = 1000;
         }
 
-        let connect_timeout = Duration::from_millis(cfg.connect_timeout_ms.max(1));
-        let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(32)
-            .connect_timeout(connect_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("failed to build RequestMirror reqwest client");
+        let connect_timeout = Duration::from_millis(tuning.connect_timeout_ms.max(1));
+        let client =
+            build_pooled_outbound_client(connect_timeout, None).expect("failed to build RequestMirror reqwest client");
 
         // If backendRef.namespace is absent, default to current route/plugin namespace.
         if cfg.backend_ref.namespace.is_none() {
@@ -59,8 +87,9 @@ impl RequestMirrorPlugin {
         }
 
         Self {
-            semaphore: Arc::new(Semaphore::new(cfg.max_concurrent)),
+            semaphore: Arc::new(Semaphore::new(tuning.max_concurrent)),
             config: cfg,
+            tuning,
             client,
         }
     }
@@ -84,7 +113,7 @@ impl RequestMirrorPlugin {
                 Some("mirror sampled:skip")
             };
         }
-        if let Some(pct) = self.config.percentage {
+        if let Some(pct) = self.config.percent {
             if pct <= 0 {
                 return Some("mirror disabled");
             }
@@ -104,10 +133,10 @@ impl RequestMirrorPlugin {
 
     fn mirror_config(&self) -> MirrorConfig {
         MirrorConfig {
-            connect_timeout: Duration::from_millis(self.config.connect_timeout_ms.max(1)),
-            write_timeout: Duration::from_millis(self.config.write_timeout_ms.max(1)),
-            max_buffered_chunks: self.config.max_buffered_chunks,
-            mirror_log: self.config.mirror_log,
+            connect_timeout: Duration::from_millis(self.tuning.connect_timeout_ms.max(1)),
+            write_timeout: Duration::from_millis(self.tuning.write_timeout_ms.max(1)),
+            max_buffered_chunks: self.tuning.max_buffered_chunks,
+            mirror_log: self.tuning.mirror_log,
             // max_concurrent omitted: managed by self.semaphore, not needed inside the task.
         }
     }
@@ -118,8 +147,12 @@ impl RequestMirrorPlugin {
             .backend_ref
             .port
             .ok_or_else(|| "backend_ref.port is required for RequestMirror".to_string())?;
-        if port <= 0 {
-            return Err("backend_ref.port must be > 0".to_string());
+        if !edgion_resources::gwapi_types::is_valid_port(port as i64) {
+            return Err(format!(
+                "backend_ref.port must be in {}..={}",
+                edgion_resources::gwapi_types::PORT_MIN,
+                edgion_resources::gwapi_types::PORT_MAX
+            ));
         }
         if self.config.backend_ref.name.is_empty() {
             return Err("backend_ref.name is required for RequestMirror".to_string());
@@ -212,7 +245,29 @@ impl RequestFilter for RequestMirrorPlugin {
                 return PluginRunningResult::GoodNext;
             }
         };
-        let headers = self.build_headers(session, &target);
+        let has_committed_body = session.ctx().request_body.has_cached_body();
+
+        let committed_body = if has_committed_body {
+            match session.read_request_body(None).await {
+                Ok(body) => Some(body),
+                Err(_) => {
+                    log.push_err("mirror body snapshot error");
+                    return PluginRunningResult::GoodNext;
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut headers = self.build_headers(session, &target);
+        if committed_body.is_some() {
+            // This mirror hop owns framing for the immutable snapshot. The
+            // downstream Content-Length may describe V0 rather than the
+            // committed version, and reqwest derives the correct length from
+            // Body::from(Bytes).
+            headers.remove(reqwest::header::CONTENT_LENGTH);
+            headers.remove(reqwest::header::TRANSFER_ENCODING);
+        }
         let x_trace_id = session
             .ctx()
             .request_info
@@ -222,15 +277,12 @@ impl RequestFilter for RequestMirrorPlugin {
 
         let cfg = self.mirror_config();
         let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(cfg.max_buffered_chunks);
+        let (cancellation, cancel_rx) = MirrorCancellation::new();
+        let abandon_reason = cancellation.reason_handle();
         let client = self.client.clone();
 
-        // Shared flag for channel-full detection.
-        // request_body_filter sets this to true when it abandons the mirror due to a full channel.
-        // The mirror task reads it at completion to distinguish "channel_full" from "write_err".
-        let channel_full_flag = Arc::new(AtomicBool::new(false));
-        let task_channel_full_flag = channel_full_flag.clone();
-
-        let channel_full_timeout_ms = self.config.channel_full_timeout_ms;
+        let channel_full_timeout_ms = self.tuning.channel_full_timeout_ms;
+        let uses_committed_snapshot = committed_body.is_some();
 
         let writer_handle = tokio::spawn(async move {
             let _permit = permit;
@@ -239,8 +291,12 @@ impl RequestFilter for RequestMirrorPlugin {
 
             // Arc<AtomicU64> instead of Rc<Cell<u64>>: tokio::spawn requires Send futures,
             // so Rc is not usable here even though the closure runs in a single task.
-            let bytes_sent = Arc::new(AtomicU64::new(0));
-            let chunks_sent = Arc::new(AtomicU64::new(0));
+            let bytes_sent = Arc::new(AtomicU64::new(
+                committed_body.as_ref().map_or(0, |body| body.len() as u64),
+            ));
+            let chunks_sent = Arc::new(AtomicU64::new(u64::from(
+                committed_body.as_ref().is_some_and(|body| !body.is_empty()),
+            )));
 
             let bytes_ref = bytes_sent.clone();
             let chunks_ref = chunks_sent.clone();
@@ -252,42 +308,45 @@ impl RequestFilter for RequestMirrorPlugin {
                 chunk_result
             });
 
-            let stream_body = reqwest::Body::wrap_stream(tracked_stream);
+            let mirror_body = match committed_body {
+                Some(body) => reqwest::Body::from(body),
+                None => reqwest::Body::wrap_stream(tracked_stream),
+            };
             let send_result = tokio::time::timeout(total_timeout, async {
                 client
                     .request(method, &url)
                     .headers(headers)
-                    .body(stream_body)
+                    .body(mirror_body)
                     .send()
                     .await
-            })
-            .await;
+            });
+            let send_result = wait_for_send_or_cancel(send_result, cancel_rx).await;
 
-            let (status, error) = match send_result {
-                Ok(Ok(resp)) => {
-                    let _ = resp.bytes().await;
-                    ("ok", None)
-                }
-                Ok(Err(e)) => {
-                    // Check channel_full_flag first: it is set by request_body_filter when the
-                    // mirror is abandoned because the body channel was full (either immediately or
-                    // after the channel_full_timeout_ms window expired). In that case, reqwest sees
-                    // the body stream end (body_tx dropped) and may return Ok or an error depending
-                    // on whether the body was already partially flushed. We must check the flag
-                    // *before* inspecting the error kind to avoid misreporting "write_err".
-                    if task_channel_full_flag.load(Ordering::Relaxed) {
-                        ("channel_full", None)
-                    } else if e.is_connect() {
-                        ("connect_err", Some("connection failed".to_string()))
-                    } else if e.is_timeout() {
-                        ("connect_timeout", None)
-                    } else if e.is_body() {
-                        ("write_err", Some("body stream error".to_string()))
-                    } else {
-                        ("write_err", Some("send failed".to_string()))
+            let (status, error) = match mirror_abandon_status(&abandon_reason) {
+                Some(status) => (status, None),
+                None => match send_result {
+                    Some(Ok(Ok(resp))) => {
+                        // The mirrored response is intentionally irrelevant to the
+                        // main request. Dropping it after the headers avoids both
+                        // unbounded aggregation and letting an infinite response
+                        // retain the mirror concurrency permit.
+                        drop(resp);
+                        ("ok", None)
                     }
-                }
-                Err(_) => ("timeout", None),
+                    Some(Ok(Err(e))) => {
+                        if e.is_connect() {
+                            ("connect_err", Some("connection failed".to_string()))
+                        } else if e.is_timeout() {
+                            ("connect_timeout", None)
+                        } else if e.is_body() {
+                            ("write_err", Some("body stream error".to_string()))
+                        } else {
+                            ("write_err", Some("send failed".to_string()))
+                        }
+                    }
+                    Some(Err(_)) => ("timeout", None),
+                    None => ("body_abandoned", None),
+                },
             };
 
             if cfg.mirror_log {
@@ -306,13 +365,226 @@ impl RequestFilter for RequestMirrorPlugin {
             record_mirror_metric(status);
         });
 
-        session.set_mirror_state(MirrorState::Streaming {
-            body_tx,
-            writer_handle,
-            channel_full_flag,
-            channel_full_timeout_ms,
-        });
+        // Only a transport-level END_STREAM on the request headers proves that
+        // no body bytes can follow. `declares_body()` is intentionally not used:
+        // it infers from Content-Length, which an H2 client can contradict by
+        // sending DATA after `Content-Length: 0`. Arming the cancellation guard
+        // when headers already ended the stream would make a later request-stage
+        // rejection abort a mirror whose empty body is already complete. `false`
+        // or `None` remains conservative and keeps the armed streaming path.
+        let body_ended_at_headers = session.request_headers_end_stream() == Some(true);
+        if uses_committed_snapshot || body_ended_at_headers {
+            // Dropping a JoinHandle detaches the task. No request-body-filter
+            // state is installed: for the committed snapshot the task owns an
+            // immutable body and never consumes Pingora's replay cursor, and
+            // for a headers-ended request there is nothing left to tee. Dropping
+            // `body_tx` ends the writer's stream so reqwest closes the chunked
+            // body cleanly, and `complete()` disarms the fail-closed guard so
+            // the mirror is not reported as abandoned.
+            drop(body_tx);
+            cancellation.complete();
+            drop(writer_handle);
+        } else {
+            session.set_mirror_state(MirrorState::Streaming {
+                body_tx,
+                writer_handle,
+                cancellation,
+                channel_full_timeout_ms,
+            });
+        }
         log.push("mirror sent");
         PluginRunningResult::GoodNext
+    }
+}
+
+#[cfg(test)]
+mod arming_tests {
+    use super::*;
+    use crate::backends::get_roundrobin_store;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::EdgionHttpContext;
+    use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+    use edgion_resources::resources::http_route::BackendObjectReference;
+    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::{BTreeMap, HashMap};
+
+    const TEST_NS: &str = "mirror-arming-test";
+    const TEST_SERVICE: &str = "mirror-arming-backend";
+    // TEST-NET-1 (RFC 5737): routable-looking but never reachable, so the
+    // detached writer task cannot connect to anything real.
+    const TEST_ADDR: &str = "192.0.2.10";
+    const TEST_PORT: i32 = 8080;
+
+    /// Register a single-address EndpointSlice in the process-wide roundrobin
+    /// store (additive `update_data_only`, so other tests sharing the singleton
+    /// are undisturbed) so `resolve_target` finds a selectable endpoint.
+    fn insert_test_endpoint_slice() {
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), TEST_SERVICE.to_string());
+        let slice = EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some(format!("{TEST_SERVICE}-slice")),
+                namespace: Some(TEST_NS.to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            endpoints: vec![Endpoint {
+                addresses: vec![TEST_ADDR.to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ports: Some(vec![EndpointPort {
+                port: Some(TEST_PORT),
+                ..Default::default()
+            }]),
+        };
+        let mut add = HashMap::new();
+        add.insert(format!("{TEST_NS}/{TEST_SERVICE}-slice"), slice);
+        get_roundrobin_store().update_data_only(add, HashMap::new(), &Default::default());
+    }
+
+    fn test_plugin() -> RequestMirrorPlugin {
+        let tuning = MirrorTuning {
+            // The mirror access log needs process-wide log infrastructure that a
+            // unit test does not bootstrap.
+            mirror_log: false,
+            ..MirrorTuning::default()
+        };
+        RequestMirrorPlugin::new(
+            HTTPRequestMirrorFilter {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: TEST_SERVICE.to_string(),
+                    namespace: Some(TEST_NS.to_string()),
+                    port: Some(TEST_PORT),
+                },
+                fraction: None,
+                percent: None,
+            },
+            tuning,
+            TEST_NS.to_string(),
+        )
+    }
+
+    fn test_session(headers_end_stream: Option<bool>) -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_request_headers_end_stream()
+            .return_const(headers_end_stream);
+        session.expect_declares_body().never();
+        session.expect_get_path().return_const("/mirror".to_string());
+        session.expect_get_query().return_const(None);
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_header_value().return_const(None);
+        session.expect_request_headers().return_const(Vec::new());
+        session
+    }
+
+    #[tokio::test]
+    async fn headers_end_stream_does_not_install_armed_streaming_state() {
+        insert_test_endpoint_slice();
+        let plugin = test_plugin();
+        let mut session = test_session(Some(true));
+        // A transport-level header END_STREAM proves the empty body complete,
+        // so no armed mirror state is installed.
+        session.expect_set_mirror_state().never();
+        let mut log = PluginLog::new("RequestMirror");
+
+        let result = plugin.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn headers_without_end_stream_keep_armed_streaming_state() {
+        insert_test_endpoint_slice();
+        let plugin = test_plugin();
+        let mut session = test_session(Some(false));
+        // This is the H2 `Content-Length: 0` without END_STREAM shape: header
+        // declarations cannot replace the transport fact. It also proves the
+        // fixture resolves a real mirror target; otherwise the positive test
+        // above could pass because of an early mirror-resolution return.
+        session
+            .expect_set_mirror_state()
+            .times(1)
+            .returning(|state| assert!(matches!(state, MirrorState::Streaming { .. })));
+        let mut log = PluginLog::new("RequestMirror");
+
+        let result = plugin.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn unknown_headers_end_stream_keeps_armed_streaming_state() {
+        insert_test_endpoint_slice();
+        let plugin = test_plugin();
+        let mut session = test_session(None);
+        // `None` means the session cannot provide the transport fact: stay
+        // conservative.
+        session
+            .expect_set_mirror_state()
+            .times(1)
+            .returning(|state| assert!(matches!(state, MirrorState::Streaming { .. })));
+        let mut log = PluginLog::new("RequestMirror");
+
+        let result = plugin.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_cancellation_wins_when_result_is_also_ready() {
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        cancel_tx.send(()).unwrap();
+
+        assert_eq!(wait_for_send_or_cancel(async { 7_u8 }, cancel_rx).await, None);
+    }
+
+    #[tokio::test]
+    async fn clean_completion_waits_for_send_result() {
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        drop(cancel_tx);
+
+        assert_eq!(wait_for_send_or_cancel(async { 7_u8 }, cancel_rx).await, Some(7));
+    }
+
+    #[test]
+    fn cancellation_reason_is_recorded_before_notifying_task() {
+        let (cancellation, mut cancel_rx) = MirrorCancellation::new();
+        let reason = cancellation.reason_handle();
+        cancellation.cancel(MirrorAbandonReason::ChannelFull);
+
+        assert_eq!(
+            MirrorCancellation::load_reason(&reason),
+            Some(MirrorAbandonReason::ChannelFull)
+        );
+        assert!(cancel_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn dropping_armed_guard_fails_closed_as_body_abandoned() {
+        let (cancellation, mut cancel_rx) = MirrorCancellation::new();
+        let reason = cancellation.reason_handle();
+        drop(cancellation);
+
+        assert_eq!(
+            MirrorCancellation::load_reason(&reason),
+            Some(MirrorAbandonReason::BodyAbandoned)
+        );
+        assert_eq!(mirror_abandon_status(&reason), Some("body_abandoned"));
+        assert!(cancel_rx.try_recv().is_ok());
     }
 }

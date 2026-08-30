@@ -100,19 +100,6 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         warnings
     }
 
-    fn preparse(&self, tls: &mut EdgionTls, ctx: &HandlerContext) -> Vec<String> {
-        let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
-        let tls_name = tls.metadata.name.as_deref().unwrap_or("");
-        update_gateway_route_index(
-            ResourceKind::EdgionTls,
-            tls_ns,
-            tls_name,
-            tls.spec.parent_refs.as_ref(),
-            ctx.runtime(),
-        );
-        Vec::new()
-    }
-
     async fn parse(&self, mut tls: EdgionTls, ctx: &HandlerContext) -> ProcessResult<EdgionTls> {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionTls,
@@ -265,13 +252,21 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // this EdgionTls when listener hostnames or ports change. Without this,
         // an EdgionTls processed before its Gateway would permanently have
         // resolved_listeners = None with no mechanism to trigger re-resolution.
-        update_gateway_route_index(
+        //
+        // Also requeue Gateways this EdgionTls no longer references: a coalesced
+        // delete->recreate that re-points parent_refs skips handler.on_delete for
+        // the previous generation, so the dropped Gateway would otherwise never
+        // be told this EdgionTls detached from it.
+        let dropped_gateways = update_gateway_route_index(
             ResourceKind::EdgionTls,
             tls_ns,
             tls_name,
             tls.spec.parent_refs.as_ref(),
             ctx.runtime(),
         );
+        for gateway_key in dropped_gateways {
+            ctx.requeue("Gateway", gateway_key).await;
+        }
     }
 
     async fn on_delete(&self, tls: &EdgionTls, ctx: &HandlerContext) {

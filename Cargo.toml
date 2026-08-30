@@ -1,10 +1,10 @@
 [workspace]
-members = ["edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
+members = ["edgion-waf", "edgion-wasm", "edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
 # `edgion-tests` is the ~56k-line end-to-end harness. It is a member (so
 # `cargo build -p edgion-tests` works and CI can target it), but is kept out of
 # `default-members` so a bare `cargo build` / `cargo check --all-targets` for
 # production does NOT compile it. Build it explicitly with `-p edgion-tests`.
-default-members = ["edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
+default-members = ["edgion-waf", "edgion-wasm", "edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
 # Virtual manifest: after the crate split there is no root `edgion` package — the
 # three binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are peers
 # and no single package owns the workspace. A virtual manifest has no
@@ -54,6 +54,9 @@ manual_let_else       = "warn"
 [workspace.dependencies]
 # Internal crates (path is relative to the workspace root). Not published, so
 # path-only — no version pin.
+edgion-waf        = { path = "edgion-waf" }
+edgion-wasm       = { path = "edgion-wasm" }
+edgion-dsl        = { path = "edgion-dsl" }
 edgion-resources  = { path = "edgion-resources" }
 edgion-common     = { path = "edgion-common" }
 # default-features = false so that a crate depending on this workspace dep
@@ -80,6 +83,9 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 schemars = "=1.2.1"
 jsonschema = { version = "0.40", default-features = false }
+json-patch = { version = "4.1", default-features = false }
+jsonptr = "0.7.1"
+mime = "0.3.17"
 
 # Kubernetes
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
@@ -94,30 +100,35 @@ prost = "0.13"
 # TLS / certificates
 rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+webpki-roots = "1"
 x509-parser = { version = "0.18", features = ["verify"] }
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 instant-acme = "0.8.4"
 # BoringSSL bindings for custom TLS callbacks — pulled in (optional) only by the
 # `boringssl` feature of the crates that hold the callback code.
-boring = "4"
-boring-sys = "4"
+boring = "5"
+boring-sys = "5"
 
-# Pingora. IMPORTANT: declared WITHOUT a TLS backend feature. Workspace-dep
-# features are additive, so the backend each binary crate selects (via its own
-# `[features]` forwarding `pingora-core/boringssl` etc.) is unioned in — putting
-# `boringssl`/`rustls` here would force it onto every member.
-pingora-core = { version = "0.8.1", features = ["connection_filter"] }
-pingora-http = "0.8.1"
-pingora-proxy = "0.8.1"
-pingora-limits = "0.8.1"
-pingora-load-balancing = "0.8.1"
-pingora-ketama = "0.8.1"
+# Pingora — the Gateway builds exclusively against the Edgion fork family so
+# public types never cross a source boundary. Development follows the fork's
+# `edgion_v3` branch; the committed Cargo.lock pins the exact commit, and
+# CI/release builds use `--locked`. Release milestones may temporarily use a
+# protected immutable tag when a manifest-level source identity is required.
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
 http = "1.4.0"
+httpdate = "1"
 h2 = "0.4"
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 tower = { version = "0.5", features = ["util"] }
@@ -140,10 +151,12 @@ fred = { version = "10", default-features = false, features = [
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
-rskafka = { version = "0.5", default-features = false, features = ["transport-tls"] }
+rskafka = { version = "0.6", default-features = false, features = ["transport-tls"] }
 
 # Crypto / encoding
 base64 = "0.22"
+filetime = "0.2"
+flate2 = "1"
 hex = "0.4"
 sha1 = "0.10.6"
 sha2 = "0.10"
@@ -152,6 +165,10 @@ hmac = "0.12"
 aes-gcm = "0.10"
 crc32fast = "1.4"
 subtle = "2"
+# &mut-only cell that is Sync regardless of its payload; used for per-request
+# streamed body handlers stored in the (Sync-required) request context.
+sync_wrapper = "1"
+tar = "0.4"
 jsonwebtoken = "9"
 zeroize = { version = "1", features = ["derive"] }
 
@@ -180,6 +197,8 @@ mimalloc = { version = "0.1", default-features = false }
 # Utilities
 bytes = "1.11.1"
 chrono = "0.4"
+chrono-tz = "0.10"
+croner = "3"
 time = { version = "0.3", features = ["std"] }
 uuid = { version = "1.19", features = ["v4"] }
 parking_lot = "0.12"
@@ -188,10 +207,35 @@ dashmap = "6.1"
 indexmap = "2"
 smallvec = "1.15"
 regex = "1.12"
+regex-automata = "0.4"
+url = "2"
 rand = "0.9"
 nom = "7"
 notify = "8.2"
 walkdir = "2"
+
+# WebAssembly runtime for the Wasm HTTP plugin (proxy-wasm host)
+wasmtime = "46"
+wasmparser = "=0.251.0"
+# WAT text-format -> binary compiler; used by vm_manager tests to write raw
+# .wasm bytes to disk for the file-source loader (wasmtime's own `wat`
+# feature only covers `Module::new` taking text input, not raw bytes).
+wat = "1"
+
+# Async DNS resolver able to target a specific server (tokio::net::lookup_host
+# cannot). default-features = false to avoid pulling a second TLS backend into
+# the workspace TLS-backend unification; enable only the tokio runtime and
+# system-config features.
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio", "system-config"] }
+
+# MaxMind GeoIP2/GeoLite2 MMDB reader (GeoIP country/city restriction feature).
+# `mmap` feature enables `Reader::open_mmap` for zero-copy database loading.
+# Pinned to >=0.27 (RUSTSEC-2025-0132: `open_mmap` was unsoundly marked safe
+# below 0.27, since remapping while the file is modified on disk is UB).
+maxminddb = { version = "0.30", features = ["mmap"] }
+# Backs maxminddb's mmap feature; pinned explicitly since the gateway also
+# opens the fixture directly via `open_mmap` in tests.
+memmap2 = "0.9"
 
 # Dev / test
 tempfile = "3"

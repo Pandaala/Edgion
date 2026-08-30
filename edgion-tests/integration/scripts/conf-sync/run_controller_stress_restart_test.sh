@@ -78,7 +78,12 @@ WORK_DIR=""
 LOG_DIR=""
 PID_DIR=""
 CONFIG_DIR=""
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+# Resolved in resolve_work_dir() to the WORK-DIR COPY that start_all_with_conf.sh produced.
+# The repo config/edgion-controller.yaml carries the same (mTLS) transport block, but its
+# work-dir relative cert paths only resolve against the run's WORK_DIR — which is where
+# start_all_with_conf.sh distributed the cert set. Restart from the work-dir copy with
+# --work-dir "${WORK_DIR}" so the Controller finds the certs the running Gateway trusts.
+CONTROLLER_CONFIG=""
 
 # =============================================================================
 # Log helpers
@@ -135,6 +140,12 @@ resolve_work_dir() {
     LOG_DIR="${WORK_DIR}/logs"
     PID_DIR="${WORK_DIR}/pids"
     CONFIG_DIR="${WORK_DIR}/config"
+    # The work-dir copy of the checked-in (mTLS) config; its cert paths resolve under WORK_DIR.
+    CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
+    if [ ! -f "$CONTROLLER_CONFIG" ]; then
+        log_error "Controller config not found: ${CONTROLLER_CONFIG} -- run start_all_with_conf.sh first"
+        exit 1
+    fi
 
     export EDGION_WORK_DIR="${WORK_DIR}"
 
@@ -455,7 +466,7 @@ main() {
     # -------------------------------------------------------------------------
     log_section "Case 4: controller_killed_gateway_serves"
     log_info "SIGKILL edgion-controller..."
-    pkill -KILL -f "edgion-controller" 2>/dev/null || true
+    pkill -KILL -f "debug/edgion-controller" 2>/dev/null || true
     sleep 2
 
     if curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then

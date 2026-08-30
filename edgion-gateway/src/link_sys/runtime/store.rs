@@ -328,21 +328,6 @@ pub fn get_kafka_client(name: &str) -> Option<Arc<KafkaLinkClient>> {
     KAFKA_RUNTIME.get(name)
 }
 
-/// List all registered Kafka client names.
-pub fn list_kafka_clients() -> Vec<String> {
-    KAFKA_RUNTIME.list()
-}
-
-/// Number of Kafka link clients currently in the runtime.
-pub fn kafka_client_count() -> usize {
-    KAFKA_RUNTIME.count()
-}
-
-/// Health check all registered Kafka clients.
-pub fn health_check_all_kafka() -> Vec<LinkSysHealth> {
-    KAFKA_RUNTIME.values().into_iter().map(|c| c.health_status()).collect()
-}
-
 // ============================================================
 // Webhook runtime store
 // ============================================================
@@ -715,6 +700,11 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     &mut new_kafka_map,
                 );
             }
+            // DNS resolver, not a runtime link client — nothing to register in the link store.
+            edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
+            // Controller-only credential acquisition metadata. The Gateway receives
+            // only the resolved plugin credential and never contacts the issuer.
+            edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
         }
     }
 
@@ -804,6 +794,10 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     &KAFKA_RUNTIME,
                 );
             }
+            // DNS resolver, not a runtime link client — nothing to register in the link store.
+            edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
+            // Controller-only credential acquisition metadata.
+            edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
         }
     }
 
@@ -837,9 +831,8 @@ mod tests {
     use super::*;
 
     fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
-        use edgion_resources::resources::http_route::BackendObjectReference;
         use edgion_resources::resources::link_sys::webhook::{
-            ExternalHttpConnection, WebhookServiceConfig, WebhookTarget,
+            ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
         };
         use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
@@ -850,16 +843,18 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {
                         target: WebhookTarget {
-                            backend_ref: BackendObjectReference {
-                                group: String::new(),
+                            service: WebhookServiceRef {
                                 kind: None,
-                                name: "resolve-svc".to_string(),
+                                name: Some("resolve-svc".to_string()),
                                 namespace: Some(namespace.to_string()),
                                 port: Some(8080),
+                                ..Default::default()
                             },
+                            ..Default::default()
                         },
                         ..Default::default()
                     },
@@ -1005,6 +1000,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://127.0.0.1:6379".to_string()],
                     auth: Some(RedisAuth {
@@ -1171,8 +1167,8 @@ mod tests {
             CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
         };
         let mut config = WebhookServiceConfig::default();
-        config.conn.target.backend_ref.name = "svc".to_string();
-        config.conn.target.backend_ref.port = Some(8080);
+        config.conn.target.service.name = Some("svc".to_string());
+        config.conn.target.service.port = Some(8080);
         config.request = WebhookOutboundRequest {
             headers: ListFields {
                 origin: vec![],
@@ -1207,8 +1203,9 @@ mod tests {
         let key = "t13-ns/wh-arc-swap".to_string();
 
         let make_ls = || {
-            use edgion_resources::resources::http_route::BackendObjectReference;
-            use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+            use edgion_resources::resources::link_sys::webhook::{
+                ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+            };
             LinkSys {
                 metadata: kube::core::ObjectMeta {
                     namespace: Some("t13-ns".into()),
@@ -1216,16 +1213,18 @@ mod tests {
                     ..Default::default()
                 },
                 spec: LinkSysSpec {
+                    unknown_fields: Vec::new(),
                     config: SystemConfig::Webhook(WebhookServiceConfig {
                         conn: ExternalHttpConnection {
                             target: WebhookTarget {
-                                backend_ref: BackendObjectReference {
-                                    group: String::new(),
+                                service: WebhookServiceRef {
                                     kind: None,
-                                    name: "webhook-svc".to_string(),
+                                    name: Some("webhook-svc".to_string()),
                                     namespace: Some("t13-ns".to_string()),
                                     port: Some(8080),
+                                    ..Default::default()
                                 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         },

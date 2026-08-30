@@ -44,11 +44,11 @@
 |------|------|--------|------|
 | `usePkce` | Boolean | `false` | 是否启用 PKCE（Proof Key for Code Exchange）。**生产部署强烈推荐 `true`**，详见[安全开关推荐配置](#安全开关推荐配置) |
 | `useNonce` | Boolean | `false` | 是否在认证请求中包含 nonce。**生产部署强烈推荐 `true`**，详见[安全开关推荐配置](#安全开关推荐配置) |
-| `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL |
+| `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL。路径形式使用请求的 `Host` 与监听器真实 TLS 状态，`X-Forwarded-Host` 与 `X-Forwarded-Proto` 均被忽略；当公开 origin 不同（含 TLS 在网关之前终止）时请使用绝对 URL |
 | `authorizationParams` | Object | 无 | 附加到授权请求的额外参数（不可包含保留键如 `response_type`、`client_id` 等） |
 | `revokeTokensOnLogout` | Boolean | `false` | 登出时是否调用 Token Revocation 端点 |
 | `logoutPath` | String | `"/logout"` | 触发登出的路径，须以 `/` 开头 |
-| `postLogoutRedirectUri` | String | 无 | 登出后重定向 URI |
+| `postLogoutRedirectUri` | String | 无 | 登出后重定向 URI。路径形式使用请求的 `Host` 与监听器真实 TLS 状态，`X-Forwarded-Host` 与 `X-Forwarded-Proto` 均被忽略；当公开 origin 不同（含 TLS 在网关之前终止）时请使用绝对 URL |
 
 ### Session 参数
 
@@ -72,7 +72,7 @@
 | `tokenSigningAlg` | String | 无 | 指定 Token 签名算法（不可为 `none`） |
 | `allowedSigningAlgs` | Array\<String\> | 无 | 允许的签名算法列表（不可包含 `none`） |
 | `useJwks` | Boolean | `true` | 是否使用 JWKS 进行本地验证 |
-| `sslVerify` | Boolean | `true` | 是否验证 OIDC Provider 的 TLS 证书 |
+| `verify` | Boolean | `true` | 是否验证 OIDC Provider 的 TLS 证书。`false` 时跳过对端证书验证（由运维人员负责，启动时记录 WARN）。对于使用私有 CA 的 IdP，请配合 `validation.caCertificateRefs`（Secret/ConfigMap 引用列表，含 `ca.crt` 键）或 `validation.wellKnownCACertificates: System` 使用；`validation.subjectAltNames` 会增加 SAN 固定并强制进行完整证书验证。如需对 IdP 进行 mTLS 连接，请配合 `clientCertificateRef`（含 `tls.crt`/`tls.key` 的 Secret）。已声明的 TLS 材料如果未解析、只解析了一部分或格式错误，OIDC 插件构建会失败，受影响路由将 fail-close；系统绝不会回退到忽略声明策略的客户端。内联 CA（`caCert`）已不再支持。注意：上表「基础参数」中的 `clientSecretRef` 是 OAuth2 客户端密钥，与 TLS 配置无关。 |
 | `issuers` | Array\<String\> | 无 | 允许的 issuer 列表 |
 | `audiences` | Array\<String\> | 无 | 允许的 audience 列表 |
 | `clockSkewSeconds` | Integer | `120` | 时钟偏差容差（秒） |
@@ -82,6 +82,28 @@
 | `introspectionEndpointAuthMethod` | Enum | `client_secret_basic` | Introspection 端点认证方式。可选值：`client_secret_basic` | `client_secret_post` |
 | `introspectionCacheTtl` | Integer | `0` | Introspection 结果缓存 TTL（秒），`0` 禁用 |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token 端点认证方式。可选值：`client_secret_basic` | `client_secret_post` |
+
+### 内存缓存限制
+
+只有 positive introspection 结果使用 TinyUFO/S3-FIFO。Access Token 间接存储
+保留 LRU，因为 logout 和 refresh 需要显式失效：
+
+```yaml
+introspection:
+  tinyUfoTtlCache:
+    maxEntries: 2048
+    maxLogicalBytes: 8MiB
+accessToken:
+  lruCache:
+    capacity: 2048
+    shards: 8
+```
+
+两类缓存分别继承 Gateway 的 `tiny_ufo_ttl_cache` 和 `lru_cache` 默认值。
+覆盖 TinyUFO 配置时必须同时设置两个字段；省略两个字段则继承进程默认值。显式设置
+LRU capacity 时，`shards: 0` 表示单分片；仅覆盖 shards 是无效配置。TinyUFO 字节
+字段表示单个缓存实例的总逻辑记录权重预算，并非精确 RSS 上限。Discovery/JWKS 继续
+使用专用 snapshot provider；refresh singleflight registry 也独立于两类缓存。
 
 ### Header 转发参数
 
@@ -137,7 +159,7 @@ config:
   useNonce: true     # 必开
   sessionCookieSecure: true      # 默认已 true，保持
   sessionCookieSameSite: "Lax"   # 默认已 Lax，根据跨站需求可调
-  sslVerify: true                # 默认已 true，切勿关闭
+  verify: true                   # 默认已 true，切勿关闭
   verificationMode: Auto
 ```
 

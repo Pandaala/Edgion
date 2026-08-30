@@ -2,6 +2,7 @@
 name = "edgion-controller"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]
@@ -16,18 +17,12 @@ path = "src/bin/edgion_controller.rs"
 workspace = true
 
 [features]
-default = ["allocator-jemalloc", "boringssl"]
+default = ["allocator-jemalloc"]
 
 # Memory allocator selection (mutually exclusive) — lives with the binary.
 allocator-jemalloc = ["tikv-jemallocator"]
 allocator-mimalloc = ["mimalloc"]
 allocator-system = []
-
-# TLS backend selection — the controller has no TLS-gated code of its own, but
-# it links pingora (core/proxy) directly, so it must pick pingora's backend.
-# (Previously forwarded through the gateway crate; that dependency is now gone.)
-boringssl = ["pingora-core/boringssl", "pingora-proxy/boringssl"]
-rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
 
 [dependencies]
 # Memory allocators (optional, controlled by features)
@@ -53,6 +48,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 jsonschema.workspace = true
+json-patch.workspace = true
 
 # Kubernetes conf_client and types
 kube.workspace = true
@@ -62,11 +58,9 @@ schemars.workspace = true
 # gRPC (config sync)
 tonic.workspace = true
 rustls.workspace = true
+rustls-pemfile.workspace = true
 tokio-rustls.workspace = true
-# System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
-rustls-native-certs.workspace = true
 x509-parser.workspace = true
-tonic-reflection.workspace = true
 prost.workspace = true
 
 # File system monitoring
@@ -76,7 +70,6 @@ futures.workspace = true
 
 # HTTP server
 axum.workspace = true
-axum-server.workspace = true
 
 # Utilities
 bytes.workspace = true
@@ -90,55 +83,36 @@ regex.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
-nom.workspace = true
 sha2.workspace = true
-subtle.workspace = true
-crc32fast.workspace = true
 hmac.workspace = true
-aes-gcm.workspace = true
 hex.workspace = true
-jsonwebtoken.workspace = true
 
-# Pingora
-pingora-core.workspace = true
-pingora-http.workspace = true
-pingora-limits.workspace = true
-pingora-load-balancing.workspace = true
-pingora-proxy.workspace = true
 etcd-client.workspace = true
-fred.workspace = true
 
 # Metrics
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
-metrics-util.workspace = true
 
 # CLI
 clap.workspace = true
-rpassword.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
+url.workspace = true
 
 # Test client dependencies
 reqwest.workspace = true
 
-# CLI table formatting
-tabled.workspace = true
-
-rusqlite.workspace = true
-md-5.workspace = true
-cookie.workspace = true
 instant-acme.workspace = true
 rcgen.workspace = true
 time.workspace = true
 sha1.workspace = true
-ldap3.workspace = true
-pingora-ketama.workspace = true
 tower.workspace = true
+croner.workspace = true
+chrono-tz.workspace = true
 
 
 [build-dependencies]
@@ -146,6 +120,7 @@ tonic-build.workspace = true
 
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 mockall.workspace = true
 expect-test.workspace = true

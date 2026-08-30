@@ -1,5 +1,19 @@
 use super::*;
 
+/// Record an outbound TLS SAN-pinning rejection on an OIDC outbound call.
+///
+/// The `edgion_gateway_outbound_tls_san_mismatch_total{plugin="openid_connect"}` counter is
+/// the only channel here. Every caller sits on the request hot path, which forbids `tracing::*`
+/// at any level (log-safety Iron rule 3), and none of them can reach the `PluginLog`; threading a
+/// typed error up to a `PluginLog`-owning frame would cost a signature cascade across the five
+/// outbound call paths. A SAN mismatch is a configuration error that fails every request
+/// identically, so the counter is the intended alerting signal.
+pub(super) fn note_oidc_san_mismatch(err: &reqwest::Error) {
+    if crate::tls::validation::outbound_san_mismatch_reason(err).is_some() {
+        crate::observe::metrics::registry::record_outbound_tls_san_mismatch("openid_connect");
+    }
+}
+
 impl OpenidConnect {
     pub(super) fn refresh_lock_key(raw_cookie_value: &str) -> String {
         let digest = Sha256::digest(raw_cookie_value.as_bytes());
@@ -22,7 +36,6 @@ impl OpenidConnect {
             session_ref.to_string(),
             AccessTokenCacheEntry {
                 token: token.to_string(),
-                _expires_at: expires_at,
             },
             Some(ttl),
         );
@@ -33,7 +46,9 @@ impl OpenidConnect {
             return None;
         }
         // Expiry (including clock_skew) was baked into TTL at insert time — no manual check needed.
-        self.access_token_cache.get(&session_ref.to_string()).map(|e| e.token)
+        self.access_token_cache
+            .get(&session_ref.to_string())
+            .map(|entry| entry.token)
     }
 
     pub(super) async fn remove_cached_access_token(&self, session_ref: &str) {
@@ -156,9 +171,12 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Token exchange request failed: {}", e),
+        let resp = request.send().await.map_err(|e| {
+            note_oidc_san_mismatch(&e);
+            OidcVerifyError::Other {
+                status: 502,
+                message: "Bad Gateway".to_string(),
+            }
         })?;
         if !resp.status().is_success() {
             return Err(OidcVerifyError::Other {
@@ -210,7 +228,7 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await?;
+        let resp = request.send().await.inspect_err(note_oidc_san_mismatch)?;
         if !resp.status().is_success() {
             return Err(format!("Revocation request failed with status {}", resp.status()).into());
         }
@@ -309,9 +327,12 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Token refresh request failed: {}", e),
+        let resp = request.send().await.map_err(|e| {
+            note_oidc_san_mismatch(&e);
+            OidcVerifyError::Other {
+                status: 502,
+                message: "Bad Gateway".to_string(),
+            }
         })?;
         if !resp.status().is_success() {
             return Err(OidcVerifyError::Other {
@@ -345,9 +366,9 @@ impl OpenidConnect {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| OidcVerifyError::Other {
+            .map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to fetch OIDC discovery document: {}", e),
+                message: "Bad Gateway".to_string(),
             })?;
         let token_response = self.refresh_access_token(&discovery, refresh_token).await?;
 
@@ -367,25 +388,7 @@ impl OpenidConnect {
         Ok(session_cookie.access_token.clone())
     }
 
-    pub(super) async fn get_or_create_refresh_lock(&self, lock_key: &str) -> Arc<Mutex<()>> {
-        // ShardedLruCache has no entry/get_or_insert_with API, so this is best-effort
-        // get-or-insert: under a true concurrent miss two callers can each insert their
-        // own lock and the last writer wins. The leader's lock is then orphaned and the
-        // two refreshes proceed in parallel — the second waiter's `try_get_recent_refresh_result`
-        // double-check after acquiring its own lock still de-dupes via the results cache,
-        // and worst case is one extra refresh round-trip for that key.
-        if let Some(existing) = self.refresh_singleflight_locks.get(&lock_key.to_string()) {
-            return existing;
-        }
-        let new_lock = Arc::new(Mutex::new(()));
-        self.refresh_singleflight_locks
-            .insert(lock_key.to_string(), new_lock.clone(), None);
-        new_lock
-    }
-
     pub(super) async fn try_get_recent_refresh_result(&self, lock_key: &str) -> Option<OidcSessionCookie> {
-        // Freshness window is owned by the cache TTL (see `put_refresh_result`); LRU
-        // lazy-expires entries past the window on read, no manual elapsed-check needed.
         self.refresh_singleflight_results.get(&lock_key.to_string())
     }
 
@@ -399,9 +402,9 @@ impl OpenidConnect {
         lock_key: &str,
         session_cookie: &mut OidcSessionCookie,
     ) -> VerifyResult<String> {
-        let lock = self.get_or_create_refresh_lock(lock_key).await;
+        let flight = self.refresh_singleflight.get_or_create(lock_key);
         let wait_timeout = Duration::from_secs(self.config.timeout);
-        let _guard = match tokio::time::timeout(wait_timeout, lock.lock()).await {
+        let _guard = match tokio::time::timeout(wait_timeout, flight.lock().lock()).await {
             Ok(guard) => guard,
             Err(_) => {
                 if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {

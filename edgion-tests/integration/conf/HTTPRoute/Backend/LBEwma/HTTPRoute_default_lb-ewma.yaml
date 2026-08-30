@@ -25,9 +25,3 @@ spec:
       backendRefs:
         - name: lb-ewma-service
           port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyEwma
-                name: default

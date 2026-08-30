@@ -9,11 +9,11 @@ description: Route matching overview — multi-stage pipeline (Listener→Domain
 
 | File | Topic |
 |------|-------|
-| [01-http-route.md](01-http-route.md) | HTTP route engine — RadixPath, RegexSet, ConfHandler, proxy implementation, LB policy sync |
+| [01-http-route.md](01-http-route.md) | HTTP route engine — RadixPath, RegexSet, per-listener ConfHandler, proxy implementation |
 | [02-grpc-route.md](02-grpc-route.md) | gRPC route engine — Service/Method matching, gRPC-Web support, HTTP pipeline integration |
 | [03-tcp-route.md](03-tcp-route.md) | TCP route — per-listener route table, TCP proxy implementation, ConfHandler |
 | [04-tls-route.md](04-tls-route.md) | TLS route — SNI matching, per-listener route table, terminate vs passthrough proxies |
-| [05-udp-route.md](05-udp-route.md) | UDP route — per-listener route table, stateless proxy, ConfHandler |
+| [05-udp-route.md](05-udp-route.md) | UDP route — per-listener route table, per-client session pinning, ConfHandler |
 
 ## Multi-stage matching pipeline
 
@@ -22,13 +22,13 @@ After a request reaches the Gateway, route matching proceeds through these layer
 ```mermaid
 flowchart LR
     A["Listener"] --> B["Domain (exact / wildcard / catch-all)"]
-    B --> C["Path (regex / radix)"]
+    B --> C["Path (radix Exact/Prefix, then regex)"]
     C --> D["Deep match"]
 ```
 
 1. **Listener isolation**: based on the connection's listening address and protocol (`ListenerKey`, formatted as `"{addr}/{protocol}"`), pick the corresponding per-listener route table.
 2. **Domain match**: look up `RouteRules` by hostname in `DomainRouteRules`.
-3. **Path match**: try the regex engine first within `RouteRules`, then the radix engine.
+3. **Path match**: try radix Exact/PathPrefix candidates first; only if none deep-match, try RegularExpression candidates.
 4. **Deep match**: run Gateway/Listener constraints, HTTP method, headers, and query-param exact checks against candidate routes.
 
 ## Per-listener isolation
@@ -88,7 +88,8 @@ Each `RouteRules` holds two engines internally:
 
 - Uses `regex::RegexSet` to batch-match all regex patterns at once, with O(M) complexity (M is path length), independent of route count.
 - Routes are sorted by regex pattern length in descending order (longer patterns are preferred).
-- Match order: regex engine runs before the radix engine.
+- Match order: the radix engine runs first; the regex engine is the fallback, preserving
+  Gateway API precedence `Exact > PathPrefix > RegularExpression`.
 
 ## RadixPath priority
 
@@ -131,8 +132,7 @@ After path matching, candidate routes go through `deep_match_common` for exact v
 flowchart TD
     A["Controller pushes HTTPRoute"] --> B["ConfHandler&lt;HTTPRoute&gt;::full_set / partial_update"]
     B --> C["route_cache update (DashMap insert/remove)"]
-    C --> D["sync_lb_policies_for_routes (sync LB policies into the global PolicyStore)"]
-    D --> E["rebuild_all_listener_managers / rebuild_affected_listener_managers"]
+    C --> E["rebuild_all_listener_managers / rebuild_affected_listener_managers"]
     E --> F["bucket_routes_by_listener (bucket by resolved_listeners)"]
     F -->|"resolved_listeners empty"| F1["skip + warn"]
     E --> G["For each affected listener"]

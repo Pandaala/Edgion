@@ -36,8 +36,8 @@ fn get_strings() -> &'static SensitiveStrings {
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum SensitiveMode {
-    #[default]
     Off = 0,
+    #[default]
     Replace = 1,
     Wrap = 2,
 }
@@ -67,7 +67,7 @@ pub struct SensitiveMaskConfig {
 impl Default for SensitiveMaskConfig {
     fn default() -> Self {
         Self {
-            mode: SensitiveMode::Off,
+            mode: SensitiveMode::Replace,
             replace_with: default_replace_with(),
             wrap_prefix: default_wrap_prefix(),
             wrap_suffix: default_wrap_suffix(),
@@ -269,5 +269,12 @@ mod tests {
             0,
             "wrap-mode buffer must be empty after apply_sensitive returns"
         );
+    }
+
+    #[test]
+    fn default_mode_is_replace() {
+        // Privacy-by-default. `ext` rendering follows this mode, so `off` would
+        // make the EdgionGatewayConfig whitelist inert out of the box.
+        assert_eq!(SensitiveMaskConfig::default().mode, SensitiveMode::Replace);
     }
 }

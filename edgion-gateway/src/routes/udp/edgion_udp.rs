@@ -16,7 +16,17 @@ use crate::routes::udp::UdpPortRouteManager;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 
-/// UDP session timeout (60 seconds of inactivity)
+/// UDP session idle timeout: a session is reclaimed after 60 seconds without
+/// traffic in either direction.
+///
+/// This is intentionally a fixed constant, NOT operator-configurable — unlike
+/// the TCP/TLS L4 relay, whose idle timeout is resolved from
+/// `tcpTimeout.idleTimeout` (`resolve_tcp_idle_timeout`). UDP is connectionless
+/// soft state with no close handshake, so 60s follows the conventional NAT-style
+/// UDP mapping lifetime and bounds resource use per [`MAX_UDP_SESSIONS`]. A
+/// `udpTimeout.idleTimeout` knob is deliberately deferred until a concrete need
+/// appears; see the timeout-coverage audit (item 4) for the rationale. The value
+/// is pinned by a unit test in this module so any change is deliberate.
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Maximum UDP packet size (64KB)
@@ -116,11 +126,11 @@ impl EdgionUdpProxy {
                 _ = self.cancel_token.cancelled() => break,
                 result = self.socket.recv_from(&mut buf) => {
                     match result {
-                        Ok((len, client_addr)) => {
+                        Ok((len, direct_peer_addr)) => {
                             tokio::select! {
                                 biased;
                                 _ = self.cancel_token.cancelled() => break,
-                                _ = self.handle_client_packet(&buf[..len], client_addr) => {}
+                                _ = self.handle_client_packet(&buf[..len], direct_peer_addr) => {}
                             }
                         }
                         Err(_) => break,
@@ -134,9 +144,9 @@ impl EdgionUdpProxy {
         self.cancel_token.cancel();
     }
 
-    async fn handle_client_packet(&self, data: &[u8], client_addr: std::net::SocketAddr) {
-        let client_ip = client_addr.ip().to_string();
-        let client_port = client_addr.port();
+    async fn handle_client_packet(&self, data: &[u8], direct_peer_addr: std::net::SocketAddr) {
+        let direct_peer_ip = crate::ctx::canonicalize_ip(direct_peer_addr.ip());
+        let direct_peer_port = direct_peer_addr.port();
 
         // Fast path: an established session already has a pinned upstream and a
         // dedicated upstream socket, so the route pipeline below (ArcSwap load,
@@ -146,9 +156,16 @@ impl EdgionUdpProxy {
         // Route/backend changes take effect when the session expires
         // (SESSION_TIMEOUT) and a new one is created. Clone the Arc out so the
         // DashMap read guard is dropped before the `.await` below.
-        if let Some(session) = self.client_sessions.get(&client_addr).map(|s| s.value().clone()) {
+        if let Some(session) = self.client_sessions.get(&direct_peer_addr).map(|s| s.value().clone()) {
             let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
-            Self::record_upstream_send_result(send_result, &session, self.listener_port, client_ip, client_port).await;
+            Self::record_upstream_send_result(
+                send_result,
+                &session,
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+            )
+            .await;
             return;
         }
 
@@ -158,8 +175,8 @@ impl EdgionUdpProxy {
             None => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
-                    client_ip,
-                    client_port,
+                    direct_peer_ip,
+                    direct_peer_port,
                     "NoRouteMatched",
                 ))
                 .await;
@@ -174,8 +191,8 @@ impl EdgionUdpProxy {
         if udp_route.spec.rules.as_ref().and_then(|rules| rules.first()).is_none() {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
-                client_ip,
-                client_port,
+                direct_peer_ip,
+                direct_peer_port,
                 "NoRuleAvailable",
             ))
             .await;
@@ -192,13 +209,17 @@ impl EdgionUdpProxy {
         // session. A rule with no annotation has store_key None, so the check
         // returns Allow immediately and the non-annotated path pays only one
         // Option check.
-        if let StreamPluginCheck::Deny(reason) =
-            check_stream_plugins(unit.stream_plugin_store_key.as_deref(), &client_ip, self.listener_port).await
+        if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
+            unit.stream_plugin_store_key.as_deref(),
+            &direct_peer_ip,
+            self.listener_port,
+        )
+        .await
         {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
-                client_ip,
-                client_port,
+                direct_peer_ip,
+                direct_peer_port,
                 reason,
             ))
             .await;
@@ -210,8 +231,8 @@ impl EdgionUdpProxy {
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
-                    client_ip,
-                    client_port,
+                    direct_peer_ip,
+                    direct_peer_port,
                     "NoBackendSelected",
                 ))
                 .await;
@@ -228,8 +249,8 @@ impl EdgionUdpProxy {
             None => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
-                    client_ip,
-                    client_port,
+                    direct_peer_ip,
+                    direct_peer_port,
                     "NoBackendResolved",
                 ))
                 .await;
@@ -248,21 +269,21 @@ impl EdgionUdpProxy {
         {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
-                client_ip,
-                client_port,
+                direct_peer_ip,
+                direct_peer_port,
                 UNSAFE_UPSTREAM_ADDRESS_LOG,
             ))
             .await;
             return;
         }
 
-        let session = match self.get_or_create_session(client_addr, upstream_addr).await {
+        let session = match self.get_or_create_session(direct_peer_addr, upstream_addr).await {
             Ok(session) => session,
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
-                    client_ip,
-                    client_port,
+                    direct_peer_ip,
+                    direct_peer_port,
                     "SessionLimitReached",
                 ))
                 .await;
@@ -271,7 +292,14 @@ impl EdgionUdpProxy {
         };
 
         let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
-        Self::record_upstream_send_result(send_result, &session, self.listener_port, client_ip, client_port).await;
+        Self::record_upstream_send_result(
+            send_result,
+            &session,
+            self.listener_port,
+            direct_peer_ip,
+            direct_peer_port,
+        )
+        .await;
     }
 
     /// Get or create a client session.
@@ -280,17 +308,17 @@ impl EdgionUdpProxy {
     /// exhaustion from UDP reflection/amplification attacks.
     async fn get_or_create_session(
         &self,
-        client_addr: std::net::SocketAddr,
+        direct_peer_addr: std::net::SocketAddr,
         upstream_addr: std::net::SocketAddr,
     ) -> Result<Arc<ClientSession>, ()> {
-        if let Some(session) = self.client_sessions.get(&client_addr) {
+        if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
             return Ok(session.value().clone());
         }
 
         let session_permit = match self.session_permits.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
-                if let Some(session) = self.client_sessions.get(&client_addr) {
+                if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
                     return Ok(session.value().clone());
                 }
                 return Err(());
@@ -317,7 +345,7 @@ impl EdgionUdpProxy {
             bytes_received: Arc::new(AtomicU64::new(0)),
         });
 
-        let session = match self.client_sessions.entry(client_addr) {
+        let session = match self.client_sessions.entry(direct_peer_addr) {
             Entry::Occupied(existing) => return Ok(existing.get().clone()),
             Entry::Vacant(vacant) => vacant.insert(session).clone(),
         };
@@ -329,7 +357,8 @@ impl EdgionUdpProxy {
         let listener_port = self.listener_port;
 
         tokio::spawn(async move {
-            Self::handle_upstream_packets(client_addr, downstream, sessions_ref, sess, cancel, listener_port).await;
+            Self::handle_upstream_packets(direct_peer_addr, downstream, sessions_ref, sess, cancel, listener_port)
+                .await;
         });
 
         Ok(session)
@@ -340,7 +369,7 @@ impl EdgionUdpProxy {
     /// Exits when the session is removed, the cancel token fires, or a
     /// socket error occurs.
     async fn handle_upstream_packets(
-        client_addr: std::net::SocketAddr,
+        direct_peer_addr: std::net::SocketAddr,
         downstream_socket: Arc<UdpSocket>,
         client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
         session: Arc<ClientSession>,
@@ -350,7 +379,7 @@ impl EdgionUdpProxy {
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
         loop {
-            if !client_sessions.contains_key(&client_addr) {
+            if !client_sessions.contains_key(&direct_peer_addr) {
                 break;
             }
 
@@ -360,12 +389,12 @@ impl EdgionUdpProxy {
                 result = tokio::time::timeout(Duration::from_secs(1), session.upstream_socket.recv_from(&mut buf)) => {
                     match result {
                         Ok(Ok((len, _))) => {
-                            let send_result = downstream_socket.send_to(&buf[..len], client_addr).await;
+                            let send_result = downstream_socket.send_to(&buf[..len], direct_peer_addr).await;
                             Self::record_downstream_send_result(
                                 send_result,
                                 &session,
                                 listener_port,
-                                client_addr,
+                                direct_peer_addr,
                             )
                             .await;
                         }
@@ -381,8 +410,8 @@ impl EdgionUdpProxy {
         result: std::io::Result<usize>,
         session: &ClientSession,
         listener_port: u16,
-        client_ip: String,
-        client_port: u16,
+        direct_peer_ip: String,
+        direct_peer_port: u16,
     ) {
         match result {
             Ok(bytes_sent) => {
@@ -393,8 +422,8 @@ impl EdgionUdpProxy {
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
                     listener_port,
-                    client_ip,
-                    client_port,
+                    direct_peer_ip,
+                    direct_peer_port,
                     "UpstreamSendError",
                 ))
                 .await;
@@ -406,7 +435,7 @@ impl EdgionUdpProxy {
         result: std::io::Result<usize>,
         session: &ClientSession,
         listener_port: u16,
-        client_addr: std::net::SocketAddr,
+        direct_peer_addr: std::net::SocketAddr,
     ) {
         match result {
             Ok(bytes_sent) => {
@@ -417,8 +446,8 @@ impl EdgionUdpProxy {
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
                     listener_port,
-                    client_addr.ip().to_string(),
-                    client_addr.port(),
+                    crate::ctx::canonicalize_ip(direct_peer_addr.ip()),
+                    direct_peer_addr.port(),
                     "DownstreamSendError",
                 ))
                 .await;
@@ -452,11 +481,11 @@ impl EdgionUdpProxy {
             }
         }
 
-        for (client_addr, session) in to_remove {
+        for (direct_peer_addr, session) in to_remove {
             let log_entry = UdpLogEntry::new(
                 self.listener_port,
-                client_addr.ip().to_string(),
-                client_addr.port(),
+                crate::ctx::canonicalize_ip(direct_peer_addr.ip()),
+                direct_peer_addr.port(),
                 Some(session.upstream_addr.to_string()),
                 session.session_start,
             )
@@ -468,7 +497,7 @@ impl EdgionUdpProxy {
             );
 
             log_udp(&log_entry).await;
-            if let Some((_, removed)) = self.client_sessions.remove(&client_addr) {
+            if let Some((_, removed)) = self.client_sessions.remove(&direct_peer_addr) {
                 removed.release_permit();
             }
         }
@@ -650,8 +679,8 @@ mod tests {
             bytes_received: Arc::new(AtomicU64::new(300)),
         });
 
-        let client_addr: std::net::SocketAddr = "192.168.1.1:12345".parse().unwrap();
-        proxy.client_sessions.insert(client_addr, session);
+        let direct_peer_addr: std::net::SocketAddr = "192.168.1.1:12345".parse().unwrap();
+        proxy.client_sessions.insert(direct_peer_addr, session);
         assert_eq!(proxy.session_count(), 1);
 
         proxy.cleanup_expired_sessions().await;
@@ -693,8 +722,8 @@ mod tests {
             bytes_received: Arc::new(AtomicU64::new(0)),
         });
 
-        let client_addr: std::net::SocketAddr = "192.168.1.2:12346".parse().unwrap();
-        proxy.client_sessions.insert(client_addr, session);
+        let direct_peer_addr: std::net::SocketAddr = "192.168.1.2:12346".parse().unwrap();
+        proxy.client_sessions.insert(direct_peer_addr, session);
         assert_eq!(proxy.session_count(), 1);
 
         proxy.cleanup_expired_sessions().await;

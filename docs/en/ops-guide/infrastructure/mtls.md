@@ -293,7 +293,22 @@ conf_sync_security:
       ca: certs/grpc/secondary/ca.crt
 ```
 
-When mTLS is enabled, the Gateway automatically upgrades the `server_addr` connection from `http://` to `https://`.
+When mTLS is enabled, the Gateway automatically upgrades the `server_addrs` connection from `http://` to `https://`.
+
+> **Etcd mode (HA, multiple controllers): manual certs with all-address SANs.**
+> `auto_ca` is Kubernetes-only — it needs a `kube::Client` and provisions K8s Secrets, so on
+> bare-metal/VM it fails at startup; etcd mode always uses manually-issued conf_sync certs.
+> When `server_addrs` lists more than one controller, the **server certificate's SAN set must
+> cover every controller address the gateway may rotate to** — the gateway derives the TLS
+> verification hostname from the address it is currently connected to. Issue the cert with
+> repeatable `--server-san` flags:
+> ```bash
+> edgion-cli gen-certs --output file --output-dir certs/grpc \
+>   --server-san 10.0.0.11 --server-san 10.0.0.12
+> ```
+> A SAN set covering only the first controller **passes every single-controller test and
+> fails exactly during a real failover** (the rotation lands on the second address and TLS
+> verification rejects it), so the end-to-end failover integration test asserts it.
 
 > **Backward compatibility**: The legacy single-cert format is still supported and requires no migration:
 > ```yaml
@@ -330,17 +345,61 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addr` conne
 | Multiple `[[certs]]` entries + `active = "name"` | Entry matching `name` |
 | Multiple `[[certs]]` entries, no `active` | Startup error |
 | No `[[certs]]`, legacy `[tls]` present | Legacy `[tls]` entry |
-| No mTLS config | Plaintext gRPC |
+| No mTLS config | Startup failure (see the Behavior Matrix below) |
 
 ### Behavior Matrix
 
 | Configuration | Result |
 |--------------|--------|
-| No `[conf_sync_security]` section | Plaintext gRPC (backward compatible) |
+| No `conf_sync_security` section | **Refuses to start** (non-zero exit, both Controller and Gateway) |
 | Valid active cert | mTLS gRPC |
+| `auto_ca: true` (Controller: alone; Gateway: **plus** `tls` cert paths) | mTLS gRPC (Controller's internal CA provisions the certs) |
+| `auto_ca: true` with no cert paths, on the **Gateway** | Startup failure (`auto_ca` implies mTLS; the client cert must be readable from disk) |
 | `active` not matching any cert name | Startup failure |
 | Missing or invalid cert files | Startup failure (Controller) / connection failure with retry (Gateway) |
-| `skip_tls = true` | Plaintext with ERROR-level warning logs |
+| `skip_tls: true` | Plaintext with ERROR-level warning logs |
+
+### Migration: `conf_sync_security` is now required
+
+The conf_sync channel streams **resolved Secrets** (TLS private keys, backend credentials)
+from the Controller to the Gateway. Plaintext on that channel must therefore be an explicit,
+audited choice — never the silent consequence of a forgotten config block.
+
+Omitting `conf_sync_security` used to mean "plaintext gRPC". It now makes **both binaries
+refuse to start** with a non-zero exit. If your deployment relied on the omitted section,
+pick one before upgrading:
+
+- **Kubernetes (recommended)**: enable the Controller's internal CA. The two sides are **not**
+  symmetric — copying the Controller's block onto the Gateway makes the Gateway exit non-zero:
+
+  ```yaml
+  # Controller — auto_ca alone (it mints its own server identity in memory)
+  conf_sync_security:
+    auto_ca: true
+
+  # Gateway — auto_ca AND the paths to the Controller-provisioned client cert
+  # (Secret `edgion-conf-sync-certs`, mounted by the shipped manifests)
+  conf_sync_security:
+    auto_ca: true
+    tls:
+      cert: /etc/edgion/conf-sync-certs/client.crt
+      key: /etc/edgion/conf-sync-certs/client.key
+      ca: /etc/edgion/conf-sync-certs/ca.crt
+  ```
+
+- **File-mode mTLS**: configure `conf_sync_security.certs` (or the legacy
+  `conf_sync_security.tls` block) with `cert` / `key` / `ca` paths.
+- **Keep plaintext**: opt in explicitly.
+
+```yaml
+conf_sync_security:
+  tls:
+    skip_tls: true    # INSECURE: plaintext conf_sync. Local dev / non-production only.
+```
+
+Plaintext (`skip_tls: true`) still logs an ERROR at startup on both ends and raises
+`edgion_system_error_state{reason="skip_tls"}`, so the degraded state stays visible in
+monitoring.
 
 ### Certificate Rotation
 
@@ -364,7 +423,7 @@ Mount the secrets into Controller and Gateway pods, and reference the mount path
 
 ### Verification
 
-After enabling mTLS, verify by checking the logs:
+After enabling mTLS, first check that both sides came up in the mode you intended:
 
 ```
 # Controller log
@@ -373,6 +432,23 @@ conf_sync mTLS enabled for gRPC server
 # Gateway log
 conf_sync mTLS enabled for gRPC client
 ```
+
+**These two lines prove intent, not a working link.** They are emitted at startup from each side's
+own configuration, so they both appear even when the two ends cannot actually talk — a CA mismatch,
+an expired leaf, or a SAN that does not match all produce two happy startup logs and a link that
+never establishes. Worse, a Gateway in that state keeps serving traffic from its last-known config
+and stays `Ready`, so nothing else looks wrong either.
+
+For the mechanical proof, scrape each **Gateway**'s metrics listener (`:12090`):
+
+```promql
+edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 0
+```
+
+`0` on every Gateway means every one of them currently holds an established conf_sync stream to the
+Controller — which is only possible if the mTLS handshake actually succeeded. A Gateway sitting at
+`1` has not connected; check that Gateway's own logs, and the Controller's rate-limited
+`conf_sync TLS handshake failed` WARN (it names the peer), for the reason.
 
 You can also confirm by attempting a plaintext gRPC connection to the Controller's gRPC port — it should be rejected.
 

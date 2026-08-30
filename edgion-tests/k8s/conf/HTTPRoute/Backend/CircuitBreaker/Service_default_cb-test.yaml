@@ -3,16 +3,6 @@ kind: Service
 metadata:
   name: cb-test
   namespace: edgion-default
-  annotations:
-    edgion.io/outlier-detection: 'consecutiveErrors: 3
-
-      consecutiveGatewayErrors: 3
-
-      ejectionSeconds: 3
-
-      maxEjectionPercent: 0
-
-      '
 spec:
   ports:
   - port: 30001

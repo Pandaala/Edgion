@@ -10,7 +10,7 @@ use anyhow::Result;
 use etcd_client::{Certificate, ConnectOptions, Identity, TlsOptions};
 
 use crate::link_sys_core::credential::CredentialState;
-use crate::link_sys_core::tls as tls_helper;
+use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
@@ -88,35 +88,74 @@ pub fn build_connect_options(
         }
     }
 
+    // NOTE deliberately NO unconditional defaults here: this builder is shared
+    // by EVERY EtcdLinkClient — the gateway's operator-configured LinkSys etcd
+    // clients included — and injecting h2-keepalive/dial defaults here would
+    // silently change their connection behavior in every mode (a §10.5
+    // zero-K8s-impact violation). The conf_center client, which DOES need
+    // always-on h2 keepalive (spec §4.2 fact 2: h2 PING is the only thing that
+    // kills a blackholed established stream), gets its defaults injected at its
+    // own config-conversion layer: `EtcdConfig::to_client_config` in
+    // edgion-controller fills `timeout.dial` and `keep_alive` before this
+    // builder ever runs.
     Ok(if has_options { Some(options) } else { None })
+}
+
+/// Connect options for the DEDICATED leader-election client (spec §4.2/§3.2).
+///
+/// Identical to [`build_connect_options`] EXCEPT the channel-wide per-request
+/// timeout is stripped. etcd's v3election `campaign()` is a unary RPC that
+/// blocks server-side until this candidate wins; a channel-wide request timeout
+/// would abort it every `request_timeout_ms`, turning a healthy standby into a
+/// re-campaign hot loop and breaking active-passive HA. h2 keepalive is retained
+/// (from the shared builder) so a blackholed campaign connection still dies.
+pub fn election_connect_options(
+    crd: &EtcdClientConfig,
+    auth: &CredentialState<BasicAuthMaterial>,
+) -> Result<ConnectOptions> {
+    let mut crd = crd.clone();
+    if let Some(t) = crd.timeout.as_mut() {
+        t.request = None;
+    }
+    Ok(build_connect_options(&crd, auth)?.unwrap_or_else(default_connect_options))
 }
 
 /// Build TLS options from CRD config.
 ///
-/// Uses Rustls (etcd-client default) for TLS connections. CA + client mTLS
-/// come from [`tls_helper::build_material`], which merges inline PEM from the
-/// CRD with the resolved K8s Secret (`tls.crt` / `tls.key` / `ca.crt`).
+/// Uses the shared [`outbound_tls::resolve_outbound_tls`] resolver with
+/// `provider_can_disable: false` — etcd-client's TLS stack always verifies
+/// certificates and has no skip-verify knob, so the resolver will return
+/// [`EdgionErrorCode::OutboundTlsVerifyUnsupported`] (mapped to an error here)
+/// if `verify=false` is configured, preventing a silent ignore of the
+/// operator's intent.
 fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
+    let resolved = outbound_tls::resolve_outbound_tls(
+        &tls.outbound,
+        tls.resolved_ca_certificates.as_deref(),
+        tls.resolved_client_certificate.as_ref(),
+        false, // etcd-client cannot disable TLS verification
+        "Etcd",
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "Etcd TLS configuration error: {e:?}. \
+             etcd-client does not support skip-verify; \
+             use a proper CA certificate or connect without TLS."
+        )
+    })?;
+
     let mut tls_options = TlsOptions::new();
 
-    if let Some(material) = tls_helper::build_material(tls) {
-        if let Some(ca_pem) = &material.ca_pem {
-            tls_options = tls_options.ca_certificate(Certificate::from_pem(ca_pem));
-        }
-        if let (Some(cert), Some(key)) = (&material.client_cert_pem, &material.client_key_pem) {
-            tls_options = tls_options.identity(Identity::from_pem(cert, key.as_slice()));
+    if let EffectiveCa::Custom(bundles) = &resolved.ca {
+        // etcd-client accepts one Certificate per `ca_certificate()` call;
+        // iterate over all resolved PEM bundles and add each in turn.
+        for bundle in bundles {
+            tls_options = tls_options.ca_certificate(Certificate::from_pem(bundle.as_slice()));
         }
     }
 
-    // etcd-client TlsOptions does not expose an insecure_skip_verify knob.
-    // Aligning with Redis: refuse to start rather than silently ignoring the
-    // operator's intent (an operator who set `insecure_skip_verify: true` for
-    // testing would otherwise get strict verification without any signal).
-    if tls.insecure_skip_verify == Some(true) {
-        anyhow::bail!(
-            "Etcd TLS insecure_skip_verify is configured but not supported by etcd-client. \
-             TLS always verifies certificates. Use a proper CA certificate or connect without TLS."
-        );
+    if let Some((cert_pem, key_pem)) = &resolved.client_identity {
+        tls_options = tls_options.identity(Identity::from_pem(cert_pem, key_pem.as_slice()));
     }
 
     Ok(tls_options)
@@ -125,6 +164,12 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
 /// Get default connect options with a reasonable dial timeout.
 /// Used when no specific options are configured but we still want a timeout.
 pub fn default_connect_options() -> ConnectOptions {
+    // Shared fallback for EVERY fully-unconfigured EtcdLinkClient (LinkSys
+    // included) — dial timeout only, no h2 keepalive, exactly the pre-election
+    // behavior. The conf_center client never reaches this fallback: its
+    // config-conversion layer (`EtcdConfig::to_client_config`) always fills
+    // `timeout.dial` and `keep_alive`, which is where the leader-election
+    // blackhole-detection defaults (spec §4.2 fact 2) live.
     ConnectOptions::new().with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
 }
 
@@ -161,6 +206,21 @@ mod tests {
     /// Shorthand: `NotRequired` state (no auth configured).
     fn no_auth() -> CredentialState<BasicAuthMaterial> {
         CredentialState::NotRequired
+    }
+
+    /// Zero-impact guard (spec §10.5): the SHARED builder must never inject
+    /// defaults of its own. An unconfigured LinkSys etcd client yields `None`
+    /// here and falls back to `default_connect_options()` = dial timeout ONLY —
+    /// no h2 keepalive. The conf_center's always-on keepalive lives in
+    /// `EtcdConfig::to_client_config` (edgion-controller), not here; if this
+    /// test fails, a conf_center default has leaked into every etcd client.
+    #[test]
+    fn unconfigured_client_gets_no_injected_options() {
+        let crd = minimal_config(vec!["http://127.0.0.1:2379".to_string()]);
+        assert!(
+            build_connect_options(&crd, &no_auth()).unwrap().is_none(),
+            "shared builder must not inject defaults for an unconfigured client"
+        );
     }
 
     /// Create a minimal EtcdClientConfig for testing
@@ -324,11 +384,14 @@ mod tests {
 
     #[test]
     fn test_with_tls_enabled_no_certs() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,
-                certs: None,
-                insecure_skip_verify: None,
+                outbound: OutboundTlsLocal::default(),
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
@@ -336,34 +399,39 @@ mod tests {
         assert!(options.is_some());
     }
 
-    /// `insecure_skip_verify: true` must fail fast rather than silently being
-    /// ignored — etcd-client cannot honour the flag and an operator who set it
+    /// `verify=false` must fail fast for Etcd rather than silently being
+    /// ignored — etcd-client has no skip-verify knob and an operator who set it
     /// (e.g. for self-signed dev certs) would otherwise get strict verification
     /// with no signal.
     #[test]
     fn test_insecure_skip_verify_bails() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
+        let _guard = outbound_tls::outbound_tls_test_guard();
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,
-                certs: None,
-                insecure_skip_verify: Some(true),
+                outbound: OutboundTlsLocal {
+                    verify: Some(false),
+                    ..Default::default()
+                },
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
-        let err = build_connect_options(&crd, &no_auth()).expect_err("should refuse insecure_skip_verify");
-        assert!(
-            err.to_string().contains("insecure_skip_verify"),
-            "unexpected error message: {err}"
-        );
+        let err = build_connect_options(&crd, &no_auth()).expect_err("should refuse verify=false");
+        assert!(err.to_string().contains("Etcd TLS"), "unexpected error message: {err}");
     }
 
     #[test]
     fn test_tls_disabled_returns_none() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: false,
-                certs: None,
-                insecure_skip_verify: None,
+                outbound: OutboundTlsLocal::default(),
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };

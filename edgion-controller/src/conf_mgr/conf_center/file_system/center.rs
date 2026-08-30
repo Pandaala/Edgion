@@ -29,6 +29,16 @@ use crate::conf_sync::conf_server::ConfigSyncServer;
 ///
 /// This struct implements both `CenterApi` and `CenterLifeCycle`,
 /// automatically getting `ConfCenter` implementation via blanket impl.
+///
+/// # Single-node only (spec §11)
+///
+/// FileSystem mode is designed for local development and single-machine
+/// testing. It has **no distributed coordination medium** — no lease, no lock,
+/// no leader election — so running multiple Controller instances against the
+/// same conf directory silently corrupts state (overlapping watchers, racing
+/// `.status` writes, conflicting conf_sync snapshots). Deploy exactly one
+/// instance. HA deployments must use the Kubernetes or Etcd backend, both of
+/// which elect a single active leader.
 pub struct FileSystemCenter {
     /// Configuration
     config: FileSystemConfig,
@@ -72,16 +82,6 @@ impl FileSystemCenter {
         })
     }
 
-    /// Get the configuration
-    pub fn config(&self) -> &FileSystemConfig {
-        &self.config
-    }
-
-    /// Get the shared path registry
-    pub fn registry(&self) -> &Arc<PathRegistry> {
-        &self.registry
-    }
-
     #[cfg(test)]
     pub(super) fn conf_dir_abs(&self) -> &std::path::Path {
         &self.conf_dir_abs
@@ -119,6 +119,14 @@ impl CenterLifeCycle for FileSystemCenter {
             component = "file_system_center",
             mode = "file_system",
             "Starting FileSystem lifecycle"
+        );
+        // Spec §11: FileSystem mode has no distributed coordination medium, so
+        // multi-instance deployments silently corrupt state. Say so at startup.
+        tracing::warn!(
+            component = "file_system_center",
+            "FileSystem mode is single-node only: it has no lease/lock/leader election, and multiple \
+             Controller instances sharing one conf directory silently corrupt state. Use the \
+             Kubernetes or Etcd backend for HA."
         );
 
         // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionConfigData).

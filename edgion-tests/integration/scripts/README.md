@@ -21,11 +21,45 @@ scripts/
 │   ├── run_direct.sh   # Direct tests without the Gateway
 │   └── run_integration.sh  # End-to-end tests through the Gateway
 └── utils/              # Utility scripts
-    ├── prepare.sh      # Prebuild test components
+    ├── prepare.sh      # Prebuild test components (build-only, no runtime artifacts)
+    ├── conf_sync_certs.sh      # Shared conf_sync mTLS helpers (see below)
     ├── start_all.sh    # Start all test services
     ├── start_all_with_conf.sh  # Start with config loading
     └── kill_all.sh     # Stop all test services
 ```
+
+## conf_sync transport: mTLS everywhere
+
+`config/edgion-{controller,gateway,controller-etcd}.yaml` ship the **mTLS**
+`conf_sync_security` block; nothing in the default path rewrites it. The cert paths are
+work-dir relative (`certs/grpc/primary/...`), so a runner only has to place the cert set
+in the work dir of the process it starts:
+
+```bash
+source utils/conf_sync_certs.sh
+conf_sync_distribute_certs "$WORK_DIR"   # generate (idempotent) directly into $WORK_DIR/certs/grpc/
+```
+
+A script that generates its **own** binary config must never hardcode a transport — it
+appends the shared emitter's output instead:
+
+```bash
+conf_sync_security_block server >> controller.yaml   # cert/key/ca for the Controller
+conf_sync_security_block client >> gateway.yaml      # cert/key/ca for the Gateway
+```
+
+Every cert set is owned by the per-run work directory of the process it serves —
+no script writes certificates into the repo root or any shared cache. `prepare.sh`
+is build-only. A developer who intentionally wants a bare `cargo run` off the
+checked-in configs (work dir = repo root) bootstraps the cert set explicitly:
+
+```bash
+cargo run --bin edgion-cli -- gen-certs --output file --output-dir certs/grpc --cert-name primary
+```
+
+`skip_tls: true` (plaintext) survives in exactly one place: `run_conf_sync_skip_tls_metric_test.sh`,
+where it is the subject under test (driven through `start_all_with_conf.sh`'s
+`EDGION_CONF_SYNC_PLAINTEXT=1` toggle).
 
 ## CI Scripts
 
@@ -78,12 +112,20 @@ Runs full end-to-end integration tests through the Gateway.
 # Run all integration tests
 ./scripts/integration/run_integration.sh
 
-# Run a specific test
-./scripts/integration/run_integration.sh --test http-match
+# Run one resource family or one exact item
+./scripts/integration/run_integration.sh -r HTTPRoute
+./scripts/integration/run_integration.sh -r HTTPRoute -i Match
 
-# Skip selected tests
-./scripts/integration/run_integration.sh --skip "mtls,backend-tls"
+# Reuse already prepared binaries, include slow tests, or load explicit fixture suites
+./scripts/integration/run_integration.sh --no-prepare -r HTTPRoute -i Basic
+./scripts/integration/run_integration.sh --full-test
+./scripts/integration/run_integration.sh --suites base,HTTPRoute/Basic -r HTTPRoute -i Basic
 ```
+
+Run `./scripts/integration/run_integration.sh --help` for the complete current option list. There is
+no implicit exclusion flag: narrow coverage explicitly with `--resource` and `--item`. The canonical
+integration architecture and workflow are documented in
+[`skills/05-testing/01-integration-testing.md`](../../../skills/05-testing/01-integration-testing.md).
 
 Covered areas:
 - Basic protocols: `http`, `https`, `grpc`, `grpc-tls`, `websocket`, `tcp`, `udp`
@@ -135,13 +177,17 @@ Prebuilds all binaries required by the test environment in debug mode.
 ./scripts/utils/prepare.sh
 ```
 
-Built artifacts:
+Built artifacts under `target/debug/`:
 - `edgion-controller`: configuration controller
 - `edgion-gateway`: gateway service
 - `edgion-cli`: command-line tool
 - `test_server`: backend test server
 - `test_client`: integration test client
 - `test_client_direct`: direct test client
+- `resource_diff`: Controller/Gateway synchronization validator
+- `config_load_validator`: configuration-load validator
+- `cache_residue`: final cache-residue validator
+- `credential_reservation_redis`: stable copy of the precompiled ignored Redis integration test
 
 Output location:
 
@@ -150,9 +196,13 @@ target/debug/
 ├── edgion-controller
 ├── edgion-gateway
 ├── edgion-cli
-└── examples/
-    ├── test_server
-    └── test_client
+├── test_server
+├── test_client
+├── test_client_direct
+├── resource_diff
+├── config_load_validator
+├── cache_residue
+└── credential_reservation_redis
 ```
 
 ### `start_all.sh`

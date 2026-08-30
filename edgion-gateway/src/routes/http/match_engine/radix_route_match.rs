@@ -46,16 +46,6 @@ impl RadixRouteMatchEngine {
         Ok(engine)
     }
 
-    /// Get the number of routes in this engine
-    pub fn route_count(&self) -> usize {
-        self.routes.len()
-    }
-
-    /// Returns the underlying radix tree.
-    pub fn tree(&self) -> &RadixTree {
-        &self.tree
-    }
-
     fn try_route_deep_match(
         &self,
         route_idx: usize,

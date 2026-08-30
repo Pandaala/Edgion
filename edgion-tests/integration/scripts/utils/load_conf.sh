@@ -88,6 +88,15 @@ is_runtime_generated_secret_template() {
         "Gateway/TLS/BackendTLSGatewayCert/Secret_edge_gateway-client-cert.yaml")
             return 0
             ;;
+        "EdgionPlugins/LdapAuthTls/00_Secret_default_ldap-ca-bundle.yaml")
+            return 0
+            ;;
+        "EdgionPlugins/LdapAuthTls/01_Secret_default_ldap-client-identity.yaml")
+            return 0
+            ;;
+        "EdgionPlugins/LdapAuthTls/05b_Secret_default_ldap-wrong-ca-bundle.yaml")
+            return 0
+            ;;
         "EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca.yaml")
             return 0
             ;;
@@ -172,34 +181,13 @@ wait_for_ready() {
 }
 
 # =============================================================================
-# use edgion-cli Loadfile
-# 
-# FileSystemWriter  Kind_namespace_name.yaml ，
-# 
-# =============================================================================
-apply_file() {
-    local file=$1
-    local filename=$(basename "$file")
-    
-    #  edgion-cli apply
-    log_info "Load $filename via API..."
-    if "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$file" 2>&1; then
-        log_success "$filename Loadsuccess"
-        return 0
-    else
-        log_error "$filename Loadfailed"
-        return 1
-    fi
-}
-
-# =============================================================================
 # Loaddirectoryall yaml file
 # =============================================================================
 load_directory_recursive() {
     local dir=$1
     local suite_name=$2
-    local failed=false
     local count=0
+    local apply_args=()
     
     if [ ! -d "$dir" ]; then
         log_warn "directory: $dir"
@@ -230,13 +218,17 @@ load_directory_recursive() {
             continue
         fi
 
-        if ! apply_file "$file"; then
-            failed=true
-        fi
+        apply_args+=("-f" "$file")
         count=$((count + 1))
     done
-    
-    if $failed; then
+
+    if [ "$count" -eq 0 ]; then
+        log_success "$suite_name: no operator-managed config files to load"
+        return 0
+    fi
+
+    log_info "Loading $count config files with one ordered CLI batch..."
+    if ! "$EDGION_CLI" --server "$CONTROLLER_URL" apply "${apply_args[@]}"; then
         log_error "$suite_name: partialconfigLoadfailed"
         return 1
     else
@@ -290,6 +282,14 @@ get_all_suites() {
         if [ -d "$subdir" ]; then
             local name=$(basename "$subdir")
             suites="$suites Status/$name"
+        fi
+    done
+
+    # EdgionBackend test suites
+    for subdir in "${CONF_DIR}/EdgionBackend"/*; do
+        if [ -d "$subdir" ]; then
+            local name=$(basename "$subdir")
+            suites="$suites EdgionBackend/$name"
         fi
     done
     

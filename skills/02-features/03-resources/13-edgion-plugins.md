@@ -1,6 +1,6 @@
 ---
 name: http-plugin-catalog
-description: Full EdgionPlugins CRD schema and catalog of 33 HTTP plugins.
+description: Full EdgionPlugins CRD schema and HTTP plugin catalog.
 ---
 
 # EdgionPlugins — HTTP Plugins
@@ -18,12 +18,16 @@ metadata:
   name: my-plugins
   namespace: default
 spec:
-  plugins:
+  waf:
+    rules: |
+      SecRule REQUEST_URI "@contains /blocked" "id:1,phase:1,deny,status:403"
+    mode: on
+  requestPlugins:
     - type: RateLimit           # Plugin type
       config:                   # Plugin configuration (varies by type)
         rate: 100
         burst: 200
-        key: "$remote_addr"
+        key: "$remote_ip"
     - type: Cors
       config:
         allowOrigins: ["*"]
@@ -38,21 +42,34 @@ spec:
 | `BasicAuth` | HTTP Basic authentication | ✅ username/password |
 | `JwtAuth` | JWT token verification (RSA/EC/HMAC/EdDSA) | ✅ public/secret keys |
 | `JweDecrypt` | JWE encrypted token decryption | ✅ encryption key |
-| `HmacAuth` | HMAC signature verification | ✅ access_key + secret_key |
+| `HmacAuth` | HMAC signature verification; `validateRequestBody` verifies the buffered request `Digest`. Its flat standalone config composes the canonical match-only `HmacMatchConfig`. | ✅ access_key + secret_key |
 | `KeyAuth` | API key authentication | ✅ API keys |
 | `HeaderCertAuth` | Request-header / connection certificate authentication | — |
 | `LdapAuth` | LDAP authentication | — |
-| `ForwardAuth` | Forward to an external authentication service | — |
+| `ForwardAuth` | Forward to an external authentication service; `forwardBody` includes the buffered original request body | — |
 | `OpenidConnect` | OpenID Connect / OAuth2 | ✅ client_secret + session_secret |
 
 ### Security
+
+`spec.waf` is the native logical WAF. It is deliberately not an
+`EdgionPlugin` discriminator and does not appear in any stage array. One
+compiled generation internally owns request-header, request-body,
+response-header, response-safe phase-4, and logging-phase execution. Its
+schema is `{ rules: String, mode: on | detectionOnly }`; source is inline,
+strictly compiled, admin-redacted, and cannot use filesystem/network includes
+or external phrase assets. Invalid updates retain the last activatable
+generation. See
+`docs/en/user-guide/http-route/filters/edgion-plugins/waf.md`.
 
 | Type | Description |
 |------|-------------|
 | `Cors` | CORS cross-origin resource sharing |
 | `Csrf` | CSRF protection |
 | `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
-| `RequestRestriction` | Request restrictions (header/body rules) |
+| `RequestRestriction` | Request restrictions (header/body match rules). Geo matching is not part of this plugin — combine it with `GeoIpLocation` (below) as a separate, ordered plugin-list entry instead. |
+| `RequestBodyBuffer` | Explicitly populate the shared request-body cache for later-stage consumers |
+| `RequestAccessPolicy` | L7 named-profile access policy with independent `DirectPeerIp`/`RemoteIp` branches, IP-first and exact-host/path-first rules, bounded `anyOf`/`allOf` conditions, Secret/HMAC checks, and fail-closed Selector/IpList hot references. Its `hmacAuth` condition uses the strict match-only `HmacMatchConfig`; ordinary auth failures are non-matches, while non-forwardable body failures terminate evaluation. Geo matching is not part of this plugin — see `GeoIpLocation` below. |
+| `GeoIpLocation` | Country/continent/city/subdivision (and CIDR) matching backed by the gateway's process-wide GeoIP provider, shared verbatim between this HTTP registration and the `EdgionStreamPlugins` L4 (Stage-1) registration of the same name. Parse-only (`config: {}`) just resolves geo into the access log; rule mode adds `defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`. Combine with `IpRestriction`/`RequestRestriction` by chaining plugin-list entries, not by embedding. See `docs/en/ops-guide/gateway/geoip.md`. |
 
 ### Traffic Control
 
@@ -61,6 +78,8 @@ spec:
 | `RateLimit` | Local rate limiting (CMS algorithm) |
 | `RateLimitRedis` | Distributed rate limiting (Redis backend) |
 | `BandwidthLimit` | Bandwidth limiting |
+| `FaultInjection` | Probabilistic delay and abort for controlled fault testing |
+| `Canary` | Route all traffic to one named backend, switchable by Selector ConfigData |
 
 ### Request/Response Modification
 
@@ -71,11 +90,16 @@ spec:
 | `RequestRedirect` | HTTP redirect (Gateway API standard) |
 | `UrlRewrite` | URL rewrite (Gateway API standard) |
 | `RequestMirror` | Request mirroring (Gateway API standard) |
-| `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting) |
+| `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting and JSON request-body transforms) |
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
-| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
+| `CredentialInjector` | Inject an upstream bearer or custom header from a Secret or a `credentialSource` LinkSys (`credentialRef.group: edgion.io`, `kind: LinkSys`). Default publication writes a generated Secret; `publication.persist: false` keeps generations in Controller memory (no generated Secret; see [18-link-sys.md](18-link-sys.md)). Header names and prefixes are static and never evaluate expressions. One EdgionPlugins resource may contain at most one enabled LinkSys-backed injector; static Secret-backed entries do not count toward that limit. |
+| `WebhookKeyGet` | Resolve webhook vars into request context (once per request). Addressable in EdgionGatewayConfig `validation.plugin_policy` allow/deny lists. |
+| `ExtProc` | Envoy-compatible external processing. One `requestPlugins` entry owns one request-scoped Process stream across request headers/body and final response headers/body. Request bodies support `BUFFERED`/`STREAMED`; response bodies support bounded transport-window `STREAMED` only (no full-response aggregation and no semantic SSE-window claim). |
+| `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
+| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
+| `TraceContext` | W3C trace-context propagation and normalization |
 
 ### Routing/Backend
 
@@ -85,9 +109,9 @@ spec:
 | `DynamicInternalUpstream` | Dynamic internal upstream |
 | `DynamicExternalUpstream` | Dynamic external upstream |
 | `AllEndpointStatus` | All-endpoint status query |
-| `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in EdgionConfigData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-edgion-config-data.md`. |
+| `RegionRoute` | Multi-region traffic routing. The complete routing logic and safe default `regions` table live inline in EdgionPlugins; optional `overrideRef` targets a `RegionRouteOverride` EdgionConfigData for hot-swappable failover state. The Controller effective API resolves permitted/enabled overlays, preserves the reference namespace, and exposes the entry-level `dye` suite (request/response header rules keyed on outcome via `on`) plus a stable request-plugin entry index. Center service-usage views derive consumers from HTTPRoute/GRPCRoute ExtensionRefs targeting the containing EdgionPlugins resource, using `resolvedRules` when delegation is present so inherited filters reach the actual Service backends. See `05-resources/15-edgion-config-data.md`. |
 
-> Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
+> Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/en/migrations/<version>-extension-ref.md`; the paired Chinese page is under `docs/zh-CN/migrations/`.
 
 ### Debugging/Testing
 
@@ -99,18 +123,90 @@ spec:
 
 ## Plugin Execution Stages
 
-HTTP plugins execute across Pingora's 4 stages:
+Ordinary HTTP plugins execute across Pingora's 4 stages:
 
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
-| `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
-| `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier |
-| `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification) |
-| `UpstreamResponse` | After the upstream response headers arrive (async) | `ExtProc` (response-header processing); logic needing async access to the response |
+| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Guardrail`, `Wasm` |
+| `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, DSL, `Wasm` |
+| `spec.upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | For each upstream response body chunk | ResponseRewrite, `Wasm` read-only observation |
+| `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous | No directly configurable plugin currently; ExtProc installs an internal companion from its request entry |
+
+Each entry uses the flattened wire shape `enable + type + config`. A plugin may
+only be placed in stages admitted by the exhaustive Rust
+`validate::applicable_stages` table; the same resource may contain entries in
+multiple stage arrays. There is no generic `spec.plugins` field.
+
+`spec.waf` is the sole exception to stage-array placement: it is one logical
+top-level configuration whose internal companions run at every supported WAF
+phase. At most one logical WAF may own a request; composing multiple
+WAF-bearing EdgionPlugins references fails closed.
+
+## Shared condition expressions
+
+Plugin entry `conditions.skip` / `conditions.run`, `body.conditions`, dye rule
+conditions, RequestRestriction, and RequestAccessPolicy supplemental
+conditions all use the same bounded `ConditionSet` wire shape:
+
+```yaml
+conditions:
+  anyOf:
+    - type: keyExist
+      key:
+        type: header
+        name: X-Internal-Request
+    - name: production-write
+      allOf:
+        - type: keyMatch
+          key:
+            type: header
+            name: X-Env
+          values: [production]
+        - type: keyMatch
+          key:
+            type: method
+          values: [POST]
+```
+
+The top level must contain exactly one non-empty `allOf` or `anyOf`.
+Top-level `allOf` accepts direct `Condition` leaves only. Top-level `anyOf`
+accepts direct leaves or one-level `{ name?, allOf: [...] }` groups. Nested
+`allOf` contains direct leaves only; `allOf -> anyOf`, `anyOf -> anyOf`, deeper
+recursion, mixed operators, empty arrays, and blank group names
+are invalid. `conditions.skip` is evaluated before `conditions.run`, but each
+field's Boolean behavior is selected by its contained set rather than implied
+by the field name.
+
+### `enable: false` means bypass, not reject
+
+An entry-level `enable: false` is **semantically inert**: the entry is not
+built, not run, and cannot invalidate the containing resource through its
+dormant inner configuration. Both the Controller schema layer
+(`EdgionPlugins::validate_plugins`) and the Gateway compilation
+(`compile_plugin_conditions` / `add_from_*`) skip disabled entries for config,
+alias, stage, dependency (Secret / LinkSys / EdgionConfigData ref), and
+`conditions` regex/`timeRange` validation. A parked entry that carries a
+malformed condition or invalid config therefore keeps the resource
+`Accepted=True` — it is a no-op, not a validation error. This matches the
+EdgionStreamPlugins rule (`preparse_skips_disabled_plugins`); HTTP and stream
+follow one rule.
+
+This is distinct from an **enabled invalid** entry (`enable: true` + bad
+config): that seals the whole EdgionPlugins resource fail-closed
+(`seal_fail_closed`), so every request referencing it gets HTTP 500. In short:
+disabling an auth/authorization plugin intentionally lets the route continue
+without it (bypass); an invalid *active* plugin must never fail open. The
+distinction is:
+
+| Entry state | Built / run | Inner config + conditions validated | Effect on the resource |
+|-------------|-------------|-------------------------------------|------------------------|
+| enabled and valid | yes | yes | none |
+| disabled (`enable: false`) | no | no | none (stays `Accepted=True`) |
+| enabled and invalid | no | yes | resource fails closed (HTTP 500 per request) |
 
 ## Secret Dependencies
 
-The following plugin types read Secret data from `GLOBAL_SECRET_STORE` during the Controller-side `parse()` stage:
+The following plugin types read Secret data from `ControllerRuntime.secret_store` during the Controller-side `parse()` stage:
 
 | Plugin | Secret Fields Read |
 |--------|--------------------|
@@ -121,5 +217,51 @@ The following plugin types read Secret data from `GLOBAL_SECRET_STORE` during th
 | `KeyAuth` | API keys |
 | `OpenidConnect` | client_secret, session_secret |
 | `HeaderCertAuth` | CA certificates |
+| `Wasm` | `source.fetch`: artifact-repo Authorization header value, fetch TLS CA / client certs |
+| `Wasm` | `source.oci.pullSecretRef`: `kubernetes.io/dockerconfigjson` registry credentials, resolved into `resolved_pull_secret` (redacted in admin output); unresolved ⇒ plugin load failure |
+| `Guardrail` | `${secretRef:namespace/name:key}` values used by restricted request path/custom-header templates, plus outbound TLS CA/client credentials |
+| `CredentialInjector` | Static Secret: `bearerToken`. `credentialSource` LinkSys: active token from a generated Secret (`persist: true`) or `ControllerRuntime.credential_memory` (`persist: false`); never from a LinkSys conf_sync field |
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.
+
+## Controller Plugin Policy (Allowlist / Denylist)
+
+An operator can restrict which `http/<Type>` plugin types the Gateway is
+allowed to instantiate via the Controller's optional
+`validation.plugin_policy` config section (absent by default = allow all).
+A restricted entry is stamped, not force-disabled, and is reported via a
+`PluginPolicyRestricted` status condition. See
+[validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
+for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
+operator guide.
+
+## Unknown config keys (`UnknownConfigFields` condition)
+
+Because a plugin's `config` block is `x-kubernetes-preserve-unknown-fields` in the CRD, the
+Kubernetes API server does not prune a mistyped key (e.g. `denys:` instead of `deny:`), and
+serde silently drops it during deserialization — the resource keeps running with that key
+simply ignored, which for a security plugin is a fail-open, not a no-op. The Controller
+detects this at ingest and reports it:
+
+```yaml
+status:
+  conditions:
+    - type: UnknownConfigFields
+      status: "True"
+      reason: UnknownFieldsDetected
+      message: "requestPlugins[0].config.denys"
+```
+
+- `Accepted` is **not** touched — it keeps meaning "resource valid and synced". The config
+  still syncs to the Gateway exactly as it would without this check; the mistyped key is
+  still ignored, unchanged from today's behavior.
+- The condition does **not** feed `edgion_controller_resource_abnormal` — an operator typo
+  is not resource ill-health.
+- The Controller also emits a WARN log line with the full path list.
+- To clear the condition, fix the key and re-apply; the next apply removes the condition
+  (upsert-on-hit, remove-on-fix — it is never left wedged at a stale `True`).
+
+Full operator guidance — including the fleet-wide `GET /api/v1/diagnostics/unknown-fields`
+endpoint and the `POST /api/v1/validate/{kind}` endpoint for building your own blocking
+gate — is in `docs/en/ops-guide/plugin-config-unknown-fields.md` and
+[Admin API — diagnostics/validate](../../01-architecture/01-controller/02-admin-api.md).

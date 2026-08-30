@@ -54,7 +54,7 @@ impl CtxSet {
     /// Process a single variable rule
     ///
     /// Returns the final value to set, or None if the value should not be set
-    async fn process_rule(
+    fn process_rule(
         &self,
         rule: &CtxVarRule,
         rule_idx: usize,
@@ -68,7 +68,7 @@ impl CtxSet {
             evaluate_template(compiled, session)
         } else if let Some(ref from) = rule.from {
             // Get from KeyGet source
-            session.key_get(from).await.or(rule.default.clone())?
+            session.key_get(from).or(rule.default.clone())?
         } else {
             // No source specified (should be caught by validation)
             return rule.default.clone();
@@ -165,7 +165,7 @@ impl RequestFilter for CtxSet {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         for (idx, rule) in self.config.vars.iter().enumerate() {
-            let value = self.process_rule(rule, idx, session, plugin_log).await;
+            let value = self.process_rule(rule, idx, session, plugin_log);
 
             match value {
                 Some(v) => {

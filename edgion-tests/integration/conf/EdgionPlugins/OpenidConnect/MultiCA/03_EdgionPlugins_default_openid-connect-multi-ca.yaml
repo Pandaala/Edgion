@@ -1,0 +1,37 @@
+# OIDC plugin with a multi-CA trust list (B2 scenario).
+# caCertificateRefs lists two Secrets (oidc-ca-primary, oidc-ca-secondary),
+# verifying that the controller merges both CA bundles for the outbound TLS
+# connection to the OIDC discovery/introspection endpoints.
+#
+# NOTE: Schema validation only for this fixture. A live run requires a TLS OIDC
+# endpoint and real CA material in both Secrets.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: openid-connect-multi-ca-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: OpenidConnect
+      config:
+        discovery: "https://127.0.0.1:30043/oidc/.well-known/openid-configuration"
+        clientId: "test-client"
+        clientSecretRef:
+          name: oidc-client-secret
+          namespace: edgion-default
+        bearerOnly: true
+        unauthAction: Deny
+        verificationMode: IntrospectionOnly
+        useJwks: false
+        requiredScopes:
+          - "api:read"
+        setAccessTokenHeader: true
+        timeout: 3
+        tls:
+          validation:
+            caCertificateRefs:
+              - kind: Secret
+                name: oidc-ca-primary
+              - kind: Secret
+                name: oidc-ca-secondary

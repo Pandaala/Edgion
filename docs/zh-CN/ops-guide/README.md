@@ -22,6 +22,7 @@
 - [TLS 终结](./gateway/tls/tls-termination.md)：标准 TLS 终结配置。
 - [EdgionTls 扩展 🔌](./gateway/tls/edgion-tls.md)：扩展证书与 TLS 能力。
 - [ACME 自动证书 🔌](./gateway/tls/acme.md)：自动签发与续期。
+- [FIPS 模式 🔒](./gateway/tls/fips.md)：BoringSSL FIPS 模式构建与默认批准的密码套件 / 曲线集合。
 
 ### 基础设施
 
@@ -29,17 +30,24 @@
 - [跨命名空间引用 (ReferenceGrant)](./infrastructure/reference-grant.md)：跨命名空间资源授权。
 - [mTLS 配置](./infrastructure/mtls.md)：网关到后端的双向 TLS。
 - [连接器 (LinkSys) 🔌](./infrastructure/connectors.md)：外部系统集成（Redis、Etcd、Elasticsearch、Webhook、Kafka）。
+- [服务发现集成](./infrastructure/service-discovery.md)：集成外部服务注册中心（Consul、Nacos、Eureka、ZooKeeper）。
 
 ### 可观测性
 
-- [访问日志](./observability/access-log.md)：访问日志字段与输出。
+- [访问日志](./observability/access-log.md)：访问日志字段与输出（含 AI `genai` 账本）。
 - [监控指标](./observability/metrics.md)：Prometheus 指标采集与告警建议。
+- [指标清单](./observability/metrics-inventory.md)：全部 `edgion_*` 指标目录（与英文权威清单对称；CI 校验英文版）。
 
 ### 配置参考
 
 - [Controller 配置](./configuration/controller-config.md)：Controller YAML 进程配置参数。
 - [Gateway 配置](./configuration/gateway-config.md)：Gateway YAML 进程配置参数。
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md)：GatewayClass 级运行时配置（超时、真实 IP、全局插件等）。
+
+### 插件策略
+
+- [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)：Controller 侧插件允许清单/拒绝清单——限制 Gateway 可执行的插件类型，支持 block/bypass 动作、状态上报，以及启用前必读的升级顺序警告。
+- [未知配置字段检测](./plugin-config-unknown-fields.md)：检测 `EdgionPlugins`、`EdgionStreamPlugins`、类型化 `EdgionConfigData` 和 `LinkSys` 配置块中无法识别的键——通过日志、状态条件和诊断接口发出警告，从不阻断；并提供 `POST /api/v1/validate/{kind}` 接口用于搭建你自己的阻断关卡。
 
 ### 联邦
 

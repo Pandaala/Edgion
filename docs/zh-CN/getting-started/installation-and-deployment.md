@@ -62,6 +62,25 @@ cicd/deploy/standalone/start.sh
 
 - [开发指南 / Work Directory 设计](../dev-guide/work-directory.md)
 
+### 用容器镜像运行非 Kubernetes 模式
+
+上面的 `start.sh` 路径使用发行版二进制，CRD schema 已经在磁盘的 `config/crd` 下，无需额外处理。
+
+但如果你改用**容器镜像**运行 controller 的非 Kubernetes 配置中心模式（`conf_center.type: file_system`
+或 `etcd`），要注意：runtime 镜像**不打包** CRD schema——它只在非 Kubernetes 模式下需要，而 Kubernetes
+模式的 schema 来自 API server。缺少它时 controller 会在启动阶段以 `FATAL: No schemas loaded in non-K8s
+mode` 退出。请把 CRD 目录挂载到 `<work_dir>/config/crd`，例如：
+
+```bash
+docker run \
+  -v "$PWD/config/crd:/usr/local/edgion/config/crd:ro" \
+  -v "$PWD/edgion-controller.yaml:/usr/local/edgion/edgion-controller.yaml:ro" \
+  docker.io/pandaala/edgion-controller:<tag> \
+  edgion-controller --config-file /usr/local/edgion/edgion-controller.yaml
+```
+
+Gateway 镜像从不加载 CRD schema，因此这一点只涉及 controller。
+
 ## 配置文件与示例入口
 
 仓库里已经有几类可以直接参考的内容：

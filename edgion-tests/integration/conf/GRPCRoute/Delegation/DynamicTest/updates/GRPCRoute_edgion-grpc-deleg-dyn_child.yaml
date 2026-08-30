@@ -1,0 +1,18 @@
+# Update phase: the application team moves the narrowed method from
+# SayHello to StreamNumbers. Only this child changes; the parent and Gateway
+# are untouched.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: child
+  namespace: edgion-grpc-deleg-dyn
+spec:
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: StreamNumbers
+      backendRefs:
+        - name: child-dyn-grpc-svc
+          port: 30021

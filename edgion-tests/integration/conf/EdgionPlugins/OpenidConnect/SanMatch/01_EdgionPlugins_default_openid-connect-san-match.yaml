@@ -1,0 +1,30 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: openid-connect-san-match-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: OpenidConnect
+      config:
+        discovery: "https://127.0.0.1:30040/oidc/.well-known/openid-configuration"
+        clientId: "test-client"
+        clientSecretRef:
+          name: oidc-client-secret
+          namespace: edgion-default
+        bearerOnly: true
+        unauthAction: Deny
+        verificationMode: IntrospectionOnly
+        useJwks: false
+        requiredScopes:
+          - "api:read"
+        setAccessTokenHeader: true
+        claimsToHeaders:
+          sub: "X-User-ID"
+        timeout: 3
+        tls:
+          validation:
+            subjectAltNames:
+              - type: Hostname
+                hostname: "127.0.0.1"

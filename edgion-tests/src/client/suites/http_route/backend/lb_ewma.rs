@@ -1,11 +1,13 @@
 // ============================================================================
-// LB EWMA Test Suite — validates LbCommit::Ewma commit/finalize lifecycle
+// LB EWMA Test Suite — retry-free distribution coverage
 // ============================================================================
 //
-// Validates that LBPolicyEwma routes requests across multiple endpoints and
+// Validates that an EdgionBackendTrafficPolicy with loadBalancer.type: Ewma
+// routes requests across multiple endpoints and
 // correctly runs the commit_attempt / finalize_attempt(Settle) lifecycle for
-// each request. Under concurrent load all endpoints start with equal EWMA
-// scores (INITIAL_EWMA_US = 1ms), so the selector distributes across them.
+// each request. This route has no retry policy, so retry outcomes cannot bias
+// the distribution assertion. Under concurrent load all endpoints start with
+// equal EWMA scores (INITIAL_EWMA_US = 1ms), so the selector distributes across them.
 //
 // Gateway annotations enable test-mode metrics:
 //   edgion.io/metrics-test-key: "lb-ewma-test"

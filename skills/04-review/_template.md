@@ -11,15 +11,13 @@ Copy this file to `04-review/<topic>/<rule-name>.md` and fill in every `<...>` p
 The finding ID lives in the `finding_id:` frontmatter field and the H1 title — NOT in the filename
 (filenames are descriptive kebab-case slugs; the topic directory supplies the category context).
 
-ONE FINDING = ONE FILE. This file is the SOLE durable record of a closed / decided finding.
-Do NOT also append the conclusion to any shared / aggregate file — there is NO central
-closed-findings log and NO `SKILL.md` "Usage principles" index to maintain. Discovery is by
-`ls` / `grep` over the topic directories, e.g. `grep -rl '<keyword>' skills/04-review/`.
-Keeping every finding in its own file is what lets parallel `/fix-issue` runs close many
-findings at once with zero merge conflicts.
+ONE FINDING = ONE FILE for the detailed rationale. Also add one concise coverage row to
+`skills/04-review/CLOSED-FINDINGS.md`; that index points readers here and must not duplicate
+the full rationale. When several findings are resolved concurrently, serialize the small
+index updates after the independent files are ready.
 
 Pick `<topic>` = the directory where sibling findings of the same family already live
-(`ls skills/04-review/`); create the directory if the family is new.
+(`find skills/04-review -mindepth 1 -maxdepth 1 -type d`); create the directory if the family is new.
 
 The "Decision rule" shape is canonical for new entries — Conclusion-first, then rationale,
 then explicit rejection of competing fixes, then re-evaluation triggers, then reference cases.

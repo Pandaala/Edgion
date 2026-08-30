@@ -220,7 +220,7 @@ impl GrpcMatchEngine {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
+    ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         let path = ctx.path();
         let (service, method) = parse_grpc_path(path)?;
 
@@ -356,7 +356,7 @@ fn try_route_deep_match_unit(
     session: &Session,
     index: &GatewayInfoIndex,
     hostname: &str,
-) -> Option<GatewayInfo> {
+) -> Option<Arc<GatewayInfo>> {
     match route_unit.deep_match(session, index, hostname) {
         Ok(Some(gi)) => Some(gi),
         Ok(None) | Err(_) => None,
@@ -374,7 +374,7 @@ fn try_match_linear<F>(
     index: &GatewayInfoIndex,
     hostname: &str,
     predicate: F,
-) -> Option<(Arc<GrpcRouteRuleUnit>, GatewayInfo)>
+) -> Option<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>)>
 where
     F: Fn(&GrpcRouteRuleUnit) -> bool,
 {
@@ -470,7 +470,7 @@ mod tests {
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
-            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None, None),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
             rule,
             route_info,
             route: None,
@@ -484,6 +484,7 @@ mod tests {
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: Arc::new(PluginRuntime::new()),
             backend_finder: Arc::new(BackendSelector::new()),
+            backends: Arc::new(Vec::new()),
         })
     }
 
@@ -713,7 +714,7 @@ mod tests {
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
-            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None, None),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
             rule,
             route_info,
             route: None,
@@ -727,6 +728,7 @@ mod tests {
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: Arc::new(PluginRuntime::new()),
             backend_finder: Arc::new(BackendSelector::new()),
+            backends: Arc::new(Vec::new()),
         })
     }
 

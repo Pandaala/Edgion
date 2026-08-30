@@ -1,22 +1,45 @@
 use super::*;
 
 impl OpenidConnect {
-    pub(super) fn http_client(&self) -> &'static reqwest::Client {
-        get_http_client_with_ssl_verify(self.config.ssl_verify)
+    pub(super) fn http_client(&self) -> Arc<reqwest::Client> {
+        self.client.clone()
     }
 
-    pub(super) async fn get_or_fetch_discovery(&self) -> OidcResult<DiscoveryDocument> {
-        self.jwks_provider
-            .get_or_fetch_discovery()
-            .await
-            .map_err(OidcError::from)
+    pub(super) async fn get_or_fetch_discovery(&self) -> Result<DiscoveryDocument, JwksProviderError> {
+        self.jwks_provider.get_or_fetch_discovery().await
     }
 
-    pub(super) async fn get_or_fetch_jwks(&self, force_refresh: bool) -> OidcResult<JwkSet> {
-        self.jwks_provider
-            .get_jwks(force_refresh)
-            .await
-            .map_err(OidcError::from)
+    /// Fetch (or serve cached) JWKS for token verification.
+    ///
+    /// Task 11: the provider's `get_jwks` transparently serves a stale cached
+    /// set when the upstream fetch fails, and errors outright only when no
+    /// cache exists at all. This is the sole consumer of `get_jwks`, so both
+    /// dye records live here rather than duplicated at each call site
+    /// (initial lookup + kid-miss force-refresh in `token_verify.rs`):
+    /// - stale serve → the request still proceeds with a degraded (possibly
+    ///   rotated-out) key set, so it's a fail-OPEN: `jwks-stale-cache`.
+    /// - no cache at all → the caller cannot validate the token, so it's a
+    ///   fail-CLOSE: `jwks-unreachable`. Recorded here, well before the error
+    ///   propagates up through `verify_jwt_token_internal` → `verify_token` →
+    ///   `run_request`'s match on `OidcVerifyError`, which is the only place
+    ///   that turns it into a self-written response.
+    pub(super) async fn get_or_fetch_jwks(
+        &self,
+        session: &mut dyn PluginSession,
+        force_refresh: bool,
+    ) -> Result<JwkSet, JwksProviderError> {
+        match self.jwks_provider.get_jwks(force_refresh).await {
+            Ok(lookup) => {
+                if lookup.served_stale {
+                    session.record_outcome(DyeOutcome::FailOpen, "jwks-stale-cache");
+                }
+                Ok(lookup.set)
+            }
+            Err(err) => {
+                session.record_outcome(DyeOutcome::FailClose, "jwks-unreachable");
+                Err(err)
+            }
+        }
     }
 
     pub(super) async fn cached_discovery_doc(&self) -> Option<DiscoveryDocument> {

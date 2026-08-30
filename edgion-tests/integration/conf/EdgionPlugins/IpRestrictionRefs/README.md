@@ -4,8 +4,8 @@ End-to-end coverage for the `IpRestriction` plugin's `allowRefs` / `denyRefs` fi
 which let the plugin delegate its IP group data to a central `IpList` `EdgionConfigData`
 instead of embedding inline `allow` / `deny` entries.
 
-All cases set `ipSource: remoteAddr`, so the checked IP is the deterministic TCP peer of
-the test client (`127.0.0.1`), independent of RealIp / X-Forwarded-For processing.
+All cases set `ipSource: RemoteIp`, so the checked IP is the resolved address, which is
+the deterministic TCP peer when no forwarded address is supplied.
 
 | Path | Config | Expected |
 |------|--------|----------|

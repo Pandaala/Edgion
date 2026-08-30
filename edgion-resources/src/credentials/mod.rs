@@ -19,10 +19,11 @@ pub mod resolver;
 pub mod resolvers;
 
 pub use materials::{
-    AcmeAccountMaterial, BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, TlsMaterial,
+    AcmeAccountMaterial, AiApiKeyMaterial, BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial,
+    TlsMaterial,
 };
-pub use resolver::{ResolveError, SecretMaterialResolver};
+pub use resolver::{InvalidValueClass, ResolveError, SecretMaterialResolver};
 pub use resolvers::{
-    AcmeAccountResolver, BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver,
-    ACME_ACCOUNT_KEY, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY,
+    AcmeAccountResolver, AiApiKeyResolver, BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver,
+    TlsCertsResolver, ACME_ACCOUNT_KEY, BEARER_TOKEN_KEY, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY,
 };

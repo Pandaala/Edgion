@@ -3,7 +3,7 @@ name: new-must-call-validate-and-init
 description: Use when reviewing findings that the CORS plugin constructor clones the config without compiling origins_cache / compiled_origins_regex / compiled_timing_regex, leaving allow_origins_by_regex, comma-separated lists, and *.domain subdomain wildcards silently ignored; documents that this was fixed (fr-types-02), mirroring the IpRestriction fr-types-01 fix.
 ---
 
-# CORS `Cors::new` + cached preflight Arc compile origin matchers — FIXED
+# CORS `Cors::new` Compiles Origin Matchers — FIXED
 
 ## Conclusion
 
@@ -12,8 +12,10 @@ description: Use when reviewing findings that the CORS plugin constructor clones
 `compiled_origins_regex`, and `compiled_timing_regex` are populated on the live request-filter
 path. The runtime's cached preflight Arc (`PluginRuntime::add_from_request_filters`,
 `edgion-gateway/src/plugins/runtime/plugin_runtime.rs`) likewise runs `validate_and_init()` on the
-`CorsConfig` before caching it, so the global preflight handler's `Cors::from_arc` path is
-initialized too. Fixed by `fr-types-02` (2026-05-29).
+`CorsConfig` before caching it. Since `change-fix-01`, the global preflight handler uses only the
+cache's presence to delegate to the normal route runtime; it no longer constructs an ad-hoc
+`Cors::from_arc`. Fixed by `fr-types-02` (2026-05-29), with ownership updated by
+`change-fix-01` (2026-08-02).
 
 Fix suggestions of the form "`Cors::new` never calls `validate_and_init`, so
 `compiled_origins_regex` / `origins_cache` stay `None` → `allow_origins_by_regex`,
@@ -33,12 +35,12 @@ comma-separated string) and skipped the regex branch entirely. `validation_error
 only re-compiles each regex pattern for *syntax* (it does not build the `#[serde(skip)]` fields),
 so `seal_fail_closed` never fired for a syntactically-valid config.
 
-**2. Two construction sites, both fixed**
+**2. The route runtime is the current construction path**
 
-The per-route request filter is built via `Cors::new` (`create_request_filter_from_edgion`); the
-global OPTIONS preflight handler instead consumes the runtime's cached `Arc<CorsConfig>`
-(`cors_config_arc()` → `Cors::from_arc`). `from_arc` assumes an already-initialized config, so the
-cache site had to initialize too — fixing only `Cors::new` would have left preflight broken.
+The per-route request filter is built via `Cors::new` (`create_request_filter_from_edgion`) and
+owns both normal requests and preflights. The global OPTIONS preflight handler checks the runtime's
+cached `Arc<CorsConfig>` only to detect this ownership and delegate. `Cors::from_arc` still assumes
+an already-initialized config, but it is no longer a separate request-path construction site.
 
 **3. Failure is deny-safe, not fail-open**
 
@@ -59,17 +61,15 @@ the way deserialization yields it (compiled fields `None`, **not** routed throug
 `CorsConfig::new`), call `Cors::new`, and assert the origin is allowed. A test that constructs via
 `CorsConfig::new` would pre-build the matchers and mask the bug — re-reports must verify the
 compiled-fields-`None` path. The integration suite adds a `cors-regex` config (regex +
-`*.sub` wildcard + comma-separated list) exercising both the request-filter and the cached preflight
-paths end-to-end.
+`*.sub` wildcard + comma-separated list) exercising the request-filter path end-to-end.
 
 ## Fix Suggestions Not Accepted
 
 - "CORS multi-origin / regex / `*.domain` is silently broken / `Cors::new` missing
   `validate_and_init`" — already fixed; verify the current `Cors::new` clones + calls
   `validate_and_init` and that the `plugin_runtime.rs` cache site does the same before filing.
-- "Make `from_arc` call `validate_and_init`" — not accepted; `from_arc` is the per-preflight hot
-  path and must not re-compile regex per request. The canonical `Arc` is initialized once at the
-  cache site instead.
+- "Make `from_arc` call `validate_and_init`" — not accepted; callers must supply an initialized
+  config, while the production route runtime uses `Cors::new` as its validated constructor.
 
 ## Re-evaluation Triggers
 

@@ -1,0 +1,23 @@
+# Per-backend retry budget for rb-svc. `budget` caps retries at 20% of total
+# attempt volume over a 10s sliding window; `minRetryRate` is the floor that
+# still lets a small trickle of retries through at low volume (5 retries per
+# 1s window) when the percentage cap rounds to ~0. When both the percentage
+# ceiling and the floor are exhausted, further retries are refused and the
+# client gets a deterministic 503 while
+# `edgion_gateway_retry_budget_denied_total` increments.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: rb-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: rb-svc
+  retryConstraint:
+    budget:
+      percent: 20
+      interval: 10s
+    minRetryRate:
+      count: 5
+      interval: 1s

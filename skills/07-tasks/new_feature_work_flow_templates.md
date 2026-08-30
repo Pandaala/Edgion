@@ -142,9 +142,12 @@ Minimum design requirements:
 
 | Command | Result | Notes |
 |------|------|------|
-| `cargo fmt --all -- --check` | pass/fail |  |
-| `cargo clippy --all-targets` | pass/fail |  |
-| `cargo test --all` | pass/fail |  |
+| `cargo fmt --all` | pass/fail | Applied before the read-only checks |
+| `cargo check --workspace --all-targets` | pass/fail | Includes `edgion-tests` |
+| `cargo clippy --workspace --all-targets` | pass/fail | Includes `edgion-tests` |
+| `python3 cicd/checks/validate_agent_docs.py` | pass/fail |  |
+| `python3 cicd/checks/check_ssa_force.py` | pass/fail |  |
+| `cargo test -p <crate> <filter>` | pass/fail | Replace with targeted test command(s) |
 | `./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r ... -i ...` | pass/fail |  |
 
 ## Failure attribution

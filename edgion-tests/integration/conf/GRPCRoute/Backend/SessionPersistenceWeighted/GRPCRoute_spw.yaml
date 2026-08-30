@@ -1,0 +1,30 @@
+# Weighted split (70/30) across two Services with Header session persistence.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-spw
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-spw-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-spw.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      retry:
+        attempts: 0
+      sessionPersistence:
+        sessionName: "x-grpc-spw-session"
+        type: Header
+      backendRefs:
+        - name: grpc-spw-a
+          port: 8080
+          weight: 70
+        - name: grpc-spw-b
+          port: 8080
+          weight: 30

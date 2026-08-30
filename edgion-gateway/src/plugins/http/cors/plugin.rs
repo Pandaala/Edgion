@@ -43,9 +43,8 @@ impl Cors {
         Self::from_arc(Arc::new(config))
     }
 
-    /// Create from a shared `Arc<CorsConfig>` without cloning the underlying
-    /// config. Used by the preflight hot path to construct an ad-hoc `Cors`
-    /// per request without re-cloning the config.
+    /// Create from a shared, already-initialized `Arc<CorsConfig>` without
+    /// cloning the underlying config.
     pub fn from_arc(config: Arc<CorsConfig>) -> Self {
         Cors {
             name: "Cors".to_string(),
@@ -102,13 +101,22 @@ impl Cors {
 
         headers.push(("Access-Control-Allow-Origin", allowed_origin.to_string()));
 
-        headers.push(("Access-Control-Allow-Methods", self.config.get_allow_methods()));
+        // Access-Control-Allow-Methods / -Headers (preflight only). Per WHATWG Fetch
+        // 3.2.2/3.2.3 the CORS-preflight fetch algorithm is the only reader of these
+        // two; the actual-request response is inspected solely for -Allow-Origin,
+        // -Allow-Credentials and -Expose-Headers. Emitting them on an actual response
+        // costs bytes on every cross-origin response and, with the `**` shorthands,
+        // renders a content-free `Access-Control-Allow-Headers: *` plus the fully
+        // expanded method list.
+        if is_preflight {
+            headers.push(("Access-Control-Allow-Methods", self.config.get_allow_methods()));
 
-        let requested_headers = session.header_value("access-control-request-headers");
-        headers.push((
-            "Access-Control-Allow-Headers",
-            self.config.get_allow_headers(requested_headers.as_deref()),
-        ));
+            let requested_headers = session.header_value("access-control-request-headers");
+            headers.push((
+                "Access-Control-Allow-Headers",
+                self.config.get_allow_headers(requested_headers.as_deref()),
+            ));
+        }
 
         let expose = self.config.get_expose_headers();
         if !expose.is_empty() {
@@ -413,6 +421,136 @@ mod tests {
         assert!(
             origin_allowed_via_new(&config, "https://tenant.example.com").await,
             "subdomain-wildcard origin should be allowed via the compiled wildcard regex"
+        );
+    }
+
+    /// Run a simple (non-preflight) GET with an allowed origin and return the
+    /// response headers the plugin queued through `set_response_header`.
+    async fn simple_request_queued_headers(config: &CorsConfig) -> Vec<(String, String)> {
+        let queued: Arc<parking_lot::Mutex<Vec<(String, String)>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let cors = Cors::new(config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Cors");
+
+        mock_session.expect_get_method().return_const("GET".to_string());
+        mock_session.expect_header_value().returning(|name| {
+            if name == "origin" {
+                Some("https://example.com".to_string())
+            } else {
+                None
+            }
+        });
+        let sink = queued.clone();
+        mock_session.expect_set_response_header().returning(move |name, value| {
+            sink.lock().push((name.to_ascii_lowercase(), value.to_string()));
+            Ok(())
+        });
+        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
+
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        let headers = queued.lock().clone();
+        headers
+    }
+
+    // Regression (gw-plugin-acl-rl-03): `Access-Control-Allow-Methods` /
+    // `-Allow-Headers` are preflight-response-only per WHATWG Fetch 3.2.2/3.2.3.
+    // The actual-request response must carry only -Allow-Origin / -Allow-Credentials
+    // / -Expose-Headers.
+
+    #[tokio::test]
+    async fn test_actual_response_omits_preflight_only_headers() {
+        let headers = simple_request_queued_headers(&create_cors_config()).await;
+        let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+
+        assert!(
+            names.contains(&"access-control-allow-origin"),
+            "actual response must still carry Access-Control-Allow-Origin, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"access-control-allow-methods"),
+            "Access-Control-Allow-Methods is preflight-only, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"access-control-allow-headers"),
+            "Access-Control-Allow-Headers is preflight-only, got {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_actual_response_omits_wildcard_shorthand_headers() {
+        // The `**` shorthands are the worst case: without the gate an actual
+        // response gets a content-free `Access-Control-Allow-Headers: *` plus the
+        // fully expanded 9-verb method list. `validate_and_init` rejects a `*`
+        // shorthand together with credentials, so this config must disable them to
+        // stay operator-admissible.
+        let mut config = create_cors_config();
+        config.allow_credentials = false;
+        config.allow_methods = "**".to_string();
+        config.allow_headers = "**".to_string();
+
+        let headers = simple_request_queued_headers(&config).await;
+        let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+
+        // Positive control: the header vec really was built for this request, so the
+        // absence assertions below cannot pass vacuously.
+        assert!(
+            names.contains(&"access-control-allow-origin"),
+            "actual response must still carry Access-Control-Allow-Origin, got {headers:?}"
+        );
+        assert!(
+            !names.contains(&"access-control-allow-methods"),
+            "`**` allow_methods must not expand onto an actual response, got {headers:?}"
+        );
+        assert!(
+            !names.contains(&"access-control-allow-headers"),
+            "`**` allow_headers must not fall back to `*` on an actual response, got {headers:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preflight_response_keeps_methods_and_headers() {
+        let config = create_cors_config();
+        let cors = Cors::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Cors");
+
+        mock_session.expect_get_method().return_const("OPTIONS".to_string());
+        mock_session.expect_header_value().returning(|name| match name {
+            "origin" => Some("https://example.com".to_string()),
+            "access-control-request-method" => Some("POST".to_string()),
+            _ => None,
+        });
+
+        let written: Arc<parking_lot::Mutex<Vec<(String, String)>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = written.clone();
+        mock_session.expect_write_response_header().returning(move |resp, _| {
+            for (name, value) in resp.headers.iter() {
+                sink.lock().push((
+                    name.as_str().to_ascii_lowercase(),
+                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                ));
+            }
+            Ok(())
+        });
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+
+        let headers = written.lock().clone();
+        let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"access-control-allow-methods"),
+            "preflight response must carry Access-Control-Allow-Methods, got {headers:?}"
+        );
+        assert!(
+            names.contains(&"access-control-allow-headers"),
+            "preflight response must carry Access-Control-Allow-Headers, got {headers:?}"
+        );
+        assert!(
+            names.contains(&"access-control-max-age"),
+            "preflight response must still carry Access-Control-Max-Age, got {headers:?}"
         );
     }
 

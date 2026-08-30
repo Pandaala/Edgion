@@ -2,6 +2,7 @@
 name = "edgion-cli"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]
@@ -27,6 +28,7 @@ allocator-system = []
 [dependencies]
 edgion-common.workspace = true
 edgion-resources.workspace = true
+edgion-wasm.workspace = true
 
 # Memory allocators (optional, controlled by features)
 tikv-jemallocator = { workspace = true, optional = true }
@@ -50,13 +52,13 @@ hex.workspace = true
 chrono.workspace = true
 rand.workspace = true
 sha2.workspace = true
+url.workspace = true
 time.workspace = true
 rcgen.workspace = true
-rpassword.workspace = true
 zeroize.workspace = true
 tabled.workspace = true
-tracing.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true
-tempfile.workspace = true
+wat.workspace = true

@@ -14,8 +14,12 @@ static TCP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 pub struct TcpLogEntry {
     pub ts: i64,
     pub listener_port: u16,
-    pub client_addr: String,
-    pub client_port: u16,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    pub direct_peer_ip: String,
+    pub direct_peer_port: u16,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
+    pub remote_ip: String,
+    pub remote_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_addr: Option<String>,
     pub duration_ms: u64,
@@ -37,8 +41,10 @@ impl TcpLogEntry {
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port: ctx.listener_port,
-            client_addr: ctx.client_addr.clone(),
-            client_port: ctx.client_port,
+            direct_peer_ip: ctx.direct_peer_ip.clone(),
+            direct_peer_port: ctx.direct_peer_port,
+            remote_ip: ctx.remote_ip.clone(),
+            remote_port: ctx.remote_port,
             upstream_addr: ctx.upstream_addr.clone(),
             duration_ms,
             bytes_sent: ctx.bytes_sent,
@@ -66,10 +72,6 @@ pub async fn init_tcp_logger(config: &edgion_resources::LogConfig) -> Result<()>
     Ok(())
 }
 
-pub fn get_tcp_logger() -> Option<&'static Arc<AccessLogger>> {
-    TCP_LOGGER.get()
-}
-
 pub async fn log_tcp(entry: &TcpLogEntry) {
     if let Some(logger) = TCP_LOGGER.get() {
         let _ = logger.send(entry.to_json()).await;
@@ -85,8 +87,10 @@ mod tests {
     fn denied_ctx(reason: Option<&'static str>) -> TcpContext {
         TcpContext {
             listener_port: 9000,
-            client_addr: "127.0.0.1".to_string(),
-            client_port: 50000,
+            direct_peer_ip: "127.0.0.1".to_string(),
+            direct_peer_port: 50000,
+            remote_ip: "127.0.0.1".to_string(),
+            remote_port: 50000,
             upstream_addr: None,
             start_time: Instant::now(),
             bytes_sent: 0,
@@ -145,5 +149,24 @@ mod tests {
         for (variant, expected) in cases {
             assert_eq!(variant.as_str(), *expected);
         }
+    }
+
+    #[test]
+    fn direct_peer_is_carried_separately_from_remote_ip() {
+        // On a proxy-protocol listener RemoteIp is the logical client while
+        // DirectPeerIp stays the physical load balancer.
+        // A wiring mistake reading peer_addr() twice would make them equal and
+        // no other test would notice.
+        let mut ctx = denied_ctx(None);
+        ctx.remote_ip = "203.0.113.9".to_string();
+        ctx.direct_peer_ip = "10.0.0.7".to_string();
+
+        let entry = TcpLogEntry::from_context(&ctx);
+        assert_eq!(entry.remote_ip, "203.0.113.9");
+        assert_eq!(entry.direct_peer_ip, "10.0.0.7");
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"direct_peer_ip\":\"10.0.0.7\""), "{json}");
+        assert!(json.contains("\"remote_ip\":\"203.0.113.9\""), "{json}");
     }
 }

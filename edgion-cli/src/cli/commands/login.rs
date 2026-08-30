@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
+use std::time::Duration;
 
 use crate::cli::token::save_token;
 
@@ -33,12 +35,16 @@ pub async fn login(base_url: &str, token: &str) -> Result<()> {
 /// the command — the token is persisted either way.
 async fn probe_status(base_url: &str) {
     let url = format!("{}/api/v1/auth/status", base_url);
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return,
+    // Built through the canonical factory (design rule D.1). `disable_proxy` is
+    // left false on purpose: this is an operator-run CLI that must be able to
+    // reach a controller through a corporate `HTTP(S)_PROXY`.
+    let Ok(client) = build_outbound_client(OutboundClientConfig {
+        total_timeout: Some(Duration::from_secs(5)),
+        redirect: OutboundRedirect::Deny,
+        disable_proxy: false,
+        ..Default::default()
+    }) else {
+        return;
     };
 
     match client.get(&url).send().await {

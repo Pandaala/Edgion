@@ -17,13 +17,21 @@ description: Entry points of the in-repo binaries, full CLI argument reference, 
 
 All three binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
 
-## work_dir Priority
+## Working Directory and Relative Paths
 
 ```
-CLI --work-dir > ENV EDGION_WORK_DIR > YAML config > Default (".")
+CLI --work-dir > ENV EDGION_WORK_DIR > YAML config > effective default "."
 ```
 
-All relative paths in configuration are resolved against `work_dir`.
+Do not assume that every relative path is resolved against `work_dir`:
+
+| Path | Base |
+|------|------|
+| `--config-file` | Process current working directory (it is read before `work_dir` is installed) |
+| Controller FileSystem `conf_center.conf_dir` / `--conf-dir` | Process current working directory |
+| Log paths, conf_sync certificate paths, Gateway Wasm OCI cache path | Effective `work_dir` |
+
+See `docs/en/dev-guide/work-directory.md` before adding another path-valued field.
 
 ---
 
@@ -37,12 +45,16 @@ edgion-controller [OPTIONS]
 
 | Argument | Short | Type | Default | Description |
 |----------|-------|------|---------|-------------|
-| `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
+| `--work-dir` | `-w` | `PathBuf` | Unset (effective `"."`) | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML configuration file path |
 | `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in YAML) |
+| `--fs-poll-interval-ms` | — | `u64` | Auto-calculated | FileSystem watcher poll interval override (minimum 100 ms; testing/tuning) |
 | `--test-mode` | — | `bool` | `false` | Enable test mode (metrics testing features) |
 | `--grpc-listen` | — | `String` | `0.0.0.0:12151` | gRPC listen address |
 | `--admin-listen` | — | `String` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | Admin HTTP API address |
+| `--probe-listen` | — | `String` | `0.0.0.0:12100` | Liveness/readiness address |
+| `--metrics-listen` | — | `String` | `0.0.0.0:12190` | Prometheus metrics address |
+| `--allow-admin-ips` | — | comma-separated CIDRs | Empty (allow all) | TCP peer allowlist for Admin API |
 | `--log-dir` | — | `String` | `logs` | Log directory |
 | `--log-level` | — | `String` | `info` | Log level: trace/debug/info/warn/error |
 | `--json-format` | — | `bool` | `false` | JSON-formatted log |
@@ -52,7 +64,7 @@ edgion-controller [OPTIONS]
 
 ```bash
 # FileSystem mode (local development)
-edgion-controller -w /opt/edgion --conf-dir config/resources
+edgion-controller -w /opt/edgion --conf-dir /opt/edgion/config/resources
 
 # K8s mode (production)
 edgion-controller -c config/edgion-controller-k8s.yaml
@@ -70,15 +82,15 @@ edgion-gateway [OPTIONS]
 
 | Argument | Short | Type | Default | Description |
 |----------|-------|------|---------|-------------|
-| `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
+| `--work-dir` | `-w` | `PathBuf` | Unset (effective `"."`) | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML configuration file path |
 | `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:12151`) |
 | `--admin-listen` | — | `String` | `127.0.0.1:12001` | Admin API listen address (default: `127.0.0.1:12001`, loopback-only; sensitive endpoints not exposed cluster-wide) |
 | `--probe-listen` | — | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address (serves `/health` and `/ready` only; binds 0.0.0.0 so kubelet can reach the pod IP) |
 | `--threads` | — | `usize` | CPU core count | Pingora worker thread count |
 | `--work-stealing` | — | `bool` | `true` | Tokio task stealing |
-| `--grace-period` | — | `u64` | `30` | Graceful shutdown wait time in seconds |
-| `--graceful-shutdown-timeout` | — | `u64` | `10` | Shutdown timeout in seconds |
+| `--grace-period-seconds` | — | `u64` | `30` | Graceful shutdown wait time in seconds |
+| `--graceful-shutdown-timeout-seconds` | — | `u64` | `10` | Shutdown timeout in seconds |
 | `--upstream-keepalive-pool-size` | — | `usize` | `128` | Upstream connection pool size |
 | `--downstream-keepalive-request-limit` | — | `u32` | `1000` | Maximum requests per downstream connection (0 = unlimited) |
 | `--error-log` | — | `String` | — | Pingora error log path |
@@ -86,15 +98,18 @@ edgion-gateway [OPTIONS]
 | `--log-level` | — | `String` | `info` | Log level |
 | `--json-format` | — | `bool` | `false` | JSON-formatted log |
 | `--integration-testing-mode` | — | `bool` | `false` | Integration testing mode (**must not be used in production**). Refused at startup unless `EDGION_ALLOW_INTEGRATION_TESTING_MODE` is also set to a truthy value (`1`/`true`/`yes`/`on`). |
+| `--require-fips` | — | `bool` | `false` | Require a FIPS build; exits non-zero if unavailable |
+| `--fips-policy[=<auto\|on\|off>]` | — | enum | Unset (effective `auto`) | Downstream approved cipher/curve policy; bare flag means `on` |
 
 ### Startup Examples
 
 ```bash
-# Connect to a local Controller
-edgion-gateway --server-addr http://127.0.0.1:12151
+# Local-only plaintext development (explicitly insecure)
+# config/dev-gateway.yaml must contain: conf_sync_security: { tls: { skip_tls: true } }
+edgion-gateway -c config/dev-gateway.yaml --server-addr http://127.0.0.1:12151
 
-# Production deployment
-edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:12151 --threads 8
+# Production: the config must contain matching mTLS or Kubernetes auto-CA settings
+edgion-gateway -c config/edgion-gateway.yaml --server-addr https://controller:12151 --threads 8
 ```
 
 ---
@@ -141,7 +156,16 @@ edgion-cli reload
 
 # Inspect Gateway-side cache
 edgion-cli -t client --server http://localhost:12001 get httproute
+
+# Local-only Proxy-Wasm inspection and strict Envoy v3 conversion
+edgion-cli wasm inspect --file plugin.wasm --format json
+edgion-cli wasm convert-envoy --file envoy-wasm.yaml --format yaml --report report.json
 ```
+
+The `wasm` command group short-circuits before token resolution, client
+construction, authentication, and network access. `convert-envoy` emits only a
+`WasmConfig` fragment; the operator still chooses the EdgionPlugins resource
+identity and stage.
 
 ### Subcommand Argument Schemas
 

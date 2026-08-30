@@ -78,31 +78,29 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 ```yaml
 tls:
   enabled: true
-  insecureSkipVerify: false
-  certs:
-    # CA 证书和客户端证书属于公开材料，可以内联。
-    caCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    clientCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    # 客户端私钥（tls.key）必须来自 Secret。
-    secretRef:
-      name: my-client-tls
+  verify: true                 # 验证对端证书（默认 true）；false 由运维人员负责，启动时记录 WARN
+  validation:                  # 可选；省略则使用内置 webpki 根证书
+    caCertificateRefs:         # CA 证书引用列表；LinkSys 仅支持 kind: Secret
+      - kind: Secret
+        name: my-ca-bundle     # Secret 须包含 ca.crt 键（类型 kubernetes.io/tls 或 Opaque）
+    wellKnownCACertificates: System  # 或显式使用内置 webpki 根证书
+    # Phase 1：hostname 和 subjectAltNames 字段已暴露，但暂不强制执行，配置后 Accepted=False。
+  clientCertificateRef:
+    name: my-client-tls        # 包含 tls.crt + tls.key 的 Secret，用于客户端 mTLS
 ```
+
+> **Phase 1 CA 引用限制**：LinkSys（redis / etcd / elasticsearch / kafka）的 `validation.caCertificateRefs` 在本版本中仅支持 `kind: Secret`，不支持 ConfigMap CA。如需 ConfigMap CA，请使用插件（OIDC / LDAP / ForwardAuth / EGC）的 TLS 配置路径。内联 CA（`caCert` 字段）已从本版本中移除，请改用包含 `ca.crt` 键的 Secret。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | Boolean | `false` | 为连接启用 TLS。对于已隐含 TLS 的 URL（`https://`、`rediss://`），此字段仅添加自定义 CA / 客户端证书处理。 |
-| `insecureSkipVerify` | Boolean | `false` | 跳过证书验证。⚠️ **仅限开发和测试。** Redis 和 Etcd 不支持此选项——设置为 `true` 会直接拒绝启动。 |
-| `certs.caCert` | String | none | CA 证书 PEM（公开材料，可内联）。 |
-| `certs.clientCert` | String | none | mTLS 客户端证书 PEM（公开材料，可内联）。 |
-| `certs.secretRef` | Object | none | 提供客户端私钥 `tls.key` 的 Secret 引用。**私钥必须来自 Secret，不可内联。** |
+| `verify` | Boolean | `true` | 验证对端 TLS 证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis 和 Etcd 始终验证证书（SDK 无跳过验证 API，启动时即失败）。 |
+| `validation` | Object | none | 可选信任锚配置。省略则使用内置 webpki 根证书。 |
+| `validation.caCertificateRefs` | Array | none | CA 证书 Secret 引用列表（每项：`{ kind: Secret, name, namespace }`）。Secret 须包含 `ca.crt` 键。LinkSys 仅支持 `kind: Secret`。自定义 CA **替换**内置根证书。 |
+| `validation.wellKnownCACertificates` | String | none | 显式使用内置 webpki 根证书。允许值：`System`。 |
+| `clientCertificateRef` | Object | none | 包含客户端 mTLS 身份（`tls.crt` / `tls.key` 键）的 Kubernetes Secret。 |
 
-⚠️ **客户端私钥必须始终通过 `certs.secretRef` 提供。** 只有 CA 和客户端证书（公开材料）可以内联为 PEM。
+客户端 mTLS 身份（证书 + 私钥）必须通过 `clientCertificateRef` 提供。
 
 ### 可观测性
 
@@ -266,9 +264,8 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      certs:
-        secretRef:
-          name: etcd-client-tls
+      clientCertificateRef:
+        name: etcd-client-tls
     namespace: "/my-app/"
 ```
 
@@ -278,7 +275,7 @@ spec:
 |------|------|--------|------|
 | `endpoints` | Array\<String\> | **必填** | Etcd 端点，至少一个。示例：`"https://etcd-1:2379"`。 |
 | `auth` | Object | none | 认证配置。Secret 通常同时提供 `username` 和 `password`。 |
-| `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd **不支持** `insecureSkipVerify`——设置为 `true` 会拒绝启动。 |
+| `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd（与 Redis 一样）在任何环境下均拒绝 `verify: false`。 |
 | `namespace` | String | none | Etcd v3 键前缀。 |
 | `userAgent` | String | none | 发送给 etcd 的 HTTP User-Agent。示例：`"edgion-gateway/v1"`。 |
 | `rejectOldCluster` | Boolean | none | 拒绝连接到过时的集群。 |
@@ -416,7 +413,9 @@ spec:
 
 ## Webhook 连接器
 
-Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（`target.backendRef`），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
+> ⚠️ **破坏性变更：`successStatusCodes` 已被 `success.statusCodes` 取代。** `successStatusCodes` 已不再是运行时可识别字段。仍设置它的 webhook YAML 会继续被接纳，但 serde 会丢弃该字段，成功判定退化为“任意 2xx”。Controller 现在会通过提示性的未知字段 warning、`UnknownConfigFields` 条件、diagnostics/metric，以及 Admin API 写入和 validate 响应报告精确路径；该发现不会改变 `Accepted`，也不会阻断同步。请立即审查每个 webhook LinkSys（以及共用该连接类型的每个 ForwardAuth 插件）并迁移到嵌套的 `success:` 块；详见下文[Success（成功判定）](#成功判定-success)。
+
+Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（直接写在 `target` 下的 `name`/`namespace`/`port`/`kind`/`group` 字段），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -428,11 +427,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -449,31 +447,31 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     maxResponseBytes: 2048
 ```
 
 ### 目标
 
-每个 webhook 通过单一的 `backendRef` 引用其后端，与路由已采用的 `BackendObjectReference` 形状相同。不再有 `type: uri` / `type: service` 的选择——`backendRef` 是唯一的目标形式。
+每个 webhook 通过直接写在 `target` 下的 Service 字段引用其后端——字段集合（`group`/`kind`/`name`/`namespace`/`port`）与 Gateway API 自身的 `BackendObjectReference` 相同，但被展平、没有嵌套的包装键。不再有 `type: uri` / `type: service` 的选择，也没有 `backendRef` 这个键——展平后的 Service 字段（或下文的 `url` 形式）是唯一的目标形态。
 
 ```yaml
 target:
-  backendRef:
-    group: ""              # 可选；默认为 core API 组
-    kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice（留空默认为 Service）
-    name: webhook-backend
-    namespace: production  # 可选；默认为 LinkSys 所在命名空间
-    port: 8080             # 必填
+  group: ""              # 可选；默认为 core API 组
+  kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice（留空默认为 Service）
+  name: webhook-backend
+  namespace: production  # 可选；默认为 LinkSys 所在命名空间
+  port: 8080             # 必填
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `target.backendRef.group` | String | core（`""`） | 被引用对象的 API 组。 |
-| `target.backendRef.kind` | String | `Service` | 目标类型。可选：`Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 或留空（默认 `Service`）。 |
-| `target.backendRef.name` | String | **必填** | Kubernetes Service 名称。 |
-| `target.backendRef.namespace` | String | LinkSys 所在命名空间 | Service 所在命名空间。 |
-| `target.backendRef.port` | Integer | **必填** | Service 端口，必须大于 0。缺少端口会在准入时以 `Accepted=False` 拒绝。 |
+| `target.group` | String | core（`""`） | 被引用对象的 API 组。 |
+| `target.kind` | String | `Service` | 目标类型。可选：`Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 或留空（默认 `Service`）。 |
+| `target.name` | String | **必填** | Kubernetes Service 名称。 |
+| `target.namespace` | String | LinkSys 所在命名空间 | Service 所在命名空间。 |
+| `target.port` | Integer | **必填** | Service 端口，必须大于 0。缺少端口会在准入时以 `Accepted=False` 拒绝。 |
 
 按 kind 的解析方式：
 
@@ -481,7 +479,53 @@ target:
 - `ServiceEndpointSlice`：同样的 EndpointSlice 解析的显式形式。
 - `ServiceClusterIp`：通过 Service ClusterIP 的 DNS 名称解析（kube-proxy）。
 
-`kind: ExternalName` 和 `ServiceImport` **不**支持作为 webhook 目标，会在准入时以带说明的 `Accepted=False` 消息拒绝。要访问外部端点，请创建一个代理 Service（例如 `LoadBalancer` 类型的 Service，或由 ingress controller 前置的 `ClusterIP` Service）指向外部主机，然后按名称引用该 Service。详见[从旧 schema 迁移](#从旧-schema-迁移)。
+`kind: ExternalName` 和 `ServiceImport` **不**支持作为 webhook 目标，会在准入时以带说明的 `Accepted=False` 消息拒绝。要访问外部端点，请创建一个代理 Service（例如 `LoadBalancer` 类型的 Service，或由 ingress controller 前置的 `ClusterIP` Service）指向外部主机，然后按名称引用该 Service——或者改用下文的 URL 目标。
+
+### URL 目标（外部服务）
+
+除了 Service 字段，webhook 也可以直接指向任意外部 URL：
+
+```yaml
+target:
+  url: https://api.example.com
+  blockPrivate: true       # 可选；仅 URL 目标可用，见下文"出站流量策略"
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `target.url` | String | none | 外部 URL 目标。**仅限 origin**：`scheme://host[:port]`——不允许路径、查询字符串、片段或内嵌凭据。与 `target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group` 互斥。 |
+| `target.blockPrivate` | Boolean | `false`（继承网关本地默认值） | 仅 URL 目标可用。详见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)。 |
+
+**为什么仅限 origin。** `target.url` 不得携带路径、查询字符串、片段或内嵌凭据——设置任一项都会在准入时以 `Accepted=False` 拒绝。出站路径完全由 `request.path.template`（见下文[出站请求](#出站请求)）决定，该字段已经能与 `healthCheck.active.path` 及消费方的 `pathOverride` 正确组合。如果 `target.url` 同时也能携带路径，上述每一条组合规则都需要再定义一次"基础路径"，且相互冲突——仅限 origin 消除的是这种歧义本身，而不是靠文档去解释它。`https://api.example.com` 搭配 `request.path.template: /v1/check` 是典型写法。
+
+**与 Service 字段互斥。** 同时设置 `target.url` 与 `target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group` 中的任意一个都会在准入时被拒绝——webhook 要么指向外部 URL，要么指向 Kubernetes Service，不能两者兼有。
+
+**`http://` 搭配 `tls.enabled: true` 会被拒绝。** 如果 `target.url` 以 `http://` 开头（scheme 比较大小写不敏感）且连接的 `tls.enabled` 为 `true`，准入会失败并报 `Accepted=False`。这是有意为之：URL 目标的 scheme 本身已经决定了明文还是 TLS，若再叠加显式的 `tls.enabled: true`，要么被静默忽略，要么静默地降级运营者的 TLS 意图——两者都不可接受，因此选择直接拒绝而非猜测意图。
+
+**独享连接池。** URL 目标总是构建自己的 `reqwest::Client`——即便完全没有设置 `tls` 块——绝不回退到其他消费方共用的进程级共享 HTTP 客户端。这使得每个 URL 目标能拥有自己的 DNS 解析与地址缓存（见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)）；也意味着 URL 目标不会与其他无关 webhook 共享连接池耗尽或健康状态。
+
+### 出站流量策略（SSRF 防护）
+
+URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice 解析的 Service 目标不同——网关需要自行完成 DNS 解析，并在建立连接前对结果进行分类。两个执行点实现同一套策略，因此无论 `target.url` 指向的是主机名还是 IP 字面量，行为都一致：
+
+- **始终拒绝**：回环地址（`127.0.0.0/8`、`::1`）和链路本地地址，其中包括云元数据地址 `169.254.169.254` 及其所在的整个 `169.254.0.0/16` 网段。
+- **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）及唯一本地地址（`fd00::/8`），在始终拒绝的类别之外追加。
+- **默认（`blockPrivate` 未设置或为 `false`）**：私有网段被放行，与 Service 目标一贯的行为保持一致——多数 webhook 合法地指向内部制品库，或只能通过私有网络访问的 SaaS。
+
+被拒绝的地址会导致该次调用连接失败（WebhookKeyGet 不写入值，与其他任何 webhook 失败一样）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
+
+**网关本地默认值。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | webhook 未设置 `target.blockPrivate` 时的网关级默认值。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
+| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | URL 目标已解析并分类的地址在重新解析前的缓存时长。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
+
+**优先级：资源字段优先于网关默认值。** webhook 上显式设置的 `target.blockPrivate` 总是覆盖网关本地默认值——希望全局采用更严格策略的集群管理员可以打开 `outbound_egress_block_private`；需要访问内部 `10.x` 制品库的个别 webhook 仍可用 `target.blockPrivate: false` 单独放行，反之亦然。
+
+**没有命令行开关，是有意的。** 这两个配置项只能通过配置文件或环境变量设置——没有 `--outbound-egress-block-private` 命令行开关。网关的配置合并逻辑只会把一小组固定字段从命令行带入基于文件加载的配置中，而 `--config-file` 在常见部署路径下默认指向一个真实文件，因此该路径下的命令行开关会被静默忽略。请改用网关配置文件或 `EDGION_*` 环境变量设置。
+
+**这是纵深防御，而非主要控制手段。** `target.blockPrivate` 与 `outbound_egress_block_private` 收窄的是一次已经具备特权（LinkSys/EdgionPlugins 写权限）的写操作所能触达的范围，而不能替代网络层隔离。主要的出站流量控制手段仍然是作用于 Gateway Pod 的 Kubernetes `NetworkPolicy`，限制其可触达的外部 IP/端口范围——之所以还需要代码层防护，是因为 URL 目标允许运营者按主机名指定任意外部主机，而这是 `NetworkPolicy` 在配置编写时无法评估的。
 
 ### 出站请求
 
@@ -560,9 +604,9 @@ request:
 |------|------------------|----------|
 | `skipIfMissing`（默认） | 从出站请求中静默省略该字段，不记录日志。 | 缺失属正常的可选增强。 |
 | `warnIfMissing` | 省略该字段，写入一条 PluginLog 告警，请求继续。 | *应当*存在的字段——你想要可见性但不想让调用失败。 |
-| `required` | webhook 调用被视为失败。随后 `statusOnError` / `allowDegradation` 与其他任何 webhook 失败完全一样地生效。 | 后端缺之不可的字段。 |
+| `required` | webhook 调用被视为失败：WebhookKeyGet 不写入值，与其他任何 webhook 失败一样。 | 后端缺之不可的字段。 |
 
-`presence` 与 `allowDegradation` 正交且可组合：`presence: required` 决定缺失字段是否*算作失败*；`allowDegradation` 随后决定该失败是中止插件链（`false`，默认）还是静默跳过 webhook 并继续（`true`）。
+`statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它**：任何失败——包括某个 `presence: required` 字段缺失——WebhookKeyGet 都不写入值（或写入其 `default`），请求继续往下走。在 webhook `LinkSys` 上设置此字段没有任何效果；它只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
 
 #### 自定义字段来源
 
@@ -601,7 +645,7 @@ custom:
 | `${path}` / `${uri}` | 当前（可能已改写的）路径 / URI。 |
 | `${requestPath}` / `${requestUri}` | 冻结的入口路径 / URI。 |
 | `${method}` | 当前 HTTP 方法。 |
-| `${clientIp}` | 真实客户端 IP。 |
+| `${remoteIp}` | 解析后的客户端 IP。 |
 
 引用未定义变量的 `${ctx:X}` 解析为空字符串。要强制存在性，请在 origin 字段上使用 `presence: required`，或在调用 webhook 之前用 ctx-set 步骤设置该变量。
 
@@ -622,30 +666,97 @@ custom:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `timeoutMs` | Integer | `5000` | 请求超时（毫秒），必须大于 0。 |
+| `timeoutMsTemplate` | String | none | 渲染单次请求超时的模板，如 `"${ctx:desired_timeout_ms}"`。仅限一组受信任的变量白名单——详见下文 [Templates（模板）](#模板-templates)。 |
 | `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。未设置时使用系统 CA 包。 |
-| `successStatusCodes` | Array\<Integer\> | 任意 2xx | 视为成功的 HTTP 状态码。 |
-| `maxResponseBytes` | Integer | `1024` | 读取的最大响应体大小（字节），受 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）限制。 |
+| `success` | Object | 任意 2xx | 成功判定条件：状态码加上可选的 JSON body 断言。**取代已移除的 `successStatusCodes`**——详见下文 [Success（成功判定）](#成功判定-success)。 |
+| `maxResponseBytes` | Integer | `1024` | 读取的最大响应体大小（字节），受 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）限制。当设置了 `success.body` 断言时必须 `>= 4096`——详见 [Success（成功判定）](#成功判定-success)。 |
 
 > **已移除的字段。** `requestMethod`、`auth` 和 `defaultHeaders` 已弃用。在滚动升级期间它们仍被接受但运行时忽略，控制器在遇到时记录 WARN。它们将在下一个版本中移除——请在此之前迁移。详见[从旧 schema 迁移](#从旧-schema-迁移)。
+>
+> `successStatusCodes` 不属于这条弃用路径，也没有运行时兼容 shim。它会被忽略，但 Controller 会通过上述提示性未知字段界面报告。详见 [Success（成功判定）](#成功判定-success)。
 
-### 降级与错误处理
+### Success（成功判定）
+
+取代旧的 `successStatusCodes` 字段（已移除；预发布阶段，不设别名——详见本节开头的警告）。只有当状态码检查**和**可选的 body 断言**同时**通过时，响应才被判定为成功：
+
+```yaml
+success:
+  statusCodes: [200]          # 省略 -> 任意 2xx（200-299），与之前行为一致
+  body:                       # 可选；与 statusCodes 按与运算组合
+    - pointer: "/code"        # 指向已解析响应 body 的 RFC 6901 JSON Pointer
+      equals: 0
+    - pointer: "/data/status"
+      in: ["ok", "accepted"]
+```
+
+动机：一些后端总是返回 `200 OK`，把真实结果放在 body 里，例如 `{"code": -101, "message": "invalid user"}`。没有 body 断言时，网关会把这种响应当作成功，重试和降级都不会触发。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `allowDegradation` | Boolean | `false` | 为 `true` 时，webhook 失败会被静默跳过，继续消费方的 fallback 链。为 `false` 时，失败导致查询失败。 |
-| `statusOnError` | Integer | `503` | `allowDegradation=false` 且 webhook 为唯一来源时返回的状态码，取值范围 `[200, 599]`。 |
+| `success.statusCodes` | Array\<Integer\> | 任意 2xx | 视为成功的状态码。省略 → 任意 2xx（200-299）。显式的空列表（`statusCodes: []`）会在**准入时被拒绝**，而不是静默地等同于"任意 2xx"——因为二者效果相同却少了可见性，例如 Helm 模板渲染出空列表会在无人察觉的情况下放宽鉴权白名单。 |
+| `success.body` | Array\<Object\> | `[]` | JSON-Pointer body 断言，与状态码检查、以及断言之间彼此按与运算组合。 |
+| `success.body[].pointer` | String | **必填** | 指向已解析响应 body 的 RFC 6901 JSON Pointer，如 `/code` 或 `/data/status`。 |
+| `success.body[].equals` / `.notEquals` / `.exists` / `.in` | — | — | 每项恰好一个操作符（在反序列化时强制校验——多于一个或一个都没有都会解析失败）。`equals` / `notEquals` / `in` 按严格的 `serde_json::Value` 比较——**不做类型转换**：`equals: 0` 匹配 JSON 的 `0`，但不匹配字符串 `"0"`。`exists: true/false` 仅检查是否存在。`in` 接受一个非空的取值列表。 |
+
+**非 JSON body → 判定为失败，而非报错。** 当配置了任意 `success.body` 断言，且响应 body 不是合法 JSON（`Content-Type` 不对或无法解析）时，响应被判定为**失败**——不 panic，不报错。
+
+**指针缺失 → 判定为失败，`exists: false` 除外。** 当 body 确实是合法 JSON，但某条断言的 `pointer` 指向不存在的位置时，`equals`/`notEquals`/`in` 都会判定为失败——不能对一个根本不存在的字段做相等/成员关系断言。唯一合法的例外是 `exists: false`，它的定义就是"该指针不存在"，因此在这种情况下会成功。例如，`{pointer: /error, notEquals: true}` 应用于 `200 {"authenticated": false}`（完全没有 `/error` 键）的响应体上，结果是**失败**，而不是通过——一个隐藏在不同字段名下的业务错误，不能借由一个指向别处字段的 `notEquals` 断言蒙混过关。
+
+**使用 body 断言时必须调高 `maxResponseBytes`。** 默认上限是 1024 字节（1 KiB）。若 `success.body` 非空，准入时要求 `maxResponseBytes >= 4096`，否则资源会被拒绝并报 `Accepted=False`。原因是：超过上限的 body 会在分类**之前**就被截断——截断的 body 会呈现为独立的 `ResponseTooLarge` 失败，**而不是**"断言未通过"。排查时请区分二者：`ResponseTooLarge` 失败意味着要调高 `maxResponseBytes`；断言失败意味着后端的响应确实不匹配。
+
+**不影响被动健康检查。** 被动健康检查（`healthCheck.passive.failureStatusCodes`）仍然只看 HTTP 状态码——200 响应体里的业务错误不会触发连接器的健康状态变化或熔断。
 
 ### 重试
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `retry.maxRetries` | Integer | `1` | 最大重试次数（不含首次调用）。 |
-| `retry.retryDelayMs` | Integer | `100` | 重试间隔（毫秒）。 |
-| `retry.retryOnTimeout` | Boolean | `true` | 请求超时时重试。 |
-| `retry.retryOnConnectError` | Boolean | `true` | 连接错误时重试。 |
-| `retry.retryOnStatus` | Array\<Integer\> | `[]` | 触发重试的 HTTP 状态码。 |
+| `retry.maxRetries` | Integer | `1` | 最大重试次数（不含首次调用）。范围 `0..=10`——更大的值在准入时被拒绝（`Accepted=False`）。这条限制与下方 `maxDelayMs` 的上限共同存在：即便每次退避都有上限，不受限的 `maxRetries`（例如 200）仍会让一个存活的数据面请求内联阻塞长达数十分钟的 `tokio::time::sleep`。 |
+| `retry.retryDelayMs` | Integer | `100` | **退避曲线的基础延迟**（毫秒）——不是固定的"重试间隔"。在 `backoffPolicy: fixed` 下它就是恒定延迟；在 `exponential`（默认）下它是曲线的第一项。必须大于 0。 |
+| `retry.backoffPolicy` | Enum | `exponential` | `exponential` \| `fixed`。`exponential`：`delay = min(maxDelayMs, retryDelayMs << (attempt-1))`。`fixed`：`delay = retryDelayMs`（每次恒定）。 |
+| `retry.maxDelayMs` | Integer | `1000` | 单次退避的上限（毫秒），在抖动**之前**应用。范围 `1..=10000`——更大的值在准入时被拒绝（`Accepted=False`）。重试的休眠会内联阻塞数据面上一个活跃的客户端请求，因此这是硬性安全上限，而不是用于等待故障恢复的调节旋钮（那是健康检查/熔断器的职责）。 |
+| `retry.jitter` | Boolean | `true` | 为每次退避延迟增加 50%–100% 的抖动（`d = uniform(d/2 ..= d)`，在 `maxDelayMs` 上限**之后**应用，因此结果永远不会超过该上限）。防止重试风暴。 |
+| `retry.honorRetryAfter` | Boolean | `false` | 可选启用。当响应状态码为 `429` 或 `503`，**且**该状态码已列在 `retryOnStatus` 中时，采用响应的 `Retry-After` 头（同时支持 `delta-seconds` 和 HTTP-date 两种形式）代替计算出的退避值。解析值 `<= maxDelayMs` 时用作本次尝试的延迟；解析值 `> maxDelayMs` 时网关会**停止重试**并将后端的响应原样返回——既不会立即重试，也不会报错。缺失或无法解析的 `Retry-After` 会回退到计算出的退避值。`honorRetryAfter` 只改变重试发生的**时机**，不改变是否重试的**决定**。 |
+| `retry.retryOnTimeout` | Boolean | **按消费方决定——见下文** | 请求超时时重试。 |
+| `retry.retryOnConnectError` | Boolean | `true` | 连接错误（拒绝、重置）时重试。连接失败意味着请求从未到达后端，因此重试总是幂等安全的——这个默认值不受下文消费方拆分的影响。 |
+| `retry.retryOnStatus` | Array\<Integer\> | `[]` | 触发重试的 HTTP 状态码。状态码重试保持可选启用。 |
+| `retry.retryOnBodyFailure` | Boolean | `false` | 当 `success.body` 断言（见 [Success（成功判定）](#成功判定-success)）将响应判定为失败时重试。默认关闭：像 `{"code": -101}` 这样的业务错误，第十次尝试仍然是 `-101`——重试纯属浪费。只有确认 body 失败是瞬时性的才应启用。 |
 
 省略 `retry` 时，webhook 在首次出错后立即失败。
+
+> **`retryOnTimeout` 的默认值已改变，现在按消费方决定：webhook 为 `false`，ForwardAuth 为 `true`。** 超时意味着结果*未知*——后端可能已经完整处理了请求。webhook 调用绝大多数是非幂等的 POST（发送通知、扣款、写审计记录），因此对超时的 webhook 重试有导致重复执行的风险——所以默认 `false`。ForwardAuth 调用是幂等的鉴权检查，对瞬时超时重试是真实的可用性收益——所以默认 `true`。**这是一次真实的行为变更**：任何设置了 `retry:` 块、且此前依赖旧的无条件 `true` 默认值的 webhook LinkSys 都会受影响；运营者始终可以显式覆盖该字段。`retryOnConnectError` 不受影响（两者都保持 `true` 不变），因为连接失败总是可以安全重试的。
+
+### Templates（模板）
+
+有一个连接层字段可以由 `request.*` 所用的同一套单次请求模板引擎驱动（见[模板变量](#模板变量)）——但它的变量白名单比 `request.*` **窄得多**。它会在准入时编译并校验；格式错误的模板，或引用了不允许的变量类型的模板，都会被拒绝并报 `Accepted=False`。
+
+> ⚠️ **`timeoutMsTemplate` 只接受 `${ctx:...}`、`${remoteIp}`、`${matchedHttpRoute:...}` 和 `${matchedGrpcRoute:...}`。** `${header:...}`、`${query:...}`、`${cookie:...}`、`${path}`、`${uri}`、`${requestPath}`、`${requestUri}`、`${method}` 以及 `${secretRef:...}` 在这个字段上都会被专门拒绝（它们在 `request.*` 中仍然完全可用）。该字段是安全敏感的：`timeoutMsTemplate` 设置鉴权服务调用的截止时间。一个客户端可控的来源会让攻击者把超时压到小到必然超时的值（可靠的拒绝服务）。
+
+```yaml
+timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # 回退到 timeoutMs
+```
+
+**规则：模板渲染为可解析的值时优先采用；否则回退到静态字段。**
+
+| 参数 | 渲染为 | 回退目标 | 说明 |
+|------|--------|----------|------|
+| `timeoutMsTemplate` | `u64` 毫秒数 | `timeoutMs` | 渲染结果非数字、为空或低于下限时回退。下限是 `MIN_OUTBOUND_TIMEOUT_MS` = 50 毫秒（低于该值的渲染结果与 0/空一视同仁）。无论如何，渲染值在上限侧都会被**限幅到 60000 毫秒（60 秒）**。 |
+
+每次静默回退都会使 `edgion_outbound_template_fallback_total{field="timeout_ms"}` 计数器递增——详见下文 [Observability metrics（可观测性指标）](#可观测性指标)，因为数据面无法通过 `tracing` 记录该回退。
+
+**总阻塞时间。** 重试休眠和出站调用都内联在请求路径上，因此最坏情况的阻塞时间是 `(有效超时 × 最大尝试次数) + Σ 退避延迟`，每一项都独立设有上限：`timeoutMsTemplate` 受 60 秒限幅（以及下限的 50 毫秒下限）约束，退避延迟受 `maxDelayMs` 及其 10 秒硬上限约束，`maxRetries` 本身也受其 10 次的上限约束（见上方 [重试](#重试)）。
+
+该字段不能重定向出站连接——本版本没有模板化的 `target.url`——而且有了上面的变量白名单，它也不能被这次调用所处理的客户端请求中的任何内容驱动。
+
+### Observability metrics（可观测性指标）
+
+Webhook 连接器（以及共用同一个 `ExternalHttpConnection` 的 ForwardAuth 插件）会输出两个 Prometheus 计数器，用于覆盖那些在数据面上原本不可见的结果（数据面无法通过 `tracing` 记录日志）：
+
+| 指标 | 标签 | 触发条件 |
+|------|------|----------|
+| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` | `timeoutMsTemplate` 渲染结果无法解析（或渲染为 0 或空），连接回退到静态字段。 |
+| `edgion_outbound_success_predicate_fail_total` | 无 | 响应状态码已被 `success.statusCodes` 接受，但 `success.body` 断言将其判定为失败——即"200 OK 但 body 里有错误"的情形。 |
+
+关于 Prometheus 的通用参考（抓取配置、基数、Gateway 指标监听端口），见 [Metrics](../observability/metrics.md)。
 
 ### 限流
 
@@ -690,11 +801,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service              # 从 EndpointSlice 解析就绪端点
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service              # 从 EndpointSlice 解析就绪端点
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -709,10 +819,9 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: ServiceClusterIp     # 通过 ClusterIP 的 DNS 名称解析（kube-proxy）
-        name: key-service
-        port: 8080
+      kind: ServiceClusterIp     # 通过 ClusterIP 的 DNS 名称解析（kube-proxy）
+      name: key-service
+      port: 8080
     request:
       method:
         template: POST
@@ -726,8 +835,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
+    target: { kind: Service, name: authz, port: 8080 }
     request:
       headers:
         origin:
@@ -749,8 +857,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: audit-sink, port: 8080 }
+    target: { kind: Service, name: audit-sink, port: 8080 }
     request:
       method:
         template: POST
@@ -770,8 +877,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: key-service, port: 8080 }
+    target: { kind: Service, name: key-service, port: 8080 }
     request:
       method:
         template: POST
@@ -798,8 +904,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: enrich, port: 8080 }
+    target: { kind: Service, name: enrich, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -812,7 +917,7 @@ spec:
           - name: X-Forwarded-Path
             template: "${requestPath}"     # 冻结的入口路径
           - name: X-Client-Ip
-            template: "${clientIp}"
+            template: "${remoteIp}"
 ```
 
 #### 6. 存在性策略（required / skipIfMissing / warnIfMissing）
@@ -821,16 +926,13 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
-    allowDegradation: false        # required 字段失败时暴露 statusOnError
-    statusOnError: 503
+    target: { kind: Service, name: authz, port: 8080 }
     request:
       headers:
         origin:
           - name: X-Trace-Id                       # 默认：skipIfMissing
           - name: X-User-Id
-            presence: required                     # 缺失 → 调用失败 → 503
+            presence: required                     # 缺失 → WebhookKeyGet 不写入值
           - name: X-Org-Id
             presence: warnIfMissing                # 缺失 → PluginLog 告警，继续
 ```
@@ -841,8 +943,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-resolver, port: 8080 }
+    target: { kind: Service, name: user-resolver, port: 8080 }
     request:
       path:
         template: "/v1/users/lookup"
@@ -867,8 +968,7 @@ metadata:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-service, port: 8080 }
+    target: { kind: Service, name: user-service, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -880,16 +980,22 @@ spec:
           - name: X-User-Id
             template: "${ctx:user_id}"
 ---
-# 消费方插件（ctx-set），位于 HTTPRoute filter 上
-type: ctx-set
-vars:
-  - { name: user_id, template: "${header:X-User-Id}" }
-  - { name: action, value: "get-user" }
-  - name: resolved_user
-    from:
-      type: webhook
-      webhookRef: production/user-resolver
-      pathOverride: "/special/path"   # 仅因 allowOverride: true 才被采纳
+# 消费方插件，位于 HTTPRoute filter 上。
+# CtxSet 必须先运行：webhook 模板读取 ${ctx:user_id} / ${ctx:action}。
+- type: CtxSet
+  config:
+    vars:
+      - { name: user_id, template: "${header:X-User-Id}" }
+      - { name: action, value: "get-user" }
+- type: WebhookKeyGet
+  config:
+    vars:
+      - name: resolved_user
+        webhookRef: production/user-resolver
+        pathOverride: "/special/path"   # 仅因 allowOverride: true 才被采纳
+        extract:
+          source: body
+          path: "data.user"
 ```
 
 #### 示例：带重试和健康检查的弹性 webhook
@@ -904,11 +1010,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -921,12 +1026,13 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    allowDegradation: false
-    statusOnError: 503
     retry:
       maxRetries: 1
-      retryDelayMs: 100
-      retryOnTimeout: true
+      retryDelayMs: 100          # 退避曲线的基础延迟，不是固定间隔
+      backoffPolicy: exponential # exponential（默认）| fixed
+      maxDelayMs: 1000           # 单次退避上限，范围 1..=10000
+      jitter: true               # 50%-100% 抖动，在 maxDelayMs 上限之后应用
+      retryOnTimeout: false      # webhook 的默认值；forward_auth 默认改为 true
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
     rateLimit:
@@ -947,8 +1053,8 @@ Webhook schema 在本版本中发生变化。旧字段在滚动升级期间被�
 
 | 旧 | 新 |
 |----|----|
-| `target.type: uri` + `target.uri` | 指向（代理）Service 的 `target.backendRef`——不再支持原始 URL |
-| `target.type: service` + `target.name/port` | `target.backendRef.{kind,name,namespace,port}`（去掉 `type` 标签） |
+| `target.type: uri` + `target.uri` | 指向（代理）Service 的展平 Service 字段（`target.name`/`target.port`/……）——不再支持原始 URL |
+| `target.type: service` + `target.name/port` | 直接写在 `target` 下的 `target.{kind,name,namespace,port}`（去掉 `type` 标签） |
 | `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | 带 `secret:` 的 `request.headers.custom`（用 `prefix:` 拼 `Bearer `/`Basic `） |
 | `defaultHeaders`（静态 map） | 每条用 `value:` 的 `request.headers.custom` |
 | `requestMethod: POST` | `request.method.template: POST`（旧默认是 `GET`） |
@@ -980,11 +1086,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service        # 对于外部端点，将此指向一个代理 Service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service        # 对于外部端点，将此指向一个代理 Service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -1000,7 +1105,7 @@ spec:
               prefix: "Bearer "
 ```
 
-消费方侧，`pathSuffix` 和 `forwardHeaders` 已移除：
+消费方侧，`pathSuffix` 和 `forwardHeaders` 已移除。面向运维的消费方是 `WebhookKeyGet` 插件（不是 KeyGet 的 `type: webhook` 来源）：
 
 ```yaml
 # 旧
@@ -1012,13 +1117,23 @@ spec:
         pathSuffix: "/special/path"
         forwardHeaders: ["X-Tenant-Id", "X-User-Id"]
 
-# 新——在 webhook 资源上声明 path/headers；消费方只覆盖路径
-- type: key-auth
+# 新——在 webhook 资源上声明 path/headers；WebhookKeyGet 写入 ctx；
+# KeyAuth（或任何后续插件）读取 { type: ctx, name: … }。
+# WebhookKeyGet 必须排在 KeyAuth 之前；把列表写反是静默认证绕过。
+- type: WebhookKeyGet
   config:
-    keys:
-      - type: webhook
+    vars:
+      - name: resolved_key
         webhookRef: production/user-resolver
         pathOverride: "/special/path"   # 仅当 webhook 上 allowOverride: true 时被采纳
+        extract:
+          source: body
+          path: "data.key"
+- type: KeyAuth
+  config:
+    keySources:
+      - type: ctx
+        name: resolved_key
 ```
 
 > **外部端点。** `target.type: uri` 和 `kind: ExternalName` 不支持。用代理 Service（LoadBalancer，或由 ingress controller 前置的 ClusterIP）前置外部主机，并按名称引用该 Service。
@@ -1026,13 +1141,13 @@ spec:
 ### Webhook 故障排查
 
 **Webhook 无法解析 / "webhook not found"。**
-检查 `target.backendRef`：命名的 Service 必须存在于解析出的命名空间中，且 `port` 必须已设置且有效。`Accepted=False` 的 LinkSys 不会加载进网关运行时，因此任何调用它的消费方都会命中相同的"webhook 不可用"路径。运行 `kubectl get linksys <name> -o yaml` 并阅读 `Accepted` 条件消息。
+检查 `target` 下的 Service 字段（`name`/`namespace`/`port`/`kind`）：命名的 Service 必须存在于解析出的命名空间中，且 `port` 必须已设置且有效。`Accepted=False` 的 LinkSys 不会加载进网关运行时，因此任何调用它的消费方都会命中相同的"webhook 不可用"路径。运行 `kubectl get linksys <name> -o yaml` 并阅读 `Accepted` 条件消息。
 
 **关于 `kind` 值的 `Accepted=False`。**
 只有 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 和留空有效。`ExternalName` 和 `ServiceImport` 被拒绝——请改用代理 Service。
 
-**Required 字段错误 / 意外的 `statusOnError`。**
-某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败。确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感）。要降级而非失败，设置 `allowDegradation: true`；要仅记录，用 `presence: warnIfMissing`。
+**Required 字段错误 / key 解析结果为空。**
+某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败：WebhookKeyGet 不写入值（或写入其 `default`）。请确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感），或用 `presence: warnIfMissing` 仅记录而不失败。
 
 **模板变量解析为空。**
 `${ctx:NAME}` 在变量从未设置时返回空。确保在 webhook 被调用之前有一个 ctx-set 步骤设置它，并检查 `${type:name}` 拼写。要强制存在性，优先在 `origin` 字段上用 `presence: required` 而非模板。
@@ -1129,7 +1244,7 @@ spec:
 
 ### 3. 带 mTLS 客户端证书的 TLS 加密 Etcd
 
-CA 和客户端证书内联（公开材料），客户端私钥来自 Secret。
+CA 包通过 Secret 引用提供（`validation.caCertificateRefs`），客户端证书和私钥来自另一个 Secret（`clientCertificateRef`）。注意：本版本已移除内联 CA（`caCert` 字段），请改用包含 `ca.crt` 键的 Secret。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1148,24 +1263,19 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      certs:
-        caCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        clientCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        secretRef:
-          name: etcd-client-tls
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: etcd-ca-bundle   # 包含 ca.crt 键的 Secret，例如 kubectl create secret generic etcd-ca-bundle --from-file=ca.crt=ca.pem
+      clientCertificateRef:
+        name: etcd-client-tls
 ```
 
 ## 常见问题
 
 ### Q1：为什么我的 LinkSys 报告 `Accepted=False/Invalid`？
 
-**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target.backendRef` 缺少/为零的 `port` 或不支持的 `kind`（仅允许 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice`、留空）、webhook 的 `request` 存在冲突字段（同一名称同时出现在 `origin` 和 `custom`、列表内重复名称、或同时声明 `headers.origin[name: Cookie]` 和 `cookies.*` 列表）。状态 `message` 字段列出了具体错误。
+**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target` Service 引用缺少/为零的 `port` 或不支持的 `kind`（仅允许 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice`、留空）、webhook 的 `request` 存在冲突字段（同一名称同时出现在 `origin` 和 `custom`、列表内重复名称、或同时声明 `headers.origin[name: Cookie]` 和 `cookies.*` 列表）。状态 `message` 字段列出了具体错误。
 
 ### Q2：凭据看起来正确，但 `ResolvedRefs` 为 `False`。为什么？
 
@@ -1180,9 +1290,9 @@ spec:
 
 **A**：不能。认证和 TLS 结构体开启了 `deny_unknown_fields`，内联敏感字段（`username`、`password`、`bearerToken`、`apiKeyId`、`hmacKey`、`clientKey` 等）会导致解析失败而非被忽略。请始终使用 `secretRef`。
 
-### Q4：为什么将 `insecureSkipVerify: true` 会导致 Redis 或 Etcd 连接器崩溃？
+### Q4：能否为 Redis 或 Etcd 禁用 TLS 验证（`verify: false`）？
 
-**A**：Redis 和 Etcd 客户端不支持跳过验证——设置为 `true` 会直接拒绝启动。这是故意的设计，避免出现字段看似已设置但验证仍然发生的配置陷阱。如需连接使用私有 CA 的后端，请通过 `tls.certs.caCert` 或 `ca.crt` Secret 键提供 CA 证书。
+**A**：不能。Redis 和 Etcd 客户端不支持禁用证书验证——在任何环境下，`verify: false` 对这两种连接器均会在启动时直接失败。这是故意的设计。如需连接使用私有 CA 的后端，请通过 `tls.validation.caCertificateRefs` 引用包含 `ca.crt` 键的 Secret 来提供 CA 证书。
 
 ### Q5：轮换 Secret 后，现有连接会怎样？
 
@@ -1208,3 +1318,4 @@ spec:
 - [mTLS 配置](./mtls.md)
 - [Redis 限流](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)
 - [Access Log](../observability/access-log.md)
+- [Metrics](../observability/metrics.md)

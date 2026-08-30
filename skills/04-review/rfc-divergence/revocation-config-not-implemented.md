@@ -67,5 +67,5 @@ false-advertised feature, not an RFC text violation.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a4.md → V11` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a4.md → V11` (CONFIRM)
 - Sibling pattern: [deprecated-tls-version-admission.md](deprecated-tls-version-admission.md)

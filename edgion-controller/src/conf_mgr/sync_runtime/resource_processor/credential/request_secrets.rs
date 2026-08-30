@@ -14,6 +14,7 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::parse_secret_re
 use edgion_resources::ResourceKind;
 
 use super::super::{HandlerContext, ResolvedRefsError, ResourceRef};
+use super::pipeline::fetch_secret_readonly;
 use super::{fetch_secret, FetchOutcome, PendingReason};
 
 /// Read a single key out of a resolved K8s Secret as a UTF-8 string.
@@ -54,6 +55,28 @@ pub async fn resolve_request_secrets(
     owner_kind: ResourceKind,
     names: &[String],
 ) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
+    resolve_request_secrets_core(ctx, owner, owner_kind, names, true)
+}
+
+/// Re-evaluate request-template Secret refs for status without registering
+/// dependencies again. Parse owns dependency registration; status derivation
+/// must be a read-only, deterministic projection of current stores and grants.
+pub fn request_secret_errors_readonly(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_kind: ResourceKind,
+    names: &[String],
+) -> Vec<ResolvedRefsError> {
+    resolve_request_secrets_core(ctx, owner, owner_kind, names, false).1
+}
+
+fn resolve_request_secrets_core(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_kind: ResourceKind,
+    names: &[String],
+    register_dependencies: bool,
+) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
     let mut resolved: BTreeMap<String, String> = BTreeMap::new();
     let mut errs: Vec<ResolvedRefsError> = Vec::new();
 
@@ -76,7 +99,12 @@ pub async fn resolve_request_secrets(
             name: parts.name.clone(),
             namespace: Some(parts.namespace.clone()),
         };
-        match fetch_secret(ctx, owner, "edgion.io", owner_kind.as_str(), &secret_ref) {
+        let outcome = if register_dependencies {
+            fetch_secret(ctx, owner, "edgion.io", owner_kind.as_str(), &secret_ref)
+        } else {
+            fetch_secret_readonly(ctx, owner, "edgion.io", owner_kind.as_str(), &secret_ref)
+        };
+        match outcome {
             FetchOutcome::Ok(secret) => match read_secret_key(&secret, &parts.key) {
                 Ok(value) => {
                     resolved.insert(name.clone(), value);

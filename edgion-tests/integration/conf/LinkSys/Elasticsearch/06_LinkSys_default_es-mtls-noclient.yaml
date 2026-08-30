@@ -1,0 +1,26 @@
+# Negative control for mutual TLS (P1#4).
+#
+# Same mutual-TLS endpoint as es-mtls-test (https://127.0.0.1:19202), trusting the
+# server cert via caSecretRef, but with NO clientSecretRef — so the connector
+# presents no client identity. The nginx terminator has ssl_verify_client on and
+# therefore rejects the handshake, proving the client cert is what makes
+# es-mtls-test succeed.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-mtls-noclient
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "https://127.0.0.1:19202"
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: es-backend-ca
+    timeout:
+      connect: 5000
+      request: 30000

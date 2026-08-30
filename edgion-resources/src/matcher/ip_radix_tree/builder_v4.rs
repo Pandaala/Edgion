@@ -116,11 +116,6 @@ impl IpV4RadixBuilder {
         Self::insert_helper(child, ip, prefix_len, label_id, current_bit + 1, cidr_str)
     }
 
-    /// Returns the number of rules inserted
-    pub fn len(&self) -> usize {
-        self.rule_count
-    }
-
     /// Returns whether the builder is empty
     pub fn is_empty(&self) -> bool {
         self.rule_count == 0
@@ -154,7 +149,7 @@ mod tests {
     #[test]
     fn test_new_builder() {
         let builder = IpV4RadixBuilder::new();
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.rule_count, 0);
         assert!(builder.is_empty());
     }
 
@@ -162,7 +157,7 @@ mod tests {
     fn test_insert_single_rule() {
         let mut builder = IpV4RadixBuilder::new();
         assert!(builder.insert("192.168.1.0/24", 1).is_ok());
-        assert_eq!(builder.len(), 1);
+        assert_eq!(builder.rule_count, 1);
         assert!(!builder.is_empty());
     }
 
@@ -172,7 +167,7 @@ mod tests {
         assert!(builder.insert("10.0.0.0/8", 1).is_ok());
         assert!(builder.insert("192.168.0.0/16", 2).is_ok());
         assert!(builder.insert("172.16.0.0/12", 1).is_ok());
-        assert_eq!(builder.len(), 3);
+        assert_eq!(builder.rule_count, 3);
     }
 
     #[test]

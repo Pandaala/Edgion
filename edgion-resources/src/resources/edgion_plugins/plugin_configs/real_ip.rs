@@ -4,10 +4,10 @@
 //! Uses Nginx-style right-to-left traversal of X-Forwarded-For header.
 //!
 //! ## Algorithm (Nginx-compatible):
-//! 1. If client_addr is not in trusted_ips, use client_addr as real IP
+//! 1. If the downstream peer is not in trusted_ips, use it as RemoteIp
 //! 2. Extract IPs from real_ip_header (e.g., X-Forwarded-For)
 //! 3. Traverse from right to left, find first non-trusted IP
-//! 4. Fallback to client_addr if all IPs are trusted
+//! 4. Fall back to the downstream peer if all IPs are trusted
 //!
 //! ## Usage Examples:
 //!

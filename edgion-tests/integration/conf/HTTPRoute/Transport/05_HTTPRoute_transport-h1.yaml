@@ -1,0 +1,40 @@
+# Ordinary (non-streamed) route to the raw HTTP/1.1 transport backend.
+#
+# Proves: with no request-body plugin on the route, the upstream request keeps
+# the `Ordinary` framing of contract §3 — the declaration the downstream client
+# made is what the upstream observes.
+#
+# The `/timeout` rule exists only so `upstream_never_responds` has a bounded,
+# deterministic outcome (504) instead of depending on a global default. It is a
+# second rule rather than a second hostname so the combination matrix stays
+# `(client constructor) x (hostname)` with no extra axis.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-h1
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-h1.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /timeout
+      timeouts:
+        backendRequest: "2s"
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030

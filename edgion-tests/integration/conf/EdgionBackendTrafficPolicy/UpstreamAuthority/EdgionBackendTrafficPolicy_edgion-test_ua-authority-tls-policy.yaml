@@ -1,0 +1,17 @@
+# upstreamAuthority for the HTTPS wildcard Service. No active health check
+# here (that is exercised on ua-svc-plain instead, since the Pingora active
+# health-check probe currently has no TLS support at all — see the Task 8
+# report's "concerns" section), so `healthCheckHost` is not required by
+# admission and is omitted.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ua-authority-tls-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ua-svc-tls
+  upstreamAuthority:
+    pattern: "*.sandbox.internal"
+    template: "${ctx:tenant}.sandbox.internal"

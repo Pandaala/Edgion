@@ -1,0 +1,18 @@
+# Corrected variant of EdgionPlugins_edgion-test_uf-fa.yaml: the stale
+# "successStatusCodes" key is removed. Applying this over the malformed
+# fixture must drain the diagnostics endpoint to zero for this resource AND
+# remove its UnknownConfigFields status condition.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: uf-fa
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-service
+          port: 8080
+        decision: {}

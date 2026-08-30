@@ -203,19 +203,16 @@ impl RegionRouteConfig {
     pub fn validate(&mut self) {
         // No local validation needed.
     }
-
-    /// Stateless field-level validation. Returns None — all checks are deferred to
-    /// plugin-build time or request-time overlay resolution.
-    fn check_fields(&self) -> Option<String> {
-        None
-    }
 }
 
 use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for RegionRouteConfig {
     fn validation_error(&self) -> Option<String> {
-        self.check_fields()
+        // Routing-table checks are deferred to plugin-build time or
+        // request-time overlay resolution; there is no local field-level
+        // validation left.
+        None
     }
 }
 

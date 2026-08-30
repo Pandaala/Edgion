@@ -30,21 +30,25 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["secrets"]
-  # create/update/patch are required so the conf_sync internal CA can provision and
+  # create/update/patch/delete are required so the conf_sync internal CA can provision and
   # rotate the CA Secret (edgion-conf-sync-ca) and the gateway leaf Secret
-  # (edgion-conf-sync-certs). get/list/watch are used for Secret resolution.
-  verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # (edgion-conf-sync-certs), and so the OAuth2 credential manager can publish
+  # and remove managed consumer Secrets. get/list/watch are used for resolution.
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["discovery.k8s.io"]
+  # create/update/patch/delete are required by the control-plane DNS resolver,
+  # which writes/GCs synthetic EndpointSlices for controller-mode ExternalName
+  # Services (edgion.io/dns-resolution-mode: controller).
   resources: ["endpointslices"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["edgion.io"]
+  resources: ["edgiontls", "edgiongatewayclassconfigs", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["edgion.io"]
-  resources: ["edgiontls", "edgiongatewayclassconfigs", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "linksys", "edgionacmes"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["edgion.io"]
-  resources: ["edgiontls/status", "edgiongatewayclassconfigs/status", "edgionstreamplugins/status", "edgionplugins/status", "edgionacmes/status"]
+  resources: ["edgiontls/status", "edgiongatewayclassconfigs/status", "edgionstreamplugins/status", "edgionplugins/status", "edgionacmes/status", "linksys/status", "edgionbackendtrafficpolicies/status", "edgionbackends/status"]
   verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["referencegrants"]

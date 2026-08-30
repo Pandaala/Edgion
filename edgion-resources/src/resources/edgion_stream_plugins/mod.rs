@@ -31,14 +31,8 @@ pub use tls_route_plugins::TlsRouteStreamPlugin;
 // Re-export plugin configs
 pub use crate::resources::edgion_plugins::DefaultAction;
 
-/// API group for EdgionStreamPlugins
-pub const EDGION_STREAM_PLUGINS_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionStreamPlugins
-pub const EDGION_STREAM_PLUGINS_KIND: &str = "EdgionStreamPlugins";
-
 /// EdgionStreamPlugins defines reusable plugin configurations for stream protocols
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Debug, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -57,6 +51,61 @@ pub struct EdgionStreamPluginsSpec {
     /// Stage 2 (TlsRoute) plugin configurations — post-handshake, post-route-match
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_route_plugins: Option<Vec<TlsRoutePluginEntry>>,
+
+    /// Unrecognized key paths found in the submitted document. Populated only on
+    /// the Kubernetes watcher ingest path (see `schema_check::strict_ingest_enabled`);
+    /// never serialized, never in the CRD schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub unknown_fields: Vec<String>,
+}
+
+/// Deserialize-only mirror of [`EdgionStreamPluginsSpec`]; see
+/// `EdgionPluginsSpecShadow` in `resources::edgion_plugins` for why this
+/// exists.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgionStreamPluginsSpecShadow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugins: Option<Vec<StreamPluginEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tls_route_plugins: Option<Vec<TlsRoutePluginEntry>>,
+}
+
+impl From<EdgionStreamPluginsSpecShadow> for EdgionStreamPluginsSpec {
+    fn from(shadow: EdgionStreamPluginsSpecShadow) -> Self {
+        EdgionStreamPluginsSpec {
+            plugins: shadow.plugins,
+            tls_route_plugins: shadow.tls_route_plugins,
+            unknown_fields: Vec::new(),
+        }
+    }
+}
+
+/// Schema used by the unknown-key walk, built once.
+///
+/// `pub` for the same reason as `edgion_plugins_spec_schema`: the
+/// FileSystem/etcd loader seam and Admin API write handlers need it outside
+/// the Kubernetes-only `strict_ingest_enabled` gate.
+pub fn edgion_stream_plugins_spec_schema() -> &'static schemars::Schema {
+    static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| schemars::schema_for!(EdgionStreamPluginsSpec))
+}
+
+impl<'de> Deserialize<'de> for EdgionStreamPluginsSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // See `EdgionPluginsSpec::deserialize` for the fast-path/gate rationale.
+        if !crate::schema_check::strict_ingest_enabled() {
+            return Ok(EdgionStreamPluginsSpecShadow::deserialize(d)?.into());
+        }
+        let value = serde_json::Value::deserialize(d)?;
+        let unknown = crate::schema_check::unknown_key_paths(&value, edgion_stream_plugins_spec_schema());
+        let mut spec: EdgionStreamPluginsSpec = EdgionStreamPluginsSpecShadow::deserialize(value)
+            .map_err(serde::de::Error::custom)?
+            .into();
+        spec.unknown_fields = unknown;
+        Ok(spec)
+    }
 }
 
 /// Stream plugin entry with enable switch
@@ -66,6 +115,14 @@ pub struct StreamPluginEntry {
     /// Whether this plugin is enabled (default: true)
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
+
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -99,6 +156,14 @@ impl StreamPluginEntry {
 pub struct TlsRoutePluginEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
+
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
     #[serde(flatten)]
     pub plugin: TlsRouteStreamPlugin,
@@ -140,19 +205,5 @@ impl EdgionStreamPlugins {
     /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
         self.spec.plugins.as_ref().map_or(0, |p| p.len())
-    }
-
-    /// Get plugin entries as a slice
-    pub fn plugin_entries(&self) -> &[StreamPluginEntry] {
-        self.spec.plugins.as_deref().unwrap_or(&[])
-    }
-
-    /// Get only enabled plugins
-    pub fn enabled_plugins(&self) -> Vec<&EdgionStreamPlugin> {
-        self.spec
-            .plugins
-            .as_ref()
-            .map(|entries| entries.iter().filter(|e| e.is_enabled()).map(|e| &e.plugin).collect())
-            .unwrap_or_default()
     }
 }

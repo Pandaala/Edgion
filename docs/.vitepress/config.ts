@@ -3,9 +3,44 @@ import { defineConfig } from 'vitepress'
 // Nav route paths shared between locales — change here to keep both nav bars in sync
 const PATHS = {
   gettingStarted: 'getting-started/installation-and-deployment',
+  aiGateway:      'ai-gateway/',
   userGuide:      'user-guide/http-route/overview',
   opsGuide:       'ops-guide/gateway/overview',
   devGuide:       'dev-guide/architecture-overview',
+}
+
+const enAiGatewaySidebar = {
+  text: 'AI Gateway',
+  collapsed: false,
+  items: [
+    { text: 'Overview', link: '/en/ai-gateway/' },
+    { text: 'Quick Start', link: '/en/ai-gateway/quick-start' },
+    { text: 'Concepts', link: '/en/ai-gateway/concepts' },
+    { text: 'EdgionBackend', link: '/en/ai-gateway/edgion-backend' },
+    { text: 'Routing and Selection', link: '/en/ai-gateway/routing' },
+    { text: 'Credentials and Limits', link: '/en/ai-gateway/credentials-and-limits' },
+    { text: 'Resilience and Failover', link: '/en/ai-gateway/resilience' },
+    { text: 'Providers', link: '/en/ai-gateway/providers' },
+    { text: 'Quotas and Cost', link: '/en/ai-gateway/quotas-and-cost' },
+    { text: 'Observability', link: '/en/ai-gateway/observability' },
+  ],
+}
+
+const zhAiGatewaySidebar = {
+  text: 'AI Gateway',
+  collapsed: false,
+  items: [
+    { text: '概览', link: '/zh-CN/ai-gateway/' },
+    { text: '快速开始', link: '/zh-CN/ai-gateway/quick-start' },
+    { text: '概念', link: '/zh-CN/ai-gateway/concepts' },
+    { text: 'EdgionBackend', link: '/zh-CN/ai-gateway/edgion-backend' },
+    { text: '路由与选择', link: '/zh-CN/ai-gateway/routing' },
+    { text: '凭据与限额', link: '/zh-CN/ai-gateway/credentials-and-limits' },
+    { text: '弹性与故障切换', link: '/zh-CN/ai-gateway/resilience' },
+    { text: '提供商', link: '/zh-CN/ai-gateway/providers' },
+    { text: '配额与成本', link: '/zh-CN/ai-gateway/quotas-and-cost' },
+    { text: '可观测性', link: '/zh-CN/ai-gateway/observability' },
+  ],
 }
 
 const enSidebar = [
@@ -17,6 +52,7 @@ const enSidebar = [
       { text: 'Core Concepts', link: '/en/getting-started/core-concepts' },
     ],
   },
+  enAiGatewaySidebar,
   {
     text: 'User Guide',
     items: [
@@ -25,6 +61,7 @@ const enSidebar = [
         collapsed: false,
         items: [
           { text: 'Overview', link: '/en/user-guide/http-route/overview' },
+          { text: 'Route Delegation', link: '/en/user-guide/http-route/delegation' },
           {
             text: 'Backends',
             collapsed: true,
@@ -56,6 +93,7 @@ const enSidebar = [
                 text: 'Edgion Plugins',
                 collapsed: true,
                 items: [
+                  { text: 'AI Proxy → AI Gateway', link: '/en/ai-gateway/' },
                   { text: 'Basic Auth', link: '/en/user-guide/http-route/filters/edgion-plugins/basic-auth' },
                   { text: 'JWT Auth', link: '/en/user-guide/http-route/filters/edgion-plugins/jwt-auth' },
                   { text: 'Key Auth', link: '/en/user-guide/http-route/filters/edgion-plugins/key-auth' },
@@ -71,6 +109,7 @@ const enSidebar = [
                   { text: 'Proxy Rewrite', link: '/en/user-guide/http-route/filters/edgion-plugins/proxy-rewrite' },
                   { text: 'Response Rewrite', link: '/en/user-guide/http-route/filters/edgion-plugins/response-rewrite' },
                   { text: 'Request Restriction', link: '/en/user-guide/http-route/filters/edgion-plugins/request-restriction' },
+                  { text: 'Conditions', link: '/en/user-guide/http-route/filters/edgion-plugins/conditions' },
                   { text: 'CORS', link: '/en/user-guide/http-route/filters/edgion-plugins/cors' },
                   { text: 'CSRF', link: '/en/user-guide/http-route/filters/edgion-plugins/csrf' },
                   { text: 'DSL', link: '/en/user-guide/http-route/filters/edgion-plugins/dsl/', collapsed: true, items: [
@@ -82,13 +121,16 @@ const enSidebar = [
                   ]},
                   { text: 'Mock', link: '/en/user-guide/http-route/filters/edgion-plugins/mock' },
                   { text: 'Dynamic Upstream', link: '/en/user-guide/http-route/filters/edgion-plugins/dynamic-upstream' },
+                  { text: 'Canary', link: '/en/user-guide/http-route/filters/edgion-plugins/canary' },
                   { text: 'Direct Endpoint', link: '/en/user-guide/http-route/filters/edgion-plugins/direct-endpoint' },
                   { text: 'Request Mirror', link: '/en/user-guide/http-route/filters/edgion-plugins/request-mirror' },
                   { text: 'All Endpoint Status', link: '/en/user-guide/http-route/filters/edgion-plugins/all-endpoint-status' },
                   { text: 'Debug Access Log', link: '/en/user-guide/http-route/filters/edgion-plugins/debug-access-log' },
                   { text: 'Ctx Setter', link: '/en/user-guide/http-route/filters/edgion-plugins/ctx-setter' },
+                  { text: 'Webhook KeyGet', link: '/en/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
                   { text: 'Real IP', link: '/en/user-guide/http-route/filters/edgion-plugins/real-ip' },
                   { text: 'Region Route', link: '/en/user-guide/http-route/filters/edgion-plugins/region-route' },
+                  { text: 'Dye', link: '/en/user-guide/http-route/filters/edgion-plugins/dye' },
                 ],
               },
               {
@@ -121,6 +163,7 @@ const enSidebar = [
         collapsed: true,
         items: [
           { text: 'Overview', link: '/en/user-guide/grpc-route/overview' },
+          { text: 'Route Delegation', link: '/en/user-guide/grpc-route/delegation' },
           { text: 'Backends', link: '/en/user-guide/grpc-route/backends/overview' },
           { text: 'Matches', link: '/en/user-guide/grpc-route/matches/overview' },
           { text: 'Filters', link: '/en/user-guide/grpc-route/filters/overview' },
@@ -157,6 +200,7 @@ const enSidebar = [
         items: [
           { text: 'Overview', link: '/en/user-guide/edgion-plugins/' },
           { text: 'Ctx Setter', link: '/en/user-guide/edgion-plugins/ctx-setter' },
+          { text: 'Webhook KeyGet', link: '/en/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
           { text: 'Forward Auth', link: '/en/user-guide/edgion-plugins/forward-auth' },
           { text: 'JWE Decrypt', link: '/en/user-guide/edgion-plugins/jwe-decrypt' },
           { text: 'LDAP Auth', link: '/en/user-guide/edgion-plugins/ldap-auth' },
@@ -216,6 +260,7 @@ const enSidebar = [
           { text: 'Reference Grant', link: '/en/ops-guide/infrastructure/reference-grant' },
           { text: 'Secret Management', link: '/en/ops-guide/infrastructure/secret-management' },
           { text: 'Connectors (LinkSys)', link: '/en/ops-guide/infrastructure/connectors' },
+          { text: 'Service Discovery', link: '/en/ops-guide/infrastructure/service-discovery' },
         ],
       },
       {
@@ -260,6 +305,7 @@ const zhSidebar = [
       { text: '核心概念', link: '/zh-CN/getting-started/core-concepts' },
     ],
   },
+  zhAiGatewaySidebar,
   {
     text: '用户指南',
     items: [
@@ -268,6 +314,7 @@ const zhSidebar = [
         collapsed: false,
         items: [
           { text: '概览', link: '/zh-CN/user-guide/http-route/overview' },
+          { text: '路由委派', link: '/zh-CN/user-guide/http-route/delegation' },
           {
             text: '后端',
             collapsed: true,
@@ -299,6 +346,7 @@ const zhSidebar = [
                 text: 'Edgion 插件',
                 collapsed: true,
                 items: [
+                  { text: 'AI Proxy → AI Gateway', link: '/zh-CN/ai-gateway/' },
                   { text: 'Basic Auth', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/basic-auth' },
                   { text: 'JWT Auth', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/jwt-auth' },
                   { text: 'Key Auth', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/key-auth' },
@@ -314,6 +362,7 @@ const zhSidebar = [
                   { text: '代理重写', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/proxy-rewrite' },
                   { text: '响应重写', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/response-rewrite' },
                   { text: '请求限制', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/request-restriction' },
+                  { text: '插件条件', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/conditions' },
                   { text: 'CORS', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/cors' },
                   { text: 'CSRF', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/csrf' },
                   { text: 'DSL', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/dsl/', collapsed: true, items: [
@@ -325,13 +374,16 @@ const zhSidebar = [
                   ]},
                   { text: 'Mock', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/mock' },
                   { text: '动态上游', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/dynamic-upstream' },
+                  { text: 'Canary', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/canary' },
                   { text: '直接端点', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/direct-endpoint' },
                   { text: '请求镜像', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/request-mirror' },
                   { text: '全端点状态', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/all-endpoint-status' },
                   { text: '调试访问日志', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/debug-access-log' },
                   { text: 'Ctx Setter', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/ctx-setter' },
+                  { text: 'Webhook KeyGet', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
                   { text: 'Real IP', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/real-ip' },
                   { text: '区域路由', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/region-route' },
+                  { text: '染色', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/dye' },
                 ],
               },
               {
@@ -364,6 +416,7 @@ const zhSidebar = [
         collapsed: true,
         items: [
           { text: '概览', link: '/zh-CN/user-guide/grpc-route/overview' },
+          { text: '路由委派', link: '/zh-CN/user-guide/grpc-route/delegation' },
           { text: '后端', link: '/zh-CN/user-guide/grpc-route/backends/overview' },
           { text: '匹配规则', link: '/zh-CN/user-guide/grpc-route/matches/overview' },
           { text: '过滤器', link: '/zh-CN/user-guide/grpc-route/filters/overview' },
@@ -392,6 +445,7 @@ const zhSidebar = [
         items: [
           { text: '概览', link: '/zh-CN/user-guide/edgion-plugins/' },
           { text: 'Ctx Setter', link: '/zh-CN/user-guide/edgion-plugins/ctx-setter' },
+          { text: 'Webhook KeyGet', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/webhook-key-get' },
           { text: 'Forward Auth', link: '/zh-CN/user-guide/edgion-plugins/forward-auth' },
           { text: 'JWE Decrypt', link: '/zh-CN/user-guide/edgion-plugins/jwe-decrypt' },
           { text: 'LDAP Auth', link: '/zh-CN/user-guide/edgion-plugins/ldap-auth' },
@@ -450,6 +504,7 @@ const zhSidebar = [
           { text: 'mTLS', link: '/zh-CN/ops-guide/infrastructure/mtls' },
           { text: '引用授权', link: '/zh-CN/ops-guide/infrastructure/reference-grant' },
           { text: '密钥管理', link: '/zh-CN/ops-guide/infrastructure/secret-management' },
+          { text: '服务发现', link: '/zh-CN/ops-guide/infrastructure/service-discovery' },
         ],
       },
       { text: 'Edgion CLI', link: '/zh-CN/ops-guide/edgion-cli' },
@@ -493,6 +548,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Getting Started', link: `/en/${PATHS.gettingStarted}` },
+          { text: 'AI Gateway',      link: `/en/${PATHS.aiGateway}` },
           { text: 'User Guide',      link: `/en/${PATHS.userGuide}` },
           { text: 'Ops Guide',       link: `/en/${PATHS.opsGuide}` },
           { text: 'Dev Guide',       link: `/en/${PATHS.devGuide}` },
@@ -509,6 +565,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: '快速开始', link: `/zh-CN/${PATHS.gettingStarted}` },
+          { text: 'AI Gateway', link: `/zh-CN/${PATHS.aiGateway}` },
           { text: '用户指南', link: `/zh-CN/${PATHS.userGuide}` },
           { text: '运维指南', link: `/zh-CN/${PATHS.opsGuide}` },
           { text: '开发指南', link: `/zh-CN/${PATHS.devGuide}` },

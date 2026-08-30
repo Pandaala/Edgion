@@ -13,24 +13,9 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 
 use super::config::DslConfig;
-use super::lang::bytecode::{CompiledScript, OpCode};
-use super::lang::validator::{compile_dsl_source, ValidationLimits, Validator};
+use super::lang::bytecode::CompiledScript;
 use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 use super::runtime::DslRuntime;
-
-/// True for zero-input, single-value-push opcodes. When the `argc` opcodes
-/// preceding a `CallBuiltin` are all of this kind, they map 1:1 to the argc
-/// arguments (each argument is exactly one instruction), so the deepest push at
-/// `i-argc` is provably the first argument. Any other opcode consumes stack,
-/// meaning an argument spanned multiple instructions and the positional guess is
-/// unreliable. This is an explicit allowlist: unknown / future opcodes default
-/// to "not a single push", keeping `check_redis_link_names` conservative.
-fn is_single_push_op(op: &OpCode) -> bool {
-    matches!(
-        op,
-        OpCode::LoadConst(_) | OpCode::LoadNil | OpCode::LoadTrue | OpCode::LoadFalse | OpCode::GetLocal(_)
-    )
-}
 
 /// DslPlugin — runs a pre-compiled DSL script per request
 pub struct DslPlugin {
@@ -58,109 +43,14 @@ impl DslPlugin {
         })
     }
 
-    /// Compile source code to CompiledScript, or deserialize from pre-compiled bytecode.
-    ///
-    /// Priority: bytecode (pre-compiled) > source (compile on-the-fly).
-    /// This allows YAML users to write inline `source` code directly, while
-    /// the controller can also pre-compile to `bytecode` for production use.
-    pub(crate) fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
-        let val_limits = ValidationLimits {
-            max_map_size: config.max_map_size.unwrap_or(512),
-            ..ValidationLimits::default()
-        };
-
-        // 1. Pre-compiled bytecode takes priority
-        if let Some(bytecode_str) = &config.bytecode {
-            let script = CompiledScript::deserialize_base64(bytecode_str)
-                .map_err(|e| format!("bytecode deserialization failed: {}", e))?;
-
-            // Validate pre-compiled bytecode to prevent malicious payloads
-            let validator = Validator::new(val_limits);
-            let errors = validator.validate(&script);
-            if !errors.is_empty() {
-                let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-                return Err(format!("bytecode validation failed: {}", msgs.join("; ")));
-            }
-
-            return Ok(script);
-        }
-
-        // 2. Compile from source code
-        if let Some(source) = &config.source {
-            let bytecode_b64 = compile_dsl_source(source, &val_limits)
-                .map_err(|errs| format!("DSL compile errors: {}", errs.join("; ")))?;
-            return CompiledScript::deserialize_base64(&bytecode_b64)
-                .map_err(|e| format!("compiled bytecode deserialization failed: {}", e));
-        }
-
-        Err("either source or bytecode must be provided".to_string())
-    }
-
-    /// Best-effort, fail-open compile-time check that every `redis.*` builtin's
-    /// link name appears in `linksys_refs`. It only rejects when the bytecode
-    /// layout unambiguously identifies the link-name argument as a string
-    /// literal; ambiguous layouts are skipped (never rejected). See the inline
-    /// notes for the layout guarantee and the remaining false-negative case.
-    fn check_redis_link_names(config: &DslConfig, script: &CompiledScript) -> Result<(), String> {
-        // Scan for redis.* CallBuiltin at index i. The first argument (link name)
-        // lies at i-argc only when every preceding argument is a single-instruction
-        // push — i.e. all argc opcodes in [i-argc, i) are zero-input single pushes.
-        // A stack-consuming opcode in that window means some argument spanned
-        // multiple instructions, so i-argc is unreliable and the check is skipped.
-        use super::lang::bytecode::Constant;
-        let valid_names: std::collections::HashSet<&str> =
-            config.linksys_refs.iter().map(|r| r.name.as_str()).collect();
-        for (i, op) in script.code.iter().enumerate() {
-            if let OpCode::CallBuiltin(id, argc) = op {
-                if id.is_redis_builtin() && *argc >= 1 {
-                    let first_arg_pos = i.wrapping_sub(*argc as usize);
-                    if first_arg_pos >= i {
-                        continue;
-                    }
-                    // Only enforce when the positional guess is provably correct.
-                    if !script.code[first_arg_pos..i].iter().all(is_single_push_op) {
-                        continue;
-                    }
-                    if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {
-                        if let Some(Constant::Str(link_name)) = script.constants.get(*k as usize) {
-                            if !valid_names.contains(link_name.as_str()) {
-                                return Err(format!("redis.* uses link '{}' which is not in linkSysRefs", link_name));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Validate a `DslConfig` exactly as far as construction would: resolve the
-    /// script (compile `source` / deserialize+validate `bytecode`), check the
-    /// `linksys_refs` config, and run the redis link-name scan. Returns the
-    /// validated `CompiledScript` on success so callers (notably `resolve_parts`)
-    /// can reuse it without paying for a second deserialize / validate cycle.
-    /// This is the single validation entry point used by
-    /// `DslConfig::validation_error()` so the control plane sees the same
-    /// failures the data-plane constructor would hit.
-    ///
-    /// Note: VM init (`Vm::new`) is intentionally NOT run here — it is the one
-    /// failure that cannot be predicted statically and is covered by the
-    /// data-plane seal backstop instead.
-    pub(crate) fn validate_config(config: &DslConfig) -> Result<CompiledScript, String> {
-        let script = Self::resolve_script(config)?;
-        config.validate()?;
-        Self::check_redis_link_names(config, &script)?;
-        Ok(script)
-    }
-
     /// Extract script, limits, error policy, and runtime from DslConfig.
     ///
-    /// `validate_config` is the single source of truth for the three validation
-    /// steps (resolve_script / config.validate / check_redis_link_names); this
-    /// function reuses the `CompiledScript` it returns rather than running the
-    /// same pipeline a second time.
+    /// `DslConfig::compile_and_validate` (edgion-resources, backed by the
+    /// `edgion-dsl` crate) is the single source of truth for the static
+    /// validation pipeline; this function reuses the `CompiledScript` it
+    /// returns rather than running the same pipeline a second time.
     fn resolve_parts(config: &DslConfig) -> Result<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime), String> {
-        let script = Self::validate_config(config)?;
+        let script = config.compile_and_validate()?;
 
         let limits = VmLimits {
             max_steps: config.max_steps.unwrap_or(10_000),
@@ -180,8 +70,10 @@ impl DslPlugin {
         let runtime = DslRuntime {
             max_timeout_ms: config.http_max_timeout_ms.unwrap_or(5_000),
             max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
+            max_request_body_bytes: config.http_max_request_body_bytes.unwrap_or(1024 * 1024),
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
             redis_links,
+            max_body_scan_passes: config.max_body_scan_passes.unwrap_or(4),
         };
         Ok((script, limits, policy, runtime))
     }
@@ -213,6 +105,13 @@ impl DslPlugin {
                 return None;
             }
         };
+        if script.references_request_body_mutation() {
+            tracing::error!(
+                "DSL plugin '{}' uses request-body mutation outside the request stage",
+                config.name
+            );
+            return None;
+        }
         match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
@@ -227,6 +126,10 @@ impl DslPlugin {
 impl RequestFilter for DslPlugin {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn requires_materialized_request_body(&self) -> bool {
+        false
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -277,95 +180,38 @@ impl UpstreamResponseFilter for DslPlugin {
 mod tests {
     use super::*;
 
-    #[test]
-    fn validate_config_rejects_uncompilable_source() {
-        use super::super::config::DslConfig;
-        let config = DslConfig {
-            name: "bad".to_string(),
-            source: Some("this is not valid dsl @@@".to_string()),
-            bytecode: None,
+    fn config(source: &str) -> DslConfig {
+        DslConfig {
+            name: "body-test".to_string(),
+            source: Some(source.to_string()),
             ..Default::default()
-        };
-        let err = DslPlugin::validate_config(&config).expect_err("uncompilable source must fail");
-        assert!(!err.is_empty(), "error string must be non-empty: {err}");
+        }
     }
 
     #[test]
-    fn validate_config_accepts_valid_source() {
-        use super::super::config::DslConfig;
-        let config = DslConfig {
-            name: "ok".to_string(),
-            source: Some("let a = 1".to_string()),
-            bytecode: None,
-            ..Default::default()
-        };
-        assert!(
-            DslPlugin::validate_config(&config).is_ok(),
-            "a trivial valid script must pass validation"
-        );
+    fn dsl_request_filter_uses_capture_only_body_gate() {
+        let filter = DslPlugin::from_config(&config("let found = req.body.contains(\"x\")")).unwrap();
+        assert!(!filter.requires_materialized_request_body());
     }
 
     #[test]
-    fn validate_config_rejects_unknown_redis_link() {
-        use super::super::config::DslConfig;
-        // The script is syntactically valid DSL: `redis.get` takes a link alias
-        // as its first (string-literal) argument. `linksys_refs` is empty, so
-        // the link "mylink" is undeclared and the redis link-name scan must
-        // reject the config after `resolve_script` succeeds.
-        let config = DslConfig {
-            name: "unknown-link".to_string(),
-            source: Some("let r = redis.get(\"mylink\", \"mykey\")".to_string()),
-            bytecode: None,
-            ..Default::default()
-        };
-        let err = DslPlugin::validate_config(&config).expect_err("redis call referencing an undeclared link must fail");
-        assert!(
-            err.contains("linkSysRefs"),
-            "error message must mention linkSysRefs, got: {err}"
-        );
+    fn request_body_call_limit_resolves_default_and_explicit_values() {
+        let (_, _, _, default_runtime) = DslPlugin::resolve_parts(&config("return next()")).unwrap();
+        assert_eq!(default_runtime.max_request_body_bytes, 1024 * 1024);
+
+        let mut explicit = config("return next()");
+        explicit.http_max_request_body_bytes = Some(64 * 1024);
+        let (_, _, _, explicit_runtime) = DslPlugin::resolve_parts(&explicit).unwrap();
+        assert_eq!(explicit_runtime.max_request_body_bytes, 64 * 1024);
     }
 
     #[test]
-    fn validate_config_accepts_redis_with_multi_instruction_sibling_arg() {
-        use super::super::config::DslConfig;
-        use edgion_resources::resources::edgion_plugins::plugin_configs::LinkSysRef;
-        // A non-literal (multi-instruction) argument after the link name makes the
-        // i-argc positional guess unreliable; the link-name check must be skipped
-        // (not rejected). The link "cache" is correctly declared; validation must pass.
-        let config = DslConfig {
-            name: "valid-link-dynamic-key".to_string(),
-            source: Some("let r = redis.get(\"cache\", req.header(\"X-Key\"))".to_string()),
-            bytecode: None,
-            linksys_refs: vec![LinkSysRef {
-                namespace: "default".to_string(),
-                name: "cache".to_string(),
-            }],
-            ..Default::default()
-        };
-        assert!(
-            DslPlugin::validate_config(&config).is_ok(),
-            "valid redis link with a multi-instruction sibling argument must not be rejected"
-        );
+    fn response_factory_rejects_request_body_mutation() {
+        assert!(DslPlugin::from_config_response(&config("req.body.clear()")).is_none());
     }
 
     #[test]
-    fn validate_config_skips_check_when_layout_is_ambiguous() {
-        use super::super::config::DslConfig;
-        // Documented fail-open behavior: when a sibling argument is a
-        // multi-instruction sub-expression, the positional guess is unreliable,
-        // so the link-name check is skipped rather than risk a false rejection.
-        // Here the link "typo" is undeclared, but because the key argument is
-        // multi-instruction the config still passes static validation (the
-        // undeclared link surfaces at runtime via ok=false, not as a 500).
-        let config = DslConfig {
-            name: "ambiguous-layout".to_string(),
-            source: Some("let r = redis.get(\"typo\", req.header(\"X-Key\"))".to_string()),
-            bytecode: None,
-            ..Default::default()
-        };
-        assert!(
-            DslPlugin::validate_config(&config).is_ok(),
-            "ambiguous bytecode layout must fail-open (skip the link-name check), not reject"
-        );
+    fn response_factory_allows_cached_request_body_reads() {
+        assert!(DslPlugin::from_config_response(&config("let found = req.body.contains(\"x\")")).is_some());
     }
 }

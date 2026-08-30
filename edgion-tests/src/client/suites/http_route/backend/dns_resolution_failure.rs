@@ -8,12 +8,22 @@
 //      (upstream status = 504 from ConnectTimedout path in pg_fail_to_connect)
 //   3. The HTTPRoute Accepted=True (config is valid; the failure is runtime/data-plane only)
 //
+// Connect-timeout note: the gateway's connection-establishment deadline is
+// resolved independently of the route's backendRequest timeout (Option-B
+// decouple, see docs/superpowers/specs/2026-07-22-per-backend-connect-timeout-design.md).
+// Connect is bounded by the per-backend BTP connection.connectTimeout (1s here)
+// else the global defaultConnectTimeout (5s) — NOT by backendRequest. The
+// EdgionBackendTrafficPolicy below sets a 1s connect timeout on the unreachable
+// backend so each connect attempt fails fast at ~1s (2 attempts ~= 2-3s total),
+// well within the test's 10s client budget.
+//
 // Required config files (in edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFailure/):
 //   - Gateway_default_dns-fail-gateway.yaml         # HTTP listener on port 31339
 //   - HTTPRoute_default_dns-fail-route.yaml         # Routes dns-fail.example.com → nonexistent-backend
 //                                                   #   timeouts: request=8s, backendRequest=1s
 //   - Service_default_nonexistent-backend.yaml      # ClusterIP Service (no endpoints via kube)
 //   - EndpointSlice_default_nonexistent-backend.yaml # 192.0.2.1:80 — unreachable, passes SSRF defense
+//   - EdgionBackendTrafficPolicy_edgion-default_dns-fail-connect-timeout.yaml # connectTimeout: 1s
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -23,8 +33,8 @@ pub struct DnsResolutionFailureTestSuite;
 
 impl DnsResolutionFailureTestSuite {
     /// Requests to an unreachable backend (192.0.2.1:80) should return 504 (connect timeout).
-    /// The route has backendRequest=1s and request=8s, so each attempt times out in ≤1s
-    /// and the gateway response is expected in ~2-3s total (2 attempts × 1s + overhead).
+    /// The BTP connection.connectTimeout=1s bounds each connect attempt to ~1s, so the
+    /// gateway response is expected in ~2-3s total (2 attempts × 1s + overhead).
     fn test_returns_5xx() -> TestCase {
         TestCase::new(
             "returns_5xx",
@@ -37,7 +47,7 @@ impl DnsResolutionFailureTestSuite {
                     let mut last_status = None;
                     let mut last_error = None;
 
-                    // backendRequest=1s so each gateway attempt times out in ~1s;
+                    // BTP connectTimeout=1s so each gateway connect attempt times out in ~1s;
                     // 2 attempts + overhead → gateway responds in ~2-3s total.
                     // Use a 10s per-request timeout to absorb variance across all 3 retries.
                     for _ in 0..3 {
@@ -85,9 +95,9 @@ impl DnsResolutionFailureTestSuite {
     ///
     /// When the TCP connect to 192.0.2.1:80 times out, Pingora fires `fail_to_connect`
     /// with ErrorType::ConnectTimedout.  pg_fail_to_connect sets upstream.status = 504
-    /// on the ConnectTimedout path (does NOT push to ctx.edgion_status, so `errors` is empty).
+    /// on the ConnectTimedout path (does not record a request diagnostic).
     ///
-    /// With backendRequest=1s each attempt times out in ~1s; gateway responds in ~2-3s total.
+    /// With BTP connectTimeout=1s each connect attempt times out in ~1s; gateway responds in ~2-3s total.
     ///
     /// We therefore assert that:
     ///  - The response HTTP status is 5xx (gateway did not crash)

@@ -5,7 +5,11 @@ description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, re
 
 # 09 Miscellaneous
 
-> Edgion build and release workflow. Cargo workspace; Rust toolchain is pinned by CI / `rust-toolchain.toml` (currently `1.92`, channel `stable`). Default features: `allocator-jemalloc` + `boringssl`.
+> Edgion build and release workflow. Rust is pinned to `1.96.1`: `rust-toolchain.toml`
+> (`channel = "1.96.1"`) is the single source of truth, and CI plus release/Docker builds
+> declare the same version so all three agree. Default Gateway and
+> Controller defaults to `allocator-jemalloc`; Pingora source/TLS features are
+> Gateway-local.
 > In-repo binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), and `edgion-cli` (CLI). The federation Center lives in the separate EdgionCenter repository.
 
 ## File list
@@ -27,12 +31,15 @@ cargo build
 # Release mode
 cargo build --release
 
-# Specify TLS backend (rustls experimental build)
-cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
+# Select supported features on an owning package
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
 
-# Code checks
-cargo check && cargo clippy && cargo fmt --check
+# Project quick pre-commit sequence
+cargo fmt --all
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets
 python3 cicd/checks/validate_agent_docs.py
+python3 cicd/checks/check_ssa_force.py
 ```
 
 Additional entry points:
@@ -43,7 +50,8 @@ Additional entry points:
 ### Docker build
 ```bash
 # See the Dockerfiles under the cicd/docker/ directory
-docker build -f cicd/docker/Dockerfile -t edgion .
+docker build --build-arg BINARY=edgion-gateway \
+  -f cicd/docker/Dockerfile -t edgion-gateway:local .
 ```
 
 ### Release workflow
@@ -60,9 +68,12 @@ See [cicd/02-github-workflow.md](cicd/02-github-workflow.md) for the full job br
 |---------|-------------|---------|
 | `allocator-jemalloc` | Use the jemalloc memory allocator | ✅ |
 | `boringssl` | Use BoringSSL as the TLS backend | ✅ |
-| `rustls` | Use rustls as the TLS backend | |
+| `rustls` | Dormant future Gateway backend seam; unsupported | |
 | `allocator-mimalloc` | Use the mimalloc memory allocator | |
 | `allocator-system` | Use the system default allocator | |
 | `legacy_route_tests` | Enable legacy route tests | |
+| `fips` | Gateway opt-in FIPS BoringSSL image build and isolated verification | |
 
-> ⚠️ `boringssl` and `rustls` are mutually exclusive and cannot be enabled simultaneously.
+> ⚠️ `boringssl` and `rustls` are mutually exclusive. BoringSSL is the only
+> supported Gateway backend; do not select rustls outside the explicitly
+> authorized future task.

@@ -61,8 +61,8 @@ spec:
 
 | `type` | Extra field | Reads from |
 |--------|-------------|------------|
-| `clientIp` | — | The client IP address (respects RealIp if present) |
-| `clientIpAndPath` | — | Client IP combined with the request path |
+| `remoteIp` | — | The resolved client IP address |
+| `remoteIpAndPath` | — | Resolved client IP combined with the request path |
 | `header` | `name` | The named request header |
 | `query` | `name` | The named query-string parameter |
 | `cookie` | `name` | The named cookie |
@@ -70,7 +70,7 @@ spec:
 | `method` | — | The HTTP method |
 | `ctx` | `name` | An existing context variable |
 
-For a fixed literal, use the top-level `value` field on the rule instead of `from`. For a composite string, use `template`.
+For a fixed literal, use the top-level `value` field on the rule instead of `from`. For a composite string, use `template`. To resolve a value from a LinkSys webhook, use [WebhookKeyGet](./webhook-key-get.md) — not a CtxSet `from` source. If webhook templates need `${ctx:NAME}`, run CtxSet first and WebhookKeyGet after it.
 
 ### `template` variables
 
@@ -87,7 +87,7 @@ A `template` is a literal string with `${...}` markers. Supported markers:
 | `${requestPath}` | Entry-time raw path (frozen, immune to later rewrites) |
 | `${requestUri}` | Entry-time raw full URI (frozen) |
 | `${method}` | HTTP method |
-| `${clientIp}` | Client IP address |
+| `${remoteIp}` | Resolved client IP address |
 
 User-controlled values that themselves contain `${...}` are emitted as literal text, so templates are not vulnerable to injection.
 
@@ -156,7 +156,7 @@ spec:
       config:
         vars:
           - name: "rate_key"
-            template: "${header:X-Tenant}_${clientIp}"
+            template: "${header:X-Tenant}_${remoteIp}"
 ```
 
 ### 3. Extract, transform, and map a plan tier
@@ -293,6 +293,7 @@ spec:
 
 ## Related links
 
+- [Webhook KeyGet](./webhook-key-get.md)
 - [Rate Limit Plugin](./rate-limit.md)
 - [DSL Plugin](./dsl/README.md)
 - [Filters overview](../README.md)

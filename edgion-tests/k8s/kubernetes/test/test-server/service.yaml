@@ -53,6 +53,19 @@ spec:
     port: 30041
     targetPort: 30041
     protocol: TCP
+  # TLS provider endpoints used by the AI backend policy dynamic scenario.
+  - name: https-backend
+    port: 30051
+    targetPort: 30051
+    protocol: TCP
+  - name: https-b-mtls
+    port: 30052
+    targetPort: 30052
+    protocol: TCP
+  - name: https-sni
+    port: 30026
+    targetPort: 30026
+    protocol: TCP
   # TCP port
   - name: tcp
     port: 30010

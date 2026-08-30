@@ -10,27 +10,56 @@ pub mod edgion {
     pub const HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
     /// Expose mTLS client certificate info to plugin layer via TLS digest extension
     pub const EXPOSE_CLIENT_CERT: &str = "edgion.io/expose-client-cert";
-    /// Active health check configuration for backend endpoints.
-    /// Value format: YAML string.
-    pub const HEALTH_CHECK: &str = "edgion.io/health-check";
-    /// Circuit breaker configuration for backend endpoints.
-    /// Value format: YAML string.
-    pub const CIRCUIT_BREAKER: &str = "edgion.io/circuit-breaker";
-    /// Outlier detection (passive health check) configuration for backend
-    /// endpoints. Canonical key; supersedes the deprecated `CIRCUIT_BREAKER`
-    /// alias, which is still parsed for backward compatibility.
-    /// Value format: YAML string.
-    pub const OUTLIER_DETECTION: &str = "edgion.io/outlier-detection";
-
-    /// Per-service load-balancing panic threshold (percent, 0-100).
-    /// When the fraction of healthy backends drops below this percent, the
-    /// gateway ignores health filtering and load-balances across all backends.
-    /// Value: integer string. 0 (default) disables panic mode.
-    pub const PANIC_THRESHOLD: &str = "edgion.io/panic-threshold";
 
     /// Proxy Protocol version to send to upstream.
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
+
+    /// Expect an inbound PROXY protocol header (v1 and v2 are auto-detected) on
+    /// every connection accepted by this Gateway's listeners, as sent by an L4
+    /// load balancer such as AWS NLB. The addresses it carries replace the peer
+    /// address seen by the whole request path.
+    ///
+    /// Lives on `Gateway.metadata.annotations`; value `"true"` enables it. A
+    /// per-listener form `edgion.io/accept-proxy-protocol.<listener-name>`
+    /// overrides the Gateway-wide value for one listener, since a Gateway API
+    /// `Listener` carries no annotations of its own.
+    ///
+    /// This is the **inbound** direction and is unrelated to [`PROXY_PROTOCOL`]
+    /// above, which makes Edgion *send* a header to the upstream.
+    ///
+    /// The header is unauthenticated: anything able to reach the listener
+    /// directly can claim any source address, so only enable this where the
+    /// listener is reachable exclusively through the trusted load balancer.
+    /// A listener with it enabled rejects connections that do not start with a
+    /// valid header (HAProxy `accept-proxy` semantics).
+    pub const ACCEPT_PROXY_PROTOCOL: &str = "edgion.io/accept-proxy-protocol";
+
+    /// Restrict [`ACCEPT_PROXY_PROTOCOL`] to connections from these sources.
+    ///
+    /// IP/CIDR list on `Gateway.metadata.annotations`, separated by commas or any
+    /// whitespace (so a YAML block scalar works), e.g. `"10.0.0.0/8, 192.168.1.5"`.
+    /// A bare address is taken as /32 or /128.
+    /// When present, a connection from any other address is served as an
+    /// ordinary direct connection and its bytes are never parsed as a PROXY
+    /// header — that is what lets one listener serve both load-balanced and
+    /// direct traffic safely. When absent, every connection must carry a header.
+    ///
+    /// An unparseable entry, or one matching every address, falls back to
+    /// requiring a header rather than building a partial or wide-open matcher.
+    /// Match-all is judged on the parsed prefix, not the text, so `0.0.0.0/00`
+    /// and `0.0.0.0/+0` are refused alongside `0.0.0.0/0`. Note a pair such as
+    /// `0.0.0.0/1, 128.0.0.0/1` still covers all of IPv4 and is accepted — the
+    /// check rejects an accidental wildcard, not a deliberate one.
+    ///
+    /// This list says who may SPEAK proxy protocol (the load balancer). It is
+    /// unrelated to `EdgionGatewayConfig.spec.realIp.trustedIps`, which says
+    /// which addresses count as proxy hops when walking X-Forwarded-For. The two
+    /// normally hold different addresses; do not conflate them.
+    ///
+    /// Only the Gateway-wide key is read: there is no per-listener suffix, so
+    /// all PROXY-enabled listeners of a Gateway share one trust list.
+    pub const PROXY_PROTOCOL_TRUSTED_CIDRS: &str = "edgion.io/proxy-protocol-trusted-cidrs";
 
     /// Per-route opt-out / opt-in for upstream path forwarding view.
     /// Three-state on HTTPRoute.metadata.annotations:
@@ -60,6 +89,33 @@ pub mod edgion {
     /// prunes unknown fields, so this knob lives in an annotation rather than a
     /// new spec field.
     pub const RETRY_NON_IDEMPOTENT: &str = "edgion.io/retry-non-idempotent";
+
+    /// RequestMirror tuning annotations on HTTPRoute.metadata.annotations,
+    /// applied to every RequestMirror filter under the route. These knobs live
+    /// in annotations rather than on `HTTPRequestMirrorFilter` because the
+    /// vendored Gateway API CRD is a structural schema that silently prunes
+    /// undeclared filter fields in K8s conf-center mode. Invalid values are
+    /// logged at INFO and fall back to the field default.
+    ///
+    /// Connection timeout for the mirror backend, in milliseconds
+    /// (default: 1000).
+    pub const MIRROR_CONNECT_TIMEOUT_MS: &str = "edgion.io/mirror-connect-timeout-ms";
+    /// Write/send timeout for the mirror backend, in milliseconds
+    /// (default: 1000).
+    pub const MIRROR_WRITE_TIMEOUT_MS: &str = "edgion.io/mirror-write-timeout-ms";
+    /// Max milliseconds to wait for channel space when the mirror body channel
+    /// is full before abandoning the mirror (default: 0 = abandon immediately;
+    /// the gateway clamps values above 1000).
+    pub const MIRROR_CHANNEL_FULL_TIMEOUT_MS: &str = "edgion.io/mirror-channel-full-timeout-ms";
+    /// Max number of body chunks buffered for the mirror when it is slower
+    /// than the main request (default: 5; 0 is treated as 5 by the gateway).
+    pub const MIRROR_MAX_BUFFERED_CHUNKS: &str = "edgion.io/mirror-max-buffered-chunks";
+    /// Whether the mirror emits a dedicated mirror-log line: "true" / "false"
+    /// (default: true).
+    pub const MIRROR_LOG: &str = "edgion.io/mirror-log";
+    /// Max concurrent mirror tasks per gateway process (default: 1024;
+    /// 0 is treated as 1024 by the gateway).
+    pub const MIRROR_MAX_CONCURRENT: &str = "edgion.io/mirror-max-concurrent";
 
     /// Idle seconds before the first TCP keepalive probe on L4 upstream
     /// connections. Presence of this annotation (parsed to a positive integer)
@@ -98,40 +154,47 @@ pub mod edgion {
     /// to enable listener-level 421 detection for that Gateway's HTTPS listeners.
     pub const REQUIRE_SNI_HOST_MATCH: &str = "edgion.io/require-sni-host-match";
 
-    /// Prefix for operator-defined log labels. Any `metadata.annotations` or
-    /// `metadata.labels` entry whose key starts with this prefix contributes
-    /// `<suffix> = <value>` to the resource's `rsc.labels` in access / TLS logs.
+    /// Prefix for operator-defined log labels on resources whose handshake layer
+    /// has no plugin chain and no `logging()` stage to hook an `AccessLogExtern`
+    /// declaration onto. Any `metadata.annotations` or `metadata.labels` entry
+    /// whose key starts with this prefix contributes `<suffix> = <value>` to the
+    /// resource's `rsc.labels` in the TLS log.
     /// Example: `edgion.io/log-label.tenant: internal` -> label `tenant=internal`.
-    /// Supported on HTTPRoute, GRPCRoute, EdgionTls, and TLSRoute.
+    /// Supported on EdgionTls and TLSRoute. HTTPRoute/GRPCRoute log projection is
+    /// declared via `AccessLogExtern` instead (see `resources::edgion_plugins`).
     pub const LOG_LABEL_PREFIX: &str = "edgion.io/log-label.";
-
-    /// Opt-in allowlist of plugin-set context variable (`ctx_map`) keys to project
-    /// into the access log for requests matching this route. Value: a
-    /// comma-separated list of ctx-var names, e.g.
-    /// `edgion.io/log-ctx-keys: "tenant_id,tier"`. Context variables are
-    /// **not** logged by default; only keys named here are emitted (and known
-    /// sensitive keys such as claims/payloads stay hard-blocked regardless).
-    /// Supported on HTTPRoute and GRPCRoute (the request paths that populate
-    /// `ctx_map`).
-    pub const LOG_CTX_KEYS: &str = "edgion.io/log-ctx-keys";
-
-    /// Unified opt-in carrier for log projection. Value: a JSON array of
-    /// `{"key": "<name>", "type": "ctx"|"label"|"annotation"}` entries.
-    /// - `type: ctx` adds `<name>` to the access-log ctx allowlist (same effect
-    ///   as listing it in `log-ctx-keys`).
-    /// - `type: label` / `type: annotation` projects the value of the existing
-    ///   `metadata.labels[<name>]` / `metadata.annotations[<name>]` into
-    ///   `rsc.labels` (a more flexible alternative to the `log-label.<suffix>`
-    ///   prefix: it references an existing key by name instead of requiring a
-    ///   prefixed copy).
-    /// Malformed entries are skipped individually (fail-safe). This carrier
-    /// merges with `log-label.<suffix>` and `log-ctx-keys`.
-    pub const LOG_KEYS: &str = "edgion.io/log-keys";
 
     /// Reference EdgionPlugins resources to run for every request on this Gateway
     /// (L7, before route-level plugins). Value: comma/space-separated "namespace/name"
     /// list (bare names use the Gateway's namespace).
     pub const EDGION_PLUGINS: &str = "edgion.io/edgion-plugins";
+
+    /// Per-Service DNS resolution mode for a `ServiceExternalName` backend.
+    /// Value: `controller` (default) | `gateway` | `per-request`.
+    /// - `controller`: use the controller-resolved EndpointSlice when it has a
+    ///   ready backend, else the gateway bridges via self-resolution + cache.
+    /// - `gateway`: the gateway resolves via the effective resolver + 5s cache
+    ///   (authoritative; never consults a slice).
+    /// - `per-request`: the gateway resolves on every request, no cache.
+    ///
+    /// Set on a Service. Invalid values fall back to `controller`.
+    pub const DNS_RESOLUTION_MODE: &str = "edgion.io/dns-resolution-mode";
+
+    /// Inline standard-DNS resolver override. Value: a comma/space-separated
+    /// server list (`ip[:port]`). Set on a Service (spans both planes) or a
+    /// Gateway (data-plane only). Mutually exclusive with `DNS_RESOLVER_REF`.
+    pub const DNS_RESOLVER: &str = "edgion.io/dns-resolver";
+
+    /// httpdns LinkSys resolver override. Value: `namespace/name` (explicit
+    /// namespace required; bare names are rejected). Set on a Service (spans both
+    /// planes) or a Gateway (data-plane only). Mutually exclusive with
+    /// `DNS_RESOLVER`.
+    pub const DNS_RESOLVER_REF: &str = "edgion.io/dns-resolver-ref";
+
+    /// Controller-written freshness stamp on a synthetic EndpointSlice produced by
+    /// the control-plane DNS resolver loop. Value: an RFC3339 timestamp of the
+    /// last resolution that changed the endpoint set. NOT operator-set.
+    pub const DNS_RESOLVED_AT: &str = "edgion.io/dns-resolved-at";
 
     /// Parse the `edgion.io/edgion-plugins` (or stream) annotation value into an ordered,
     /// de-duplicated list of "namespace/name" store keys. Bare names (no `/`) are expanded

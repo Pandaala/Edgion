@@ -1,0 +1,16 @@
+# three_tier_collision_route_wins: route tier (Tier 3) declares the same
+# `key` ("collide") as the global tier (03_EdgionPlugins_als-global.yaml) and
+# the gateway tier (04_EdgionPlugins_als-gateway-tier.yaml), each sourced from
+# a distinct header so the three values are distinguishable. collect()
+# applies tiers in order global -> gateway -> route, and LogExt::insert
+# overwrites an existing key in place — so the route tier's value must win.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-collision-route
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: collide
+      from: header
+      name: x-route-val

@@ -100,7 +100,7 @@ integration test to add).
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → V1` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a2.md → V1` (CONFIRM)
 - Related naming: naming-h2-grpc-01 (✅ closed 2026-05-21) — renamed the function
   `send_grpc_trailers_only` → `send_grpc_error_three_frame` to signal the workaround at
   call sites; the spec term is reserved for the future single-frame implementation.

@@ -33,3 +33,5 @@ pub mod port_config;
 pub mod reporter;
 #[path = "client/suites/mod.rs"]
 pub mod suites;
+#[path = "client/transport.rs"]
+pub mod transport;

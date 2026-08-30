@@ -286,6 +286,63 @@ impl HttpMatchTestSuite {
         })
     }
 
+    /// A match item that omits `path` defaults to `PathPrefix /` (Gateway API
+    /// structural default). This suite runs against the FileSystem config
+    /// center, which never passes through K8s admission defaulting, so the
+    /// rule is only reachable if the default is replicated at deserialization.
+    fn test_omitted_path_defaults_to_root_prefix() -> TestCase {
+        TestCase::new(
+            "omitted_path_defaults_to_root_prefix",
+            "Header-only match with no path is reachable at an arbitrary path",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // Positive: an arbitrary path no other rule covers, gated
+                    // only by the header the path-less rule matches on.
+                    let mut request = ctx.http_client.get(format!("{}/no-path-rule/anything", ctx.http_url()));
+                    request = request.header("Host", "match-test.example.com");
+                    request = request.header("X-No-Path-Match", "yes");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if !response.status().is_success() {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Path-less match rule is unreachable: got {}", response.status()),
+                                );
+                            }
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+
+                    // Negative: same path without the header matches nothing.
+                    let mut request = ctx.http_client.get(format!("{}/no-path-rule/anything", ctx.http_url()));
+                    request = request.header("Host", "match-test.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if response.status() == 404 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Omitted path defaults to PathPrefix / (header-gated rule reachable, \
+                                     header-less request still 404)"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 404 without the header, got {}", response.status()),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Negative test request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// Percent-encoded query parameter consistency:
     /// route matcher sees the decoded `hello world`, request must succeed.
     fn test_percent_encoded_query_param() -> TestCase {
@@ -574,6 +631,7 @@ impl TestSuite for HttpMatchTestSuite {
             Self::test_header_regex_match(),
             Self::test_query_param_match(),
             Self::test_percent_encoded_query_param(),
+            Self::test_omitted_path_defaults_to_root_prefix(),
             Self::test_method_match(),
             Self::test_combined_match(),
             Self::test_section_name_match(),

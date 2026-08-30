@@ -30,13 +30,21 @@ are **not accepted** as a narrow review fix.
 
 **1. The strict enum is an intentional lockstep invariant, not an oversight**
 
-The "no catch-all" property is load-bearing across crates. `applicable_stages` in
-`edgion-resources/src/resources/edgion_plugins/validate.rs:30-32` documents it explicitly:
-the exhaustive `match` over `EdgionPlugin` means a newly added variant fails to compile until
-its stages are declared, "keeping the two in lockstep". The same exhaustive-match contract
-holds for `EdgionPlugin::type_name()` and the Gateway's four `create_*_from_edgion` matches.
-A catch-all `_`/`Unknown` arm would dissolve exactly the compile-time guarantee these matches
-exist to provide.
+The "no catch-all" property is load-bearing across crates. `EdgionPlugin::type_name()`,
+`validation_error()`, `body_requirement()`, `dye_capabilities()`, `dye_type_prefix()`,
+`key_header_names()`, and the Gateway's four `create_*_from_edgion` matches are all exhaustive:
+a newly added variant fails to compile until each is updated. A catch-all `_`/`Unknown` arm
+would dissolve exactly the compile-time guarantee these matches exist to provide.
+
+> **Stage applicability is the one deliberate exception.** `applicable_stages` used to be an
+> exhaustive `match` too, but it is now a lookup over `HTTP_PLUGIN_STAGE_EXCEPTIONS`
+> (`edgion_plugins/validate.rs`) keyed by `type_name()`, with request-only as the default —
+> so the CRD drift guard can read the authority instead of maintaining a copy of it. The lost
+> compile-time check is replaced by `stage_exception_keys_are_real_variants` in
+> `edgion-resources/tests/plugin_crd_type_coverage.rs`, which validates the keys against
+> `schema_for!(EdgionPlugin)`. That is stronger than the match was: it checks the names the CRD
+> and `plugin_policy` actually consume, not the enum declaration. This exception is scoped to
+> stage applicability; it is **not** a precedent for softening the matches listed above.
 
 **2. A string-tag catch-all masks operator typos that the type check currently rejects**
 

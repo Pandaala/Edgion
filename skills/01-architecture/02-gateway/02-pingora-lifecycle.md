@@ -50,7 +50,7 @@ The most complex phase, responsible for request parsing and route matching:
 
 1. **Metadata extraction** (`build_request_metadata`):
    - Protocol detection: WebSocket (Upgrade header), gRPC-Web/gRPC (Content-Type header).
-   - Address extraction: `client_addr` (direct TCP IP), `remote_addr` (real client IP after RealIpExtractor processing).
+   - Address extraction: `direct_peer_ip` (`DirectPeerIp`, physical transport peer), `remote_ip` (`RemoteIp`, resolved client identity after the applicable PROXY/RealIp processing).
    - Hostname normalization: URI host → Host header → :authority header, all stripped of port, trailing dot removed, lowercased.
    - TLS metadata: extract `tls_id`, `sni`, and `client_cert_info` from `SslDigestExtension`.
    - Security checks: SNI-Host consistency check, Listener hostname isolation, X-Forwarded-For length limit.
@@ -112,7 +112,7 @@ Callback after the upstream connection is established:
 
 Called when the upstream response headers are received:
 
-1. **Status code recording**: `ctx.request_info.status = status_code`.
+1. **Per-attempt status recording**: write the received code to the current `UpstreamInfo`. After retry decisions and response-stage normalization, snapshot the pre-plugin status and select the candidate final downstream status. Do not mutate `request_info.status` here.
 2. **Server header**: inject the custom Server header via `ServerHeaderOpts::apply_to_response()`.
 3. **Header time recording**: compute `ht` (header time, in milliseconds, from upstream attempt start to receiving response headers).
 4. **Sync plugin execution**:
@@ -124,12 +124,93 @@ Called when the upstream response headers are received:
 **File**: `pg_upstream_response_body_filter.rs`
 **Signature**: `fn upstream_response_body_filter(session, body, end_of_stream, ctx) -> Result<Option<Duration>>`
 
-Called once per upstream response body chunk; returning `Some(Duration)` enables bandwidth limiting:
+Called once per upstream response body chunk; returning `Some(Duration)` enables bandwidth limiting.
+When Phase 7 accepts the final header, the Edgion Pingora fork also calls this hook exactly once
+with `body = None` and `end_of_stream = true` when that upstream header task already ends the response. This terminal
+call is driven by the transport's actual end-of-stream state for H1, H2, and custom upstreams; a
+`Content-Length: 0` header alone is not sufficient on H2. It lets streaming processors finalize or
+replace a bodyless upstream response without a provider-specific header-stage workaround.
+Unlike an ordinary body task, the terminal event is initially carried by the header. Pingora
+therefore defers this synthetic call until that header's Phase 7 `response_filter` has completed.
+This preserves the ordinary lifecycle invariant that final response classification, async plugins,
+local replies, and denials run before the body hook. If `response_filter` rejects or writes a local
+reply, the synthetic body hook is not called.
+
+If that synthetic call emits bytes, Pingora rewrites the task sequence to
+`Header(..., false)` followed by emitted body chunks with EOS only on the last chunk. The same
+sequence is used for cache admission and downstream delivery. Both the live sequence and cache-hit
+replay pass through the same downstream `response_body_filter`; cache hits do not invoke the
+upstream hook again. Output is discarded for `HEAD`, 1xx,
+204, and 304 responses, including when the final `response_filter` creates that bodyless status;
+cache hits then end on the header instead of replaying the stored body. 101/informational upstream
+headers do not trigger the synthetic call.
+
+Cache policy evaluation still runs on the upstream-filtered header before Phase 7. Admission waits
+for terminal body synthesis so the stored metadata can reconcile `Content-Length` with the actual
+cached representation. Internal cache-control responses consumed by revalidation or stale serving
+(for example, an origin 304 merged into an existing cached response) are not forwarded response
+representations and do not enter this body lifecycle.
+
+Even when no hook emits bytes, Pingora materializes the terminal body boundary so the downstream
+`response_body_filter` receives one EOS call. Streaming miss readback and cache hits preserve this
+same EOS callback. If terminal synthesis changes the body length, Pingora removes a stale upstream
+`Content-Length` and selects consistent downstream framing; it never relies on `Content-Length: 0`
+as the bodyless detector.
+
+Downstream completion is independent from upstream completion. If the final header filter changes
+a bodyful response to 204/304, Pingora may finish the downstream response at the header but keeps
+draining and caching the upstream body until the source's real EOS. Suppressed follow-up tasks are
+dropped and never converted into a second `Done` terminal event. A source failure after the
+downstream terminal boundary prevents upstream reuse without replacing the already-complete
+downstream response. It also aborts any incomplete cache admission so the miss writer and cache
+lock cannot survive a swallowed post-terminal source error.
+
+The normal processing order remains:
 
 1. **Body time recording**: compute `bt` (body time) on the first chunk.
 2. **Route-level body filter plugins**: bandwidth limiting, etc.
 3. **Global body filter plugins**: loaded from `EdgionGatewayConfig.spec.global_plugins_ref`.
 4. **Limit merging**: when multiple plugins return delays, the maximum is taken.
+
+### Response terminal and trailer companion lifecycle
+
+Response completion is a typed boundary, not only a body callback with an EOS
+boolean. The Edgion Pingora fork reports one of these events to the Gateway:
+
+- `Data { end_of_stream }` for an ordinary body task;
+- `TerminalWithoutTrailers` when the representation ends and no trailer task
+  follows;
+- `TerminalBeforeTrailers` when bounded body processors must flush before a
+  real trailer task is delivered.
+
+The distinction prevents a trailer-aware processor from closing its protocol
+transaction at the pre-trailer boundary. Legacy bounded body processors still
+receive an EOS-compatible callback and flush normally. The request-local
+`UpstreamTrailerLifecycle` gate moves `Open -> AwaitingTrailers -> Dispatched`
+for a trailer-bearing response, or directly `Open -> Dispatched` for a
+trailer-free response. This makes a Trailer followed by Done, duplicate
+transport evidence, and logging fallback exactly-once.
+
+Request-stage plugins install `UpstreamResponseTrailer` companions in resolved
+plugin order. The Gateway awaits them serially, passing the current mutable
+`HeaderMap` to each companion so a later companion observes its predecessor's
+committed mutation. `None` means a real no-trailers terminal observation; it is
+never converted into an empty map. Fail-close stops the chain and preempts the
+remaining companions before Pingora forwards trailers. Implementations must
+keep any retained trailer state and mutations bounded; the canonical driver
+does not aggregate the response body.
+
+This lifecycle depends on two APIs implemented in the local Edgion Pingora
+fork worktree:
+`upstream_response_body_filter_event` supplies the typed terminal evidence,
+and the asynchronous `upstream_response_trailer_filter` is awaited before the
+transport writes the trailer block. The fork change is not yet
+committed/pushed or pinned to an immutable Edgion dependency revision, so the
+ordinary dependency build cannot consume this lifecycle yet. Once pinned,
+replacing the fork with upstream Pingora or reverting either hook without
+disabling trailer consumers would break the contract. H1
+parsing/serialization and H2/custom trailer tasks converge on the same Gateway
+companion chain.
 
 ### Phase 7: response_filter (async)
 
@@ -192,8 +273,10 @@ Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiti
 |-------|------|-------------|
 | `start_time` | `Instant` | Request start time |
 | `gateway_info` | `GatewayInfo` | Matched Gateway metadata |
-| `request_info` | `RequestInfo` | Request metadata: client_addr, remote_addr, hostname, path, status, x_trace_id, sni, tls_id, listener_port, discover_protocol |
-| `edgion_status` | `Vec<EdgionStatus>` | Error code collection |
+| `request_info` | `RequestInfo` | Request metadata: direct_peer_ip, remote_ip, hostname, path, status, x_trace_id, sni, tls_id, listener_port, discover_protocol |
+| `diagnostics` | `RequestDiagnostics` | Bounded, ordered information/error diagnostic history |
+| `pre_plugin_response_status` | `Option<u16>` | Upstream status snapshot used by response-body admission |
+| `final_downstream_status` | `Option<u16>` | Selected downstream status before terminal logging; private ownership state |
 | `route_unit` | `Option<Arc<HttpRouteRuleUnit>>` | Matched HTTP route rule |
 | `grpc_route_unit` | `Option<Arc<GrpcRouteRuleUnit>>` | Matched gRPC route rule |
 | `selected_backend` | `Option<HTTPBackendRef>` | LB-selected HTTP backend |
@@ -221,22 +304,23 @@ Each upstream attempt creates an `UpstreamInfo` recording fine-grained timings:
 
 **Definition**: `observe/access_log/entry.rs`
 
-`AccessLogEntry` is built by borrowing fields from `EdgionHttpContext` (`&'a RequestInfo`, `&'a BackendContext`, `&'a [EdgionStatus]`, `&'a [StageLogs]`), avoiding data copying.
+`AccessLogEntry` is built by borrowing fields from `EdgionHttpContext` (`&'a RequestInfo`, `&'a BackendContext`, `&'a [RequestDiagnostic]`, `&'a [StageLogs]`), avoiding data copying.
 
 ```rust
 pub struct AccessLogEntry<'a> {
     pub timestamp: i64,                      // millisecond timestamp
     pub request_info: &'a RequestInfo,        // borrowed
     pub match_info: Option<RouteMatchInfo<'a>>, // HTTP or gRPC match info
-    pub errors: &'a [EdgionStatus],           // borrowed
+    pub diagnostics: &'a [RequestDiagnostic], // borrowed
+    pub diagnostics_full: bool,
     pub backend_context: Option<&'a BackendContext>, // borrowed (includes upstreams list)
     pub stage_logs: &'a [StageLogs],          // borrowed
     pub conn_est: Option<bool>,               // WebSocket/gRPC-Web connection-established marker
-    pub ctx: AllowlistedCtx<'a>,              // ctx_map projection (deny-by-default opt-in allowlist)
+    pub ext: LogExt,                          // AccessLogExtern-declared fields
 }
 ```
 
-`ctx` is a deny-by-default projection of the plugin `ctx_map`: a ctx var reaches the log only when allow-listed on the matched route (`edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx`), and known-sensitive keys stay hard-blocked.
+`ext` is populated at serialization time (inside `logging()`, not by any request-stage filter) by resolving up to three tiers of `AccessLogExtern` declarations (`EdgionGatewayConfig.spec.globalPluginsRef` → Gateway `edgion.io/edgion-plugins` → route `ExtensionRef`) against the live plugin store; a `ctx` field within it is masked unless whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`, and known-sensitive ctx keys (`jwt_claims`/`oidc_claims`/`jwe_payload`) stay hard-blocked: naming one is reported on the `EdgionPlugins` resource's `Accepted=False` status condition at ingest, and the gateway separately drops the field when it loads the resource. See `skills/03-coding/observability/00-access-log.md`.
 
 It is serialized to a JSON string directly via `serde_json`'s `to_string()`, producing the output in a single allocation. The `#[serde(skip_serializing_if)]` annotation omits empty fields to reduce log volume.
 

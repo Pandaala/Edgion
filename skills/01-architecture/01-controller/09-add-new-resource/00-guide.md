@@ -12,7 +12,7 @@ Use this guide when a task adds a brand new resource kind, not when you are only
 Current Edgion architecture is:
 
 - Controller side: `ResourceProcessor<T>` owns `ServerCache<T>`
-- `ConfigSyncServer` only serves watch/list for processors already registered in `PROCESSOR_REGISTRY`
+- `ConfigSyncServer` serves watch/list for the complete ready set published from `ControllerRuntime.processor_registry`
 - Gateway side: `ConfigClient` owns per-kind `ClientCache<T>` and optional `ConfHandler<T>`
 
 Do **not** follow the old pattern of manually adding controller-side `ConfigServer` fields. That is outdated in this repository.
@@ -51,7 +51,7 @@ Pattern references:
 Useful search pattern:
 
 ```bash
-rg -n "EdgionAcme|ResourceKind::EdgionAcme|edgion_acme" src config/crd
+rg -n "EdgionAcme|ResourceKind::EdgionAcme|edgion_acme" edgion-{resources,controller,gateway,common,tests} config/crd
 ```
 
 Replace `EdgionAcme` with the closest analog for your new resource.
@@ -69,7 +69,10 @@ Always update:
 Notes:
 
 - Keep `kind`, `group`, `version`, scope, and status type aligned with the actual API contract.
-- If the resource has runtime-only derived fields, follow the existing pattern of `#[serde(skip)]` or dedicated preparse fields used by similar resources.
+- Operator-facing serialized fields must be declared in the CRD schema.
+- Controller-resolved fields needed by the Gateway must remain serde-serialized and use `#[schemars(skip)]`; do **not** use `#[serde(skip)]` for them.
+- Resolved Secret values additionally use the appropriate redaction adapter.
+- Use `#[serde(skip)]` only for pure in-process caches that the receiving process re-derives.
 
 ### 2. Register It In The Resource System
 
@@ -92,7 +95,7 @@ Usually update:
 
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs` (`spawn_all_controllers`, shared by FileSystem and Etcd)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What the handler usually owns:
@@ -192,7 +195,7 @@ For route-like or dependency-heavy resources, integration coverage is usually th
 ## Common Failure Modes
 
 - Adding the type in `defs.rs` but forgetting `kind.rs`
-- Adding controller processing but forgetting to spawn the processor in one of the two centers
+- Adding controller processing but forgetting either the shared FileSystem/Etcd spawn list or the Kubernetes spawn path
 - Adding Gateway sync but forgetting one of `get_dyn_cache()`, `list()`, or `apply_resource_change()`
 - Adding a handler that depends on Gateway / Secret / Service without registering the right requeue path
 - Updating Rust types without updating CRD YAML
@@ -203,15 +206,15 @@ For route-like or dependency-heavy resources, integration coverage is usually th
 Run the smallest checks that prove the new resource is really wired:
 
 ```bash
-cargo check
-cargo test
+cargo check --workspace --all-targets
+./cicd/checks/check_crd_coverage.sh
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 ```
 
 Also verify that your template resource and the new resource have comparable touchpoints:
 
 ```bash
-rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd edgion-tests
+rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" edgion-{resources,controller,gateway,common,tests} config/crd
 ```
 
 ## References

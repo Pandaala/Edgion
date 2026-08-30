@@ -1,0 +1,33 @@
+# Conditions-gated dye: the response rule only renders when the request
+# carries X-Debug-Token (run condition, keyExist). The Canary selection
+# itself always succeeds (activeProfile "stable" -> canary-app-v1, present
+# in the route's backendRefs) -- only whether the debug outcome header
+# renders is gated.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-dye-conditions
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Debug-Outcome
+            conditions:
+              run:
+                allOf:
+                  - type: keyExist
+                    key:
+                      type: header
+                      name: X-Debug-Token
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: reject

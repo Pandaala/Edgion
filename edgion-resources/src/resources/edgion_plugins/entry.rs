@@ -1,6 +1,8 @@
 //! Plugin entry types with enable/disable functionality
 
+use super::body_requirement::BodyRequirement;
 use super::conditions::PluginConditions;
+use super::dye::{DyeOutcome, DyeSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +15,30 @@ pub(super) fn default_true() -> bool {
 
 pub(super) fn is_true(v: &bool) -> bool {
     *v
+}
+
+/// Record a valid alias and report it if an earlier entry in the same stage
+/// array already claimed it.
+///
+/// `seen` is the caller's per-stage-array accumulator; `alias` should already
+/// have passed [`validate_alias_str`] (an invalid alias is dropped, not
+/// deduplicated). Entries without an alias never collide.
+///
+/// Uniqueness matters beyond the access log: the alias is the discriminator in
+/// a plugin entry's runtime identity (`<namespace>/<name>/<alias or #index>`),
+/// which `RateLimitRedis` uses to namespace its Redis buckets. Two entries
+/// sharing an alias would silently share one bucket namespace — and one
+/// access-log label. Callers therefore report the duplicate AND drop it, the way
+/// an invalid alias is dropped: reporting alone would not protect the data plane,
+/// since lenient admission keeps an `Accepted=False` resource synced and serving.
+pub fn duplicate_alias_error(seen: &mut std::collections::HashSet<String>, alias: Option<&str>) -> Option<String> {
+    let alias = alias?;
+    if seen.insert(alias.to_string()) {
+        return None;
+    }
+    Some(format!(
+        "duplicate alias '{alias}': aliases must be unique within a stage"
+    ))
 }
 
 /// Validate a plugin entry alias.
@@ -77,11 +103,19 @@ pub struct PluginEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+
+    /// Entry-level dye suite (traffic tagging on outcomes). See
+    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -95,6 +129,7 @@ impl PluginEntry {
             enable: true,
             conditions: None,
             alias: None,
+            dye: None,
             plugin,
         }
     }
@@ -105,16 +140,7 @@ impl PluginEntry {
             enable,
             conditions: None,
             alias: None,
-            plugin,
-        }
-    }
-
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
+            dye: None,
             plugin,
         }
     }
@@ -123,6 +149,16 @@ impl PluginEntry {
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
         self.alias.as_deref().and_then(validate_alias_str)
+    }
+
+    /// Validate the optional dye suite against rule-local checks + this
+    /// plugin's declared capabilities and key sources. `PluginEntry` sits in
+    /// a request-stage array, so request-direction rules are allowed.
+    pub fn validate_dye(&self) -> Option<String> {
+        let dye = self.dye.as_ref()?;
+        let keys = self.plugin.key_header_names();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        dye.validation_error(true, self.plugin.dye_capabilities(), &key_refs)
     }
 
     /// Check if this plugin is enabled
@@ -135,11 +171,6 @@ impl PluginEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -161,11 +192,34 @@ pub struct RequestFilterEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
+    /// Optional body requirement. When set (by the operator) or declared
+    /// intrinsically by the plugin, the runtime wraps the plugin in a body gate
+    /// that buffers the request body (OpenResty-style, at the request phase) and
+    /// applies the configured fail-open / fail-close policy on a read failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRequirement>,
+
+    /// Entry-level dye suite (traffic tagging on outcomes). See
+    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -179,6 +233,9 @@ impl RequestFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
+            body: None,
+            dye: None,
             plugin,
         }
     }
@@ -189,16 +246,9 @@ impl RequestFilterEntry {
             enable,
             conditions: None,
             alias: None,
-            plugin,
-        }
-    }
-
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
+            policy_action: None,
+            body: None,
+            dye: None,
             plugin,
         }
     }
@@ -209,6 +259,16 @@ impl RequestFilterEntry {
         self.alias.as_deref().and_then(validate_alias_str)
     }
 
+    /// Validate the optional dye suite against rule-local checks + this
+    /// plugin's declared capabilities and key sources. `RequestFilterEntry`
+    /// sits in the request-stage array, so request-direction rules are allowed.
+    pub fn validate_dye(&self) -> Option<String> {
+        let dye = self.dye.as_ref()?;
+        let keys = self.plugin.key_header_names();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        dye.validation_error(true, self.plugin.dye_capabilities(), &key_refs)
+    }
+
     /// Check if this plugin is enabled
     pub fn is_enabled(&self) -> bool {
         self.enable
@@ -217,11 +277,6 @@ impl RequestFilterEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -243,11 +298,27 @@ pub struct UpstreamResponseFilterEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
+    /// Entry-level dye suite (traffic tagging on outcomes). See
+    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -261,6 +332,8 @@ impl UpstreamResponseFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
+            dye: None,
             plugin,
         }
     }
@@ -271,16 +344,8 @@ impl UpstreamResponseFilterEntry {
             enable,
             conditions: None,
             alias: None,
-            plugin,
-        }
-    }
-
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
+            policy_action: None,
+            dye: None,
             plugin,
         }
     }
@@ -291,6 +356,16 @@ impl UpstreamResponseFilterEntry {
         self.alias.as_deref().and_then(validate_alias_str)
     }
 
+    /// Validate the optional dye suite against rule-local checks + this
+    /// plugin's declared capabilities and key sources. `UpstreamResponseFilterEntry`
+    /// is a response-stage entry, so request-direction rules are rejected.
+    pub fn validate_dye(&self) -> Option<String> {
+        let dye = self.dye.as_ref()?;
+        let keys = self.plugin.key_header_names();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        dye.validation_error(false, self.plugin.dye_capabilities(), &key_refs)
+    }
+
     /// Check if this plugin is enabled
     pub fn is_enabled(&self) -> bool {
         self.enable
@@ -299,11 +374,6 @@ impl UpstreamResponseFilterEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -325,11 +395,27 @@ pub struct UpstreamResponseBodyFilterEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
+    /// Entry-level dye suite (traffic tagging on outcomes). See
+    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -343,6 +429,8 @@ impl UpstreamResponseBodyFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
+            dye: None,
             plugin,
         }
     }
@@ -353,16 +441,8 @@ impl UpstreamResponseBodyFilterEntry {
             enable,
             conditions: None,
             alias: None,
-            plugin,
-        }
-    }
-
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
+            policy_action: None,
+            dye: None,
             plugin,
         }
     }
@@ -373,6 +453,16 @@ impl UpstreamResponseBodyFilterEntry {
         self.alias.as_deref().and_then(validate_alias_str)
     }
 
+    /// Validate the optional dye suite against rule-local checks + this
+    /// plugin's declared capabilities and key sources. `UpstreamResponseBodyFilterEntry`
+    /// is a response-stage entry, so request-direction rules are rejected.
+    pub fn validate_dye(&self) -> Option<String> {
+        let dye = self.dye.as_ref()?;
+        let keys = self.plugin.key_header_names();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        dye.validation_error(false, self.plugin.dye_capabilities(), &key_refs)
+    }
+
     /// Check if this plugin is enabled
     pub fn is_enabled(&self) -> bool {
         self.enable
@@ -381,11 +471,6 @@ impl UpstreamResponseBodyFilterEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -407,11 +492,33 @@ pub struct UpstreamResponseEntry {
     pub conditions: Option<PluginConditions>,
 
     /// Operator-defined label echoed verbatim into PluginLog.alias.
-    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
-    /// Lets multiple entries of the same plugin type be distinguished
-    /// in the access log.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$` and be unique
+    /// within its stage array. Lets multiple entries of the same plugin type be
+    /// distinguished in the access log; it is also the discriminator in the
+    /// entry's runtime identity, which namespaces state a plugin keeps outside
+    /// its own instance (RateLimitRedis buckets), so a duplicate is reported and
+    /// dropped rather than allowed to merge two entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
+    /// Reserved body requirement. Proxied upstream responses are
+    /// streaming-only, so validation rejects this field for every currently
+    /// supported response-stage plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRequirement>,
+
+    /// Entry-level dye suite (traffic tagging on outcomes). See
+    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye: Option<DyeSuite>,
 
     /// The actual plugin configuration
     #[serde(flatten)]
@@ -425,6 +532,9 @@ impl UpstreamResponseEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
+            body: None,
+            dye: None,
             plugin,
         }
     }
@@ -435,16 +545,9 @@ impl UpstreamResponseEntry {
             enable,
             conditions: None,
             alias: None,
-            plugin,
-        }
-    }
-
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
+            policy_action: None,
+            body: None,
+            dye: None,
             plugin,
         }
     }
@@ -453,6 +556,16 @@ impl UpstreamResponseEntry {
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
         self.alias.as_deref().and_then(validate_alias_str)
+    }
+
+    /// Validate the optional dye suite against rule-local checks + this
+    /// plugin's declared capabilities and key sources. `UpstreamResponseEntry`
+    /// is a response-stage entry, so request-direction rules are rejected.
+    pub fn validate_dye(&self) -> Option<String> {
+        let dye = self.dye.as_ref()?;
+        let keys = self.plugin.key_header_names();
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        dye.validation_error(false, self.plugin.dye_capabilities(), &key_refs)
     }
 
     /// Check if this plugin is enabled
@@ -465,15 +578,41 @@ impl UpstreamResponseEntry {
         self.conditions.as_ref()
     }
 
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
-    }
-
     /// Get the plugin type name
     pub fn type_name(&self) -> &'static str {
         self.plugin.type_name()
     }
+}
+
+/// Within one EdgionPlugins resource, a failure rule's response name must not
+/// equal (case-insensitively) any success rule's response name in any entry:
+/// success renders with Set (replace-all) semantics and would silently wipe
+/// appended failure values queued earlier. Cross-resource composition cannot
+/// be checked statically — user docs instruct dedicated failure names.
+pub fn dye_set_clobber_error<'a>(suites: impl Iterator<Item = Option<&'a DyeSuite>>) -> Option<String> {
+    let mut success_names: Vec<String> = Vec::new();
+    let mut failure_names: Vec<String> = Vec::new();
+    for suite in suites.flatten() {
+        for rule in &suite.response {
+            let bucket = if rule.on.iter().any(DyeOutcome::is_failure) {
+                &mut failure_names
+            } else {
+                &mut success_names
+            };
+            bucket.push(rule.name.to_ascii_lowercase());
+        }
+    }
+    for f in &failure_names {
+        if success_names.iter().any(|s| s == f) {
+            return Some(format!(
+                "dye: response header '{}' is used by both a success rule (Set \
+                 semantics) and a failure rule (Append semantics) in this resource; \
+                 the Set would wipe appended failure values — use distinct names",
+                f
+            ));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -558,5 +697,79 @@ config: {}
 
         entry.alias = Some("ok-name_v1.2".to_string());
         assert_eq!(entry.validate_alias(), None);
+    }
+}
+
+#[cfg(test)]
+mod dye_entry_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::dye::{DyeOutcome, DyeRule, DyeSuite};
+    use crate::resources::edgion_plugins::EdgionPlugin;
+    use crate::resources::plugin_configs::CorsConfig;
+
+    fn dye_response(name: &str, on: &[DyeOutcome]) -> DyeSuite {
+        DyeSuite {
+            request: vec![],
+            response: vec![DyeRule {
+                name: name.to_string(),
+                on: on.to_vec(),
+                value: None,
+                conditions: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn entry_dye_serde_roundtrip() {
+        let yaml = "type: Cors\nconfig: {}\ndye:\n  response:\n    - name: X-O\n      on: [success]\n";
+        let entry: RequestFilterEntry = serde_yaml::from_str(yaml).unwrap();
+        assert!(entry.dye.is_some());
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["dye"]["response"][0]["name"], "X-O");
+        // absent stays absent
+        let e2 = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        assert!(serde_json::to_value(&e2).unwrap().get("dye").is_none());
+    }
+
+    #[test]
+    fn validate_dye_uses_plugin_capabilities() {
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        entry.dye = Some(dye_response("X-O", &[DyeOutcome::FailOpen]));
+        let err = entry.validate_dye().expect("cors records nothing");
+        assert!(err.contains("never records"), "{err}");
+        assert!(RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()))
+            .validate_dye()
+            .is_none());
+    }
+
+    // `CanaryConfig` has no `Default` impl (its fields are all operator-required),
+    // so build a minimal valid instance directly rather than relying on `::default()`.
+    fn canary_config() -> crate::resources::plugin_configs::CanaryConfig {
+        use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
+        use std::collections::HashMap;
+        CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([(
+                "stable".to_string(),
+                DynUpstreamTarget {
+                    name: "app-v1".to_string(),
+                    namespace: None,
+                },
+            )]),
+            active_profile_ref: None,
+            on_invalid: UpstreamFallback::Reject,
+        }
+    }
+
+    #[test]
+    fn set_clobber_collision_across_entries_rejected() {
+        // entry A: success dye on X-O; entry B: failure dye on x-o (case-insensitive hit)
+        let mut a = RequestFilterEntry::new(EdgionPlugin::Canary(canary_config()));
+        a.dye = Some(dye_response("X-O", &[DyeOutcome::Success]));
+        let mut b = RequestFilterEntry::new(EdgionPlugin::Canary(canary_config()));
+        b.dye = Some(dye_response("x-o", &[DyeOutcome::Fallback]));
+        let err = dye_set_clobber_error([&a, &b].iter().map(|e| e.dye.as_ref())).expect("clobber must be rejected");
+        assert!(err.contains("x-o") || err.contains("X-O"), "{err}");
     }
 }

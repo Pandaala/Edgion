@@ -1,0 +1,11 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: uf-cd
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: lockdown
+      descripton: intentionally misspelled description

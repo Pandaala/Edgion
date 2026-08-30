@@ -16,13 +16,14 @@ use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::conf_mgr::conf_center::etcd::leadership_gate::LeaderHandle;
 use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
-    EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
-    EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
-    LinkSysHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor, SecretHandler, ServiceHandler,
-    TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    EdgionBackendHandler, EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler,
+    EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler,
+    GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ProcessorHandler, ReferenceGrantHandler,
+    ResourceProcessor, SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 use crate::conf_mgr::sync_runtime::{ShutdownHandle, ShutdownSignal};
 use crate::conf_mgr::ControllerRuntime;
@@ -45,12 +46,15 @@ pub struct CenterBase {
 impl CenterBase {
     /// Create a new `CenterBase` with all handles initialised to `None`.
     pub fn new() -> Self {
+        let runtime = Arc::new(ControllerRuntime::new());
+        runtime.set_managed_credentials_supported(false);
+        // single_publisher stays true (ControllerRuntime::new default): persist=false is allowed on FS/etcd.
         Self {
             config_sync_server: RwLock::new(None),
             shutdown_handle: Mutex::new(None),
             controller_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
-            runtime: Arc::new(ControllerRuntime::new()),
+            runtime,
         }
     }
 
@@ -169,6 +173,34 @@ impl CenterBase {
         component: &'static str,
         make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
     ) -> Result<()> {
+        self.run_lifecycle_gated(shutdown_handle, component, None, make_handle)
+            .await
+    }
+
+    /// Run the shared controller lifecycle loop with an optional leadership gate.
+    ///
+    /// This is the gated variant of [`CenterBase::run_lifecycle`]. When
+    /// `leadership` is `Some`, each iteration blocks at the top of the loop until
+    /// the handle reports leadership, and a mid-term loss of leadership tears the
+    /// iteration down and re-parks at the gate. When `leadership` is `None` the
+    /// gate is a no-op — the unconditional-leader path used by FileSystem mode
+    /// (K8s mode never calls this path at all). See spec §5.
+    ///
+    /// # Parameters
+    ///
+    /// - `shutdown_handle`: The top-level shutdown handle for this center instance.
+    /// - `component`: A `'static` string used as the `component` field in every log line.
+    /// - `leadership`: Optional leadership handle. `None` = unconditional leader.
+    /// - `make_handle`: A synchronous closure that spawns the backend-specific controller
+    ///   and returns its `JoinHandle`. Receives the iteration-scoped shutdown signal,
+    ///   the shared runtime, and a oneshot sender for reporting fatal errors.
+    pub async fn run_lifecycle_gated(
+        &self,
+        shutdown_handle: ShutdownHandle,
+        component: &'static str,
+        leadership: Option<LeaderHandle>,
+        make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
+    ) -> Result<()> {
         self.set_shutdown_handle(shutdown_handle.clone());
 
         let mut reload_start_time: Option<Instant> = None;
@@ -179,6 +211,22 @@ impl CenterBase {
                 let duration = Instant::now().saturating_duration_since(start_time).as_secs_f64();
                 reload_metrics().reload_completed(duration);
                 tracing::info!(component = component, duration_secs = duration, "Reload completed");
+            }
+
+            // 0. Leadership gate (spec §5). `None` ⇒ unconditional leader
+            // (FileSystem mode; K8s never calls this path at all). When `Some`,
+            // park here until this node is the leader, letting shutdown break out.
+            if let Some(ref lh) = leadership {
+                let mut gate_shutdown = shutdown_handle.signal();
+                loop {
+                    if lh.is_leader() {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                        _ = gate_shutdown.wait() => { return Ok(()); }
+                    }
+                }
             }
 
             // 1. Iteration-specific shutdown handle.
@@ -215,6 +263,10 @@ impl CenterBase {
                 "ConfigSyncServer is ready, gRPC services can process requests"
             );
 
+            // Persist-off acquisition on FS/etcd: always-leader (this iteration is
+            // already gated). Kubernetes starts its own kube-backed worker instead.
+            crate::services::credential_manager::start_memory_credential_manager_service(self.runtime.clone());
+
             // 8. Wait for shutdown, reload, or controller error.
             let mut global_shutdown = shutdown_handle.signal();
             let mut error_rx = error_rx;
@@ -222,6 +274,7 @@ impl CenterBase {
             let action = tokio::select! {
                 _ = global_shutdown.wait() => LoopAction::Shutdown,
                 _ = reload_rx.recv() => LoopAction::Reload,
+                _ = leadership_lost_wait(&leadership) => LoopAction::LeadershipLost,
                 result = &mut error_rx => {
                     match result {
                         Ok(msg) => LoopAction::Error(msg),
@@ -235,15 +288,20 @@ impl CenterBase {
 
             // 9. Stop the controller for this iteration.
             iteration_shutdown.shutdown();
+            crate::services::credential_manager::stop_credential_manager_service();
 
             // 10. Cleanup.
-            // Clear all caches before dropping CSS — this wakes any active
-            // Federation watchers so they detect EventsLost and exit,
-            // allowing Center to re-watch on the new CSS after reload.
-            if let Some(css) = self.config_sync_server() {
+            // Drop the published CSS before clearing its caches. Clearing wakes
+            // active Federation watchers so they detect EventsLost and exit,
+            // allowing Center to re-watch on the next CSS generation.
+            let old_css = self.config_sync_server();
+            // Stop advertising readiness before clearing the old generation's
+            // caches. Stats and proxy tasks must never observe a live CSS paired
+            // with the transient empty stores created during reload cleanup.
+            self.set_config_sync_server(None, component);
+            if let Some(css) = old_css {
                 css.clear_all();
             }
-            self.set_config_sync_server(None, component);
             self.abort_controller();
             self.runtime.reset();
             self.set_reload_tx(None);
@@ -258,6 +316,17 @@ impl CenterBase {
                     tracing::info!(component = component, "Reload requested, restarting controller");
                     reload_metrics().reload_started();
                     reload_start_time = Some(Instant::now());
+                    continue;
+                }
+                LoopAction::LeadershipLost => {
+                    // Lost leadership mid-term. The teardown above already ran;
+                    // loop back to the gate and park until leadership is
+                    // regained. Do NOT release leadership here — the election
+                    // supervisor owns demotion (spec §5.1a).
+                    tracing::warn!(
+                        component = component,
+                        "Lost leadership, tearing down and re-parking at the gate"
+                    );
                     continue;
                 }
                 LoopAction::Error(msg) => {
@@ -285,6 +354,24 @@ enum LoopAction {
     Shutdown,
     Reload,
     Error(String),
+    LeadershipLost,
+}
+
+/// Resolve when leadership is lost.
+///
+/// With `None` leadership (FileSystem / unconditional-leader path) this never
+/// resolves, so the corresponding `select!` arm is inert. With `Some`, it polls
+/// `is_leader()` and returns as soon as leadership drops.
+async fn leadership_lost_wait(leadership: &Option<LeaderHandle>) {
+    match leadership {
+        None => std::future::pending::<()>().await,
+        Some(lh) => loop {
+            if !lh.is_leader() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        },
+    }
 }
 
 // ============================================================================
@@ -308,8 +395,17 @@ pub trait LocalControllerBackend: Send + Sync {
 
     /// Subscribe to events for a resource kind, returning a channel receiver.
     ///
-    /// Must be called before the watcher's `run()` starts sending events.
+    /// Must be called before the watcher's `dispatch_init` starts sending events.
     async fn subscribe(&self, kind: &'static str) -> Self::EventReceiver;
+
+    /// Take one full snapshot of backend state (etcd: single-revision prefix
+    /// list; FS: directory scan + atomic registry swap). Stores only — emits no
+    /// events. Called once before any `dispatch_init`.
+    async fn prime(&self) -> Result<()>;
+
+    /// Dispatch `Init` / `InitApply` / `InitDone` to exactly these
+    /// already-subscribed kinds, from the snapshot captured by `prime`.
+    async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()>;
 
     /// Construct and spawn the per-kind resource controller.
     ///
@@ -375,13 +471,15 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     runtime: Arc<ControllerRuntime>,
     component: &'static str,
 ) -> Result<Vec<JoinHandle<Result<()>>>> {
-    use crate::conf_mgr::conf_center::common;
-
     let mut handles = Vec::new();
+    // Collects the kind name of every spawned controller, in spawn order.
+    // Sliced at the Phase-1/Phase-2 boundary below (see `phase1_count`).
+    let mut spawned_kinds: Vec<&'static str> = Vec::new();
 
     // Helper macro: reduces the per-resource boilerplate inside this function.
     macro_rules! do_spawn {
         ($K:ty, $handler:expr) => {
+            spawned_kinds.push(stringify!($K));
             handles.push(
                 spawn::<$K, _, B>(
                     stringify!($K),
@@ -395,6 +493,9 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
         };
     }
 
+    // Snapshot backend state once, up front, before any dispatch.
+    backend.prime().await?;
+
     // ==================== Phase 1: Foundation Resources ====================
     tracing::info!(
         component = component,
@@ -407,17 +508,20 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     do_spawn!(EndpointSlice, EndpointSliceHandler::new());
 
     let phase1_count = handles.len();
+    let phase1_kinds: Vec<&'static str> = spawned_kinds[..phase1_count].to_vec();
     tracing::info!(
         component = component,
         count = phase1_count,
-        "Phase 1 foundation controllers spawned, waiting for init completion"
+        "Phase 1 foundation controllers spawned, dispatching init"
     );
 
-    // Wait for Phase 1 resources to complete their init phase
+    // Pump Phase-1 init from the snapshot, then wait for readiness (now real).
+    backend.dispatch_init(&phase1_kinds).await?;
+
     const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
     let phase1_ready = runtime
         .processor_registry
-        .wait_kinds_ready(&common::phase1_kinds(), PHASE1_TIMEOUT)
+        .wait_kinds_ready(&phase1_kinds, PHASE1_TIMEOUT)
         .await;
 
     if phase1_ready {
@@ -437,6 +541,9 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
 
     for_each_phase2_resource!(do_spawn);
 
+    let phase2_kinds: Vec<&'static str> = spawned_kinds[phase1_count..].to_vec();
+    backend.dispatch_init(&phase2_kinds).await?;
+
     tracing::info!(
         component = component,
         phase1_count = phase1_count,
@@ -448,4 +555,41 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     runtime.processor_registry.mark_registration_complete();
 
     Ok(handles)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::conf_mgr::sync_runtime::ShutdownHandle;
+
+    use super::CenterBase;
+
+    #[tokio::test]
+    async fn filesystem_none_leadership_runs_immediately() {
+        // With leadership=None the gate must not block; the make_handle closure runs at once.
+        let base = CenterBase::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = ran.clone();
+        let sd = ShutdownHandle::new();
+        let h = {
+            let sd2 = sd.clone();
+            tokio::spawn(async move {
+                base.run_lifecycle_gated(sd2, "test", None, move |shutdown, _rt, _err| {
+                    r.store(true, Ordering::Release);
+                    tokio::spawn(async move {
+                        let mut s = shutdown;
+                        s.wait().await;
+                    })
+                })
+                .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(ran.load(Ordering::Acquire), "None leadership must not gate");
+        sd.shutdown();
+        let _ = h.await;
+    }
 }

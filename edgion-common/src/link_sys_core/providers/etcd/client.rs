@@ -286,6 +286,28 @@ impl EtcdLinkClient {
         self.client.read().await.clone()
     }
 
+    /// Build an [`ElectionSession`] on a Client configured for a BLOCKING
+    /// Build an `ElectionSession` on a DEDICATED etcd connection (spec §3.2/§4.2).
+    ///
+    /// The election must NOT ride the shared conf_center client, because if the
+    /// operator configured `EtcdConfig.timeout.request` that client carries a
+    /// channel-wide request timeout, and v3election `campaign()` blocks
+    /// server-side until won — a request timeout would abort the blocking
+    /// campaign every cycle and break active-passive HA. `election_connect_options`
+    /// strips the request timeout while keeping h2 keepalive on (so a blackholed
+    /// campaign connection still dies) and the same endpoints/auth/TLS. Using a
+    /// separate connection also sidesteps the shared client's health-monitor
+    /// swap (§4.6) for the campaign/resign path.
+    pub async fn election_session(&self) -> Result<crate::link_sys_core::providers::etcd::election::ElectionSession> {
+        let opts = super::config_mapping::election_connect_options(&self.config, &self.auth_state())?;
+        let client = etcd_client::Client::connect(&self.endpoints, Some(opts))
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd [{}] election connect: {:?}", self.name, e))?;
+        Ok(crate::link_sys_core::providers::etcd::election::ElectionSession::new(
+            client,
+        ))
+    }
+
     /// Graceful shutdown — signal health monitor to stop and clear the client.
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!(etcd = %self.name, "Etcd client shutting down");

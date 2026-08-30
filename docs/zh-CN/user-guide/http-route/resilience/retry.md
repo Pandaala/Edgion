@@ -90,9 +90,9 @@ rules:
 - 只有在尚未向客户端发送任何内容时，单次尝试超时才会重试。一旦响应头已转发到下游，传输响应体过程中的超时会直接终止请求而不是重试。
 - 重试会重新执行常规负载均衡，**不会**排除刚刚超时的后端。RoundRobin 通常会轮转到其他端点，但 ConsistentHash 会确定性地再次选中**同一个**后端（哈希键相同）；在 ConsistentHash 路由上使用较紧的单次尝试超时时，请配合熔断器 annotation，让持续缓慢的端点被摘除。
 - 当剩余的 `request`/`grpc-timeout` 预算小于计算出的 `backoff` 延迟时，请求**不会**被重试：遵守配置的最小退避时间会达到或超过截止时间，因此依据 GEP-1731（禁止在配置的最小时长之前重试），网关会以绑定截止时间的超时直接失败请求，而不是发起一次低于最小退避的立即重试。若希望最后一次尝试得以执行，请将 `timeouts.request` 设置得足以容纳至少一个完整的 `backoff` 间隔。
-- 每次被取消并重试的尝试都会在访问日志错误链中记录 `BackendRequestTimeoutRetry`（504_03），且该尝试的 per-upstream 日志条目会被标记 504 状态与超时错误类型。
+- 每次被取消并重试的尝试都会在访问日志 `diagnostics` 数组中记录 `{ "kind": "error", "code": "BackendRequestTimeoutRetry" }`，且该尝试的 per-upstream 日志条目会被标记 504 状态与超时错误类型。
 - 每个由 Edgion 做出的重试决策都会在该次尝试的访问日志 `upstreams[].err` 字段中显式打标：连接失败携带错误类型（如 `ConnectTimedout`），单次尝试超时携带超时类型，状态码重试携带 `RetryOnStatus`，过期 keepalive 连接重试携带 `ConnectionReuseRetry`（由 Pingora 内部自行决定的重试，如 h2 GOAWAY 重试，可能表现为一条额外的无标签条目）。因此按原因统计的重试率完全可以通过访问日志聚合得到；项目有意不提供按重试计数的 Prometheus 指标（参见指标设计规则）。
-- 如果客户端在响应送达之前就断开连接，请求级 `errors` 数组会记录 `ClientClosed`（常见情况下状态码为 499；投递失败的记录会保留原有的错误状态码——请按 `errors` 字段过滤，而非按状态码）。在 HTTP/1.1 上，进行中的尝试会在毫秒级内被中止；一条带有多个 `upstreams` 条目的 `ClientClosed` 记录可以量化花在已离开调用方身上的重试开销。
+- 如果客户端在响应送达之前就断开连接，请求级 `diagnostics` 数组会记录 `ClientClosed` 错误诊断（常见情况下状态码为 499；投递失败的记录会保留原有的错误状态码——请按该诊断过滤，而非按状态码）。在 HTTP/1.1 上，进行中的尝试会在毫秒级内被中止；一条带有多个 `upstreams` 条目的 `ClientClosed` 记录可以量化花在已离开调用方身上的重试开销。
 - 精度说明：Edgion 将 `backendRequest` 实现为逐 I/O 操作的读/写超时，因此持续有进展的尝试不会在传输中途被杀掉（在响应头阶段最接近 Envoy 的 `per_try_timeout`，在响应体传输阶段最接近 `per_try_idle_timeout`）。特别地，对于带长生命周期流的 gRPC 路由，过紧的 `backendRequest` 与重试策略组合会切断空闲的流——请按预期最长的静默期来设置该值。
 
 ## 示例

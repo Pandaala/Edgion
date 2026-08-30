@@ -1,0 +1,35 @@
+# Self-reject dye: RateLimitRedis fail-close self-writes its 429 reject
+# reply via the ErrTerminateRequest path (write_response_header +
+# write_response_body). The entry-level dye response rule on the
+# `fail-close` outcome must survive that self-write drain (Task 10's
+# `write_response_header` drain amendment) -- the outcome is recorded BEFORE
+# the plugin's own reject write, so the queued response-header op is drained
+# by that very write.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rlr-dye-fail-close
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimitRedis
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            on: [fail-close]
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onKeyMiss: Allow
+        onRedisFailure: Deny
+        rejectStatus: 429
+        rejectMessage: "Redis unavailable (dye fail-close)"
+        showLimitHeaders: true
+        keyPrefix: "edgion:it:rlr:dye-fail-close:"

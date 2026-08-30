@@ -1,5 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::EdgionHttpContext;
+use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
@@ -34,12 +35,12 @@ pub fn fail_to_connect(
         );
     }
 
-    // Record circuit breaker failure
+    // Record outlier detection failure
     if let Some(upstream) = ctx.get_current_upstream() {
         if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
             // Connect failure / connect timeout / TLS-handshake timeout — the data plane
             // never got a usable HTTP response, so this is a local-origin failure.
-            crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+            crate::backends::get_outlier_detection_store().record_failure_by_addr(
                 service_key,
                 addr,
                 crate::backends::FailureClass::LocalOrigin,
@@ -51,7 +52,7 @@ pub fn fail_to_connect(
     // If timeout is exceeded, block all retries and return 504. Both the
     // route-level `request_timeout` and a client-supplied `grpc-timeout`
     // (which can be tighter than the route timeout) abort retries; either
-    // deadline blown means a new LB pick / connection / circuit-breaker
+    // deadline blown means a new LB pick / connection / outlier-detection
     // counter increment would only burn resources the caller has given up on.
     if ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded() {
         if let Some(upstream) = ctx.get_current_upstream_mut() {
@@ -61,12 +62,39 @@ pub fn fail_to_connect(
         return e;
     }
 
+    if ctx.has_ai_attempt_plan() {
+        if let Some(state) = ctx.ai_state_mut() {
+            state.attempt_runtime.finish_predispatch();
+        }
+        // The typed predispatch hook consumes no scheduler dispatch slot,
+        // failure-ledger entry, or retry-budget numerator. The bounded Redis
+        // release is drained before the next selection or at final logging.
+        if crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
+            e.set_retry(true);
+        }
+        return e;
+    }
+
     // Determine max_retries: rule.retry.attempts > global (HTTP or gRPC route)
     let max_retries = ctx
         .retry_attempts()
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
     if ctx.try_cnt <= max_retries {
+        // Retry budget (retryConstraint): composes AFTER the maxRetries/deadline
+        // checks above (D3) — both gates must pass. On refusal the retry flag is
+        // NOT set; instead the client gets a deterministic 503, delivered by
+        // swapping the error's ErrorType (pg_fail_to_proxy renders the status from
+        // the error, never from ctx.request_info.status). The per-upstream entry
+        // keeps the backend's real observed status (set above); the 503 is a
+        // request-level outcome carried by the error.
+        if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+            if !budget.try_retry() {
+                crate::observe::metrics::record_retry_budget_denied();
+                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
+                return Error::explain(ErrorType::HTTPStatus(503), "retry budget exhausted");
+            }
+        }
         e.set_retry(true);
     }
 

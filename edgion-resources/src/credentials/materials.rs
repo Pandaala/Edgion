@@ -17,7 +17,7 @@
 //! - The controller-side `SecretStore` caches the raw `ByteString` plaintext
 //!   for the lifetime of the resource watcher.
 //! - The resolved `Secret` object is embedded on `*Auth.secret` /
-//!   `TlsCerts.secret` and serialized via `serde_json` / gRPC through
+//!   `TlsConfig.resolved_ca_secret`/`resolved_client_secret` and serialized via `serde_json` / gRPC through
 //!   conf_sync to the Gateway; none of those buffers are wiped.
 //! - The Gateway-side runtime store keeps the embedded `Secret` until the
 //!   resource is removed.
@@ -27,6 +27,8 @@
 //!
 //! Treat `Zeroizing` here as **defense-in-depth, not a strict end-to-end
 //! guarantee**.
+
+use std::fmt;
 
 use zeroize::Zeroizing;
 
@@ -45,9 +47,18 @@ pub struct EsApiKeyMaterial {
 }
 
 /// Elasticsearch / Webhook bearer auth.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BearerMaterial {
     pub token: String,
+}
+
+impl fmt::Debug for BearerMaterial {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BearerMaterial")
+            .field("token", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Webhook HMAC auth.
@@ -59,6 +70,12 @@ pub struct HmacMaterial {
 /// Webhook API Key auth.
 #[derive(Clone, Debug)]
 pub struct WebhookApiKeyMaterial {
+    pub api_key: String,
+}
+
+/// API key used to authenticate an AI provider request.
+#[derive(Clone, Debug)]
+pub struct AiApiKeyMaterial {
     pub api_key: String,
 }
 
@@ -82,9 +99,9 @@ pub struct WebhookApiKeyMaterial {
 ///   builds a parsed tree in the heap that is dropped normally.
 /// - Transient `String` allocations produced during decoding (e.g.
 ///   `json.to_string()`) live until the allocator reclaims the memory.
-/// - The embedded `Secret` object on `*Auth.secret` / `TlsCerts.secret` is
-///   serialized via `serde_json` and transported over gRPC to the Gateway
-///   — none of those buffers are zero-wiped.
+/// - The embedded `Secret` object on `*Auth.secret` / `TlsConfig.resolved_ca_secret`
+///   / `TlsConfig.resolved_client_secret` is serialized via `serde_json` and
+///   transported over gRPC to the Gateway — none of those buffers are zero-wiped.
 ///
 /// In other words: `Zeroize` here reduces but does NOT eliminate the window
 /// during which the private key is resident in memory. Treat this as
@@ -111,7 +128,8 @@ pub struct AcmeAccountMaterial {
 /// `client_key_pem` (the private key) is held in `Zeroizing<Vec<u8>>` and
 /// zero-wiped on drop. `ca_pem` and `client_cert_pem` are plaintext public
 /// material and deliberately not wrapped. The same caveats about the
-/// `SecretStore` cache, the embedded `Secret` on `TlsCerts.secret`, and the
+/// `SecretStore` cache, the embedded `Secret` on `TlsConfig.resolved_ca_secret`
+/// / `resolved_client_secret`, and the
 /// conf_sync transport buffers apply here — see [`AcmeAccountMaterial`] for
 /// the full list. `Zeroize` is defense-in-depth, not an end-to-end guarantee.
 #[derive(Debug)]
@@ -151,8 +169,19 @@ mod tests {
         assert_send_sync::<BearerMaterial>();
         assert_send_sync::<HmacMaterial>();
         assert_send_sync::<WebhookApiKeyMaterial>();
+        assert_send_sync::<AiApiKeyMaterial>();
         assert_send_sync::<AcmeAccountMaterial>();
         assert_send_sync::<TlsMaterial>();
+    }
+
+    #[test]
+    fn bearer_debug_is_redacted() {
+        let material = BearerMaterial {
+            token: "private-token".to_string(),
+        };
+        let debug = format!("{material:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("private-token"));
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 ## Edgion 是什么？
 
-基于 [Pingora](https://github.com/cloudflare/pingora) 和 [Gateway API](https://gateway-api.sigs.k8s.io/) 构建的高性能 API 网关。同时支持 Kubernetes 和独立部署（裸金属 / 虚拟机）环境。一个现代的 Rust 原生替代方案，对标 Kong、APISIX、Traefik、Envoy 和 HAProxy。
+基于 [Pingora](https://github.com/cloudflare/pingora) 和 [Gateway API](https://gateway-api.sigs.k8s.io/) 构建的高性能 API 网关。同时支持 Kubernetes 和独立部署（裸金属 / 虚拟机）环境。它既有 NGINX/Envoy 级别的极致性能，又有类似 OpenResty 的高可编程性，同时享受 Rust 带来的内存安全。作为一个现代的 Rust 原生替代方案，对标 Kong、APISIX、Traefik、Envoy 和 HAProxy。
 
 ## 功能亮点
 
@@ -18,6 +18,7 @@
 - **高性能路由** — 基数树 + 缓存优化，支持路径变量的 Exact/Prefix 匹配。按 Gateway API 规范进行优先级规则评估。
 - **高级 TLS** — mTLS、ACME 自动签发（HTTP-01 / DNS-01）、按域名的 TLS 版本和密码套件控制。
 - **流量管理** — 加权金丝雀路由；多种负载均衡算法（Round Robin、EWMA、最少连接、一致性哈希、加权）。
+- **AI Gateway** — 兼容 OpenAI 的 LLM 入口：`EdgionBackend` 凭据池、智能后端选择、有界故障切换、用量与成本核算。详见 [AI Gateway 专栏](ai-gateway/README.md)。
 - **强大的插件系统** — 通过插件引用组合，内置 DSL 支持自定义逻辑。
   - HTTP 插件：认证 · 安全 · 流量管理 · 可观测性（25+）
   - Stream 插件：TCP/UDP 流量控制
@@ -28,7 +29,7 @@
   - Stream log：长连接（WebSocket、TCP）的连接生命周期事件
   - 灵活输出：本地文件或远程 Kafka / Elasticsearch
 - **无需 Kubernetes 部署** — 可独立运行于裸金属或虚拟机。本地文件或 etcd 作为配置后端，无需 Kubernetes。
-- **联邦集群设计** — 无状态的 Center 连接多个跨地域的 Controller，实现集群级和区域级的高级路由控制。
+- **联邦集群设计** — 无状态的 Center 连接多个跨地域的 Controller，提供跨集群资源可见性、配置覆盖层写入与区域路由故障切换。
 - 完整文档请参见 [English Docs](../en/README.md) · [中文文档导航](#文档)。
 
 ## 架构
@@ -108,7 +109,7 @@ graph TD;
 
 | 组件 | 二进制 | 职责 |
 |------|--------|------|
-| **Center** | `edgion-center` | 联邦控制面。连接多个跨集群或跨地域的 Controller，实现全局路由策略和跨集群可见性。 |
+| **Center** | `edgion-center` | 联邦控制面（已拆分至独立的 EdgionCenter 仓库）。连接多个跨集群或跨地域的 Controller，实现全局路由策略和跨集群可见性。 |
 | **Controller** | `edgion-controller` | 监听 Kubernetes CRD 或本地 YAML，验证并预解析资源，通过 gRPC 向 Gateway 流式同步配置。处理 ACME 和状态更新。 |
 | **Gateway** | `edgion-gateway` | 基于 Pingora 的无状态数据面。从 Controller 接收配置，执行路由、插件链、负载均衡、TLS 和 Access Log。 |
 | **CLI** | `edgion-cli` | 用于检查和操作 Controller 及 Gateway 实例的管理工具。 |
@@ -196,6 +197,7 @@ requestPlugins:
 
 | | 文档 | 说明 |
 |---|------|------|
+| 🤖 | [AI Gateway](ai-gateway/README.md) | 兼容 OpenAI 的 LLM 路由、凭据池、智能选择、弹性故障切换、用量与成本 |
 | 📘 | [用户指南](user-guide/README.md) | HTTPRoute、GRPCRoute、插件、负载均衡、弹性能力和流量管理 |
 | 🔧 | [运维指南](ops-guide/README.md) | Gateway 配置、TLS、可观测性、ACME 和生产运维 |
 | 🛠️ | [开发指南](dev-guide/README.md) | 架构内部实现、新增资源/插件、编码规范 |

@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 
 /// Tier-1 fixed buffer capacity (bytes). Entries that no longer fit overflow
 /// into the tier-2 `ULogBuffer`.
-const BUFFER_CAPACITY: usize = 128;
+pub const BUFFER_CAPACITY: usize = 128;
 
 /// Inline capacity hint for the `positions` SmallVec — NOT a hard entry-count
 /// cap. The only limit on tier 1 is `BUFFER_CAPACITY`; in the pathological
@@ -11,7 +11,7 @@ const BUFFER_CAPACITY: usize = 128;
 const POSITIONS_INLINE_CAP: usize = 20;
 
 /// Tier-2 overflow buffer cap (bytes).
-const ULOG_MAX_BUFFER: usize = 512;
+pub const ULOG_MAX_BUFFER: usize = 512;
 
 /// Byte-bounded log buffer. The byte store is stack-allocated; the `positions`
 /// index is inline for up to `POSITIONS_INLINE_CAP` entries and spills to the

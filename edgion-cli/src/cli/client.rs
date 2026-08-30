@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use reqwest::{Client, Response};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -30,13 +31,39 @@ const DEFAULT_PORT_CENTER: u16 = 12101; // Controller ConfCenter CRUD API
 const DEFAULT_PORT_SERVER: u16 = 12101; // Controller ConfigServer cache
 const DEFAULT_PORT_CLIENT: u16 = 12001; // Gateway admin
 
+/// Build the shared outbound client used by every `EdgionClient` constructor.
+///
+/// Routed through the canonical `build_outbound_client` factory (design rule
+/// D.1) so transport policy is not re-derived per call site. Two knobs are
+/// deliberately *not* the server-side defaults:
+///
+/// - `disable_proxy: false` — unlike gateway/controller egress, this is an
+///   operator-run CLI; honoring `HTTP(S)_PROXY` is required to reach a
+///   controller from behind a corporate proxy.
+/// - `pool_max_idle_per_host: Some(2)` — multi-request subcommands (`get --all`
+///   pagination, multi-document `apply`, which issues a probe GET plus a
+///   PUT/POST per document) would otherwise pay a fresh TCP (and TLS) handshake
+///   per request. A CLI process talks to exactly one host, so a small bound is
+///   enough to keep the connection warm across a serial command.
+fn build_cli_client() -> Result<Client> {
+    build_outbound_client(OutboundClientConfig {
+        total_timeout: Some(Duration::from_secs(10)),
+        connect_timeout: Some(Duration::from_secs(5)),
+        pool_max_idle_per_host: Some(2),
+        // The admin API never redirects; following one would silently carry the
+        // bearer token across an https -> http downgrade on the same host.
+        redirect: OutboundRedirect::Deny,
+        disable_proxy: false,
+        ..Default::default()
+    })
+    .context("Failed to create HTTP client")
+}
+
 /// EdgionClient for interacting with Controller/Gateway APIs
 pub struct EdgionClient {
     client: Client,
     base_url: String,
     target: TargetType,
-    #[allow(dead_code)]
-    socket_path: Option<PathBuf>,
     token: Option<Zeroizing<String>>,
 }
 
@@ -47,13 +74,8 @@ impl EdgionClient {
     /// `EDGION_TOKEN`, or `~/.edgion/token`), this token-less client is created so
     /// `ensure_auth` can print a friendly "no token configured" message. With a
     /// resolved token the caller uses `with_static_bearer` instead.
-    pub fn new(target: TargetType, server: Option<String>, socket: Option<PathBuf>) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .pool_max_idle_per_host(0) // Disable connection pooling
-            .build()
-            .context("Failed to create HTTP client")?;
+    pub fn new(target: TargetType, server: Option<String>, _socket: Option<PathBuf>) -> Result<Self> {
+        let client = build_cli_client()?;
 
         let base_url = server.unwrap_or_else(|| {
             let port = match target {
@@ -68,7 +90,6 @@ impl EdgionClient {
             client,
             base_url,
             target,
-            socket_path: socket,
             token: None,
         })
     }
@@ -80,15 +101,10 @@ impl EdgionClient {
     pub fn with_static_bearer(
         target: TargetType,
         server: Option<String>,
-        socket: Option<PathBuf>,
+        _socket: Option<PathBuf>,
         bearer: &str,
     ) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .pool_max_idle_per_host(0)
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = build_cli_client()?;
 
         let base_url = server.unwrap_or_else(|| {
             let port = match target {
@@ -103,7 +119,6 @@ impl EdgionClient {
             client,
             base_url,
             target,
-            socket_path: socket,
             // Wrap in Zeroizing so the credential is wiped on drop.
             token: Some(Zeroizing::new(bearer.to_string())),
         })
@@ -462,7 +477,6 @@ mod ensure_auth_tests {
             client,
             base_url,
             target: crate::cli::TargetType::Center,
-            socket_path: None,
             token: None,
         }
     }

@@ -186,7 +186,7 @@ impl OpenidConnect {
                 status: 502,
                 message: format!("Failed to encode OIDC state cookie: {}", e),
             })?;
-        let cookie_suffix = self.build_cookie_attr_suffix(session, 300, &self.callback_path());
+        let cookie_suffix = self.build_cookie_attr_suffix(session, 300, self.callback_path());
         let cookie = format!("{}={}{}", Self::state_cookie_name(), cookie_value, cookie_suffix);
 
         Ok((auth_url.to_string(), cookie))
@@ -239,9 +239,12 @@ impl OpenidConnect {
         let discovery = match self.get_or_fetch_discovery().await {
             Ok(d) => d,
             Err(e) => {
-                let _ = self
-                    .send_plain_error(session, 502, &format!("Failed to fetch OIDC discovery document: {}", e))
-                    .await;
+                if let JwksProviderError::TlsSanMismatch { ref reason } = e {
+                    session.record_error(edgion_resources::EdgionErrorCode::OutboundTlsSanMismatch);
+                    plugin_log.push_err("outbound tls san mismatch");
+                    plugin_log.push_fmt("san {}", la![reason.as_str()]);
+                }
+                let _ = self.send_plain_error(session, 502, "Bad Gateway").await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };
@@ -281,14 +284,14 @@ impl OpenidConnect {
                     return PluginRunningResult::ErrTerminateRequest;
                 }
             };
-            if let Err(err) = self.validate_id_token_nonce(id_token, expected_nonce).await {
+            if let Err(err) = self.validate_id_token_nonce(session, id_token, expected_nonce).await {
                 plugin_log.push_err(err.log_tag());
                 self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         }
 
-        let _claims = match self.verify_token(&token_response.access_token).await {
+        let _claims = match self.verify_token(session, &token_response.access_token).await {
             Ok(v) => v,
             Err(err) => {
                 plugin_log.push_err(err.log_tag());
@@ -345,7 +348,7 @@ impl OpenidConnect {
             "{}={}{}",
             Self::state_cookie_name(),
             "",
-            self.build_cookie_attr_suffix(session, 0, &self.callback_path())
+            self.build_cookie_attr_suffix(session, 0, self.callback_path())
         );
         let redirect_target = Self::sanitize_redirect_target(&state_cookie.original_url);
         let cookies = vec![session_cookie, clear_state_cookie];

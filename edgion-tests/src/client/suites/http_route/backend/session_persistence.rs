@@ -12,9 +12,29 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct SessionPersistenceTestSuite;
+
+/// Current Unix time in whole seconds (clock read, NOT a sleep).
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Parse a session token of the form `<16hex>.<expiry_epoch>`. Returns
+/// `(addrhash, expiry)`. Returns `None` if it is not the expiry-bearing form.
+fn parse_token_expiry(token: &str) -> Option<(&str, u64)> {
+    let (hash, exp) = token.split_once('.')?;
+    let expiry: u64 = exp.parse().ok()?;
+    if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some((hash, expiry))
+    } else {
+        None
+    }
+}
 
 impl SessionPersistenceTestSuite {
     /// Test Cookie-based session persistence
@@ -226,6 +246,224 @@ impl SessionPersistenceTestSuite {
             },
         )
     }
+
+    /// Cookie mode: the emitted token carries an absolute expiry, an expired
+    /// (forged past-expiry) cookie is refreshed, and a live cookie is not
+    /// re-issued. No wall-clock sleep — the expired state is forged, not waited
+    /// for.
+    fn test_cookie_absolute_expiry_and_refresh() -> TestCase {
+        TestCase::new(
+            "cookie_absolute_expiry_and_refresh",
+            "Verify Cookie absolute-lifetime: token carries expiry, expired cookie refreshes, live cookie is not re-issued",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(2))
+                        .timeout(std::time::Duration::from_secs(5))
+                        .no_proxy()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .expect("Failed to create HTTP client");
+                    let url = format!("http://{}:31313/test", ctx.target_host);
+
+                    let get_set_cookie = |resp: &reqwest::Response| -> Option<String> {
+                        resp.headers()
+                            .get("set-cookie")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string())
+                    };
+
+                    // Step 1: initial request, no cookie -> Set-Cookie with an
+                    // expiry-bearing token and Max-Age (Permanent lifetime).
+                    let resp = match client
+                        .get(&url)
+                        .header("host", "sp-cookie.example.com")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("initial request failed: {e}")),
+                    };
+                    let set_cookie = match get_set_cookie(&resp) {
+                        Some(sc) => sc,
+                        None => return TestResult::failed(start.elapsed(), "no Set-Cookie on initial request".into()),
+                    };
+                    let cookie_value = set_cookie.split(';').next().unwrap_or(&set_cookie).to_string();
+                    let token = cookie_value.split_once('=').map(|(_, v)| v.to_string()).unwrap_or_default();
+                    let (hash, expiry) = match parse_token_expiry(&token) {
+                        Some(v) => v,
+                        None => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("token is not <16hex>.<expiry>: {token}"),
+                            );
+                        }
+                    };
+                    if expiry <= now_secs() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("issued token expiry {expiry} is not in the future (now {})", now_secs()),
+                        );
+                    }
+
+                    // Step 2: replay a FORGED past-expiry cookie -> gateway treats
+                    // it as expired and issues a fresh token (refresh).
+                    let forged = format!("edgion-sp-test={hash}.1");
+                    let resp = match client
+                        .get(&url)
+                        .header("host", "sp-cookie.example.com")
+                        .header("cookie", &forged)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("forged-cookie request failed: {e}")),
+                    };
+                    match get_set_cookie(&resp).as_deref().map(|sc| {
+                        let v = sc.split(';').next().unwrap_or(sc);
+                        v.split_once('=').and_then(|(_, t)| parse_token_expiry(t).map(|(_, e)| e))
+                    }) {
+                        Some(Some(new_exp)) if new_exp > now_secs() => {}
+                        other => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("expired cookie was not refreshed with a future expiry: {other:?}"),
+                            );
+                        }
+                    }
+
+                    // Step 3: replay the LIVE cookie -> valid, so NO new Set-Cookie.
+                    let resp = match client
+                        .get(&url)
+                        .header("host", "sp-cookie.example.com")
+                        .header("cookie", &cookie_value)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("live-cookie request failed: {e}")),
+                    };
+                    if let Some(sc) = get_set_cookie(&resp) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("live cookie should not be re-issued, but got Set-Cookie: {sc}"),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Cookie absolute-lifetime OK: token carries expiry, expired refreshes, live not re-issued".into(),
+                    )
+                })
+            },
+        )
+    }
+
+    /// Header mode: same three assertions, token travels in the `x-session-id`
+    /// response/request header (no Max-Age). Requires `absoluteTimeout` on the
+    /// header route.
+    fn test_header_absolute_expiry_and_refresh() -> TestCase {
+        TestCase::new(
+            "header_absolute_expiry_and_refresh",
+            "Verify Header absolute-lifetime: token carries expiry, expired header refreshes, live header is not re-issued",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(2))
+                        .timeout(std::time::Duration::from_secs(5))
+                        .no_proxy()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .expect("Failed to create HTTP client");
+                    let url = format!("http://{}:31313/test", ctx.target_host);
+
+                    let get_token = |resp: &reqwest::Response| -> Option<String> {
+                        resp.headers()
+                            .get("x-session-id")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string())
+                    };
+
+                    // Step 1: initial request -> x-session-id with expiry.
+                    let resp = match client
+                        .get(&url)
+                        .header("host", "sp-header.example.com")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("initial request failed: {e}")),
+                    };
+                    let token = match get_token(&resp) {
+                        Some(t) => t,
+                        None => return TestResult::failed(start.elapsed(), "no x-session-id on initial request".into()),
+                    };
+                    let (hash, expiry) = match parse_token_expiry(&token) {
+                        Some(v) => v,
+                        None => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("header token is not <16hex>.<expiry>: {token}"),
+                            );
+                        }
+                    };
+                    if expiry <= now_secs() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("issued header token expiry {expiry} is not in the future", ),
+                        );
+                    }
+
+                    // Step 2: forged past-expiry header -> refreshed.
+                    let forged = format!("{hash}.1");
+                    let resp = match client
+                        .get(&url)
+                        .header("host", "sp-header.example.com")
+                        .header("x-session-id", &forged)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("forged-header request failed: {e}")),
+                    };
+                    match get_token(&resp).and_then(|t| parse_token_expiry(&t).map(|(_, e)| e)) {
+                        Some(new_exp) if new_exp > now_secs() => {}
+                        other => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("expired header was not refreshed with a future expiry: {other:?}"),
+                            );
+                        }
+                    }
+
+                    // Step 3: live header -> NOT re-issued.
+                    let resp = match client
+                        .get(&url)
+                        .header("host", "sp-header.example.com")
+                        .header("x-session-id", &token)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("live-header request failed: {e}")),
+                    };
+                    if let Some(t) = get_token(&resp) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("live header should not be re-issued, but got x-session-id: {t}"),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Header absolute-lifetime OK: token carries expiry, expired refreshes, live not re-issued".into(),
+                    )
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -239,6 +477,11 @@ impl TestSuite for SessionPersistenceTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_cookie_persistence(), Self::test_header_persistence()]
+        vec![
+            Self::test_cookie_persistence(),
+            Self::test_header_persistence(),
+            Self::test_cookie_absolute_expiry_and_refresh(),
+            Self::test_header_absolute_expiry_and_refresh(),
+        ]
     }
 }

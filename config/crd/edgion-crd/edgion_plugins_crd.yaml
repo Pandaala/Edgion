@@ -24,6 +24,28 @@ spec:
               type: object
               description: "EdgionPlugins specification"
               properties:
+                waf:
+                  type: object
+                  description: "One native WAF configuration spanning all supported transaction phases"
+                  required: [rules]
+                  additionalProperties: false
+                  properties:
+                    rules:
+                      type: string
+                      minLength: 1
+                      description: "Inline bounded SecLang source; filesystem includes and external assets are not available"
+                    mode:
+                      type: string
+                      description: "Whether disruptive WAF actions are enforced or only reported"
+                      enum: [on, detectionOnly]
+                      default: on
+                    priority:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 65535
+                      default: 0
+                      description: "WAF owner-selection priority; a larger value wins"
                 # ============================================
                 # Request Stage Plugins (async)
                 # ============================================
@@ -63,81 +85,270 @@ spec:
                         type: object
                         description: "Advanced plugin conditions for conditional execution"
                         properties:
-                          skip:
-                            type: array
-                            description: "Conditions that will skip plugin execution (OR logic)"
-                            items: &conditionSchema
-                              type: object
-                              description: "A single condition (tagged union with 'type' field)"
-                              properties:
-                                type:
-                                  type: string
-                                  description: "Condition type"
-                                  enum: [keyExist, keyMatch, timeRange, probability, include, exclude]
-                                key: &keyGetSchema
+                          skip: &conditionSetSchema
+                            type: object
+                            description: "A bounded condition set with one explicit Boolean operator"
+                            properties:
+                              allOf:
+                                type: array
+                                description: "Atomic conditions combined with AND"
+                                items: &conditionSchema
                                   type: object
-                                  description: "Key accessor (KeyGet) - source for reading values"
+                                  description: "A single condition (tagged union with 'type' field)"
+                                  required: [type]
                                   properties:
                                     type:
                                       type: string
-                                      description: "Key source type"
-                                      enum: [clientIp, header, cookie, query, path, method, ctx, clientIpAndPath, webhook]
-                                    name:
-                                      type: string
-                                      description: "Key name (required for header, cookie, query, ctx)"
-                                    webhookRef:
-                                      type: string
-                                      description: "Reference to LinkSys Webhook resource: 'namespace/name' (required for webhook type)"
-                                    extract:
+                                      description: "Condition type"
+                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
+                                    key: &keyGetSchema
                                       type: object
-                                      description: "How to extract key value from webhook response (required for webhook type)"
+                                      description: "Key accessor (KeyGet) - source for reading values"
                                       properties:
-                                        source:
+                                        type:
                                           type: string
-                                          description: "Extraction source"
-                                          enum: [header, cookie, body, bodyText]
+                                          description: "Key source type"
+                                          enum: [remoteIp, directPeerIp, host, header, cookie, query, path, method, ctx, remoteIpAndPath, requestPath]
                                         name:
                                           type: string
-                                          description: "Header or cookie name (required for header/cookie source)"
-                                        path:
-                                          type: string
-                                          description: "JSON dot-path (required for body source)"
+                                          description: "Key name (required for header, cookie, query, ctx)"
+                                    values:
+                                      type: array
+                                      description: "Exact values to match (keyMatch)"
+                                      items:
+                                        type: string
+                                    regex:
+                                      type: array
+                                      description: "Regex patterns to match (keyMatch)"
+                                      items:
+                                        type: string
+                                    caseSensitive:
+                                      type: boolean
+                                      description: "Case sensitivity for exact values (default true; regex uses (?i) if needed)"
+                                    negate:
+                                      type: boolean
+                                      description: "Invert the condition result after the missing-value check (default false)"
+                                    after:
+                                      type: string
+                                      description: "Time after which condition is true (RFC3339)"
+                                    before:
+                                      type: string
+                                      description: "Time before which condition is true (RFC3339)"
+                                    ratio:
+                                      type: number
+                                      description: "Probability ratio 0.0-1.0"
+                                      minimum: 0.0
+                                      maximum: 1.0
+                                    ips:
+                                      type: array
+                                      description: "Inline IPs or CIDRs (directPeerIpMatch / remoteIpMatch)"
+                                      items:
+                                        type: string
+                                    ipRefs:
+                                      type: array
+                                      description: "EdgionConfigData IpList references (directPeerIpMatch / remoteIpMatch)"
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    secretRef:
+                                      type: object
+                                      description: "Secret reference (secretMatch)"
+                                      x-kubernetes-preserve-unknown-fields: true
+                                    secretKey:
+                                      type: string
+                                      description: "Exact Secret data key to compare (secretMatch)"
+                                    secretGroups:
+                                      type: array
+                                      description: "HMAC credential Secret groups (hmacAuth)"
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    algorithms:
+                                      type: array
+                                      description: "Allowed HMAC algorithms (hmacAuth)"
+                                      items:
+                                        type: string
+                                    clockSkew:
+                                      type: integer
+                                      description: "Maximum HMAC clock skew in seconds (hmacAuth)"
+                                    enforceHeaders:
+                                      type: array
+                                      description: "Headers that must appear in the signed header list (hmacAuth)"
+                                      items:
+                                        type: string
+                                    validateRequestBody:
+                                      type: boolean
+                                      description: "Verify the request body digest (hmacAuth). Valid only inside RequestAccessPolicy conditions or RequestRestriction."
+                                    minSecretLength:
+                                      type: integer
+                                      description: "Minimum HMAC secret length in bytes (hmacAuth)"
+                                    secretField:
+                                      type: string
+                                      description: "Credential field name for the HMAC secret (hmacAuth)"
+                                    usernameField:
+                                      type: string
+                                      description: "Credential field name for the HMAC username (hmacAuth)"
+                                    claim:
+                                      type: string
+                                      description: "Dot-nested JWT claim path (jwtClaimMatch)"
+                                    field:
+                                      type: string
+                                      description: "mTLS certificate field (mtlsMatch): subject, cn, or san"
+                                      enum: [subject, cn, san]
+                                    sanType:
+                                      type: string
+                                      description: "SAN type filter for mtlsMatch field san (DNS, URI, Email)"
+                                      enum: [DNS, URI, Email]
+                              anyOf:
+                                type: array
+                                description: "Alternatives combined with OR; an alternative is atomic or one allOf group"
+                                items: &anyOfClauseSchema
+                                  type: object
+                                  description: "An atomic condition or a named one-level allOf group"
+                                  properties:
+                                    type:
+                                      type: string
+                                      description: "Condition type"
+                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
+                                    key: *keyGetSchema
+                                    values:
+                                      type: array
+                                      description: "Exact values to match (keyMatch)"
+                                      items: { type: string }
+                                    regex:
+                                      type: array
+                                      description: "Regex patterns to match (keyMatch)"
+                                      items: { type: string }
+                                    caseSensitive: { type: boolean }
+                                    negate: { type: boolean }
+                                    after: { type: string }
+                                    before: { type: string }
+                                    ratio:
+                                      type: number
+                                      minimum: 0.0
+                                      maximum: 1.0
+                                    ips:
+                                      type: array
+                                      items: { type: string }
+                                    ipRefs:
+                                      type: array
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    secretRef:
+                                      type: object
+                                      x-kubernetes-preserve-unknown-fields: true
+                                    secretKey: { type: string }
+                                    secretGroups:
+                                      type: array
+                                      items:
+                                        type: object
+                                        x-kubernetes-preserve-unknown-fields: true
+                                    algorithms:
+                                      type: array
+                                      items: { type: string }
+                                    clockSkew: { type: integer }
+                                    enforceHeaders:
+                                      type: array
+                                      items: { type: string }
+                                    validateRequestBody: { type: boolean }
+                                    minSecretLength: { type: integer }
+                                    secretField: { type: string }
+                                    usernameField: { type: string }
+                                    claim: { type: string }
+                                    field:
+                                      type: string
+                                      enum: [subject, cn, san]
+                                    sanType:
+                                      type: string
+                                      enum: [DNS, URI, Email]
+                                    name:
+                                      type: string
+                                      description: "Optional attribution name for an allOf group"
+                                    allOf:
+                                      type: array
+                                      description: "Atomic conditions combined with AND"
+                                      items: *conditionSchema
+                                  # Structural schema: declare the property union
+                                  # once above; these branches only narrow the
+                                  # discriminator requirements.
+                                  oneOf:
+                                    - required: [type]
+                                      not:
+                                        required: [allOf]
+                                    - &allOfGroupSchema
+                                      required: [allOf]
+                                      not:
+                                        required: [type]
+                                  x-kubernetes-validations:
+                                    - rule: "has(self.type) != has(self.allOf)"
+                                      message: "an anyOf clause must contain exactly one of type or allOf"
+                                    - rule: "!has(self.name) || has(self.allOf)"
+                                      message: "name is only valid on an allOf group"
+                            # Structural schema: properties stay outside oneOf;
+                            # branches only select the required operator.
+                            oneOf:
+                              - required: [allOf]
+                                not:
+                                  required: [anyOf]
+                              - required: [anyOf]
+                                not:
+                                  required: [allOf]
+                            x-kubernetes-validations:
+                              - rule: "has(self.allOf) != has(self.anyOf)"
+                                message: "a condition set must contain exactly one of allOf or anyOf"
+                          run: *conditionSetSchema
+                      # --- dye: define anchor here, reuse below ---
+                      dye: &dyeSchema
+                        type: object
+                        description: >-
+                          Entry-level dye suite: render traffic-tagging headers
+                          on plugin outcomes (success / fallback / reject /
+                          fail-open / fail-close).
+                        properties:
+                          request:
+                            type: array
+                            items: &dyeRuleSchema
+                              type: object
+                              required: ["name"]
+                              properties:
+                                name:
+                                  type: string
+                                on:
+                                  type: array
+                                  items:
+                                    type: string
+                                    enum: ["success", "fallback", "reject", "fail-open", "fail-close"]
                                 value:
                                   type: string
-                                  description: "Exact value to match (keyMatch)"
-                                values:
-                                  type: array
-                                  description: "Multiple values to match (keyMatch, include, exclude)"
-                                  items:
-                                    type: string
-                                regex:
-                                  type: array
-                                  description: "Regex patterns to match (keyMatch, include, exclude)"
-                                  items:
-                                    type: string
-                                after:
-                                  type: string
-                                  description: "Time after which condition is true (RFC3339)"
-                                before:
-                                  type: string
-                                  description: "Time before which condition is true (RFC3339)"
-                                ratio:
-                                  type: number
-                                  description: "Probability ratio 0.0-1.0"
-                                  minimum: 0.0
-                                  maximum: 1.0
-                          run:
+                                conditions: *conditionsSchema
+                          response:
                             type: array
-                            description: "Conditions that must be satisfied to run (AND logic)"
-                            items: *conditionSchema
+                            items: *dyeRuleSchema
+                      # --- body: define anchor here, reuse in the async response stage ---
+                      body: &bodySchema
+                        type: object
+                        description: "Body requirement for body-aware plugins: force-buffer the body (OpenResty-style) before the plugin runs"
+                        properties:
+                          maxBodySize:
+                            type: string
+                            description: "Per-plugin body-size LIMIT (human size '1k'/'1m'/'64M'). If the body exceeds it, only THIS plugin treats it as too-large (per onReadFailure). It does NOT size the shared buffer (that is bounded by the resolved Gateway request-body policy); multiple plugins can each set their own with no conflict. Usually left unset."
+                          onReadFailure:
+                            type: string
+                            enum: [failClose, failOpen]
+                            description: "Behavior when the body cannot be read (default failClose → 500, or 413 if oversize; failOpen skips the plugin)"
+                          conditions: *conditionsSchema
                       type:
                         type: string
                         description: "Plugin type"
                         enum:
                           - BasicAuth
+                          - CredentialInjector
+                          - AiProxy
                           - Cors
                           - Csrf
                           - CtxSet
+                          - WebhookKeyGet
                           - ForwardAuth
                           - IpRestriction
                           - JwtAuth
@@ -153,6 +364,9 @@ spec:
                           - RateLimitRedis
                           - RealIp
                           - RequestRestriction
+                          - RequestBodyBuffer
+                          - JsonSchemaValidation
+                          - FormJsonTransform
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect
@@ -168,7 +382,12 @@ spec:
                           - FaultInjection
                           - TraceContext
                           - ExtProc
-                          - GlobalAccessControl
+                          - Guardrail
+                          - AiGuard
+                          - RequestAccessPolicy
+                          - GeoIpLocation
+                          - Canary
+                          - Wasm
                       config:
                         type: object
                         description: "Plugin-specific configuration"
@@ -182,14 +401,14 @@ spec:
                           # --- KeyAuth config fields ---
                           keySources:
                             type: array
-                            description: "Key source list (header, query, cookie, ctx, webhook)"
+                            description: "Key source list (header, query, cookie, ctx)"
                             items:
                               type: object
                               x-kubernetes-preserve-unknown-fields: true
                               properties:
                                 type:
                                   type: string
-                                  enum: [header, query, cookie, ctx, webhook]
+                                  enum: [header, query, cookie, ctx]
                                 name:
                                   type: string
                               required: [type]
@@ -261,7 +480,7 @@ spec:
                               type: string
                           validateRequestBody:
                             type: boolean
-                            description: "Validate request body digest (currently rejected at preparse)"
+                            description: "Verify the request body against the signed Digest header (SHA-256). Enforced via the body gate; fail-closes (500) until full-body buffering is implemented."
                           minSecretLength:
                             type: integer
                             minimum: 0
@@ -361,6 +580,7 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      dye: *dyeSchema
                       type:
                         type: string
                         enum:
@@ -368,6 +588,7 @@ spec:
                           - ResponseRewrite
                           - DebugAccessLogToHeader
                           - Dsl
+                          - Wasm
                       config:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
@@ -387,10 +608,12 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      dye: *dyeSchema
                       type:
                         type: string
                         enum:
                           - BandwidthLimit
+                          - Wasm
                       config:
                         type: object
                         description: "Plugin-specific configuration"
@@ -411,11 +634,56 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      dye: *dyeSchema
+                      body: *bodySchema
                       type:
                         type: string
                       config:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
+
+                # ============================================
+                # Access Log Extension Declarations (not a stage)
+                # ============================================
+                accessLogExtern:
+                  type: array
+                  description: >-
+                    Access log extension declarations. Not an execution stage: these
+                    entries never run as filters, they are read when the access log
+                    entry is serialized. Each entry projects exactly one value into
+                    the entry's `ext` block.
+                  maxItems: 16
+                  items:
+                    type: object
+                    required:
+                      - key
+                      - from
+                      - name
+                    properties:
+                      key:
+                        type: string
+                        description: "Field name inside the entry's ext block"
+                        minLength: 1
+                        maxLength: 63
+                      from:
+                        type: string
+                        description: >-
+                          Source type. routeLabel/routeAnnotation are never masked;
+                          header/query/cookie/respHeader/ctx are masked unless the
+                          key is whitelisted in EdgionGatewayConfig.
+                        enum:
+                          - routeLabel
+                          - routeAnnotation
+                          - header
+                          - query
+                          - cookie
+                          - respHeader
+                          - ctx
+                      name:
+                        type: string
+                        description: "Key within the source"
+                        minLength: 1
+                        maxLength: 63
 
             status:
               type: object

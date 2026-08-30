@@ -23,6 +23,9 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         tracing::info!(component = "plugin_store", cnt = data.len(), "full set");
         let compiled = data.iter().map(|(k, v)| (k.clone(), compile_plugins(v))).collect();
         self.replace_all(compiled);
+        if std::ptr::eq(self, super::global_plugin_store()) {
+            crate::ai::reconcile_all_adaptive_plugin_dependents();
+        }
     }
 
     fn partial_update(
@@ -39,10 +42,14 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
             "partial update"
         );
 
+        let changed_keys: HashSet<_> = add.keys().chain(update.keys()).chain(remove.iter()).cloned().collect();
         let mut add_or_update = compile_map(add);
         add_or_update.extend(compile_map(update));
 
         self.update(add_or_update, &remove);
+        if std::ptr::eq(self, super::global_plugin_store()) {
+            crate::ai::reconcile_adaptive_plugin_keys(&changed_keys);
+        }
     }
 }
 
@@ -67,6 +74,48 @@ mod tests {
                         remove: Some(vec!["X-Remove".to_string()]),
                     },
                 ))]),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    fn create_invalid_test_plugin(namespace: &str, name: &str) -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(
+                    HTTPHeaderFilter {
+                        set: None,
+                        add: None,
+                        remove: None,
+                    },
+                ))]),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    fn create_invalid_dsl_test_plugin(namespace: &str, name: &str) -> EdgionPlugins {
+        use edgion_resources::resources::edgion_plugins::DslConfig;
+
+        EdgionPlugins {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                    name: "invalid-reload".to_string(),
+                    source: Some("let value =".to_string()),
+                    ..Default::default()
+                }))]),
                 ..Default::default()
             },
             status: None,
@@ -147,5 +196,109 @@ mod tests {
         store.partial_update(HashMap::new(), HashMap::new(), remove);
 
         assert!(!store.contains("default/plugin1"));
+    }
+
+    #[test]
+    fn invalid_partial_update_retains_last_known_good() {
+        let store = PluginStore::new();
+        store.partial_update(
+            HashMap::from([(
+                "default/plugin1".to_string(),
+                Arc::new(create_test_plugin("default", "plugin1")),
+            )]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let previous_runtime = store
+            .get_plugin_runtime("default/plugin1")
+            .expect("valid plugin runtime should be stored");
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "default/plugin1".to_string(),
+                Arc::new(create_invalid_dsl_test_plugin("default", "plugin1")),
+            )]),
+            HashSet::new(),
+        );
+
+        assert_eq!(
+            store.with_plugin("default/plugin1", |compiled| compiled.is_activatable),
+            Some(true)
+        );
+        let retained_runtime = store
+            .get_plugin_runtime("default/plugin1")
+            .expect("last-known-good runtime should be retained");
+        assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
+    }
+
+    #[test]
+    fn invalid_full_snapshot_retains_last_known_good_but_drops_absent_keys() {
+        let store = PluginStore::new();
+        store.full_set(&HashMap::from([
+            (
+                "default/kept".to_string(),
+                Arc::new(create_test_plugin("default", "kept")),
+            ),
+            (
+                "default/removed".to_string(),
+                Arc::new(create_test_plugin("default", "removed")),
+            ),
+        ]));
+        let previous_runtime = store
+            .get_plugin_runtime("default/kept")
+            .expect("valid plugin runtime should be stored");
+
+        store.full_set(&HashMap::from([(
+            "default/kept".to_string(),
+            Arc::new(create_invalid_dsl_test_plugin("default", "kept")),
+        )]));
+
+        assert_eq!(
+            store.with_plugin("default/kept", |compiled| compiled.is_activatable),
+            Some(true)
+        );
+        let retained_runtime = store
+            .get_plugin_runtime("default/kept")
+            .expect("last-known-good runtime should be retained");
+        assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
+        assert!(!store.contains("default/removed"));
+    }
+
+    #[test]
+    fn invalid_initial_resource_remains_fail_closed() {
+        let store = PluginStore::new();
+        store.full_set(&HashMap::from([(
+            "default/plugin1".to_string(),
+            Arc::new(create_invalid_test_plugin("default", "plugin1")),
+        )]));
+
+        assert_eq!(
+            store.with_plugin("default/plugin1", |compiled| compiled.is_activatable),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn non_dsl_invalid_update_replaces_last_known_good_with_fail_closed_runtime() {
+        let store = PluginStore::new();
+        store.full_set(&HashMap::from([(
+            "default/plugin1".to_string(),
+            Arc::new(create_test_plugin("default", "plugin1")),
+        )]));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "default/plugin1".to_string(),
+                Arc::new(create_invalid_test_plugin("default", "plugin1")),
+            )]),
+            HashSet::new(),
+        );
+
+        assert_eq!(
+            store.with_plugin("default/plugin1", |compiled| compiled.is_activatable),
+            Some(false)
+        );
     }
 }

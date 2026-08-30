@@ -5,18 +5,12 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use super::common::{Condition, ParentReference, RefDenied};
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
-
-/// API group for HTTPRoute
-pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for HTTPRoute
-pub const HTTP_ROUTE_KIND: &str = "HTTPRoute";
 
 /// HTTPRoute defines HTTP rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -36,6 +30,10 @@ pub struct HTTPRouteSpec {
 
     /// Hostnames defines the set of hostnames
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
@@ -52,6 +50,7 @@ pub struct HTTPRouteSpec {
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
+    /// Indices refer to `rules`; not applicable to `resolved_rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
@@ -59,7 +58,41 @@ pub struct HTTPRouteSpec {
     /// Rules defines the HTTP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,
+
+    /// Controller-resolved flattened rules produced by HTTPRoute delegation
+    /// (a rule whose backendRef points at `kind: HTTPRoute` delegates its path
+    /// prefix to child routes; the controller expands the delegation tree).
+    /// Present only on routes containing at least one delegating rule. When
+    /// present, the gateway compiles these INSTEAD of `rules`, and
+    /// `invalid_rule_indices` does not apply (flattening already dropped
+    /// invalid rules). See docs/en/user-guide/http-route/delegation.md and
+    /// skills/01-architecture/05-resources/04-http-route.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_rules: Option<Vec<HTTPRouteRule>>,
+
+    /// Controller-internal delegation diagnostics, produced by the flatten
+    /// step in `parse` and consumed by `update_status`. Never serialized.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub delegation_issues: Vec<DelegationIssue>,
 }
+
+/// Diagnostics from delegation flattening (controller-internal).
+#[derive(Clone, Debug, PartialEq)]
+pub enum DelegationIssue {
+    /// A named child HTTPRoute referenced by a delegating rule does not exist
+    /// (surfaces as `ResolvedRefs=False` / `BackendNotFound`).
+    MissingChild { namespace: String, name: String },
+    /// A delegating rule or a child rule was dropped from `resolved_rules`
+    /// (surfaces via the `PartiallyInvalid` condition).
+    RuleDropped { message: String },
+}
+
+/// API group of the Gateway API resources (used for delegation ref detection).
+pub const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
+/// API group of Edgion custom resources.
+pub const EDGION_API_GROUP: &str = "edgion.io";
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +128,20 @@ pub struct HTTPRouteRule {
     /// Support: Extended (Experimental)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_persistence: Option<SessionPersistence>,
+
+    /// Controller-resolved identity of the terminal HTTPRoute that owns this
+    /// effective rule. Kubernetes resources use `metadata.uid`; UID-less
+    /// config-center resources use the stable typed route key instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_terminal_route_uid: Option<String>,
+
+    /// Controller-resolved identity of the terminal rule within its owning
+    /// route. Named rules use `name:<value>` and unnamed rules use
+    /// `index:<zero-based index>` so the two domains cannot collide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_terminal_rule_identity: Option<String>,
 
     /// Pre-parsed route-level timeout configurations (not serialized)
     /// Parsed once when route is loaded, used at runtime
@@ -132,6 +179,18 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_allow_non_idempotent_retry: Option<bool>,
+
+    /// Pre-parsed `edgion.io/mirror-*` tuning annotations from parent
+    /// HTTPRoute.metadata, applied to every RequestMirror filter under this
+    /// route. `None` — no mirror annotation present (defaults apply).
+    ///
+    /// Lives in annotations (not on `HTTPRequestMirrorFilter`) because the
+    /// vendored Gateway API CRD silently prunes undeclared filter fields in
+    /// K8s conf-center mode. Parsed in `http_route_preparse.rs` at load time
+    /// and copied to every rule under that route.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_mirror_tuning: Option<MirrorTuning>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -144,10 +203,13 @@ impl Clone for HTTPRouteRule {
             timeouts: self.timeouts.clone(),
             retry: self.retry.clone(),
             session_persistence: self.session_persistence.clone(),
+            resolved_terminal_route_uid: self.resolved_terminal_route_uid.clone(),
+            resolved_terminal_rule_identity: self.resolved_terminal_rule_identity.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
             parsed_forward_raw_path: self.parsed_forward_raw_path,
             parsed_allow_non_idempotent_retry: self.parsed_allow_non_idempotent_retry,
+            parsed_mirror_tuning: self.parsed_mirror_tuning.clone(),
         }
     }
 }
@@ -162,6 +224,8 @@ impl fmt::Debug for HTTPRouteRule {
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
+            .field("resolved_terminal_route_uid", &self.resolved_terminal_route_uid)
+            .field("resolved_terminal_rule_identity", &self.resolved_terminal_rule_identity)
             .field("parsed_forward_raw_path", &self.parsed_forward_raw_path)
             .field(
                 "parsed_allow_non_idempotent_retry",
@@ -174,8 +238,16 @@ impl fmt::Debug for HTTPRouteRule {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteMatch {
-    /// Path specifies a HTTP request path matcher
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Path specifies a HTTP request path matcher.
+    ///
+    /// Omitting it means `{type: PathPrefix, value: "/"}` per the Gateway API
+    /// spec. On Kubernetes the API server backfills that value from the
+    /// structural schema at admission, but the File and Etcd config-center
+    /// backends never pass through admission — so the default is replicated
+    /// here to keep every backend on the same semantics. Without it a
+    /// spec-valid header/method-only match compiles into a route unit with no
+    /// radix-tree entry and becomes permanently unreachable.
+    #[serde(default = "default_path_prefix_root", skip_serializing_if = "Option::is_none")]
     pub path: Option<HTTPPathMatch>,
 
     /// Headers specifies HTTP request header matchers
@@ -189,6 +261,14 @@ pub struct HTTPRouteMatch {
     /// Method specifies HTTP method matcher
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+}
+
+/// Gateway API structural default for an omitted `HTTPRouteMatch.path`.
+fn default_path_prefix_root() -> Option<HTTPPathMatch> {
+    Some(HTTPPathMatch {
+        match_type: Some("PathPrefix".to_string()),
+        value: Some("/".to_string()),
+    })
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -228,6 +308,10 @@ pub struct HTTPHeaderMatch {
     pub match_type: Option<String>,
 
     /// Name is the name of the HTTP Header
+    #[schemars(
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Value is the value of HTTP Header
@@ -260,6 +344,7 @@ pub struct HTTPBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend
@@ -278,14 +363,9 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
 
-    /// Parsed extension info (runtime only, not serialized).
-    /// Populated from `filters[].extensionRef` by `preparse()`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
-
-    /// BackendTLSPolicy for this backend (runtime only, not serialized)
-    /// Queried and populated during select_backend
+    /// Runtime-only BackendTLSPolicy attachment used by standalone backend
+    /// utilities. Routed Gateway HTTP selection captures its request-stable
+    /// policy separately and does not mutate this schema field.
     #[serde(skip)]
     #[schemars(skip)]
     pub backend_tls_policy: Option<Arc<crate::resources::BackendTLSPolicy>>,
@@ -298,6 +378,177 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
+}
+
+/// Stable identity of one declaration in an effective HTTPRoute backendRefs
+/// list. `occurrence` is counted among equal normalized tuples, while Gateway
+/// keeps the raw vector slot separately for dispatch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogicalBackendSlotIdentity {
+    pub group: String,
+    pub kind: String,
+    pub namespace: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    pub occurrence: u16,
+}
+
+impl LogicalBackendSlotIdentity {
+    pub fn matches_ai_selector(&self, selector: &crate::resources::edgion_plugins::AiBackendSlotSelector) -> bool {
+        self.group == selector.group
+            && self.kind == selector.kind
+            && self.namespace == selector.namespace
+            && self.name == selector.name
+            && self.section == selector.section
+            && self.occurrence == selector.occurrence
+    }
+}
+
+/// Construct one canonical identity for every declaration in order.
+pub fn logical_backend_slot_identities(
+    refs: &[HTTPBackendRef],
+    route_namespace: &str,
+) -> Vec<LogicalBackendSlotIdentity> {
+    let mut occurrences: HashMap<(String, String, String, String, Option<String>), u16> = HashMap::new();
+    refs.iter()
+        .map(|backend| {
+            let group = match backend.group.as_deref() {
+                None | Some("") => "core".to_string(),
+                Some(group) => group.to_string(),
+            };
+            let kind = match backend.kind.as_deref() {
+                None | Some("") => "Service".to_string(),
+                Some(kind) => kind.to_string(),
+            };
+            let namespace = backend.namespace.as_deref().unwrap_or(route_namespace).to_string();
+            let tuple = (
+                group.clone(),
+                kind.clone(),
+                namespace.clone(),
+                backend.name.clone(),
+                None,
+            );
+            let occurrence = occurrences.entry(tuple).or_default();
+            let identity = LogicalBackendSlotIdentity {
+                group,
+                kind,
+                namespace,
+                name: backend.name.clone(),
+                section: None,
+                occurrence: *occurrence,
+            };
+            *occurrence = occurrence.saturating_add(1);
+            identity
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod logical_slot_identity_tests {
+    use super::*;
+
+    fn backend(name: &str, namespace: Option<&str>) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: name.to_string(),
+            namespace: namespace.map(str::to_string),
+            port: None,
+            weight: Some(1),
+            group: Some("edgion.io".to_string()),
+            kind: Some("EdgionBackend".to_string()),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    #[test]
+    fn logical_identity_normalizes_namespace_and_counts_equal_tuple_occurrences() {
+        let refs = vec![
+            backend("same", None),
+            backend("other", None),
+            backend("same", None),
+            backend("same", Some("elsewhere")),
+        ];
+        let identities = logical_backend_slot_identities(&refs, "route-ns");
+        assert_eq!(identities[0].namespace, "route-ns");
+        assert_eq!(identities[0].occurrence, 0);
+        assert_eq!(identities[2].occurrence, 1);
+        assert_eq!(identities[3].namespace, "elsewhere");
+        assert_eq!(identities[3].occurrence, 0);
+        assert!(
+            identities[2].matches_ai_selector(&crate::resources::edgion_plugins::AiBackendSlotSelector {
+                group: "edgion.io".to_string(),
+                kind: "EdgionBackend".to_string(),
+                namespace: "route-ns".to_string(),
+                name: "same".to_string(),
+                section: None,
+                occurrence: 1,
+            })
+        );
+    }
+}
+
+/// Canonical classification of an HTTPRoute backendRef.
+///
+/// Keep this classification in the shared resource layer so the Controller
+/// and Gateway cannot disagree about which downstream subsystem owns a ref.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HTTPBackendRefKind {
+    /// A Kubernetes Service backend (Gateway API default or an Edgion Service-family
+    /// kind such as `ServiceExternalName` / `ServiceClusterIp`). Peer selection still
+    /// uses the concrete `kind` string via `ServiceBackendKind::from_kind`.
+    Service,
+    /// An Edgion AI provider-service resource.
+    EdgionBackend,
+    /// A child HTTPRoute expanded by Controller-side route delegation.
+    RouteDelegation,
+    /// Any other group/kind combination.
+    Unsupported,
+}
+
+/// True when `kind` is the Gateway API Service default or an Edgion Service-family
+/// extension that still resolves through the Service store / peer path.
+fn is_service_family_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        None | Some("")
+            | Some("Service")
+            | Some("ServiceClusterIp")
+            | Some("ServiceImport")
+            | Some("ServiceExternalName")
+            | Some("ServiceEndpointSlice")
+            | Some("EndpointSlice")
+    )
+}
+
+impl HTTPBackendRef {
+    /// Classify this backendRef using Gateway API defaults and Edgion's exact
+    /// extension groups/kinds.
+    pub fn backend_kind(&self) -> HTTPBackendRefKind {
+        match (self.group.as_deref(), self.kind.as_deref()) {
+            (None | Some("") | Some("core"), kind) if is_service_family_kind(kind) => HTTPBackendRefKind::Service,
+            (Some(EDGION_API_GROUP), Some("EdgionBackend")) => HTTPBackendRefKind::EdgionBackend,
+            (Some(GATEWAY_API_GROUP), Some("HTTPRoute")) => HTTPBackendRefKind::RouteDelegation,
+            _ => HTTPBackendRefKind::Unsupported,
+        }
+    }
+
+    /// True if this backendRef delegates to a child HTTPRoute
+    /// (`group: gateway.networking.k8s.io, kind: HTTPRoute`) instead of
+    /// referencing a Service backend.
+    pub fn is_route_delegation_ref(&self) -> bool {
+        self.backend_kind() == HTTPBackendRefKind::RouteDelegation
+    }
+}
+
+impl HTTPRoute {
+    /// Rules the gateway should compile: the controller-flattened delegation
+    /// result when present, otherwise the operator-authored `rules`.
+    pub fn effective_rules(&self) -> Option<&Vec<HTTPRouteRule>> {
+        self.spec.resolved_rules.as_ref().or(self.spec.rules.as_ref())
+    }
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle
@@ -384,6 +635,10 @@ pub struct HTTPHeaderFilter {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct HTTPHeader {
     /// Name is the name of the HTTP Header
+    #[schemars(
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN)
+    )]
     pub name: String,
     /// Value is the value of HTTP Header
     pub value: String,
@@ -399,6 +654,10 @@ pub struct HTTPRequestRedirectFilter {
 
     /// Hostname is the hostname to be used in the value of the Location header
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// Path defines parameters used to modify the path of the incoming request
@@ -407,6 +666,7 @@ pub struct HTTPRequestRedirectFilter {
 
     /// Port is the port to be used in the value of the Location header
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// StatusCode is the HTTP status code to be used in response
@@ -420,6 +680,10 @@ pub struct HTTPRequestRedirectFilter {
 pub struct HTTPURLRewriteFilter {
     /// Hostname is the value to be used to replace the Host header value during forwarding
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// Path defines a path rewrite
@@ -453,7 +717,15 @@ pub enum HTTPPathModifierType {
     ReplacePrefixMatch,
 }
 
-/// HTTPRequestMirrorFilter defines configuration for the RequestMirror filter
+/// HTTPRequestMirrorFilter defines configuration for the RequestMirror filter.
+///
+/// Contains ONLY the fields declared by the vendored Gateway API standard CRD
+/// (`backendRef`, `fraction`, `percent`). Do NOT add Edgion extension fields
+/// here: the vendored CRD is a structural schema, so in K8s conf-center mode
+/// the API server silently prunes any undeclared field — the extension becomes
+/// a no-op with no admission error. Mirror tuning knobs live in
+/// [`MirrorTuning`], carried via `edgion.io/mirror-*` route annotations
+/// (HTTPRoute path) or inline plugin config (EdgionPlugins path).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRequestMirrorFilter {
@@ -465,11 +737,24 @@ pub struct HTTPRequestMirrorFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<Fraction>,
 
-    /// Percentage of requests to mirror (0-100). Gateway API v1.5 feature.
-    /// Accepts both "percent" (Gateway API spec field name) and "percentage" (internal alias).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "percent")]
-    pub percentage: Option<i32>,
+    /// Percent of requests to mirror (0-100). Gateway API v1.5 field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<i32>,
+}
 
+/// Edgion-specific tuning knobs for the RequestMirror filter.
+///
+/// Kept out of [`HTTPRequestMirrorFilter`] because the vendored Gateway API
+/// CRD would silently prune these fields in K8s conf-center mode (structural
+/// schema). Sources:
+/// - HTTPRoute path: `edgion.io/mirror-*` annotations, pre-parsed in
+///   `http_route_preparse.rs` and copied onto every rule
+///   (`HTTPRouteRule.parsed_mirror_tuning`).
+/// - EdgionPlugins path: inline fields of the `RequestMirror` plugin config
+///   (that CRD preserves unknown fields, so no pruning applies).
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorTuning {
     /// Connection timeout for mirror backend in milliseconds.
     #[serde(default = "default_mirror_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
@@ -502,6 +787,19 @@ pub struct HTTPRequestMirrorFilter {
     /// without immediately discarding valuable traffic.
     #[serde(default)]
     pub channel_full_timeout_ms: u64,
+}
+
+impl Default for MirrorTuning {
+    fn default() -> Self {
+        Self {
+            connect_timeout_ms: default_mirror_connect_timeout_ms(),
+            write_timeout_ms: default_mirror_write_timeout_ms(),
+            max_buffered_chunks: default_mirror_max_buffered_chunks(),
+            mirror_log: default_mirror_log_enabled(),
+            max_concurrent: default_mirror_max_concurrent(),
+            channel_full_timeout_ms: 0,
+        }
+    }
 }
 
 fn default_mirror_connect_timeout_ms() -> u64 {
@@ -683,6 +981,7 @@ pub struct BackendObjectReference {
 
     /// Port specifies the destination port number to use for this resource
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 }
 
@@ -711,6 +1010,17 @@ pub struct LocalObjectReference {
 
     /// Name is the name of the referent
     pub name: String,
+
+    /// Controller-resolved namespace of a delegated rule's ExtensionRef.
+    ///
+    /// LocalObjectReference is operator-local and therefore has no namespace
+    /// field. Once a child rule is flattened into a parent HTTPRoute, the
+    /// child's local namespace must travel with the derived rule so Controller
+    /// dependency tracking and Gateway plugin lookup do not reinterpret it as
+    /// parent-local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_namespace: Option<String>,
 }
 
 /// HTTPRouteTimeouts defines timeouts that can be configured for an HTTPRoute
@@ -723,7 +1033,7 @@ pub struct HTTPRouteTimeouts {
     /// Gateway API v1.4 standard field
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub request: Option<String>,
 
     /// BackendRequest specifies a timeout for an individual request from the gateway
@@ -731,7 +1041,7 @@ pub struct HTTPRouteTimeouts {
     /// sent from the gateway to when the full response has been received from the backend.
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub backend_request: Option<String>,
 }
 
@@ -749,7 +1059,7 @@ pub struct HTTPRouteRetry {
     /// retry attempts and is represented in Gateway API Duration formatting.
     /// Format: Duration (e.g., "10ms", "1s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub backoff: Option<String>,
 
     /// Codes specifies the HTTP response status codes that a Gateway should
@@ -773,7 +1083,7 @@ pub struct SessionPersistence {
     /// session, regardless of activity.
     /// Format: Duration (e.g., "1h", "24h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub absolute_timeout: Option<String>,
 
     /// IdleTimeout defines the idle timeout of the persistent session.
@@ -781,7 +1091,7 @@ pub struct SessionPersistence {
     /// IdleTimeout, the session becomes invalid.
     /// Format: Duration (e.g., "30m", "1h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub idle_timeout: Option<String>,
 
     /// Type defines the type of session persistence such as through
@@ -831,6 +1141,84 @@ pub enum CookieLifetimeType {
     Session,
 }
 
+/// Parse a Gateway API GEP-2257 duration (`^([0-9]{1,5}(h|m|s|ms)){1,4}$`) into
+/// whole seconds, rounding UP to the nearest second with a floor of 1s so a
+/// positive timeout never rounds to 0. Returns `None` for any string outside
+/// GEP-2257 (bare integers, decimals, days, long unit names, >5-digit segments,
+/// or >4 segments). Segments may be unordered and units may repeat; values
+/// accumulate.
+pub fn parse_gep2257_duration_secs(s: &str) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    let mut total_ms: u64 = 0;
+    let mut segments = 0u32;
+    while i < bytes.len() {
+        // Digits: 1..=5 of them.
+        let digit_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let digit_len = i - digit_start;
+        if digit_len == 0 || digit_len > 5 {
+            return None;
+        }
+        let value: u64 = s[digit_start..i].parse().ok()?;
+        // Unit: match `ms` before `m`.
+        let unit_ms: u64 = if s[i..].starts_with("ms") {
+            i += 2;
+            1
+        } else if s[i..].starts_with('h') {
+            i += 1;
+            3_600_000
+        } else if s[i..].starts_with('m') {
+            i += 1;
+            60_000
+        } else if s[i..].starts_with('s') {
+            i += 1;
+            1_000
+        } else {
+            return None;
+        };
+        total_ms = total_ms.checked_add(value.checked_mul(unit_ms)?)?;
+        segments += 1;
+        if segments > 4 {
+            return None;
+        }
+    }
+    // ceil to seconds, floor 1.
+    let secs = total_ms.div_ceil(1_000);
+    Some(secs.max(1))
+}
+
+impl SessionPersistence {
+    /// Validate the fields this gateway enforces at config-load time, mirroring
+    /// the upstream Gateway API CRD's admission rules for the modes (FileSystem/
+    /// Etcd) that have no CRD/CEL admission. Returns `Err(reason)` with an
+    /// operator-readable message; a failing rule is dropped via
+    /// `invalid_rule_indices` (never silently downgraded).
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(t) = self.absolute_timeout.as_deref() {
+            if parse_gep2257_duration_secs(t).is_none() {
+                return Err(format!(
+                    "absoluteTimeout '{t}' is not a valid Gateway API duration (GEP-2257: e.g. 1h, 30m, 1h30m, 500ms)"
+                ));
+            }
+        }
+        let is_permanent = self
+            .cookie_config
+            .as_ref()
+            .and_then(|c| c.lifetime_type.as_ref())
+            .is_some_and(|lt| *lt == CookieLifetimeType::Permanent);
+        if is_permanent && self.absolute_timeout.is_none() {
+            return Err("cookieConfig.lifetimeType 'Permanent' requires absoluteTimeout".to_string());
+        }
+        Ok(())
+    }
+}
+
 // ============================================
 // Pre-parsed Route Retry
 // ============================================
@@ -855,7 +1243,8 @@ use std::time::Duration;
 
 /// Three-state timeout setting per Gateway API spec.
 /// - `Unset`: field not specified → fall back to global default
-/// - `Disabled`: explicitly set to `"0s"` → no timeout (infinite)
+/// - `Disabled`: explicitly set to `"0s"` → no route-configured timeout
+///   (transport-level liveness floors may still apply)
 /// - `Duration`: explicitly set to a positive value
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteTimeout {
@@ -871,11 +1260,6 @@ impl RouteTimeout {
             RouteTimeout::Duration(d) => Some(*d),
             _ => None,
         }
-    }
-
-    /// Returns true if explicitly disabled via "0s".
-    pub fn is_disabled(&self) -> bool {
-        matches!(self, RouteTimeout::Disabled)
     }
 
     pub fn parse(s: &str, field_name: &str) -> Self {
@@ -947,7 +1331,13 @@ impl ParsedRouteTimeouts {
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live route). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }
 
@@ -968,6 +1358,299 @@ pub struct RouteParentStatus {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn route_status_empty_parents_serialize_explicit_array() {
+        // K8s status persistence uses JSON Merge Patch. An empty parents list
+        // must serialize as `"parents": []`, not be omitted, or a merge patch
+        // can never clear a previously-persisted non-empty list (reachable when
+        // all parentRefs are removed from a live route). Covers every
+        // route-family status struct that shares this parents shape.
+        use crate::resources::edgion_tls::EdgionTlsStatus;
+        use crate::resources::grpc_route::GRPCRouteStatus;
+        use crate::resources::tcp_route::TCPRouteStatus;
+        use crate::resources::tls_route::TLSRouteStatus;
+        use crate::resources::udp_route::UDPRouteStatus;
+
+        let expected = serde_json::json!({ "parents": [] });
+        assert_eq!(serde_json::to_value(HTTPRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(GRPCRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(TCPRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(TLSRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(UDPRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(EdgionTlsStatus::default()).unwrap(), expected);
+    }
+
+    #[test]
+    fn match_without_path_defaults_to_path_prefix_root() {
+        // The K8s API server backfills this from the structural schema at
+        // admission; File/Etcd config-center sources never pass through it, so
+        // the default must come from deserialization or the match compiles
+        // into a route unit with no radix-tree entry (permanently unreachable).
+        let m: HTTPRouteMatch = serde_json::from_value(serde_json::json!({
+            "headers": [{ "name": "x-internal", "value": "true" }]
+        }))
+        .unwrap();
+        let path = m.path.expect("omitted path must default, not stay None");
+        assert_eq!(path.match_type.as_deref(), Some("PathPrefix"));
+        assert_eq!(path.value.as_deref(), Some("/"));
+
+        // An explicit path is never overwritten by the default.
+        let m: HTTPRouteMatch = serde_json::from_value(serde_json::json!({
+            "path": { "type": "Exact", "value": "/api" }
+        }))
+        .unwrap();
+        let path = m.path.expect("explicit path must survive");
+        assert_eq!(path.match_type.as_deref(), Some("Exact"));
+        assert_eq!(path.value.as_deref(), Some("/api"));
+    }
+
+    fn backend_ref(group: Option<&str>, kind: Option<&str>) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: "target".to_string(),
+            namespace: None,
+            port: None,
+            weight: None,
+            group: group.map(str::to_string),
+            kind: kind.map(str::to_string),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    #[test]
+    fn backend_ref_classification_is_canonical() {
+        for (group, kind) in [
+            (None, None),
+            (None, Some("Service")),
+            (Some(""), Some("Service")),
+            (Some("core"), Some("Service")),
+            // Edgion Service-family kinds still own the Service peer path.
+            (None, Some("ServiceExternalName")),
+            (None, Some("ServiceClusterIp")),
+            (None, Some("ServiceImport")),
+            (None, Some("ServiceEndpointSlice")),
+            (None, Some("EndpointSlice")),
+            (Some("core"), Some("ServiceExternalName")),
+            (Some(""), Some("ServiceClusterIp")),
+        ] {
+            assert_eq!(backend_ref(group, kind).backend_kind(), HTTPBackendRefKind::Service);
+        }
+
+        assert_eq!(
+            backend_ref(Some(EDGION_API_GROUP), Some("EdgionBackend")).backend_kind(),
+            HTTPBackendRefKind::EdgionBackend
+        );
+        assert_eq!(
+            backend_ref(Some(GATEWAY_API_GROUP), Some("HTTPRoute")).backend_kind(),
+            HTTPBackendRefKind::RouteDelegation
+        );
+
+        for (group, kind) in [
+            (Some(EDGION_API_GROUP), None),
+            (None, Some("EdgionBackend")),
+            (Some("core"), Some("EdgionBackend")),
+            (Some(GATEWAY_API_GROUP), Some("Service")),
+            (Some(EDGION_API_GROUP), Some("HTTPRoute")),
+            (Some("example.io"), Some("Widget")),
+            // Service-family kinds under a non-core group stay Unsupported.
+            (Some(EDGION_API_GROUP), Some("ServiceExternalName")),
+            (Some(GATEWAY_API_GROUP), Some("ServiceClusterIp")),
+        ] {
+            assert_eq!(backend_ref(group, kind).backend_kind(), HTTPBackendRefKind::Unsupported);
+        }
+    }
+
+    #[test]
+    fn gep2257_basic_units() {
+        assert_eq!(parse_gep2257_duration_secs("1h"), Some(3600));
+        assert_eq!(parse_gep2257_duration_secs("5m"), Some(300));
+        assert_eq!(parse_gep2257_duration_secs("30s"), Some(30));
+        assert_eq!(parse_gep2257_duration_secs("2000ms"), Some(2));
+    }
+
+    #[test]
+    fn gep2257_compound_and_unordered() {
+        assert_eq!(parse_gep2257_duration_secs("1h30m"), Some(5400));
+        assert_eq!(parse_gep2257_duration_secs("30m1h"), Some(5400)); // unordered
+        assert_eq!(parse_gep2257_duration_secs("1s500ms"), Some(2)); // 1500ms -> ceil 2
+        assert_eq!(parse_gep2257_duration_secs("1h1h"), Some(7200)); // duplicate unit
+    }
+
+    #[test]
+    fn gep2257_ceil_min_one_second() {
+        assert_eq!(parse_gep2257_duration_secs("500ms"), Some(1)); // ceil, floor 1
+        assert_eq!(parse_gep2257_duration_secs("1ms"), Some(1));
+        assert_eq!(parse_gep2257_duration_secs("1500ms"), Some(2));
+    }
+
+    #[test]
+    fn gep2257_rejects_non_conforming() {
+        assert_eq!(parse_gep2257_duration_secs(""), None);
+        assert_eq!(parse_gep2257_duration_secs("3600"), None); // bare integer not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("1.5h"), None); // decimals not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("1d"), None); // days not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("1hour"), None); // long name not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("abc"), None);
+        assert_eq!(parse_gep2257_duration_secs("1h30x"), None); // trailing garbage
+        assert_eq!(parse_gep2257_duration_secs("123456h"), None); // >5 digits per segment
+        assert_eq!(parse_gep2257_duration_secs("1h1h1h1h1h"), None); // >4 segments
+    }
+
+    #[test]
+    fn sp_validate_ok_cases() {
+        let unset = SessionPersistence {
+            session_name: None,
+            absolute_timeout: None,
+            idle_timeout: None,
+            persistence_type: None,
+            cookie_config: None,
+            strict: None,
+        };
+        assert!(unset.validate().is_ok());
+
+        let permanent_ok = SessionPersistence {
+            absolute_timeout: Some("1h".into()),
+            cookie_config: Some(CookieConfig {
+                lifetime_type: Some(CookieLifetimeType::Permanent),
+            }),
+            session_name: None,
+            idle_timeout: None,
+            persistence_type: None,
+            strict: None,
+        };
+        assert!(permanent_ok.validate().is_ok());
+    }
+
+    #[test]
+    fn sp_validate_permanent_requires_absolute_timeout() {
+        let bad = SessionPersistence {
+            absolute_timeout: None,
+            cookie_config: Some(CookieConfig {
+                lifetime_type: Some(CookieLifetimeType::Permanent),
+            }),
+            session_name: None,
+            idle_timeout: None,
+            persistence_type: None,
+            strict: None,
+        };
+        let err = bad.validate().unwrap_err();
+        assert!(err.contains("absoluteTimeout"), "got: {err}");
+    }
+
+    #[test]
+    fn sp_validate_rejects_bad_duration() {
+        let bad = SessionPersistence {
+            absolute_timeout: Some("1d".into()), // not GEP-2257
+            session_name: None,
+            idle_timeout: None,
+            persistence_type: None,
+            cookie_config: None,
+            strict: None,
+        };
+        let err = bad.validate().unwrap_err();
+        assert!(err.contains("absoluteTimeout"), "got: {err}");
+    }
+
+    #[test]
+    fn test_is_route_delegation_ref_matrix() {
+        // Positive: exact group + kind
+        assert!(backend_ref(Some(GATEWAY_API_GROUP), Some("HTTPRoute")).is_route_delegation_ref());
+        // Negative: kind absent (defaults to Service semantics)
+        assert!(!backend_ref(Some(GATEWAY_API_GROUP), None).is_route_delegation_ref());
+        // Negative: Service kind
+        assert!(!backend_ref(None, Some("Service")).is_route_delegation_ref());
+        // Negative: right kind, wrong/absent group (core group Service named HTTPRoute)
+        assert!(!backend_ref(None, Some("HTTPRoute")).is_route_delegation_ref());
+        assert!(!backend_ref(Some("example.io"), Some("HTTPRoute")).is_route_delegation_ref());
+        // Negative: GRPCRoute is not (yet) a delegation target
+        assert!(!backend_ref(Some(GATEWAY_API_GROUP), Some("GRPCRoute")).is_route_delegation_ref());
+    }
+
+    fn route_json(spec: serde_json::Value) -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "r", "namespace": "default"},
+            "spec": spec
+        }))
+        .expect("route should deserialize")
+    }
+
+    #[test]
+    fn test_effective_rules_prefers_resolved() {
+        let mut route = route_json(serde_json::json!({
+            "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/spec"}}]}]
+        }));
+        // No resolved_rules → falls back to spec.rules
+        let rules = route.effective_rules().expect("spec rules present");
+        assert_eq!(
+            rules[0].matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/spec")
+        );
+
+        // With resolved_rules → resolved wins
+        let resolved: Vec<HTTPRouteRule> = serde_json::from_value(serde_json::json!(
+            [{"matches": [{"path": {"type": "PathPrefix", "value": "/resolved"}}]}]
+        ))
+        .unwrap();
+        route.spec.resolved_rules = Some(resolved);
+        let rules = route.effective_rules().expect("resolved rules present");
+        assert_eq!(
+            rules[0].matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/resolved")
+        );
+    }
+
+    #[test]
+    fn test_resolved_rules_serialized_delegation_issues_not() {
+        let mut route = route_json(serde_json::json!({"rules": []}));
+        route.spec.resolved_rules = Some(Vec::new());
+        route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
+            message: "internal".to_string(),
+        }];
+        let json = serde_json::to_value(&route).unwrap();
+        // resolved_rules must survive conf_sync serialization
+        assert!(json["spec"].get("resolvedRules").is_some());
+        // delegation_issues is controller-internal and must never serialize
+        assert!(json["spec"].get("delegationIssues").is_none());
+        assert!(json["spec"].get("delegation_issues").is_none());
+    }
+
+    #[test]
+    fn terminal_rule_identity_is_transport_only() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "name": "primary",
+            "resolvedTerminalRouteUid": "route-uid",
+            "resolvedTerminalRuleIdentity": "name:primary"
+        }))
+        .expect("rule with resolved terminal identity should deserialize");
+        assert_eq!(rule.resolved_terminal_route_uid.as_deref(), Some("route-uid"));
+        assert_eq!(rule.resolved_terminal_rule_identity.as_deref(), Some("name:primary"));
+
+        let transported = serde_json::to_value(&rule).expect("resolved terminal identity should serialize");
+        assert_eq!(transported["resolvedTerminalRouteUid"], "route-uid");
+        assert_eq!(transported["resolvedTerminalRuleIdentity"], "name:primary");
+
+        let schema = schemars::schema_for!(HTTPRouteRule);
+        let schema_json = serde_json::to_value(schema).expect("HTTPRouteRule schema should serialize");
+        let properties = schema_json["properties"]
+            .as_object()
+            .expect("HTTPRouteRule schema should have properties");
+        assert!(!properties.contains_key("resolvedTerminalRouteUid"));
+        assert!(!properties.contains_key("resolvedTerminalRuleIdentity"));
+    }
 
     #[test]
     fn test_backend_request_clamped_to_request() {

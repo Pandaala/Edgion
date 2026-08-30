@@ -11,18 +11,21 @@ description: DSL sandbox security model — maintainer view of where each sandbo
 
 The VM never trusts a single layer. Each layer is independent — a hole in one does not compromise the others.
 
+The compile-time layers (parser, validator, compiler, bytecode loader) now live in the standalone `edgion-dsl` crate, shared by the controller and the gateway; the VM and builtins (runtime layers) remain gateway-only, since only the gateway constructs and executes a `Vm`.
+
 | Layer | Where it runs | What it caps | Code |
 |---|---|---|---|
-| Parser | source → AST | source bytes, AST node count, parse-step budget | `lang/parser/mod.rs:17,32-46,80-86,96-100` |
-| Validator (post-decode) | bytecode → AST-shaped program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex pattern length + DFA-bounded rebuild | `lang/validator.rs:11-46,61-128,210-290` |
-| Compiler | AST → bytecode | regex pattern length, "pattern must be a string literal" enforcement (applies to `.matches()`, `regex_find`, `regex_replace`) | `lang/compiler/mod.rs:25`, `lang/compiler/emit.rs:79-86`, `lang/compiler/expr.rs:218-251` |
-| Bytecode load | decoded base64 → struct | total decoded bytes ≤ 256 KB | `lang/bytecode.rs:13,285-301` |
+| Parser | source → AST | source bytes, AST node count, parse-step budget | `edgion-dsl/src/parser/mod.rs:17,32-46,80-86,96-100` |
+| Validator (post-decode) | bytecode → AST-shaped program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex/DFA rebuild, definite JSONPath validation | `edgion-dsl/src/validator.rs` |
+| Compiler | AST → bytecode | regex pattern length, literal-pattern enforcement, streaming-DFA validation, definite literal JSONPath enforcement | `edgion-dsl/src/compiler/` |
+| Bytecode load | decoded base64 → struct | total decoded bytes ≤ 256 KB | `edgion-dsl/src/bytecode.rs:13,285-301` |
 | VM (per-instruction) | runtime | steps, calls, stack depth, loops, string len, list len, map size | `lang/vm.rs:34-95,132-176` |
 | VM init (regex precompile) | script load | per-pattern DFA memory ≤ 1 MiB | `lang/vm.rs:199-235` |
 | Builtins (per-call) | runtime | per-builtin caps (split list size, range list size, header map size, http.call response size, etc.); shared `checked_value_str` / `checked_value_opt_str` helpers at `lang/builtins.rs:46-56` | `lang/builtins.rs:500-549,943-1208` |
+| Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `lang/body_scanners.rs`, `lang/vm.rs`, `request_body/operation.rs` |
 | Panic isolation | the whole `execute` | catches everything else | `lang/vm.rs` → `execute_safe` (`AssertUnwindSafe + catch_unwind`); see `dsl-engine.md` §5 |
 
-**Pre-compiled bytecode shipped from the controller is re-validated by `Validator::validate` on the gateway side.** The controller's compile output is never trusted blindly — see `DslPlugin::resolve_script` for the order `deserialize → Validator::validate → use`. Hand-crafted bytecode payloads that declare `max_loop_depth: 0` while shipping deeper loops, or `MakeMap(65535)` operands, are rejected here (`validator.rs:220-290`).
+**Pre-compiled bytecode shipped from the controller is re-validated by `Validator::validate` on the gateway side.** The controller's compile output is never trusted blindly — see `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` for the order `deserialize → Validator::validate → use`. Hand-crafted bytecode payloads that declare `max_loop_depth: 0` while shipping deeper loops, or `MakeMap(65535)` operands, are rejected here (`edgion-dsl/src/validator.rs:220-290`).
 
 ## 2. Runtime limit enforcement — source map
 
@@ -36,11 +39,20 @@ These are the `VmLimits` fields and where every breach is raised. **When adding 
 | `max_stack_depth` | 128 | `vm.rs` push paths (`StackOverflow`) |
 | `max_string_len` | 8_192 | `vm.rs:327,341,355` (concat branches), `vm.rs:593` (`regex_find` result), `vm.rs:626` (`regex_replace` result), plus every checked builtin return via `checked_value_str` / `checked_value_opt_str` (defined at `builtins.rs:46-56`, used throughout) |
 | `max_list_len` | 1_024 | List construction lives entirely in builtins — `builtins.rs:510-549` (`split` pre-allocation estimate, `range` with `hard_cap = max_list_len.min(1000)`); also bounds `req.header_names` / `resp.header_names` via their own hard 256 cap (predates Point 02) |
-| `max_map_size` | 512 | `vm.rs:732` `MakeMap`, `builtins.rs:943,1204` (`http.call` response headers truncate at this cap; `redis.hgetall` rejects above it), `validator.rs:279-290` compile-time `MakeMap(n)` operand check |
+| `max_map_size` | 512 | `vm.rs:732` `MakeMap`, `builtins.rs:943,1204` (`http.call` response headers truncate at this cap; `redis.hgetall` rejects above it), `edgion-dsl/src/validator.rs:279-290` compile-time `MakeMap(n)` operand check |
+
+Request-body scanning has a separate per-plugin runtime limit,
+`DslRuntime::max_body_scan_passes` (default 4, configured as
+`maxBodyScanPasses`, valid range 1–16). At request execution, the VM converts
+this to `physical_body_cap × passes`, reserves before each potentially
+full-body operation, and refunds unused bytes after an early match. Metadata
+access such as `byte_len()` does not consume the scan budget. This is separate
+from `VmLimits`: the absolute byte ceiling comes from the already-resolved
+gateway request-body policy, not from bytecode.
 
 Adding a new runtime limit requires:
 1. Field + default in `VmLimits` (`vm.rs:34-95`).
-2. Mirror the compile-time portion in `validator.rs` `Limits` if the bytecode can declare the value statically (`MakeMap(n)` is the model).
+2. Mirror the compile-time portion in `edgion-dsl/src/validator.rs` `Limits` if the bytecode can declare the value statically (`MakeMap(n)` is the model).
 3. Raise the matching `RuntimeError` variant from every code path that can blow the cap.
 4. Extend the user docs in `docs/en/.../dsl/sandbox-security.md` (and the zh-CN mirror).
 5. Add a negative test in `tests/sandbox.rs` or a dedicated `tests/<limit>.rs`.
@@ -49,18 +61,18 @@ Adding a new runtime limit requires:
 
 | Constant / field | Default | Where |
 |---|---|---|
-| `MAX_SOURCE_LEN` | 64 KB | `lang/parser/mod.rs:17` |
-| Parse-step budget | 50_000 | `lang/parser/mod.rs:26,41` (`parse_budget`) |
-| `max_ast_nodes` | 2_000 | `lang/parser/mod.rs:34,45` |
-| `max_nesting_depth` (parser) | 64 | `lang/parser/mod.rs:30,43` — parser stack-overflow guard, separate from the compiler's `max_loop_depth` |
-| `max_instructions` | 1_000 | `lang/validator.rs:17,35` |
-| `max_locals` | 64 | `lang/validator.rs:19,36` |
-| `max_constants` | 256 | `lang/validator.rs:21,37` |
-| `max_string_const_len` | 4_096 B | `lang/validator.rs:23,38` |
-| `max_const_pool_bytes` | 32_768 B | `lang/validator.rs:25,39` |
-| `max_loop_depth` (observed) | 8 | `lang/validator.rs:27,40,220-260` — recomputed from the bytecode, not trusted from the declared field |
-| `MAX_REGEX_PATTERN_LEN` | 1_024 B | `lang/compiler/mod.rs:25`, `lang/compiler/emit.rs:79-86`, `lang/validator.rs:11,106-113` (also re-checked when validating decoded bytecode, alongside a DFA-bounded rebuild at `:114-125`) |
-| `MAX_DECODED_BYTECODE_LEN` | 256 KB | `lang/bytecode.rs:13,297-301` |
+| `MAX_SOURCE_LEN` | 64 KB | `edgion-dsl/src/parser/mod.rs:17` |
+| Parse-step budget | 50_000 | `edgion-dsl/src/parser/mod.rs:26,41` (`parse_budget`) |
+| `max_ast_nodes` | 2_000 | `edgion-dsl/src/parser/mod.rs:34,45` |
+| `max_nesting_depth` (parser) | 64 | `edgion-dsl/src/parser/mod.rs:30,43` — parser stack-overflow guard, separate from the compiler's `max_loop_depth` |
+| `max_instructions` | 1_000 | `edgion-dsl/src/validator.rs:17,35` |
+| `max_locals` | 64 | `edgion-dsl/src/validator.rs:19,36` |
+| `max_constants` | 256 | `edgion-dsl/src/validator.rs:21,37` |
+| `max_string_const_len` | 4_096 B | `edgion-dsl/src/validator.rs:23,38` |
+| `max_const_pool_bytes` | 32_768 B | `edgion-dsl/src/validator.rs:25,39` |
+| `max_loop_depth` (observed) | 8 | `edgion-dsl/src/validator.rs:27,40,220-260` — recomputed from the bytecode, not trusted from the declared field |
+| `MAX_REGEX_PATTERN_LEN` | 1_024 B | `edgion-dsl/src/compiler/mod.rs:25`, `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/validator.rs:11,106-113` (also re-checked when validating decoded bytecode, alongside a DFA-bounded rebuild at `:114-125`) |
+| `MAX_DECODED_BYTECODE_LEN` | 256 KB | `edgion-dsl/src/bytecode.rs:13,297-301` |
 
 These constants are deliberately **not** runtime-configurable. They protect the loader/parser themselves; exposing them to operator config would invite the bytecode-format attack surface to grow with deployment time.
 
@@ -72,7 +84,7 @@ Before 2026-05-18, `max_list_len` and `max_map_size` existed only on paper for s
 |---|---|---|
 | `Split(s, delim)` | `max_list_len` (estimated, before allocation) | `builtins.rs:500-518` |
 | `Range(start, end)` | `min(max_list_len, 1000)` hard ceiling | `builtins.rs:519-549` |
-| `MakeMap` opcode | `max_map_size` runtime + compile-time | `vm.rs:732`, `validator.rs:279-290` |
+| `MakeMap` opcode | `max_map_size` runtime + compile-time | `vm.rs:732`, `edgion-dsl/src/validator.rs:279-290` |
 | `http.call` response headers | silently truncate at `max_map_size` | `builtins.rs:938-947` |
 | `redis.hgetall` | reject above `max_map_size` | `builtins.rs:1204-1209` |
 | `req.header_names` / `resp.header_names` | hard 256 (separate from `max_map_size`, predates Point 02) | see `docs/.../sandbox-security.md` "Per-Function Limit Summary" |
@@ -81,49 +93,119 @@ Before 2026-05-18, `max_list_len` and `max_map_size` existed only on paper for s
 
 **Why `http.call` truncates while `redis.hgetall` rejects?** HTTP response headers are inbound third-party data we cannot retransmit — silently dropping the tail is the only way to keep the script running. Redis HGETALL operates on values the script asked for; failing loud is the safer default there.
 
-The compile-time `MakeMap(n)` operand check in `validator.rs:279-290` exists specifically to reject hand-crafted bytecode that ships `MakeMap(65535)` without ever having to allocate. Skipping the validator check would still be caught by the runtime check at `vm.rs:732`, but at the cost of one wasted allocation per request — undesirable on a hot path.
+The compile-time `MakeMap(n)` operand check in `edgion-dsl/src/validator.rs:279-290` exists specifically to reject hand-crafted bytecode that ships `MakeMap(65535)` without ever having to allocate. Skipping the validator check would still be caught by the runtime check at `vm.rs:732`, but at the cost of one wasted allocation per request — undesirable on a hot path.
 
 ## 5. String length cap — what it does and doesn't cover
 
-`max_string_len` caps **runtime-produced** strings only — every concat (`vm.rs:327,341,355`), `regex_find` result (`vm.rs:593`), `regex_replace` result (`vm.rs:626`), and every checked builtin return (`checked_value_str` / `checked_value_opt_str` at `builtins.rs:46-56`).
+`max_string_len` caps **runtime-produced** strings only — every concat,
+`regex_find` / `regex_replace` result, checked builtin return, request-body
+`read()` / `read_all()` result, serialized `json_get()` result, and the live
+aggregate string payload retained by `json_select()`. Body
+predicates and `sha256()` scan storage without first constructing a complete
+body string; `read_all()` is the explicit escape hatch and fails before
+returning an oversized value.
+
+`sha256()` uses one lazy `[u8; 32]` once-cell per immutable Body snapshot. The
+first successful call scans the captured snapshot; concurrent and later calls
+reuse that result and report zero scanned bytes. Initial capture publishes one
+canonical snapshot, while every successful mutation publishes a distinct
+snapshot with an empty digest cell. The cache never contains Body bytes,
+errors, or keyed MAC state.
+
+`md5()` and `hmac_sha256(key)` deliberately use the generic raw snapshot scanner
+without caching. Each call consumes another body-scan pass. MD5 exists only for
+compatibility protocols and is not a security digest. Body HMAC is a
+MAC-generation API. It adds no persistent key or MAC cache and makes no extra
+key String copy, but ordinary VM values may retain the caller's key and
+returned hexadecimal MAC; memory zeroization is not promised. Ordinary DSL
+equality is not constant-time, so scripts must not use it to authenticate an
+attacker-supplied tag; authentication belongs in a dedicated verifier such as
+the HMAC Auth plugin.
 
 It deliberately does **not** cap string literals in the constant pool. Those are bounded at compile time by `max_string_const_len` (4 KB per literal) and `max_const_pool_bytes` (32 KB total). Mixing the two would force the operator to set `max_string_len ≥ 4 KB` to accommodate the largest legal literal, defeating the point of a per-request runtime cap.
 
 ## 6. Regex / ReDoS posture
 
-All three regex opcodes (`.matches(pattern)`, `regex_find(s, pattern)`, `regex_replace(s, pattern, replacement)`) require a **string-literal pattern**, enforced at the compiler in `lang/compiler/expr.rs:195-208` (`.matches()`) and `:218-251` (`regex_find` / `regex_replace`) — dynamic patterns are rejected before bytecode is emitted. The literal is stored as a `Constant::Regex(String)` (`bytecode.rs:247`) and never appears in a variable slot.
+All three regex operations (`.matches(pattern)`, `regex_find(s, pattern)`,
+`regex_replace(s, pattern, replacement)`) require a **string-literal pattern**;
+dynamic patterns are rejected before bytecode is emitted. `.matches()` stores
+`Constant::StreamingRegex` and can operate incrementally on `String` or
+`Body`; the find/replace functions remain string-only and store
+`Constant::Regex`.
 
 Patterns are **pre-compiled once per script**, not once per call:
 
-- `Vm::new` (`vm.rs:199-235`) iterates `script.constants` and, for every `Constant::Regex`, builds a `regex::Regex` with `size_limit(1 << 20)` and `dfa_size_limit(1 << 20)`. The compiled regex is stored in `regex_cache: Vec<Option<Regex>>` indexed by constant id.
-- `OpCode::Matches(regex_idx)` (`vm.rs:566-580`), `OpCode::RegexFind(regex_idx)` (`vm.rs:581-607`), and `OpCode::RegexReplace(regex_idx)` (`vm.rs:608-633`) all dispatch identically: `self.regex_cache.get(regex_idx as usize)`. No opcode pays a per-call compile cost.
+- `Vm::new` rebuilds `Constant::Regex` into the bounded string regex cache and
+  `Constant::StreamingRegex` into a forward dense DFA capped at 1 MiB.
+- `OpCode::Matches` carries DFA state across body chunks, including the final
+  end-of-input transition. `RegexFind` and `RegexReplace` use the string regex
+  cache. No opcode pays a per-request compile cost.
 
 Defense in depth around regex evaluation:
 
 | Layer | Where | What it stops |
 |---|---|---|
-| String-literal requirement | `lang/compiler/expr.rs:218-251` | Dynamic / attacker-controlled patterns |
-| `MAX_REGEX_PATTERN_LEN = 1024 B` | `lang/compiler/emit.rs:79-86`, `lang/validator.rs:106-113` (re-checked after deserialization) | Pathologically long patterns |
-| DFA + size limit during compile | `lang/compiler/emit.rs:89-94`, `lang/validator.rs:114-125`, `lang/vm.rs:209-215` | Patterns that compile to multi-MB DFA tables |
-| `max_steps` | `lang/vm.rs:168` | Pathological matching time on adversarial input |
+| String-literal requirement | `edgion-dsl/src/compiler/expr.rs:218-251` | Dynamic / attacker-controlled patterns |
+| `MAX_REGEX_PATTERN_LEN = 1024 B` | `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/validator.rs:106-113` (re-checked after deserialization) | Pathologically long patterns |
+| DFA + size limit during compile | compiler, validator, and `Vm::new` | Patterns that compile to multi-MB DFA tables |
+| Body scan budget | `VmState::reserve_body_scan` | Repeated scans of adversarial or spilled input |
 | `max_string_len` | `lang/vm.rs:593,626` | Oversized `regex_find` / `regex_replace` output |
 
-The validator-side rebuild at `validator.rs:114-125` is the key safeguard against **hand-crafted bytecode that ships a regex pattern the compiler would have rejected**: even if the controller's compiler is bypassed, the validator runs the same `RegexBuilder` with the same memory caps before the VM is constructed.
+The validator-side rebuild is the key safeguard against **hand-crafted
+bytecode that ships a regex pattern the compiler would have rejected**. The
+streaming DFA subset intentionally rejects unsupported Unicode-aware word
+boundaries; an explicit ASCII boundary such as `(?-u:\b)` remains available.
 
-## 7. SSRF guard — `is_ssrf_blocked_ip_literal`
+## 7. Request-body JSON selection and mutation
 
-`http.call` resolves the URL host and, when `httpBlockPrivateIps: true` is set on the plugin config, rejects:
+`json_get()` embeds a `Constant::JsonPath`. The compiler and untrusted-bytecode
+validator both require a definite path rooted at `$`, limited to 1,024 bytes
+and 32 `.member`, `["quoted"]`, or non-negative `[index]` segments. Runtime
+parsing validates the complete JSON document but materializes only the selected
+value, bounded by `max_string_len`; invalid JSON, missing paths, and type
+mismatch return `nil`.
+
+`req.body.json_select()` embeds one self-contained `Constant::JsonSelect` with
+1–64 literal `{name, path}` entries. Names are unique and at most 256 UTF-8
+bytes; the configured `max_map_size` may lower the entry count. The validator
+rechecks every path and constant-pool byte, then `Vm::new` builds one immutable
+shared-prefix trie. Each execution performs one complete Body scan and JSON
+parse, retains no full DOM, and returns a caller-ordered Map. Individual
+selected strings, the live aggregate selected string payload, and each
+canonical-object accumulator are bounded by `max_string_len`. The parser may
+also own one in-progress candidate and a small constant number of encoding
+copies; serde may temporarily own one decoded or escaped token bounded by the
+physical Body cap. It never retains a complete Body DOM. Invalid JSON discards
+every observed value and returns all `Nil`.
+
+Body mutations are request-stage only and are transactional: an invalid range,
+physical-cap breach, storage error, or 4,096-segment breach leaves the prior
+logical body intact. Those failures, scan-budget exhaustion, and body-storage
+failures become `RuntimeError::BodyAccess` and always use the fixed generic
+HTTP 500 response. This internal classification must not acquire a
+configuration knob or become a fifth failure-policy shape.
+
+## 8. SSRF guard — literal precheck plus dial-time resolution
+
+When `httpBlockPrivateIps: true` is set on the plugin config, `http.call` rejects:
 - IPv4 loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), unspecified (0.0.0.0)
 - IPv6 loopback (`::1`), unique local (`fc00::/7`), link-local (`fe80::/10`), and `::ffff:`-mapped IPv4 forms of the above
-- Implementation: `builtins.rs:1329-1357` (`is_ssrf_blocked_ip_literal` + `is_private_v4`). Tests live alongside in `#[cfg(test)] mod ip_tests` at `builtins.rs:1359-1430`.
+
+Direct IP literals are rejected before a connection is attempted. Hostnames are
+resolved through the canonical `EgressResolver`, which classifies the exact addresses
+returned to reqwest for dialing. reqwest does not independently re-resolve those names,
+so the check has no DNS-rebinding TOCTOU window. The DSL resolver uses metric-only
+rejection reporting because its destination is request-derived; emitting one WARN per
+blocked address would allow log amplification.
 
 **Why is the default `false`?** Two reasons:
 1. Many real deployments call internal services (Redis admin APIs, sidecar `/healthz` endpoints) from DSL scripts. Defaulting to "block private" would break the common case.
 2. SSRF is a deployment-level concern: when the gateway runs in a cluster where `http.call` should never touch the cluster network, the operator enables the guard; when it runs as a per-tenant Lua-style scripting hook, the guard is on by default in the example configs (`edgion-tests/integration/conf/EdgionPlugins/Dsl/`).
 
-The blocklist is **host-string** based, not post-DNS-resolution. If the URL host is a name (`internal-svc.local`), the script can still reach private IPs by resolving in the upstream DNS. A future tightening would resolve before checking — out of scope today because it would require a synchronous resolver in the path. Reopen when an SSRF report cites this gap.
-
-**Redirect hops are guarded (F-012, 2026-05-26).** With `httpBlockPrivateIps: true`, `runtime::dsl_http_client(true)` returns a separate process-global `reqwest::Client` whose `redirect::Policy::custom` re-applies `is_ssrf_blocked_ip_literal` to **every** redirect hop's URL host; a 30x to a blocked IP literal terminates the request (`status = 0`) instead of being silently followed. The same host-string-only limitation applies to redirect hops too — a redirect `Location:` pointing at a DNS name that resolves privately still goes through, by the same accepted tradeoff above.
+**Redirect hops are guarded.** `Str` and `Nil` calls re-apply the literal precheck
+and use the guarded resolver for each connection, for at most ten redirects. Opaque
+`Body` calls do not follow redirects because their pull stream is single-use; the 3xx
+response is returned directly to the script.
 
 ## Cross-references
 

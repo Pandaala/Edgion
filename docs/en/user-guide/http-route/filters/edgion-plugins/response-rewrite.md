@@ -37,7 +37,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `statusCode` | Integer | none | HTTP status code (100–599) |
+| `statusCode` | Integer | none | Final HTTP status code (200–599) |
 | `headers` | Object | none | Response header modification operations |
 | `headers.set` | Array\<Object\> | none | Set response headers (overwrite existing values) |
 | `headers.add` | Array\<Object\> | none | Add response headers (append to existing values) |
@@ -193,7 +193,7 @@ When multiple operations are configured simultaneously, the execution order is:
 
 ### 1. Status Code Range
 
-The status code must be in the 100-599 range:
+The status code must be in the 200-599 range. Informational responses cannot replace a final response:
 
 ```yaml
 # ✅ Correct
@@ -389,7 +389,7 @@ spec:
 ### Issue 3: Configuration Validation Fails
 
 **Common causes**:
-1. `statusCode` is outside the 100-599 range
+1. `statusCode` is outside the 200-599 range
 2. `name` or `from`/`to` in `headers` is empty
 
 **Solution**: Check the configuration validation error messages in the gateway startup logs.

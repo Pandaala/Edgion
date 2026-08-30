@@ -143,7 +143,7 @@ spec:
 
 ## Interaction with IP Restriction
 
-RealIp and [IP Restriction](./ip-restriction.md) are commonly paired. RealIp resolves the true client IP and stores it on the request context; IP Restriction then reads that resolved address (`get_real_client_ip()`) for its allow/deny decision. Order matters — both run in the request phase, so list RealIp **before** IpRestriction so the allow/deny check sees the real client IP rather than the proxy's:
+RealIp and [IP Restriction](./ip-restriction.md) are commonly paired. RealIp resolves `RemoteIp` and stores it on the request context; IP Restriction then reads that resolved address (`get_remote_ip()`) for its allow/deny decision. Order matters — both run in the request phase, so list RealIp **before** IpRestriction so the allow/deny check sees the resolved client rather than the proxy's:
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -188,6 +188,20 @@ spec:
 **A**: `trustedIps` must be non-empty, `realIpHeader` must not be blank, and every entry in `cidrs` must be a valid IP or CIDR (for example, `10.0.0.0/8`, not `10.0.0/8`). The plugin reports the offending field at parse time.
 
 ---
+
+## Migration to DirectPeerIp and RemoteIp
+
+The pre-release rename is intentionally hard: `client_addr`/`client-addr` maps
+to `DirectPeerIp`/`direct_peer_ip`, while `remote_addr`/`remote-addr` maps to
+`RemoteIp`/`remote_ip`. Update `IpSource`, `KeyGet`, templates, DSL, access-log
+queries, and backend assertions together; no compatibility aliases or dual log
+fields are retained. The DSL rename `req.client_ip` → `req.direct_peer_ip` is an
+exact identity rename for callers that intentionally need the physical peer;
+ordinary client identity, rate-limit, and experiment bucketing use cases should
+choose `req.remote_ip`. `RealIp` remains the name of the resolver mechanism. The
+upstream propagation header is configured independently through
+`EdgionGatewayConfig.spec.forwardedHeaders.remoteIpHeader` and defaults to
+`X-Real-IP`.
 
 ## Complete configuration example
 

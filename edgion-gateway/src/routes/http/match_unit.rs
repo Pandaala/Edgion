@@ -7,7 +7,7 @@ use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
+use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
@@ -71,28 +71,115 @@ impl MatchSpecificity {
 /// gateway/listener context that satisfied the parentRef constraints.
 pub struct RouteMatchResult {
     pub route_unit: Arc<HttpRouteRuleUnit>,
-    pub matched_gateway: GatewayInfo,
+    pub matched_gateway: Arc<GatewayInfo>,
 }
 
-/// A backend ref paired with its compiled plugin runtime — the unit the LB
-/// selector returns. Keeps the gateway-compiled `PluginRuntime` off the
-/// `HTTPBackendRef` schema (two-type split). Both fields are `Arc`, so cloning
-/// on `select()` is cheap.
+/// A backend ref paired with its compiled plugin runtime. The LB selector stores
+/// only original slot indexes; request handles borrow this object from the
+/// immutable per-rule generation. This keeps the gateway-compiled
+/// `PluginRuntime` off the `HTTPBackendRef` schema (two-type split).
 #[derive(Clone)]
 pub struct CompiledBackend {
-    /// The pure backend-ref schema (name, port, weight, extension_info, …). Owned
-    /// (not `Arc`) because the selected backend's per-request `backend_tls_policy`
-    /// is mutated after selection; clone-on-`select()` matches today's cost (the
-    /// old selector also cloned `HTTPBackendRef`).
+    /// The pure backend-ref schema (name, port, weight, …). Owned by the
+    /// immutable compiled generation. Per-request policy winners are stored on
+    /// selected handles and never mutate this schema.
     pub schema: HTTPBackendRef,
+    /// Original position in `HTTPRouteRule.backendRefs`. This remains stable
+    /// across typed filtering and is the conformance/metrics slot identity.
+    pub slot: usize,
+    /// Canonical typed identity shared with Controller contextual admission.
+    pub identity: edgion_resources::LogicalBackendSlotIdentity,
+    /// Cold-path classification. Service-only consumers must explicitly match
+    /// `Service`; AI routing consumes the full ordered slot list separately.
+    pub target: CompiledBackendTarget,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompiledBackendTarget {
+    Service { namespace: String, name: String },
+    EdgionBackend { namespace: String, name: String },
+    Invalid { classified_kind: HTTPBackendRefKind },
+}
+
+impl CompiledBackend {
+    pub fn is_service(&self) -> bool {
+        matches!(self.target, CompiledBackendTarget::Service { .. })
+    }
+
+    /// Whether this slot participates in ordinary HTTP backend selection.
+    /// Invalid refs retain their declared Gateway API traffic share and fail
+    /// after selection; valid AI refs are owned by the AI dispatch path.
+    fn is_generic_selectable(&self) -> bool {
+        matches!(
+            self.target,
+            CompiledBackendTarget::Service { .. }
+                | CompiledBackendTarget::EdgionBackend { .. }
+                | CompiledBackendTarget::Invalid { .. }
+        )
+    }
+
+    /// Whether this backend is an authorized EdgionBackend reference.
+    ///
+    /// AI routing bypasses the generic Service selector, so its callers must
+    /// use this predicate rather than kind-only matching to preserve the
+    /// Controller's ReferenceGrant decision.
+    pub fn is_permitted_ai_backend(&self) -> bool {
+        self.schema.ref_denied.is_none() && matches!(self.target, CompiledBackendTarget::EdgionBackend { .. })
+    }
+
+    pub fn compile(
+        schema: HTTPBackendRef,
+        route_namespace: &str,
+        slot: usize,
+        plugin_runtime: Arc<PluginRuntime>,
+    ) -> Self {
+        let identity =
+            edgion_resources::logical_backend_slot_identities(std::slice::from_ref(&schema), route_namespace)
+                .into_iter()
+                .next()
+                .expect("one backend ref produces one identity");
+        Self::compile_with_identity(schema, route_namespace, slot, identity, plugin_runtime)
+    }
+
+    fn compile_with_identity(
+        schema: HTTPBackendRef,
+        route_namespace: &str,
+        slot: usize,
+        identity: edgion_resources::LogicalBackendSlotIdentity,
+        plugin_runtime: Arc<PluginRuntime>,
+    ) -> Self {
+        let target = Self::compile_target(&schema, route_namespace);
+        Self {
+            schema,
+            slot,
+            identity,
+            target,
+            plugin_runtime,
+        }
+    }
+
+    fn compile_target(schema: &HTTPBackendRef, route_namespace: &str) -> CompiledBackendTarget {
+        let namespace = schema.namespace.as_deref().unwrap_or(route_namespace).to_string();
+        match schema.backend_kind() {
+            HTTPBackendRefKind::Service => CompiledBackendTarget::Service {
+                namespace,
+                name: schema.name.clone(),
+            },
+            HTTPBackendRefKind::EdgionBackend if schema.port.is_none() => CompiledBackendTarget::EdgionBackend {
+                namespace,
+                name: schema.name.clone(),
+            },
+            classified_kind => CompiledBackendTarget::Invalid { classified_kind },
+        }
+    }
+}
+
 impl std::ops::Deref for CompiledBackend {
     type Target = HTTPBackendRef;
-    /// Deref to the backend schema so existing `selected_backend.name` / `.port` /
-    /// `.extension_info` / `.backend_tls_policy` accesses keep working unchanged.
+    /// Deref to the immutable backend schema so identity, port, and filter
+    /// consumers share the compiled generation.
     /// `plugin_runtime` is `CompiledBackend`'s own field, so it shadows correctly.
     fn deref(&self) -> &HTTPBackendRef {
         &self.schema
@@ -137,9 +224,10 @@ pub struct HttpRouteRuleUnit {
     /// Per-rule compiled backends (each with its own plugin runtime), shared
     /// across the rule's units. Used for by-name lookup (Internal upstream jumps).
     pub backends: Arc<Vec<CompiledBackend>>,
-    /// LB backend selector over compiled backends, built at unit construction.
+    /// LB selector over original compiled-backend slot indexes, built at unit
+    /// construction.
     /// `Arc` so the `#[derive(Clone)]` unit stays cheap to clone.
-    pub backend_finder: Arc<BackendSelector<CompiledBackend>>,
+    pub backend_finder: Arc<BackendSelector<usize>>,
 }
 
 /// Per-rule compiled runtime, built ONCE per rule. The `Arc<PluginRuntime>` and
@@ -163,21 +251,26 @@ impl HttpRouteRuleUnit {
     /// (in-memory RateLimit) own per-rule state, so the runtime must NOT be rebuilt
     /// per match-item/hostname.
     pub fn compile_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
+        // Route-level `edgion.io/mirror-*` annotation values, pre-parsed onto
+        // the rule; defaults when no mirror annotation is present.
+        let mirror_tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
         let plugin_runtime = Arc::new(match &rule.filters {
-            Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace),
+            Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace, &mirror_tuning),
             None => PluginRuntime::new(),
         });
         let backends: Vec<CompiledBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
+            let identities = edgion_resources::logical_backend_slot_identities(refs, namespace);
             refs.iter()
-                .map(|br| {
+                .zip(identities)
+                .enumerate()
+                .map(|(slot, (br, identity))| {
                     let plugin_runtime = Arc::new(match &br.filters {
-                        Some(filters) => PluginRuntime::from_httproute_filters_for_backend(filters, namespace),
+                        Some(filters) => {
+                            PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &mirror_tuning)
+                        }
                         None => PluginRuntime::new(),
                     });
-                    CompiledBackend {
-                        schema: br.clone(),
-                        plugin_runtime,
-                    }
+                    CompiledBackend::compile_with_identity(br.clone(), namespace, slot, identity, plugin_runtime)
                 })
                 .collect()
         });
@@ -187,13 +280,21 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Build a per-(rule,hostname) LB selector over a rule's compiled backends.
-    /// Compiled backends are Arc-shared; only the WRR cursor is per-hostname.
-    pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<CompiledBackend>> {
+    /// Build a per-(rule,hostname) LB selector over original backend slots.
+    /// Compiled backends are Arc-shared; only the WRR cursor and indexes are
+    /// per-hostname.
+    pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<usize>> {
         let selector = BackendSelector::new();
-        if !backends.is_empty() {
-            let weights: Vec<Option<i32>> = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
-            selector.init(backends.to_vec(), weights);
+        let generic_backends = backends
+            .iter()
+            .filter(|backend| backend.is_generic_selectable())
+            .collect::<Vec<_>>();
+        if !generic_backends.is_empty() {
+            let weights = generic_backends
+                .iter()
+                .map(|backend| backend.schema.weight.or(Some(1)))
+                .collect();
+            selector.init(generic_backends.iter().map(|backend| backend.slot).collect(), weights);
         }
         Arc::new(selector)
     }
@@ -247,10 +348,6 @@ impl HttpRouteRuleUnit {
         (header_regexes, query_regexes)
     }
 
-    pub fn is_regex_route(&self) -> bool {
-        self.path_regex.is_some()
-    }
-
     /// Try to match the request path against the regex pattern (if this is a regex route)
     pub fn matches_path(&self, path: &str) -> bool {
         if let Some(ref regex) = self.path_regex {
@@ -273,7 +370,7 @@ impl HttpRouteRuleUnit {
         session: &Session,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let req_header = session.req_header();
         Self::deep_match_common(
             &self.matched_info,
@@ -285,10 +382,6 @@ impl HttpRouteRuleUnit {
             &self.compiled_query_regexes,
             self.has_query_matchers,
         )
-    }
-
-    pub fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.rsc.ns, self.matched_info.rsc.name)
     }
 
     /// Match HTTP header.
@@ -352,7 +445,7 @@ impl HttpRouteRuleUnit {
         compiled_header_regexes: &[Option<Regex>],
         compiled_query_regexes: &[Option<Regex>],
         has_query_matchers: bool,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let method = req_header.method.as_str();
         let match_item = &matched_info.m;
 
@@ -428,6 +521,80 @@ impl HttpRouteRuleUnit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compile_http_rule_preserves_slots_and_types_backends() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [
+                {"name": "service-a", "port": 8080, "weight": 7},
+                {"kind": "ServiceExternalName", "name": "dns-svc", "port": 30001, "weight": 1},
+                {"kind": "ServiceImport", "name": "imported-svc", "port": 8080, "weight": 2},
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "ai-a", "weight": 3},
+                {"group": "edgion.io", "kind": "EdgionBackend", "name": "ai-bad", "port": 443},
+                {"group": "example.io", "kind": "Service", "name": "wrong-group-service"}
+            ]
+        }))
+        .unwrap();
+
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns");
+        assert_eq!(runtime.backends.len(), 6);
+        assert_eq!(
+            runtime.backends.iter().map(|backend| backend.slot).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(runtime.backends[0].schema.weight, Some(7));
+        assert_eq!(
+            runtime.backends[0].target,
+            CompiledBackendTarget::Service {
+                namespace: "route-ns".to_string(),
+                name: "service-a".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[1].target,
+            CompiledBackendTarget::Service {
+                namespace: "route-ns".to_string(),
+                name: "dns-svc".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[2].target,
+            CompiledBackendTarget::Service {
+                namespace: "route-ns".to_string(),
+                name: "imported-svc".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[3].target,
+            CompiledBackendTarget::EdgionBackend {
+                namespace: "route-ns".to_string(),
+                name: "ai-a".to_string()
+            }
+        );
+        assert_eq!(
+            runtime.backends[4].target,
+            CompiledBackendTarget::Invalid {
+                classified_kind: HTTPBackendRefKind::EdgionBackend
+            }
+        );
+        assert_eq!(
+            runtime.backends[5].target,
+            CompiledBackendTarget::Invalid {
+                classified_kind: HTTPBackendRefKind::Unsupported
+            }
+        );
+
+        let selector = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
+        // Service, EdgionBackend, and invalid slots retain their declared
+        // traffic share. Two complete WRR cycles make the assertion independent
+        // of the smooth sequence's partial-cycle ordering.
+        let mut seen = [0u32; 6];
+        for _ in 0..30 {
+            let selected = selector.select().unwrap();
+            seen[selected] += 1;
+        }
+        assert_eq!(seen, [14, 2, 4, 6, 2, 2]);
+    }
 
     fn make_specificity(
         has_method: bool,

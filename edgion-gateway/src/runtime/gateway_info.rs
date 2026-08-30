@@ -5,19 +5,20 @@
 //! port-based GatewayInfo store.
 
 use crate::observe::metrics::TestType;
+use edgion_common::dns::resolver_select::ResolverCandidate;
 
 /// Gateway information for route matching context
 ///
 /// Used to pass gateway context during route matching to support
 /// both sectionName-based and hostname-based lookup strategies.
 ///
-/// This struct should be created once when the HTTP proxy listener is constructed,
-/// not per-request, to avoid allocation overhead.
+/// Each Gateway/listener generation creates this struct once and shares it with
+/// matched requests through `Arc`; request paths must not deep-clone it.
 ///
 /// Note: Listener configuration (hostname, allowedRoutes) is resolved through
 /// `ListenerGatewayInfoStore::GatewayInfoIndex`, which is rebuilt on every
 /// Gateway change to support hot-reload.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct GatewayInfo {
     /// Gateway namespace (None for cluster-scoped or default namespace)
     pub namespace: Option<String>,
@@ -41,10 +42,18 @@ pub struct GatewayInfo {
     /// the `edgion.io/edgion-plugins` annotation. Run for every request on this Gateway,
     /// after GatewayClass-wide global plugins and before route-level plugins.
     pub plugin_store_keys: Vec<String>,
+
+    /// Gateway-layer DNS resolver candidate, precomputed from the Gateway's
+    /// `edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref` annotations. Used
+    /// as the middle layer of the data-plane resolver precedence
+    /// (Service → Gateway → EGC → system) when self-resolving an `ExternalName`
+    /// backend. `None` when the Gateway sets neither annotation.
+    pub dns_resolver_candidate: Option<ResolverCandidate>,
 }
 
 impl GatewayInfo {
     /// Create a new GatewayInfo
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         namespace: Option<String>,
         name: String,
@@ -53,6 +62,7 @@ impl GatewayInfo {
         metrics_test_type: Option<TestType>,
         require_sni_host_match: Option<bool>,
         plugin_store_keys: Vec<String>,
+        dns_resolver_candidate: Option<ResolverCandidate>,
     ) -> Self {
         Self {
             namespace,
@@ -62,13 +72,8 @@ impl GatewayInfo {
             metrics_test_type,
             require_sni_host_match,
             plugin_store_keys,
+            dns_resolver_candidate,
         }
-    }
-
-    /// Get namespace as &str, returns empty string if None
-    #[inline]
-    pub fn namespace_str(&self) -> &str {
-        self.namespace.as_deref().unwrap_or("")
     }
 
     /// Build Gateway Key: "{namespace}/{name}" or just "{name}" if no namespace

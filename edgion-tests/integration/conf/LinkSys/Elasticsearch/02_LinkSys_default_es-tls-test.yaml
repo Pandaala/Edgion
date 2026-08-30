@@ -1,0 +1,27 @@
+# LinkSys Elasticsearch over TLS with a private CA (caSource: SecretRef).
+#
+# Connects to the nginx TLS terminator (es-tls-proxy, https://127.0.0.1:19201)
+# whose server cert is signed by the backend test CA. The CA is supplied via
+# caSecretRef -> es-backend-ca (a ca.crt Secret in `default`, created at runtime
+# by run_es_test.sh). caSource: SecretRef REPLACES the public webpki roots with
+# this private CA, so the handshake succeeds ONLY because the private CA is
+# trusted — proving the REPLACE trust model end-to-end.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-tls-test
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "https://127.0.0.1:19201"
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: es-backend-ca
+    timeout:
+      connect: 5000
+      request: 30000

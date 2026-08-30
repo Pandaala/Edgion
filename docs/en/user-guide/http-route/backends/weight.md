@@ -98,6 +98,8 @@ backendRefs:
     weight: 100
 ```
 
+> **Remotely switchable, without a redeploy?** The weight edit above still requires editing and reapplying the route. If you want to flip a full cutover at runtime (e.g. via a `kubectl apply` to a small config object instead of the route itself), use the [Canary plugin](../filters/edgion-plugins/canary.md) with an `activeProfileRef` Selector instead.
+
 ### Example 3: A/B Testing
 
 ```yaml

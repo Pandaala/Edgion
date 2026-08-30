@@ -114,7 +114,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -153,7 +153,7 @@ impl MtlsTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => TestResult::failed(
@@ -207,7 +207,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => TestResult::failed(
@@ -251,7 +251,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -290,7 +290,7 @@ impl MtlsTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -339,7 +339,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -382,7 +382,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => TestResult::failed(
@@ -424,7 +424,7 @@ impl MtlsTestSuite {
                     };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -471,7 +471,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -514,7 +514,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {
@@ -563,7 +563,7 @@ impl MtlsTestSuite {
                         };
 
                     let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url).header("Host", hostname);
+                    let request = client.get(&url);
 
                     match request.send().await {
                         Ok(response) => {

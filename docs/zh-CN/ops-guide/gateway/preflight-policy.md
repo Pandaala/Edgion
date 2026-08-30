@@ -8,7 +8,7 @@ Edgion 在网关层处理 CORS 预检（`OPTIONS`）请求的方式。
 
 ## 概述
 
-浏览器在某些跨域调用之前会发送 CORS 预检 `OPTIONS` 请求。Edgion 在边缘处理这些预检，使其无需到达每个后端。默认情况下无需任何配置即可工作：如果路由配置了 CORS 插件，Edgion 会使用该 CORS 配置来响应；否则返回 `204 No Content`。
+浏览器在某些跨域调用之前会发送 CORS 预检 `OPTIONS` 请求。Edgion 可以在边缘处理这些预检，使其无需到达每个后端。默认情况下，若路由配置了 CORS filter，标准预检由该 filter 处理；否则 Edgion 返回 `204 No Content`。CORS filter 也可以按配置将请求转发到上游，详见[与 CORS 的关系](#与-cors-的关系)。
 
 只有当您想改变*哪些* `OPTIONS` 请求被视为预检，或修改默认状态码时，才需要配置 `preflightPolicy`。它在 GatewayClass 引用的 `EdgionGatewayConfig` 上设置，而非通过注解。
 
@@ -45,18 +45,18 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `mode` | Enum | `cors-standard` | 哪些 `OPTIONS` 请求被视为预检。可选值：`cors-standard` \| `all-options` |
-| `statusCode` | Integer | `204` | 路由未挂载 CORS 插件时的预检响应状态码 |
+| `statusCode` | Integer | `204` | 路由未挂载 CORS 插件时的预检最终响应状态码（200-599） |
 
 ### `mode` 取值说明
 
 | 取值 | 含义 |
 |------|------|
 | `cors-standard` | 严格的 CORS 检测：请求必须是 `OPTIONS` 且同时携带 `Origin` 和 `Access-Control-Request-Method`。符合标准浏览器行为。 |
-| `all-options` | 将所有 `OPTIONS` 请求都视为预检，不检查 CORS 头。适用于省略 CORS 头的非标准客户端。 |
+| `all-options` | 不预先要求 CORS 头，将每个 `OPTIONS` 请求都选入全局预检处理；路由级 CORS filter 仍决定是否接管选中的请求。 |
 
 ## 默认行为
 
-Edgion 会自动处理预检；默认 `preflightPolicy` 为 `mode: cors-standard`，`statusCode: 204`。若路由引用了 CORS 插件，预检响应遵循 CORS 规则；否则 Edgion 返回已配置的 `statusCode`。
+Edgion 会自动处理预检；默认 `preflightPolicy` 为 `mode: cors-standard`，`statusCode: 204`。若路由引用了 CORS 插件，预检响应遵循 CORS 规则，包括 `preflightContinue`；否则 Edgion 返回已配置的 `statusCode`。
 
 ## 配置场景
 
@@ -77,7 +77,7 @@ spec:
 
 ### 将所有 OPTIONS 视为预检
 
-当某些客户端发送 `OPTIONS` 请求时不携带标准 CORS 头，使用 `all-options`。
+当某些客户端发送 `OPTIONS` 请求时不携带标准 CORS 头，并且未配置 CORS filter 的路由需要在本地响应这些请求时，使用 `all-options`。对于配置了 CORS filter 的路由，不带 `Origin` 的 `OPTIONS` 不是 CORS 请求，因此仍会转发到上游。
 
 ```yaml
 apiVersion: edgion.io/v1alpha1
@@ -109,7 +109,24 @@ spec:
 预检如何与 CORS 交互取决于路由的 CORS 配置方式：
 
 - **Gateway API 原生 `type: CORS` filter**——预检处理器**不介入**；预检由路由级 filter 链内部处理，`preflightPolicy` 对此路径无效。
-- **EdgionPlugins CORS 插件（通过 `ExtensionRef`）**——预检处理器先运行，找到路由的 CORS 配置后使用该配置响应。若未找到 CORS 配置，则返回已配置的 `statusCode`。
+- **EdgionPlugins CORS 插件（通过 `ExtensionRef`）**——预检处理器将请求交给正常的路由插件链。对于允许的 Origin，除非设置了 `preflightContinue: true`，标准预检会携带已配置的 CORS 响应头在本地返回；启用该设置后，请求会转发到上游。对于拒绝的 Origin，无论 `preflightContinue` 如何设置，都会在本地返回不带 CORS 响应头的 `204`。不带 `Origin` 的 `OPTIONS` 不是 CORS 请求，即使 `mode: all-options` 将其选入全局处理，CORS 插件也不会接管，而是将其转发到上游。插件 entry-level conditions 仍然生效；条件不匹配时会跳过 CORS 插件，并将请求继续转发到上游。
+- **没有路由级 CORS filter**——`preflightPolicy` 选中的请求会使用 `statusCode` 在本地响应，不携带 CORS 响应头。
+
+完整行为如下：
+
+| 请求 | 路由 CORS filter | 结果 |
+|------|------------------|------|
+| 标准预检（`OPTIONS` + `Origin` + `Access-Control-Request-Method`） | 无 | 本地返回 `statusCode`，不携带 CORS 响应头 |
+| 标准预检，Origin 被允许 | Gateway API 原生 CORS | 本地返回 `204`，携带 CORS 响应头 |
+| 标准预检，Origin 被拒绝 | Gateway API 原生 CORS | 本地返回 `204`，不携带 CORS 响应头 |
+| 标准预检，Origin 被允许 | EdgionPlugins CORS，`preflightContinue: false` | 本地返回 `204`，携带 CORS 响应头 |
+| 标准预检，Origin 被允许 | EdgionPlugins CORS，`preflightContinue: true` | 转发到上游，并在上游响应中添加 CORS 响应头 |
+| 标准预检，Origin 被拒绝 | EdgionPlugins CORS，任意 `preflightContinue` 值 | 本地返回 `204`，不携带 CORS 响应头 |
+| 标准预检 | entry-level conditions 不匹配的 EdgionPlugins CORS | 转发到上游，不添加 CORS 响应头 |
+| 不带 `Origin` 的 `OPTIONS`，`mode: all-options` | 无 | 本地返回 `statusCode`，不携带 CORS 响应头 |
+| 不带 `Origin` 的 `OPTIONS`，`mode: all-options` | 原生或 EdgionPlugins CORS | 作为非 CORS 请求转发到上游 |
+| 带 `Origin` 但不带 `Access-Control-Request-Method` 的 `OPTIONS`，`mode: all-options` | 无 | 本地返回 `statusCode`，不携带 CORS 响应头 |
+| 带 `Origin` 但不带 `Access-Control-Request-Method` 的 `OPTIONS`，`mode: all-options` | 原生或 EdgionPlugins CORS | 作为实际 CORS 请求转发；若 Origin 被允许，则在上游响应中添加 CORS 响应头 |
 
 ## 边界情况与注意事项
 

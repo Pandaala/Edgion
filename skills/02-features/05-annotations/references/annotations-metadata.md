@@ -5,14 +5,13 @@ Use this file when the task is about real Kubernetes object annotations under `m
 ## Verify In Code
 
 - `edgion-resources/src/constants/annotations.rs`
-- `edgion-gateway/src/runtime/server/listener_builder.rs`
-- `edgion-gateway/src/runtime/store/listener_gateway_info.rs`
+- `edgion-gateway/src/runtime/server/base.rs`
+- `edgion-gateway/src/runtime/gateway_info.rs`
 - `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
 - `edgion-gateway/src/routes/tls/conf_handler_impl.rs`
 - `edgion-resources/src/resources/http_route_preparse.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
-- `edgion-gateway/src/backends/health/check/annotation.rs`
 - `edgion-resources/src/resources/edgion_tls.rs`
 
 ## Gateway `metadata.annotations`
@@ -21,18 +20,53 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/enable-http2` | `"true"` / `"false"` | enabled | **Frontend (Listener-side) only.** Controls HTTP/2 support for listeners built from this Gateway. For HTTP listeners this enables h2c; for HTTPS listeners it enables ALPN h2. When disabled, pure gRPC requests are rejected with 500. Does not affect backend protocol selection (use Service `appProtocol` for that). |
-| `edgion.io/http-to-https-redirect` | `"true"` / `"false"` | disabled | On non-TLS listeners, enables redirect before normal HTTP proxying. |
+| `edgion.io/enable-http2` | string | enabled | Frontend only. Case-insensitive `false`/`0`/`no`/`off` disables; any other present value enables. HTTP listeners use h2c and HTTPS listeners advertise ALPN h2. Backend protocol uses Service `appProtocol`. |
+| `edgion.io/http-to-https-redirect` | string | disabled | On non-TLS listeners, only case-insensitive `true` enables redirect. |
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
 | `edgion.io/metrics-test-type` | `lb` / `retry` / `latency` | none | Test-only metrics mode selector. |
-| `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Short names are expanded with the Gateway's namespace. Current verified runtime path is in `listener_builder.rs`. |
-| `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.requireSniHostMatch` | When `true`, on HTTPS listeners the SNI must match the request `Host` header (otherwise the request is rejected). Read in `listener_gateway_info.rs`; falls back to the cluster-wide `EdgionGatewayConfig` setting when absent. |
+| `edgion.io/edgion-stream-plugins` | `name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. The resource is resolved in the Gateway's namespace; slash-containing values are rejected by the Controller and fail closed defensively in the Gateway. Current verified runtime path is in `listener_builder.rs`. |
+| `edgion.io/edgion-plugins` | comma/space-separated refs | none | Ordered HTTP plugins applied to every request on this Gateway before route plugins. Bare names use the Gateway namespace; duplicates preserve first occurrence. |
+| `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.securityProtect.requireSniHostMatch` | Explicit true or false overrides the global value for this Gateway; absent inherits. HTTPS mismatch returns 421. |
+| `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway inline standard-DNS resolver for `ServiceExternalName` backends. **Data-plane only** (D3a): overrides the EGC default but not control-plane resolution. Mutually exclusive with `dns-resolver-ref`. |
+| `edgion.io/dns-resolver-ref` | `namespace/name` | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway httpdns LinkSys resolver reference. Explicit namespace required (bare names rejected). **Data-plane only**. A cross-namespace ref is ReferenceGrant-gated (from-kind `Gateway`, to-kind `edgion.io/LinkSys`); a denied ref is reported via `ResolvedRefs=False` and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
+
+| `edgion.io/accept-proxy-protocol` | `"true"` / `"false"` | disabled | **Inbound** PROXY protocol. Only case-insensitive `true` enables. Every listener of the Gateway then requires a PROXY header (v1 and v2 auto-detected) at the start of each connection, as sent by an L4 load balancer such as AWS NLB; the addresses it carries replace the peer address for the whole request path. Connections without a valid header are rejected (HAProxy `accept-proxy` semantics). Applies to HTTP, HTTPS, TCP, and TLS listeners — the header is consumed before the TLS handshake. Not applicable to UDP. Read once at listener-bind time, so changing it needs a gateway restart. Runtime path is in `listener_builder.rs`. |
+| `edgion.io/accept-proxy-protocol.<listener-name>` | `"true"` / `"false"` | inherits the Gateway-wide key | Overrides `accept-proxy-protocol` for the single listener with that `spec.listeners[].name`. Exists because a Gateway API `Listener` carries no annotations of its own. |
+| `edgion.io/proxy-protocol-trusted-cidrs` | IP/CIDR list (comma/space separated) | none | Restricts `accept-proxy-protocol` to these peers. A bare address is taken as /32 or /128. Peers outside the list are served as ordinary direct connections and their bytes are never parsed as a header — this is how one listener serves both load-balanced and direct traffic without letting a direct client forge a source address. Absent means every connection must carry a header. Separators are commas or any whitespace, so a YAML block scalar works. An unparseable entry or one matching every address falls back to requiring a header rather than building a partial or wide-open matcher; match-all is judged on the parsed prefix, so `0.0.0.0/00` and `0.0.0.0/+0` are refused too. A deliberate pair like `0.0.0.0/1, 128.0.0.0/1` still covers all of IPv4 and is accepted. **Gateway-wide only** — unlike `accept-proxy-protocol` there is no per-listener suffix. Deciding whether a trusted peer sent a header requires reading 12 bytes, so a trusted peer that connects silently is held until the handshake timeout: unsuitable for listeners fronting server-speaks-first protocols. |
 
 Important:
 
 - `metrics-test-*` keys are meant for integration testing and diagnostics, not normal production config.
 - `edgion.io/edgion-stream-plugins` is the current key used by the runtime path. Older docs used `edgion.io/stream-plugins`.
+- `edgion.io/accept-proxy-protocol` (inbound, on `Gateway`) and `edgion.io/proxy-protocol` (outbound, on `TLSRoute`) are opposite directions and unrelated. Do not confuse them.
+- A PROXY header is unauthenticated. Without `proxy-protocol-trusted-cidrs`, enable `accept-proxy-protocol` only where the listener is reachable exclusively through the trusted load balancer, enforced at the network layer, and never on a listener that also serves kubelet probes. With the CIDR list set, probes and other direct traffic are served normally.
+- In either mode the listener must only be reachable via a component that writes the header itself. A transparent L4 relay forwards the client's first bytes verbatim, so a client can author a header and the relay launders it into a trusted position — do not list such a gateway in `proxy-protocol-trusted-cidrs`.
+- `edgion.io/edgion-stream-plugins` runs at accept time, **before** the PROXY header is parsed, so its IP rules match the load balancer rather than the real client. The gateway logs a warning when both are enabled on one listener.
+- Gateway-level StreamPlugins attachments are intentionally same-namespace. To reuse centrally managed lists or selectors across per-namespace policies, reference a shared `EdgionConfigData` from each local `EdgionStreamPlugins`; those cross-namespace data references use the existing `ReferenceGrant` and `visibility` controls.
+
+## Log Projection Annotations
+
+| Key | Scope | Effect |
+|-----|-------|--------|
+| `edgion.io/log-label.<key>` | **TLSRoute, EdgionTls only** | Adds the suffix/value to resolved `Rsc.labels`, consumed by `ssl.log`. The same prefix may also be used on `metadata.labels`. **Not honored on HTTPRoute / GRPCRoute** — the TLS handshake layer has no plugin chain to attach a declaration to, so this prefix remains its only log-projection carrier. |
+
+The old comma-separated ctx-key allowlist annotation and the old unified
+JSON log-projection annotation have both been **removed entirely** (no
+aliases, no migration shim). On HTTPRoute / GRPCRoute, all log projection —
+route label/annotation values, request/response fields, plugin-set ctx vars —
+now goes through an `AccessLogExtern` declaration
+(`EdgionPlugins.spec.accessLogExtern`, attached via an `ExtensionRef` filter),
+which lands the collected fields in a nested `ext` block instead of flattening
+them at the entry's top level. See
+`skills/03-coding/observability/00-access-log.md` and
+`docs/superpowers/specs/2026-07-16-access-log-extern-plugin-design.md`.
+
+The `log-label.<key>` prefix on TLSRoute/EdgionTls is resolved by
+`resolve_log_labels` in `edgion-resources/src/resources/common/log_labels.rs`
+(capped at 16 entries, 63 bytes per key, 256 bytes per value); the function's
+JSON-array-parsing half (for the deleted unified log-projection annotation)
+has been removed.
 
 ## HTTPRoute / GRPCRoute `metadata.annotations`
 
@@ -40,6 +74,12 @@ Important:
 |-----|-------|---------|--------|
 | `edgion.io/hostname-resolution` | controller-generated string | system-managed | Diagnostic annotation describing effective hostname resolution. The controller writes it during parse. Do not hand-author it. |
 | `edgion.io/retry-non-idempotent` | `"true"` / `"false"` | `false` (safe) | Opt-in to retrying non-idempotent methods on the reused-connection retry path. Applies to all rules under this HTTPRoute/GRPCRoute. |
+| `edgion.io/mirror-connect-timeout-ms` | integer string | `1000` | RequestMirror connect timeout (ms). Applies to all RequestMirror filters under this HTTPRoute. |
+| `edgion.io/mirror-write-timeout-ms` | integer string | `1000` | RequestMirror write timeout (ms). |
+| `edgion.io/mirror-max-buffered-chunks` | integer string | `5` | Max body chunks buffered for the mirror (`0` is treated as `5`). |
+| `edgion.io/mirror-log` | `"true"` / `"false"` | `true` | Whether the mirror emits a dedicated mirror-log line. |
+| `edgion.io/mirror-max-concurrent` | integer string | `1024` | Max concurrent mirror tasks per gateway process (`0` is treated as `1024`). |
+| `edgion.io/mirror-channel-full-timeout-ms` | integer string | `0` | Max ms to wait for mirror channel space before abandoning the mirror; values above `1000` are clamped. |
 
 Notes:
 
@@ -56,6 +96,28 @@ Notes:
 - **Scope**: only the reused-connection retry path (`error_while_proxy` Case 2). The connect-failure path (`fail_to_connect`) never wrote request bytes upstream and is always retried regardless of method. The status-code retry (`retry.codes`) and per-try-timeout paths are explicitly operator-configured and are unaffected by this guard.
 - **Why an annotation, not a CRD field**: the standard Gateway API `HTTPRouteRetry` CRD is a structural schema that prunes unknown fields, so a new `spec.rules[*].retry` field would be silently dropped by the API server.
 - **Idempotency definition**: uses `http::Method::is_idempotent()` (RFC 9110), matching nginx's default `proxy_next_upstream` exclusion of non-idempotent methods.
+
+### `edgion.io/mirror-*` (RequestMirror tuning)
+
+- **Granularity**: HTTPRoute (applied to every `RequestMirror` filter under the route,
+  both rule-level and backendRef-level filters). Under delegation, the parent route's
+  annotations apply to the flattened `resolved_rules`; a child route's own mirror-*
+  annotations are not carried over (same semantics as `forward-raw-path` /
+  `retry-non-idempotent`).
+- **Why annotations, not filter fields**: Edgion installs the unmodified vendored
+  Gateway API CRD, a structural schema — in K8s conf-center mode the API server
+  silently prunes any `requestMirror` field the schema does not declare (no admission
+  error). The `HTTPRequestMirrorFilter` struct therefore keeps only the standard
+  `backendRef` / `fraction` / `percent` fields; do NOT add extension fields to it.
+- **Parsing time**: HTTPRoute load (`http_route_preparse.rs`,
+  `parse_mirror_tuning_annotations`).
+- **Storage**: `HTTPRouteRule.parsed_mirror_tuning: Option<MirrorTuning>` (copied to
+  every rule, `None` when no mirror annotation is present → defaults apply).
+- **Invalid value handling**: tracing INFO log + fall back to that field's default;
+  the route is not rejected and the other keys still apply.
+- **EdgionPlugins path**: the `RequestMirror` plugin variant embeds the same knobs
+  inline (`RequestMirrorPluginConfig`, flattened standard + tuning fields) because the
+  EdgionPlugins CRD preserves unknown fields — no pruning, no annotations needed.
 
 ### `edgion.io/forward-raw-path`
 
@@ -124,22 +186,26 @@ Verify in code: `edgion-gateway/src/backends/mod.rs` (`detect_backend_app_protoc
 
 GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 
-## Service / EndpointSlice / Endpoints `metadata.annotations`
+## Service / EndpointSlice `metadata.annotations`
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
-| `edgion.io/outlier-detection` | YAML string | none | Per-endpoint passive health check (Envoy-style outlier detection). Fields: `consecutiveErrors` (consecutive **application** 5xx — any >=500 except 502/503/504; default `5`), `consecutiveGatewayErrors` (consecutive **upstream-origin gateway** failures — backend returned 502/503/504; defaults to the parsed `consecutiveErrors`), `consecutiveLocalOriginFailures` (consecutive **local-origin** failures — connect failure/timeout, TLS-handshake timeout, transport reset, mid-proxy error; the data plane never got a usable HTTP response; defaults to the resolved `consecutiveGatewayErrors`), `ejectionSeconds` (base ejection time; default `30`), `maxEjectionSeconds` (cap on the backoff-scaled ejection time = `ejectionSeconds × num_ejections`; default `max(300, ejectionSeconds)`), `maxEjectionPercent` (default `50`). The three failure counters are independent; any one reaching its threshold ejects the endpoint. Aligns with Envoy `splitExternalLocalOriginErrors`: connect/transport failures (local-origin) are split from backend-returned 5xx (gateway/application) so a backend doing graceful 503 overload-shedding is not ejected on the same threshold as a dead port. Limitation: app-origin 502/503/504 are counted as gateway failures (the gateway sees only the status code) — raise `consecutiveGatewayErrors` if your app emits them. No-op for UDPRoute. Metrics: `edgion_circuit_breaker_ejected_endpoints` gauge + `edgion_circuit_breaker_ejections_total` counter (labelled `class` = `gateway`/`application`/`local_origin`) + `cb_recovery`/`cb_rejection`. Verify in code: `edgion-gateway/src/backends/circuit_breaker/config.rs`. |
-| `edgion.io/circuit-breaker` | YAML string | none | **Deprecated alias** for `edgion.io/outlier-detection` (logs a one-time deprecation warning per service; still fully functional). Despite the name this is passive health check / outlier detection, **not** an upstream circuit breaker. Prefer the canonical key. |
-| `edgion.io/panic-threshold` | integer string `0`–`100` | `0` (disabled) | Panic threshold percent. When the fraction of healthy backends (after health-check and circuit-breaker filtering) drops below this value, the gateway ignores health filtering and routes across **all** backends instead of returning 503. `0` disables panic mode. Values outside `0`–`100` are rejected. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for this Service. |
+| `edgion.io/dns-resolution-mode` | `controller` / `gateway` / `per-request` | `controller` | Per-`ServiceExternalName` DNS resolution mode. `controller`: use the controller-resolved EndpointSlice when it has a ready backend, else the gateway bridges via self-resolution + 5s cache. `gateway`: gateway resolves via the effective resolver + 5s cache (authoritative). `per-request`: resolve on every request, no cache. Invalid values fall back to `controller`. |
+| `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits Gateway / EGC / system | Per-Service inline standard-DNS resolver (most specific; applies to **both** planes). Mutually exclusive with `dns-resolver-ref`. |
+| `edgion.io/dns-resolver-ref` | `namespace/name` | inherits Gateway / EGC / system | Per-Service httpdns LinkSys resolver reference (most specific; applies to **both** planes). Explicit namespace required (bare names rejected). A cross-namespace ref is ReferenceGrant-gated (from-kind `Service`, to-kind `edgion.io/LinkSys`); a denied ref is logged and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
+
+Active health checks, outlier detection (passive ejection / circuit breaking), and
+the per-Service panic-threshold override are **not** Service annotations anymore —
+they moved to the `EdgionBackendTrafficPolicy` CRD (`spec.healthCheck` /
+`spec.outlierDetection` / `spec.loadBalancer.panicThreshold`, attached via
+`targetRefs`). See
+[03-resources/20-edgion-backend-traffic-policy.md](../../03-resources/20-edgion-backend-traffic-policy.md)
+for the schema and `edgion-resources/src/resources/edgion_backend_traffic_policy.rs`
+for the implementation.
 
 Notes:
 
-- The parser accepts YAML text, not flat key-value options.
-- Supported probe types: `http` (default), `tcp`, `grpc` (gRPC Health Check Protocol).
-- The user-facing health-check guide remains the best place for schema examples:
-  - `docs/zh-CN/user-guide/http-route/backends/health-check.md`
-  - `docs/en/user-guide/http-route/backends/health-check.md`
+- Supported active-probe types: `http` (default), `tcp`, `grpc` (gRPC Health Check Protocol).
 
 ## Legacy Key Warning
 

@@ -2,7 +2,7 @@
 
 This document lists all built-in functions in EdgionDSL, organized by category. Each function includes its full signature, parameter descriptions, return values, constraints, and usage examples.
 
-**Type overview**: EdgionDSL has 6 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
+**Type overview**: EdgionDSL has 7 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `Body` (an opaque request-body handle), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
 
 **Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations and `grpc_error()` are only meaningful in the request phase; `resp.*` read and write operations are only valid in the response phase.
 
@@ -149,17 +149,17 @@ req.set_header("X-Session-Id", session)
 
 ---
 
-### req.client_ip
+### req.direct_peer_ip
 
-**Signature**: `req.client_ip` → `Str`
+**Signature**: `req.direct_peer_ip` → `Str`
 
-Returns the client IP address after processing by the `real-ip` plugin. If the `real-ip` plugin is not configured, this is identical to `req.remote_ip` and returns the direct peer address of the connection.
+Returns the physical downstream transport peer (`DirectPeerIp`). It is not changed by inbound PROXY protocol or forwarded-header processing. Use `req.remote_ip` for ordinary client identity, rate-limit, and experiment-bucketing use cases.
 
 **Return value**: IP address string (IPv4 or IPv6 format)
 
 **Example**:
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") {
   req.set_header("X-Internal-Request", "true")
 }
@@ -171,14 +171,14 @@ if ip_in_cidr(ip, "10.0.0.0/8") {
 
 **Signature**: `req.remote_ip` → `Str`
 
-Returns the direct peer IP address of the TCP connection, without any proxy header processing. This is the actual remote address of the underlying connection.
+Returns the resolved client identity (`RemoteIp`) for the current request layer. It starts from the effective L4 peer and may be updated by the trusted-proxy `RealIp`/XFF resolver.
 
 **Return value**: IP address string (IPv4 or IPv6 format)
 
 **Example**:
 ```
 let remote = req.remote_ip
-log("direct connection from: " + remote)
+log("resolved client: " + remote)
 ```
 
 ---
@@ -310,6 +310,112 @@ Checks whether the request contains the specified header. Does not return the va
 ```
 if not req.has_header("X-Request-Id") {
   req.set_header("X-Request-Id", uuid())
+}
+```
+
+---
+
+### req.body
+
+**Signature**: `req.body` → `Body`
+
+Returns an opaque handle for the proxied request body. The handle contains no
+bytes, cursor, file descriptor, or storage path. Evaluating it checks body
+availability but does not read the body into a contiguous string. Every
+operation sees the current logical body version, whether it is backed by
+memory, a spill file, or mutation segments.
+
+Shared text operations decode incrementally with the same result as
+`String::from_utf8_lossy`: invalid UTF-8 is represented by U+FFFD and incomplete
+code points are carried across storage chunks. Raw byte reads, hashing, and
+mutations still operate on the original bytes.
+
+**Shared `Str` / `Body` text methods**:
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `.len()` | `Int` | Unicode scalar count |
+| `.is_empty()` | `Bool` | Whether the logical text is empty |
+| `.starts_with(s)` | `Bool` | Prefix test |
+| `.ends_with(s)` | `Bool` | Suffix test |
+| `.contains(s)` | `Bool` | Substring test |
+| `.matches("regex")` | `Bool` | Compile-time streaming-regex test |
+
+**Body-only reads**:
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `.byte_len()` | `Int` | Raw byte length; metadata-only |
+| `.read(offset, max_bytes)` | `Str` | Select the raw range, then lossily decode that isolated slice |
+| `.read_all()` | `Str` | Explicitly read and lossily decode the complete body |
+| `.sha256()` | `Str` | 64-character lowercase SHA-256 of the raw bytes; cached per immutable Body generation |
+| `.md5()` | `Str` | 32-character lowercase legacy MD5 checksum of the raw bytes |
+| `.hmac_sha256(key)` | `Str` | Generate a 64-character lowercase HMAC-SHA-256 over the raw bytes |
+| `.json_get("$.a[0]")` | value or `Nil` | Select a compile-time definite JSONPath |
+| `.json_select({"name": "$.a"})` | `Map` | Select several named compile-time paths in one parse |
+
+`read`, `read_all`, and serialized JSON results must fit `maxStringLen`. `read`
+returns at most `max_bytes`; an offset beyond the body is an error.
+
+Body digest and MAC methods scan the already captured raw bytes; they do not
+hash concurrently with client upload and never convert the Body to String.
+`sha256()` caches one 32-byte result per immutable Body generation. `md5()` and
+`hmac_sha256(key)` scan on every call and consume actual Body scan bytes. MD5
+is compatibility-only and must not be used for authentication, signatures,
+password storage, or collision-sensitive security. Its availability in a FIPS
+build does not make MD5 an approved security algorithm.
+
+`Body.hmac_sha256(key)` accepts an exact `Str`, adds no persistent key/MAC
+cache, and is only a MAC-generation API. Ordinary DSL `==` is not
+constant-time; do not use it to verify an attacker-supplied authentication
+tag. Use a dedicated authentication plugin or external verifier for inbound
+signature verification.
+
+**Request-stage-only mutations**:
+
+| Method | Effect |
+|--------|--------|
+| `.clear()` | Replace the body with empty content |
+| `.append(s)` | Append the UTF-8 bytes of exact `Str` argument `s` |
+| `.prepend(s)` | Prepend the UTF-8 bytes of exact `Str` argument `s` |
+| `.remove(start, end)` | Remove the half-open raw-byte range |
+| `.replace(from, to)` | Replace all non-overlapping, leftmost literal byte matches; both arguments must be `Str` |
+
+Mutations return `nil`, publish atomically, remain bounded by the gateway
+physical request-body cap, and retain at most 4,096 logical segments. Empty
+search patterns and invalid ranges are rejected. Mutation outside
+`requestPlugins` is rejected during configuration validation.
+
+**Availability and failure behavior**:
+
+- A request-stage script that statically references `req.body` uses the one
+  shared bounded request-body capture. A script without such a reference pays
+  no capture cost.
+- An `upstreamResponseFilterPlugins` script may read a cache populated earlier
+  by `RequestBodyBuffer`; it never starts late capture.
+- A known bodyless request uses an empty Body without allocating a cache.
+- The pre-VM body gate always fails closed: request-body limit failures return
+  413, capture timeouts return 408, and refusals or other capture failures
+  return 500. These gate responses have an empty body.
+- After the VM starts, missing late capture for a declared or unknown body,
+  storage I/O, scan-budget exhaustion, segment overflow, and mutation
+  publication failures always return HTTP 500 with the generic response
+  `Request body processing failed`, regardless of `errorPolicy`.
+- `Body` is truthy but cannot be converted implicitly or by `to_str`. It cannot
+  be concatenated, logged, interpolated, used as a map key, passed as a header
+  value, or forwarded to another string API. Use an explicit bounded read.
+
+Body/String equality scans logical text in either operand order. Two Body
+values compare equal because both identify the current request body. Ordering a
+Body is a type error.
+
+**Example**:
+
+```
+let body = req.body
+if !body.is_empty() and body.contains("token") {
+  req.set_header("X-Body-Preview", body.read(0, 128))
+  req.set_header("X-Body-SHA256", body.sha256())
 }
 ```
 
@@ -661,20 +767,35 @@ if ct != nil and regex_find(ct, "text/html") != nil {
 
 ---
 
+### resp.body
+
+`resp.body` is not supported. Configuration validation rejects scripts that
+reference it because proxied upstream response bodies remain streaming-only.
+Use response-header DSL operations or a per-chunk response-body plugin such as
+Wasm when streaming observation is sufficient.
+
+**Example**:
+```
+-- Rejected during EdgionPlugins validation:
+let b = resp.body
+```
+
+---
+
 ## Response Modification (resp.*)
 
 ### resp.set_status
 
 **Signature**: `resp.set_status(code)` → `Nil`
 
-Modifies the response status code sent to the client. `code` must be an integer between 100 and 599; otherwise a runtime error is raised.
+Modifies the final response status code sent to the client. `code` must be an integer between 200 and 599; otherwise a runtime error is raised.
 
 **Parameters**:
-- `code` (Int) — HTTP status code, in the range 100–599
+- `code` (Int) — final HTTP status code, in the range 200–599
 
 **Return value**: `nil`
 
-**Constraints**: `code` must be an integer type and within the range 100–599; a runtime error is raised if it is out of range.
+**Constraints**: `code` must be an integer type and within the range 200–599; a runtime error is raised if it is out of range.
 
 **Example**:
 ```
@@ -827,6 +948,9 @@ Returns the number of Unicode characters in a string (not bytes), or the number 
 
 > **Note (unit mismatch with `max_string_len`)**: `len()` reports **Unicode character count**, while the sandbox `max_string_len` limit (default 8192) and the resulting `string too long (N bytes > L bytes)` error are measured in **UTF-8 bytes**. For ASCII strings the two numbers are equal; for strings containing multi-byte characters (e.g. CJK, emoji) the byte length can be up to 4× the character length, so a `len(s) < max_string_len` guard does not guarantee that a subsequent concatenation or builtin call will pass the byte-length check.
 
+`Body` uses the method form `req.body.len()`. The global `len(req.body)` does
+not implicitly convert a Body to a string.
+
 **Example**:
 ```
 let token = req.header("X-Api-Key")
@@ -868,12 +992,16 @@ if auth != nil and len(auth) > 7 {
 
 **Signature**: `to_str(v)` → `Str`
 
-Converts any type to a string:
+Converts scalar and container values to a string:
 - `Str` → original value
 - `Int` → decimal representation
 - `Bool` → `"true"` or `"false"`
 - `Nil` → `"nil"`
 - `List` → `"[list]"`
+- `Map` → a diagnostic map representation
+
+`Body` is intentionally rejected with a type error. Use `read(offset,
+max_bytes)` or `read_all()` when an actual body string is required.
 
 **Parameters**:
 - `v` (any type) — Input value
@@ -1178,6 +1306,14 @@ if hex_token != nil {
 
 Computes the SHA-256 hash of a string, returning a 64-character lowercase hexadecimal digest.
 
+For a request Body, use `req.body.sha256()`. The method streams the original
+bytes from the already captured Body and does not require the body to fit
+`maxStringLen`; it does not hash concurrently with client upload. The first
+successful call for an immutable Body generation performs one bounded scan.
+Later calls for that generation reuse the 32-byte digest with zero Body scan
+bytes. A successful Body mutation creates a new generation and therefore
+requires one new scan. The old `sha256(req.body)` form is a type error.
+
 **Parameters**:
 - `s` (Str) — Input string
 
@@ -1199,7 +1335,11 @@ if key != nil {
 
 **Signature**: `md5(s)` → `Str`
 
-Computes the MD5 hash of a string, returning a 32-character lowercase hexadecimal digest. Note that MD5 is not suitable for security-sensitive use cases (such as password storage); it should only be used for non-security purposes such as data integrity checks or cache key generation.
+Computes the MD5 hash of a string, returning a 32-character lowercase
+hexadecimal digest. MD5 is collision-broken and provides no adversarial
+integrity guarantee. Use it only for legacy protocol compatibility, cache keys,
+or accidental-corruption checks; never use it for signatures, authentication,
+password storage, or attacker-controlled integrity decisions.
 
 **Parameters**:
 - `s` (Str) — Input string
@@ -1218,7 +1358,9 @@ req.set_header("X-Cache-Key", body_hash)
 
 **Signature**: `hmac_sha256(key, data)` → `Str`
 
-Computes a message authentication code using the HMAC-SHA256 algorithm, returning a 64-character lowercase hexadecimal string. Commonly used to verify request signatures.
+Generates a message authentication code using HMAC-SHA256 and returns a
+64-character lowercase hexadecimal string. For raw request Body bytes, use
+`req.body.hmac_sha256(key)`.
 
 **Parameters**:
 - `key` (Str) — Secret key string
@@ -1226,23 +1368,31 @@ Computes a message authentication code using the HMAC-SHA256 algorithm, returnin
 
 **Return value**: 64-character hexadecimal HMAC digest
 
-**Example**:
+This function generates a MAC. Ordinary DSL `==` is not constant-time, so do
+not use either HMAC function to verify an attacker-supplied tag. Use a
+dedicated authentication plugin or external verifier for inbound signature
+verification.
+
+**Example — generate an upstream signature**:
 ```
 let secret = "my-secret-key"
 let timestamp = req.header("X-Timestamp")
-let signature = req.header("X-Signature")
-if timestamp == nil or signature == nil {
-  return deny(401, "missing signature headers")
-}
-let expected = hmac_sha256(secret, timestamp + ":" + req.path)
-if signature != expected {
-  return deny(401, "invalid signature")
+if timestamp != nil {
+  let signature = hmac_sha256(secret, timestamp + ":" + req.path)
+  req.set_header("X-Upstream-Signature", signature)
 }
 ```
 
 ---
 
 ## Regular Expressions
+
+The `.matches("pattern")` method works on both `Str` and `Body`. It uses a
+bounded incremental DFA and a compile-time literal pattern, so matches may span
+storage chunks without materializing a Body. The streaming dialect rejects
+constructs the DFA cannot execute, including Unicode word boundaries; use an
+explicit ASCII boundary such as `(?-u:\b)`. `regex_find` and `regex_replace`
+remain string-only because they return or construct strings.
 
 ### regex_find
 
@@ -1351,33 +1501,89 @@ req.set_header("X-Request-Time", date_str)
 
 ### json_get
 
-**Signature**: `json_get(json_str, path)` → `Str | Int | Bool | Nil`
+**Signatures**:
 
-Extracts a value from a JSON string using a dot-separated path. The path format is `"field"` or `"parent.child.grandchild"`; numeric indices can be used for arrays, e.g. `"items.0.name"`. Returns `nil` if the path does not exist or JSON parsing fails.
+- `json_get(json_str, "$.path")` → `Str | Int | Bool | Nil`
+- `req.body.json_get("$.path")` → `Str | Int | Bool | Nil`
+
+Selects a value from a string or request Body using a compile-time definite
+JSONPath. The accepted subset is root `$`, dot members (`$.user.name`), quoted
+members (`$["name.with.dots"]`), and non-negative array indices
+(`$.items[0].name`). Wildcards, filters, recursive descent, unions, slices,
+negative indices, and dynamic paths are rejected at compile time.
 
 **Parameters**:
 - `json_str` (Str) — JSON string
-- `path` (Str) — Dot-separated field path
+- `path` (Str literal) — Definite JSONPath
 
 **Return value**: Extracted value (`Str`, `Int`, `Bool`, or `Nil`)
 
 **Constraints**:
-- The JSON string length must not exceed `maxStringLen` (default 8192 bytes)
-- The path supports at most 32 segments; a runtime error is triggered if this is exceeded
+- Paths are at most 1024 UTF-8 bytes and 32 segments
+- The complete JSON document is validated, but Body input retains only the selected value rather than building a complete DOM
 - JSON numbers that can be represented as `i64` are returned as `Int`; otherwise they are returned as `Str`; array and object nodes are returned as their JSON string representation
+- The selected string or serialized array/object must fit `maxStringLen`
+- A missing path, structural mismatch, or invalid JSON returns `nil`; request-body storage failure is fixed fail-close
 
 **Example**:
 ```
 let payload = req.header("X-Jwt-Claims")
 if payload != nil {
-  let user_id = json_get(payload, "sub")
-  let role = json_get(payload, "role")
+  let user_id = json_get(payload, "$.sub")
+  let role = json_get(payload, "$.role")
   if user_id != nil {
     req.set_header("X-User-Id", to_str(user_id))
   }
   if role == "admin" {
     req.set_header("X-Is-Admin", "true")
   }
+}
+```
+
+---
+
+### req.body.json_select
+
+**Signature**:
+`req.body.json_select({"outputName": "$.path", ...})` → `Map`
+
+Selects several definite JSONPaths from the current request Body with one
+complete Body scan and one JSON parse. The argument must be a non-empty map
+literal: output names and paths cannot be computed at runtime.
+
+The result contains every declared output name in declaration order. Missing
+paths, traversal mismatches, and JSON `null` become `Nil`. Duplicate paths are
+allowed under different output names and are captured once. Duplicate JSON
+object keys use the last occurrence, matching `json_get`.
+
+**Constraints**:
+
+- 1–64 entries, further limited by `maxMapSize`
+- unique output names up to 256 UTF-8 bytes
+- paths up to 1,024 UTF-8 bytes and 32 segments
+- each selected string or serialized subtree, and the live aggregate selected
+  string payload, is bounded by `maxStringLen`
+- the complete JSON document is validated; invalid JSON returns a Map whose
+  values are all `Nil`
+- Body storage and scan-budget failures remain fixed fail-close
+
+Numbers use the same conversion as `json_get`: values fitting `i64` become
+`Int`; other numbers use its canonical `Str` conversion. Exact source-token
+spelling is not promised.
+
+Prefer `json_select` whenever a script needs several Body fields. Repeated
+`json_get` calls each parse and scan the complete Body and each consume a Body
+scan pass.
+
+```dsl
+let values = req.body.json_select({
+  "id": "$.user.id",
+  "name": "$.user.name",
+  "role": "$.user.role"
+})
+
+if values["id"] != nil {
+  req.set_header("X-User-Id", to_str(values["id"]))
 }
 ```
 
@@ -1394,7 +1600,7 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 **Parameters**:
 - `method` (Str) — HTTP method, e.g. `"GET"`, `"POST"`, `"PUT"`
 - `url` (Str) — Full URL including scheme and host, e.g. `"https://api.example.com/v1/check"`
-- `body` (Str | Nil) — Request body; pass `nil` for no body
+- `body` (Str | Body | Nil) — A string request body, the opaque `req.body`, or `nil` for no body
 - `timeout_ms` (Int, optional) — Per-request timeout in milliseconds; capped to `httpMaxTimeoutMs` (default 5000)
 - `headers` (Map, optional) — Additional request headers as a `Map` of string key-value pairs
 
@@ -1402,27 +1608,36 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | Int | HTTP response status code; `0` if the request failed (timeout, connection error, SSRF block, etc.) |
+| `status` | Int | HTTP response status code; `0` for network, timeout, dial-time egress rejection, or response-stream failure |
 | `body` | Str | Response body as UTF-8 text; empty string if the call failed or the body is empty |
 | `headers` | Map | Response headers; each key is the lowercase header name, each value is the last header value for that name |
 
-**This function never raises a runtime error.** Network failures, timeouts, and SSRF blocks all return `status = 0` with an empty body.
+Network failures, timeouts, response-stream failures, and DNS-resolved addresses
+rejected at dial time return `status = 0` with an empty body. Invalid arguments,
+malformed or unsupported URLs, direct IP literals rejected by the SSRF precheck, and
+caller-supplied framing headers on an opaque `Body` call raise normal DSL runtime
+errors. Opaque-Body access, read, scan-budget, and limit failures raise the fixed
+fail-close `BodyAccess` error.
 
 **Constraints**:
-- Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
-- When `httpBlockPrivateIps: true`, requests whose URL host is a loopback, private, or link-local **IP literal** return `status = 0`. The guard inspects the URL host string only — it does **not** resolve DNS names, so a hostname that resolves to a private address is not blocked by this flag. Use network-level egress controls (NetworkPolicy) as the primary defense for hostname-based SSRF.
-- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent — the call still succeeds and the call still does not raise.
+- Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) raise an error.
+- When `httpBlockPrivateIps: true`, loopback, private, link-local, and unspecified destinations are blocked. Direct IP literals are rejected before sending; hostnames are checked after DNS resolution against the exact addresses used for dialing, including on redirect hops. Network-level egress controls remain recommended as defense in depth.
+- Only the third argument accepts the opaque `Body` value, normally written as `req.body`. The runtime takes an immutable call-time snapshot and pull-streams its raw bytes from memory, spill files, and mutation segments without materializing the complete body.
+- Opaque `Body` size is capped by `min(httpMaxRequestBodyBytes, gateway physical request-body cap)`. The configured field defaults to 1 MiB and may be explicitly raised to at most 32 MiB. Bytes fetched from the snapshot count against the cumulative `maxBodyScanPasses` budget.
+- On an opaque `Body` call, caller headers must not contain `Content-Length` or `Transfer-Encoding`; either header is rejected so the runtime exclusively controls request framing. An empty opaque `Body` sends `Content-Length: 0`; `nil` attaches no body.
+- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent and the call still succeeds.
 - The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
-- At most 10 redirects are followed (global client setting). When `httpBlockPrivateIps: true`, the same IP-literal guard is re-applied to **every** redirect hop, so a 30x to a blocked address yields `status = 0` instead of silently following.
+- `Str` and `Nil` calls follow at most 10 redirects. When `httpBlockPrivateIps: true`, both the direct-literal and dial-time resolved-address checks apply to every redirect hop. Opaque `Body` calls never follow redirects and return the 3xx response directly.
 
 **Configuration fields** (inside `config`):
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
+| `httpMaxRequestBodyBytes` | Integer | `1048576` | Maximum opaque `Body` request size; range `1`–`33554432`, further capped by the gateway physical request-body limit |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
-| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard). IP literals only — hostnames are not resolved (see note above). |
+| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local/unspecified IP addresses, including hostname results checked at dial time |
 
 **Example — call a health endpoint and branch on status**:
 ```
@@ -1440,6 +1655,15 @@ let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-K
 let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
 if r["status"] != 200 {
   return deny(401, "auth check failed")
+}
+```
+
+**Example — stream the current request body without full materialization**:
+```
+let hdrs = {"Content-Type": req.content_type}
+let r = http.call("POST", "https://scanner.example.com/check", req.body, 2000, hdrs)
+if r["status"] != 200 {
+  return deny(403, "request rejected")
 }
 ```
 
@@ -1588,7 +1812,7 @@ Atomically increments the integer value of a key by 1. Creates the key with valu
 
 **Example — simple rate limiting**:
 ```
-let r = redis.incr("cache", "rate:" + req.client_ip)
+let r = redis.incr("cache", "rate:" + req.remote_ip)
 if !r["ok"] {
   log_warn("redis error: " + r["error"])
   return deny(503, "service unavailable")
@@ -1705,7 +1929,7 @@ Checks whether the specified IP address belongs to the given CIDR range. Both IP
 
 **Example**:
 ```
-let ip = req.client_ip
+let ip = req.direct_peer_ip
 if ip_in_cidr(ip, "10.0.0.0/8") or ip_in_cidr(ip, "172.16.0.0/12") or ip_in_cidr(ip, "192.168.0.0/16") {
   req.set_header("X-Private-Network", "true")
 } else {
@@ -1726,7 +1950,7 @@ The following functions terminate the current request processing pipeline. They 
 Returns the specified HTTP error response to the client and terminates processing. If `status` is out of range, it is automatically downgraded to 500. If `body` is `nil`, the response body is empty.
 
 **Parameters**:
-- `status` (Int) — HTTP status code, in the range 100–599
+- `status` (Int) — final HTTP status code, in the range 200–599
 - `body` (Str | Nil) — Response body string; pass `nil` for no response body
 
 **Example**:
@@ -1886,7 +2110,7 @@ Records a log message at the ERROR level. The message is written to the Gateway'
 ```
 let sig = req.header("X-Signature")
 if sig == nil {
-  log_error("missing signature header, rejecting request from: " + req.client_ip)
+  log_error("missing signature header, rejecting request from: " + req.remote_ip)
   return deny(401, "signature required")
 }
 ```
@@ -1903,7 +2127,7 @@ if sig == nil {
 | `req.query(name)` | Request Reading | `Str\|Nil` | 1 |
 | `req.query_string` | Request Reading | `Str\|Nil` | 0 |
 | `req.cookie(name)` | Request Reading | `Str\|Nil` | 1 |
-| `req.client_ip` | Request Reading | `Str` | 0 |
+| `req.direct_peer_ip` | Request Reading | `Str` | 0 |
 | `req.remote_ip` | Request Reading | `Str` | 0 |
 | `req.path_param(name)` | Request Reading | `Str\|Nil` | 1 |
 | `req.header_names` | Request Reading | `List` | 0 |
@@ -1959,7 +2183,8 @@ if sig == nil {
 | `time_now()` | Time | `Int` | 0 |
 | `time_format(timestamp, format)` | Time | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
-| `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 2–5 |
+| `req.body.json_select({name: path, ...})` | JSON | `Map` | 1 map |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 3–5 |
 | `ip_in_cidr(ip, cidr)` | Network | `Bool` | 2 |
 | `uuid()` | Utility | `Str` | 0 |
 | `range(start, end)` | Utility | `List` | 2 |

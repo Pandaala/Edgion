@@ -799,6 +799,46 @@ impl RegionRouteTestSuite {
         )
     }
 
+    /// Local-region pass-through still dyes: the request was routed to a
+    /// region (virginia == myRegion), so X-Region must reach the backend.
+    fn myregion_local_pass_sets_dye_header() -> TestCase {
+        TestCase::new(
+            "myregion_local_pass_sets_dye_header",
+            "Local-region pass-through: dye X-Region carries 'virginia'",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MYREGION_HOST)
+                        .header("X-Direct-Region", "virginia")
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            let body = resp.text().await.unwrap_or_default();
+                            if body.contains("x-region: virginia") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("x-region: virginia not found in echo body: {}", body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// X-Direct-Region: ohio (failoverTo=virginia=myRegion) → redirect ohio→virginia → local pass → 200
     fn my_region_failover_to_local() -> TestCase {
         TestCase::new(
@@ -996,6 +1036,7 @@ impl TestSuite for RegionRouteTestSuite {
             Self::hash_writeback_logged(),
             // myRegion + failoverTo (MYREGION_HOST)
             Self::my_region_direct_local(),
+            Self::myregion_local_pass_sets_dye_header(),
             Self::my_region_failover_to_local(),
             Self::my_region_failover_to_nonlocal(),
         ]

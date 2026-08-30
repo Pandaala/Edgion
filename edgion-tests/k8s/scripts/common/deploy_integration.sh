@@ -6,6 +6,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/edgion-tests/k8s/kubernetes}"
 CRD_ROOT="${CRD_ROOT:-$PROJECT_ROOT/config/crd}"
 VALIDATE_SCRIPT="$SCRIPT_DIR/validate_no_endpoints.sh"
+PORTS_CONFIG="$PROJECT_ROOT/edgion-tests/integration/conf/ports.json"
 TEST_SERVER_REPLICAS="${TEST_SERVER_REPLICAS:-3}"
 BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE:-edgion-backend}"
 
@@ -158,6 +159,11 @@ fi
 
 if [[ "${SKIP_TEST}" != "true" ]]; then
   echo "[5/5] Apply test workloads"
+  kubectl create configmap edgion-test-ports \
+    --namespace edgion-test \
+    --from-file="ports.json=${PORTS_CONFIG}" \
+    --dry-run=client \
+    -o yaml | kubectl apply -f -
   set +e
   APPLY_OUT="$(kubectl apply -k "$K8S_DEPLOY_ROOT/test/" 2>&1)"
   APPLY_RC=$?
@@ -179,6 +185,11 @@ if [[ "${SKIP_TEST}" != "true" ]]; then
   else
     echo "${APPLY_OUT}"
   fi
+
+  # A ConfigMap file mounted with subPath does not update in an existing Pod.
+  # Restart after every canonical registry apply so repeated deployments cannot
+  # keep a stale listener map.
+  kubectl rollout restart deployment/edgion-test-client -n edgion-test
 
   if [[ -n "${TEST_SERVER_IMAGE}" ]]; then
     echo "Override test-server image: ${TEST_SERVER_IMAGE}"

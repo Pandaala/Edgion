@@ -3,12 +3,6 @@ kind: Service
 metadata:
   name: cb-alias
   namespace: edgion-default
-  annotations:
-    edgion.io/circuit-breaker: 'consecutiveErrors: 10
-
-      consecutiveGatewayErrors: 3
-
-      '
 spec:
   ports:
   - port: 30002

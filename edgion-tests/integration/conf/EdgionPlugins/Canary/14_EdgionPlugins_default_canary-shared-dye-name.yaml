@@ -1,0 +1,50 @@
+# Shared dye name: two independent plugin entries record to the SAME
+# response header name. Canary's profile resolves to canary-app-v2, which
+# 15_HTTPRoute_default_canary-shared-dye-name-test.yaml deliberately omits
+# from its backendRefs, so Canary takes its `fallback` branch and appends
+# the first value; RateLimitRedis then hits its (intentionally
+# unreachable) Redis and appends the second value under `fail-open`. Both
+# rules render into X-Edgion-Outcome, in execution (list) order.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-shared-dye-name
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            on: [fallback]
+      config:
+        enable: true
+        activeProfile: canary
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: fallback
+    - enable: true
+      type: RateLimitRedis
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            on: [fail-open]
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onKeyMiss: Allow
+        onRedisFailure: Allow
+        rejectStatus: 429
+        rejectMessage: "unused (fail-open)"
+        showLimitHeaders: false
+        keyPrefix: "edgion:it:rlr:shared-dye:"

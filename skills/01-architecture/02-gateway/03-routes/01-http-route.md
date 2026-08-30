@@ -1,6 +1,6 @@
 ---
 name: gateway-http-route-engine
-description: HTTP route matching engine — RadixPath, RegexSet, ConfHandler, proxy implementation, LB policy sync.
+description: HTTP route matching engine — RadixPath, RegexSet, ConfHandler, proxy implementation, session persistence.
 ---
 
 # HTTP route engine
@@ -24,7 +24,6 @@ edgion-gateway/src/routes/http/
 │   ├── pg_response_filter.rs   # response filter
 │   └── ...                     # other Pingora callbacks
 ├── redirect_http.rs            # EdgionHttpRedirectProxy: HTTP→HTTPS 301 redirect
-├── lb_policy_sync.rs           # sync LB policies into the global PolicyStore
 ├── session_persistence.rs      # Gateway API SessionPersistence: cookie/header session affinity
 └── tests.rs
 ```
@@ -60,7 +59,8 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 - All regex patterns are compiled into a single `RegexSet`; match complexity is O(M) where M is the input path length.
 - Routes are sorted by pattern string length descending; longer (more specific) patterns are preferred.
 - When `RegexSet` construction fails, falls back to linear matching one by one.
-- The regex engine runs before the radix engine inside `RouteRules.match_route`.
+- `RouteRules.match_route` tries the radix Exact/PathPrefix engine first and uses the regex engine
+  only as a fallback, preserving `Exact > PathPrefix > RegularExpression`.
 
 ## proxy_http implementation
 
@@ -89,21 +89,25 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 - Returns status code 301 with a `Location` header pointing to the HTTPS URL.
 - Port handling: when the HTTPS port is 443, the port number is omitted.
 
-## LB policy sync
+## LB policy
 
-`lb_policy_sync.rs` extracts LB policies and syncs them to the global `PolicyStore` when routes update:
-
-- `sync_lb_policies_for_routes`: iterate all HTTPRoute rules' `backend_refs`, extract `extension_info.lb_policy`, and update `PolicyStore`.
-- `cleanup_lb_policies_for_routes`: remove LB policies associated with deleted routes.
-- Supported policy types: `LBPolicyConsistentHash` (header.xxx / cookie.xxx / arg.xxx), `LBPolicyLeastConn`.
+The route no longer carries an LB policy. The route-level `LBPolicy*`
+`ExtensionRef` filter mechanism and its per-route sync module
+(`lb_policy_sync.rs`, the route-fed `PolicyStore`) were removed; a route
+`backendRef` filter referencing an `LBPolicy*` kind now fails validation like
+any other unrecognized `extensionRef`. The LB algorithm is resolved purely
+from the target Service key at selection time, via the
+`EdgionBackendTrafficPolicy` policy store — see
+[06-load-balancing.md](../06-load-balancing.md) and
+[07-backends.md](../07-backends.md#backend-traffic-policy-edgionbackendtrafficpolicy).
 
 ## Session persistence
 
 `session_persistence.rs` implements Gateway API `SessionPersistence` (cookie- or header-based session affinity):
 
-- **Token derivation**: `generate_session_token(backend_addr)` returns a deterministic 8-char hex CRC32 of the backend `ip:port`. It is a stickiness hint, not a security boundary (no MAC/secret) — see the module doc-comment threat model.
+- **Token derivation**: `generate_session_token(backend_addr)` returns a deterministic 16-char hex token (SHA-256 of the backend `ip:port` truncated to 64 bits). It is a stickiness hint, not a security boundary (no MAC/secret) — see the module doc-comment threat model. `build_sp_affinity_map` reuses this function so map keys and injected tokens can never drift.
 - **Default name**: `edgion-session-affinity` (overridable via the resource's `sessionName`). `get_session_name` / `get_persistence_type` read the config.
-- **Request path** (`pg_upstream_peer.rs`): `extract_session_token` reads the token from the cookie or header; if present and the token maps to a live backend, that backend is selected (with SSRF validation on the upstream-peer fallback path).
+- **Request path** (`pg_upstream_peer.rs` / `grpc/integration.rs`): `sp_extract_token` reads the token from the cookie or header; `sp_resolve_target_rule_scoped` then resolves it **before** weighted backendRef selection, across ALL of the matched rule's backendRefs in declaration order (weight-0 refs included — GEP-1619: weights govern only new sessions). A hit selects that backendRef and pins the endpoint (`sp_target_addr`, with SSRF validation on the upstream-peer fallback path); a full miss falls back to weighted RR and refreshes the token. An `Internal` upstream jump wins over the sticky session for that request without rewriting the session.
 - **Response path** (`pg_upstream_response_filter.rs`): `build_set_cookie_value` emits the `Set-Cookie` for cookie-mode persistence.
 
 ## conf_handler_impl flow
@@ -112,16 +116,17 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 
 ### full_set
 
-1. Sync LB policies.
-2. Clear `route_cache` and replace fully.
-3. Call `rebuild_all_listener_managers` to rebuild every listener route table.
+1. Clear `route_cache` and replace it fully.
+2. Call `rebuild_all_listener_managers` to rebuild every listener route table.
 
 ### partial_update
 
 1. Compute the set of affected listeners (from changed routes' `resolved_listeners`).
-2. Merge add+update, sync LB policies, clean up LB policies for removed routes.
-3. Update `route_cache`.
-4. Call `rebuild_affected_listener_managers` to rebuild only affected listeners.
+2. Merge add+update and update `route_cache`; remove deleted route keys.
+3. Call `rebuild_affected_listener_managers` to rebuild only affected listeners.
+
+LB policy is not synchronized from routes. It is resolved from the target Service's
+`EdgionBackendTrafficPolicy` at backend selection time.
 
 ### Route parsing
 
@@ -147,4 +152,4 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 | `edgion-gateway/src/routes/http/match_unit.rs` | HttpRouteRuleUnit, deep_match |
 | `edgion-gateway/src/routes/http/proxy_http/mod.rs` | EdgionHttpProxy |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | EdgionHttpRedirectProxy |
-| `edgion-gateway/src/routes/http/lb_policy_sync.rs` | LB policy sync |
+| `edgion-gateway/src/routes/http/session_persistence.rs` | Gateway API SessionPersistence |

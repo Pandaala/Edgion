@@ -7,14 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::{ParentReference, RefDenied};
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
-
-/// API group for TLSRoute
-pub const TLS_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for TLSRoute
-pub const TLS_ROUTE_KIND: &str = "TLSRoute";
 
 /// TLSRoute defines TLS rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -35,6 +28,10 @@ pub struct TLSRouteSpec {
     /// Hostnames defines a set of SNI names that should match against the SNI attribute
     /// of TLS ClientHello message in TLS handshake
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     /// Rules defines the TLS routing rules
@@ -76,6 +73,7 @@ pub struct TLSBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend
@@ -89,11 +87,6 @@ pub struct TLSBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-
-    /// Parsed extension info (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
 
     /// Cross-namespace reference denial info
     /// Set by Controller when this backend's cross-namespace reference
@@ -123,6 +116,10 @@ pub struct TLSRouteAlpha3Spec {
     pub parent_refs: Option<Vec<ParentReference>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,7 +167,13 @@ use super::http_route::RouteParentStatus;
 #[serde(rename_all = "camelCase")]
 pub struct TLSRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live route). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }
 
@@ -204,7 +207,6 @@ mod tests {
                         weight: Some(1),
                         group: None,
                         kind: None,
-                        extension_info: Default::default(),
                         ref_denied: None,
                     }]),
                 }]),

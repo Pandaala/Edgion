@@ -1,0 +1,40 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gac-ip-outside
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestAccessPolicy
+      config:
+        defaultProfile: lockdown
+        status: 403
+        message: "forbidden: origin accepts CDN traffic only"
+        profiles:
+          normal:
+            requiredRuleGroups:
+              - name: source
+                anyOfRules:
+                  - name: none
+                    type: directPeerIp
+                    config:
+                      ips: ["192.0.2.0/24"]
+          lockdown:
+            requiredRuleGroups:
+              - name: source
+                anyOfRules:
+                  - name: cloudflare
+                    type: directPeerIp
+                    config:
+                      ips: ["10.0.0.0/8"]
+                      conditions:
+                        allOf:
+                          - type: secretMatch
+                            key:
+                              type: header
+                              name: X-CF-Secret
+                            secretKey: token
+                            secretRef:
+                              name: gac-origin-secret
+                              namespace: edgion-test

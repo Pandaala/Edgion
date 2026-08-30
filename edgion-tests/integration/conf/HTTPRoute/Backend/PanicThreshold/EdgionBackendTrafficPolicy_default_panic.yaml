@@ -1,0 +1,27 @@
+# Panic threshold plus a misconfigured health check.
+# The active probe points at an always-503 path, so every backend is marked
+# unhealthy even though the real backend serves /health fine. With the healthy
+# fraction below 50%, panic mode engages and keeps routing to all backends
+# instead of returning 503.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: panic-svc-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: panic-svc
+  loadBalancer:
+    type: RoundRobin
+    panicThreshold: 50
+  healthCheck:
+    active:
+      type: http
+      path: /status/503
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses:
+        - 200

@@ -1,6 +1,6 @@
 ---
 name: gateway-udp-route
-description: UDP route — per-listener route table, stateless proxy, ConfHandler.
+description: UDP route — per-listener route table, client-session upstream pinning, and ConfHandler.
 ---
 
 # UDP route
@@ -39,15 +39,18 @@ pub struct UdpRouteTable {
 
 `GlobalUdpRouteManagers` (`route_cache` + `by_listener → UdpPortRouteManager → ArcSwap<UdpRouteTable>`) follows the shared L4 per-listener management pattern — identical bucketing/rebuild/ConfHandler mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
 
-## Stateless UDP proxy
+## UDP client-session proxy
 
 `EdgionUdpProxy` is the core UDP proxy implementation:
 
-- Holds an `Arc<UdpPortRouteManager>` and gets the current snapshot via `load_route_table()` (per-packet hot path).
-- Calls `match_route()` for each datagram to obtain the route.
-- Selects a backend from the route's `backend_refs`.
-- UDP is connectionless — each datagram is forwarded independently with no connection state.
-- Supports weighted backend selection (same `BackendSelector` mechanism as TCP / HTTP).
+- Maintains a per-client `client_sessions` map and pins each active client to one upstream address.
+- The first packet for a client loads the current route snapshot, runs route/plugins/backend selection,
+  creates the upstream socket/session, and records the selected address.
+- Subsequent packets take the session fast path and reuse the pinned upstream without repeating route,
+  plugin, or backend selection.
+- Sessions expire after 60 seconds of inactivity; each listener is capped at 10,000 sessions.
+- Route or backend configuration changes therefore affect an existing client after its pinned session
+  expires (or is otherwise removed), not on the next datagram.
 
 ## Key source files
 

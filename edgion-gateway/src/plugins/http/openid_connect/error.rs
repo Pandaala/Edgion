@@ -33,7 +33,7 @@ impl OidcVerifyError {
             OidcVerifyError::Expired => Cow::Borrowed("Token expired"),
             OidcVerifyError::InvalidFormat => Cow::Borrowed("Invalid token format"),
             OidcVerifyError::RefreshSingleflightTimeout => Cow::Borrowed("Token refresh singleflight wait timeout"),
-            OidcVerifyError::JwksFetch(detail) => Cow::Owned(format!("Failed to fetch JWKS: {}", detail)),
+            OidcVerifyError::JwksFetch(_) => Cow::Borrowed("Bad Gateway"),
             OidcVerifyError::Other { message, .. } => Cow::Borrowed(message.as_str()),
         }
     }
@@ -98,7 +98,7 @@ mod tests {
         );
         assert_eq!(
             OidcVerifyError::JwksFetch("connection refused".into()).user_message(),
-            "Failed to fetch JWKS: connection refused"
+            "Bad Gateway"
         );
         assert_eq!(
             OidcVerifyError::Other {

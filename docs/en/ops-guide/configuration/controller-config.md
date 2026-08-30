@@ -40,13 +40,25 @@ conf_sync:
   # no_sync_kinds: [ReferenceGrant, Secret]
   # Kinds NOT synced to Gateway — setting this REPLACES the default list entirely, not appended
 
-# ─── gRPC channel security (optional mTLS) ────────────────────────
+# ─── gRPC channel security (REQUIRED) ─────────────────────────────
+# Omitting this section makes the Controller REFUSE TO START. Pick exactly one of
+# the three options below (auto_ca / cert paths / skip_tls).
+#
+# Option 1 — Kubernetes: the Controller's internal CA provisions everything.
+conf_sync_security:
+  auto_ca: true
+#
+# Option 2 — file-mode mTLS:
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/server.crt   # Controller server certificate (PEM)
 #     key: certs/grpc/server.key    # Server private key (PEM)
 #     ca: certs/grpc/ca.crt         # CA to verify Gateway client certificates
-#     skip_tls: false               # true = emergency plaintext fallback, logs ERROR
+#
+# Option 3 — explicit plaintext opt-in (local dev / non-production only, logs ERROR):
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 # ─── conf_center: FileSystem mode (local development) ─────────────
 conf_center:
@@ -63,6 +75,7 @@ conf_center:
 #   gateway_address: ""                            # Address reported in Gateway status
 #   ha_mode: leader-only                           # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]           # Skip CRD pre-check and watch for these kinds
+#   cache_ready_deadline_secs: 90                  # Pre-CachesReady deadline (secs); restart-bound, not hot-reloadable
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system
@@ -118,16 +131,33 @@ conf_center:
 | `capacity_overrides` | `Map<String, Integer>` | `{}` | Per-kind capacity overrides, e.g. `HTTPRoute = 500` |
 | `no_sync_kinds` | `Array<String>` | `["ReferenceGrant", "Secret"]` | Kinds NOT synced to Gateway. **Setting this replaces the default list entirely — it is not appended**. Optional |
 
-### [conf_sync_security.tls]
+### [conf_sync_security]
 
-Optional. When present, the Controller gRPC port uses mTLS. When absent, gRPC runs in plaintext (compatible with older versions).
+**Required.** The conf_sync gRPC channel carries resolved Secrets (TLS private keys, backend
+credentials) to the data plane, so its transport must be chosen explicitly.
+
+**Omitting the `conf_sync_security` section entirely makes the Controller refuse to start**
+(non-zero exit, with an actionable error). Configure exactly one of:
+
+| Configuration | Result |
+|---------------|--------|
+| `auto_ca: true` | mTLS — the Controller's internal CA provisions the CA and the Gateway client cert (recommended on Kubernetes) |
+| `certs` / legacy `tls` block with `cert` + `key` + `ca` | File-mode mTLS |
+| `tls.skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
+| *(section omitted)* | **Refuses to start** |
+
+> **Migration**: omitting the section used to mean "plaintext gRPC". Deployments that relied on
+> that will now fail to start. To keep plaintext, opt in explicitly with
+> `conf_sync_security: {tls: {skip_tls: true}}`; otherwise configure `auto_ca` or cert paths.
+
+#### [conf_sync_security.tls]
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cert` | `String` | — | Server certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Server private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify Gateway client certificates |
-| `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and starts in plaintext mode (logs ERROR) |
+| `skip_tls` | `Boolean` | `false` | Explicit plaintext opt-in: `true` skips TLS and starts in plaintext mode (logs ERROR and raises `edgion_system_error_state{reason="skip_tls"}`) |
 
 Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
@@ -155,8 +185,13 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | `gateway_address` | `String` | — | Address reported in Gateway status. Optional |
 | `ha_mode` | `String` | — | HA mode: `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | Resource kinds to skip CRD pre-check and watch for (PascalCase), e.g. `["TCPRoute", "UDPRoute"]` |
+| `cache_ready_deadline_secs` | `Integer` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` — covers the internal 30 s readiness-poll budget plus the post-ready tail (WatchObj registration, revalidations, leader-job start). **Must be `> 30`** (startup validation error otherwise). **Restart-bound, not hot-reloadable** — `POST /api/v1/reload` re-arms the deadline every iteration but always with the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value is a *permanent* restart loop, not a one-off failure, since the pod replays from scratch on every deadline expiry. Worst case, the pre-ready wait before a restart fires is ≈2× the configured value (the same deadline budget also wraps the initial `start_event_watchers` call via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism |
 
-### [conf_center.leader_election]
+### [conf_center.leader_election] — Kubernetes Mode
+
+Kubernetes-mode leader election uses a K8s Lease object. **These fields are distinct from the
+Etcd-mode `leader_election` block below** — the Etcd block has no `lease_name`/`lease_namespace`
+(there is no Lease object) and instead requires `grpc_addr`/`admin_addr`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -165,6 +200,66 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | `lease_duration_secs` | `Integer` | `15` | Lease hold duration in seconds (server-side validity on the apiserver) |
 | `renew_deadline_secs` | `Integer` | `10` | Renewal deadline window: the leader keeps leadership across transient errors as long as the last successful renew was within this window. Constraint: `retry_period_secs < renew_deadline_secs < lease_duration_secs` |
 | `retry_period_secs` | `Integer` | `2` | Sleep interval between each acquire/renew attempt (client-go `RetryPeriod`) |
+
+### [conf_center] — Etcd Mode
+
+Etcd mode targets non-Kubernetes (bare-metal / VM) production, where the Controller stores and watches
+resources in an etcd cluster instead of the Kubernetes API. It supports active-passive HA through the
+`leader_election` block below.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | `String` | — | Must be `etcd` |
+| `endpoints` | `Array<String>` | **Required** | etcd cluster endpoints, e.g. `["http://10.0.0.1:2379"]` |
+| `key_prefix` | `String` | `/edgion` | Prefix for all configuration keys stored in etcd |
+| `auth` | Object | — | Optional etcd username/password authentication (`auth.username`, `auth.password`) |
+| `tls` | Object | — | Optional TLS for the **Controller→etcd** connection (file paths): `tls.ca_cert_file`, `tls.client_cert_file`, `tls.client_key_file`. This is unrelated to the conf_sync mTLS channel |
+| `connect_timeout_ms` | `Integer` | `5000` | etcd connection (dial) timeout in milliseconds |
+| `request_timeout_ms` | `Integer` | `10000` | Per-request timeout for the shared conf_center etcd client's unary calls, in milliseconds. **Note**: this is NOT applied to the blocking leader-election `campaign()` RPC (which the election client runs without a channel-wide timeout on purpose), so operators do not need to tune it for election |
+| `leader_election` | Object | — | Active-passive HA settings (see below). **Always on**; there is no enable/disable toggle |
+
+### [conf_center.leader_election] — Etcd Mode
+
+Etcd-mode leader election uses etcd's official `v3election` gRPC service plus a self-managed lease
+keepalive. **These fields are DISTINCT from the Kubernetes `leader_election` block above** — the Etcd
+block has **no** `lease_name`/`lease_namespace` (there is no K8s Lease object) and instead **requires**
+`grpc_addr` and `admin_addr`.
+
+Exactly one Controller becomes leader (runs the resource controllers and serves conf_sync); standbys
+reject data-plane traffic and, on the Admin API, return `409` naming the leader's `admin_addr`. On a
+single node the sole candidate wins the election instantly. Kubernetes mode (which has its own
+Lease-based HA) is unaffected.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `identity` | `String` | hostname | Human-facing label only — used in logs and the not-leader `409` body. **Never** used for an ownership decision (per-lease keys make incarnations distinct). Defaults to the host's `HOSTNAME` |
+| `grpc_addr` | `String` | **Required** | The conf_sync gRPC address gateways connect to. Must be a **routable, non-loopback** address (not `127.0.0.1` / `0.0.0.0` / `localhost`) — it is the failover target gateways rotate to |
+| `admin_addr` | `String` | **Required** | The Admin HTTP address named in the not-leader `409` body. Must be a **routable, non-loopback** address |
+| `lease_duration_secs` | `Integer` | `15` | Session lease TTL. The double-leader window and teardown budget are both bounded by `lease_duration − renew_deadline` |
+| `renew_deadline_secs` | `Integer` | `10` | The leader self-demotes if it cannot record a successful keepalive within this window |
+| `retry_period_secs` | `Integer` | `2` | Keepalive / guard-txn cadence |
+
+**Startup validation (fail fast).** The Controller rejects the config at startup unless
+`retry_period_secs < renew_deadline_secs < lease_duration_secs`, all `> 0`, **and**
+`floor(renew_deadline_secs / retry_period_secs) >= 3`. The defaults `2 / 10 / 15` satisfy this.
+
+**Deployment requirements and caveats:**
+
+- **`v3election` must be available.** Stock etcd serves it, but some proxied/managed etcd deployments
+  (and certain `grpc-proxy` configurations) disable the `v3election`/`v3lock` gRPC services. The
+  Controller probes it at startup and fails fast with an actionable error if it is absent.
+- **These defaults assume a LAN-local etcd.** A WAN-separated etcd should raise all three values, and
+  etcd's own election timeout must be kept well under `renew_deadline_secs` (validation cannot check
+  this).
+- **conf_sync mTLS requires manually-issued certs in etcd mode.** The `auto_ca` automatic cert
+  provisioning is **Kubernetes-only** (it needs a kube API client and hard-codes K8s Service DNS SANs)
+  and fails at startup on bare-metal/VM. Use `edgion-cli gen-certs --server-san <name>` (repeatable) and
+  ensure the conf_sync **server** certificate's SAN covers **every** Controller's `grpc_addr` a gateway
+  may rotate to across failover — otherwise the gateway fails TLS verification when it reconnects to a
+  new leader.
+- **A standby's `/ready` returns `503`** (it has no ConfigSyncServer). Do **not** front the Admin/probe
+  port with a TCP/HTTP liveness check that would kill a healthy standby; health and metrics endpoints
+  remain reachable.
 
 ### [conf_center.metadata_filter]
 
@@ -244,6 +339,64 @@ conf_sync_security:
     key: certs/grpc/server.key
     ca: certs/grpc/ca.crt
 ```
+
+### Non-Kubernetes (VM / bare-metal) HA Deployment
+
+Run two (or more) Controllers against a shared etcd cluster for active-passive HA. Leader election is
+**always on** — exactly one Controller becomes leader; the rest stand by and take over on failure.
+Gateways list every Controller's `grpc_addr` and rotate to whichever is currently the leader.
+
+Controller **A** (`10.0.0.11`):
+
+```yaml
+conf_center:
+  type: etcd
+  endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
+  key_prefix: /edgion
+  leader_election:
+    identity: controller-a          # optional; human-facing (logs + 409 body) only
+    grpc_addr: 10.0.0.11:12151      # routable; the conf_sync gRPC port gateways rotate to
+    admin_addr: 10.0.0.11:12101     # routable; named in the not-leader 409 body
+    lease_duration_secs: 15
+    renew_deadline_secs: 10
+    retry_period_secs: 2
+```
+
+Controller **B** (`10.0.0.12`) is identical except for the addresses:
+
+```yaml
+  leader_election:
+    identity: controller-b
+    grpc_addr: 10.0.0.12:12151
+    admin_addr: 10.0.0.12:12101
+```
+
+Each gateway lists both Controllers and rotates to the current leader (a one-element list keeps
+today's single-Controller behavior):
+
+```yaml
+# edgion-gateway.yaml
+gateway:
+  server_addrs:
+    - "https://10.0.0.11:12151"
+    - "https://10.0.0.12:12151"
+```
+
+**Caveats (see [conf_center.leader_election] — Etcd Mode above for detail):**
+
+- **`v3election` is required.** The Controller probes it at startup and fails fast if the managed/proxied
+  etcd has it disabled.
+- **conf_sync mTLS needs manually-issued certs** — `auto_ca` is Kubernetes-only. The **server**
+  certificate's SAN must cover **every** Controller's `grpc_addr` (here both `10.0.0.11` and
+  `10.0.0.12`), or a gateway fails TLS verification after failover:
+
+  ```bash
+  edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
+      --server-san 10.0.0.11 --server-san 10.0.0.12
+  ```
+
+- **A standby's `/ready` returns `503`.** Do not use the Admin `/ready` as a plain liveness check that
+  would restart a healthy standby.
 
 ## Authentication
 
@@ -342,7 +495,6 @@ Omit it entirely when not using federation.
 | `enabled` | `Boolean` | `true` | Hot-reloadable kill-switch; `false` stops the federation client without a restart (reload via `POST /api/v1/reload`) |
 | `env` | `Array<String>` | `[]` | Environment tags reported to Center |
 | `tag` | `Array<String>` | `[]` | Extension tags reported to Center |
-| `ping_interval_secs` | `Integer` | `30` | Federation keep-alive ping interval |
 | `security` | Object | — | mTLS certificates for the channel; required (federation fails closed without it) |
 | `rbac` | Object | built-in default | RBAC for Center operations; absent applies a built-in default policy |
 

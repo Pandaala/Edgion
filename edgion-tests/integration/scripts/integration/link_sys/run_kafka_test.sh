@@ -36,6 +36,9 @@ NC='\033[0m'
 # ── Paths ───────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
+CONF_SYNC_UTILS="${SCRIPT_DIR}/../../utils/conf_sync_certs.sh"
+# shellcheck source=../../utils/conf_sync_certs.sh
+source "$CONF_SYNC_UTILS"
 
 KAFKA_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/kafka"
 CONF_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf"
@@ -179,9 +182,9 @@ cleanup() {
             fi
         done
 
-        pkill -f edgion-gateway    2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
-        pkill -f test_server       2>/dev/null || true
+        pkill -f debug/edgion-gateway    2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
+        pkill -f debug/test_server       2>/dev/null || true
 
         log_info "Stopping Redpanda container..."
         docker compose -f "${KAFKA_DIR}/docker-compose.yaml" down --timeout 10 2>/dev/null || true
@@ -198,9 +201,9 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway    2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
-pkill -9 -f test_server       2>/dev/null || true
+pkill -9 -f debug/edgion-gateway    2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
+pkill -9 -f debug/test_server       2>/dev/null || true
 sleep 1
 
 # =============================================================================
@@ -232,6 +235,11 @@ done
 log_section "Preparing work directory"
 mkdir -p "$LOG_DIR" "$PID_DIR" "$CONFIG_DIR"
 
+# conf_sync is mTLS by default (the checked-in config/edgion-*.yaml carry the cert
+# paths, work-dir relative). Both binaries below run with WORK_DIR as their work
+# dir, so the cert set has to land there.
+conf_sync_distribute_certs "$WORK_DIR"
+
 if [ -d "${PROJECT_ROOT}/config/crd" ]; then
     cp -r "${PROJECT_ROOT}/config/crd" "$CONFIG_DIR/"
 fi
@@ -239,7 +247,7 @@ fi
 GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway-kafka.yaml"
 cat > "$GATEWAY_CONFIG" <<EOF
 gateway:
-  server_addr: "http://127.0.0.1:12151"
+  server_addrs: ["https://127.0.0.1:12151"]
 
 logging:
   log_dir: "logs"
@@ -256,6 +264,7 @@ access_log:
 ssl_log:
   enabled: false
 EOF
+conf_sync_security_block client >> "$GATEWAY_CONFIG"
 
 # =============================================================================
 # Step 3: Start Redpanda and pre-create topic
@@ -468,17 +477,22 @@ log_info "─── 6. Broker outage recovery (Mode B) ───"
 # container correctly — no change to cleanup() is needed.
 log_info "Stopping Redpanda broker (LinkSys resource remains applied)..."
 docker compose -f "${KAFKA_DIR}/docker-compose.yaml" stop 2>&1 | grep -v "^$" || true
-sleep 2
-
 for i in $(seq 1 5); do
     curl -sf "${GATEWAY_PROXY}/health" -H "Host: kafka-gateway.edgion-test.example.com" \
         -o /dev/null 2>/dev/null || true
 done
-# Allow linger flush interval plus producer-failure detection time.
-sleep 5
 
-assert_eq "Gateway logs Kafka degraded after broker down" "found" \
-    "$(grep -q 'Kafka degraded' "${LOG_DIR}/gateway.log" && echo found || echo missing)"
+# Health probing is asynchronous and its interval can exceed a fixed sleep on
+# loaded Linux CI hosts. Poll the generic runtime transition with a hard bound.
+KAFKA_DEGRADED=false
+for i in $(seq 1 45); do
+    if grep 'link-sys degraded' "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q 'kafka'; then
+        KAFKA_DEGRADED=true
+        break
+    fi
+    sleep 1
+done
+assert_eq "Gateway logs Kafka degraded after broker down" "true" "$KAFKA_DEGRADED"
 
 # -- Up phase: restart the broker and wait for readiness ----------------------
 log_info "Restarting Redpanda broker..."
@@ -508,7 +522,7 @@ sleep 3
 # rskafka's already-built PartitionClient may not reconnect automatically after
 # the broker restarts mid-stream (Mode B' residual). We wait up to ~35 s,
 # driving a few requests each iteration, and look for BOTH signals:
-#   1. "Kafka recovered" log line (rate-limited, emitted on health-state flip)
+#   1. Generic link-system recovery log line (emitted on health-state flip)
 #   2. Topic message count increased beyond the post-restart baseline
 #
 # If recovery is observed => PASS (increment counters normally).
@@ -524,7 +538,7 @@ for attempt in $(seq 1 5); do
     done
     sleep 5
 
-    RECOVERED_LOG="$(grep -q 'Kafka recovered' "${LOG_DIR}/gateway.log" && echo found || echo missing)"
+    RECOVERED_LOG="$(grep 'link-sys recovered' "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q 'kafka' && echo found || echo missing)"
     COUNT_NOW=$(count_topic_messages 4)
 
     if [ "$RECOVERED_LOG" = "found" ] && [ "$COUNT_NOW" -gt "$COUNT_BASELINE_AFTER_UP" ]; then

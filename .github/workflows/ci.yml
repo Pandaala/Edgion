@@ -20,7 +20,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.92"
+          toolchain: "1.96.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "cargo-check"
@@ -29,8 +29,45 @@ jobs:
       # of `default-members`) gets the fast type-check signal too — without it,
       # `--all-targets` alone covers only default members and harness breakages
       # surface much later in the slow `test` job.
+      - name: Verify Pingora source policy
+        run: python3 cicd/checks/check_pingora_source_policy.py
+
       - name: Run cargo check
-        run: cargo check --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
+
+  gateway-build:
+    name: Gateway Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-gateway"
+
+      - name: Build Gateway
+        run: |
+          cargo build --locked -p edgion-gateway --bin edgion-gateway
+          cargo tree --locked -p edgion-gateway --edges normal > /tmp/gateway-tree.txt
+
+      - name: Verify compiled capability
+        run: |
+          capabilities="$(target/debug/edgion-gateway --print-build-capabilities)"
+          grep -qx 'format=edgion-build-capabilities/v1' <<<"$capabilities"
+          grep -qx 'body-buffering=enabled' <<<"$capabilities"
+          grep -qx 'pingora-mode=edgion-fork' <<<"$capabilities"
+
+      - name: Verify Pingora source isolation
+        run: |
+          pingora_nodes="$(grep -E 'pingora-[^ ]+ v' /tmp/gateway-tree.txt)"
+          if grep -v 'github.com/Pandaala/pingora' <<<"$pingora_nodes"; then
+            echo "Gateway contains a non-fork Pingora package"
+            exit 1
+          fi
 
   fmt:
     name: Format
@@ -41,7 +78,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.92"
+          toolchain: "1.96.1"
           components: rustfmt
           install-deps: "false"
           cache-enabled: "false"
@@ -68,7 +105,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.92"
+          toolchain: "1.96.1"
           components: clippy
           install-deps: "true"
           cache-enabled: "true"
@@ -77,7 +114,7 @@ jobs:
       # `--workspace` so clippy also lints `edgion-tests` (excluded from
       # `default-members`); otherwise the harness never gets a clippy signal in CI.
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets
 
   test:
     name: Test
@@ -88,28 +125,60 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.92"
+          toolchain: "1.96.1"
           install-deps: "true"
           cache-enabled: "true"
           cache-key-prefix: "cargo-test"
 
       - name: Run tests
-        run: cargo test --all
+        run: cargo test --locked --all
+
+  ext_proc_fixture:
+    name: ExtProc Go Fixture
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edgion-tests/integration/fixtures/ext_proc_external
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.9"
+          cache-dependency-path: edgion-tests/integration/fixtures/ext_proc_external/go.sum
+
+      - name: Verify pinned module graph
+        env:
+          GOTOOLCHAIN: local
+        run: go mod verify
+
+      - name: Run fixture tests
+        env:
+          GOTOOLCHAIN: local
+        run: go test -mod=readonly ./...
+
+      - name: Verify read-only fixture build
+        env:
+          GOTOOLCHAIN: local
+        run: go build -mod=readonly ./...
 
   # Summary job for branch protection
   ci-success:
     name: CI Success
-    needs: [check, fmt, agent-docs, clippy, test]
+    needs: [check, gateway-build, fmt, agent-docs, clippy, test, ext_proc_fixture]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           if [[ "${{ needs.check.result }}" != "success" ]] || \
+             [[ "${{ needs.gateway-build.result }}" != "success" ]] || \
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
              [[ "${{ needs.agent-docs.result }}" != "success" ]] || \
              [[ "${{ needs.clippy.result }}" != "success" ]] || \
-             [[ "${{ needs.test.result }}" != "success" ]]; then
+             [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.ext_proc_fixture.result }}" != "success" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi

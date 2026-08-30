@@ -1,74 +1,102 @@
 ---
 name: conf-sync-plaintext-default-observable
-description: Use when reviewing conf_sync (Controller→Gateway) plaintext / secret-in-transit findings; covers why omitted conf_sync_security is observable-but-not-fail-closed, why it differs from fed_sync, and that this is an interim posture pending cert bootstrap (#13).
+description: Use when reviewing conf_sync (Controller→Gateway) plaintext / secret-in-transit findings; records the 2026-07-14 decision to make an omitted conf_sync_security fail-close (refuse to start), what the old observable-but-not-fail-closed posture was, and why skip_tls remains the only plaintext path.
 ---
 
-# conf_sync Plaintext Default — Observable, Not Fail-Closed (interim)
+# conf_sync Plaintext — Fail-Close (decided 2026-07-14)
 
-## Status: risk reduced (interim), NOT closed
+## Status: CLOSED — plaintext-by-omission no longer exists
 
-The conf_sync channel carries resolved Secrets (TLS keys via `TlsCerts::secret`,
-backend creds via `SecretSlot.secret`). When `conf_sync_security` is omitted it
-runs plaintext. As of 2026-06-21 this is **not eliminated** for deployments that
-stay plaintext — it is made loud and the shipped defaults are flipped to mTLS:
+The conf_sync channel carries **resolved Secrets** (TLS private keys via
+`TlsCerts::secret`, backend credentials via `SecretSlot.secret`) from the Controller
+to the data plane. As of **2026-07-14** an omitted `conf_sync_security` section makes
+**both binaries refuse to start**. Plaintext is now reachable only through the
+explicit `skip_tls: true` opt-in.
 
-1. The previously-silent omitted path now logs ERROR on both ends and raises
-   `edgion_system_error_state{component=conf_sync_client|conf_sync_server,
-   reason="plaintext_default"}` (gateway emits the client series, controller the
-   server series).
-2. The shipped K8s manifests (`cicd/deploy/kubernetes/`) and the default
-   integration stack now default to active mTLS (cert Secret `edgion-conf-sync-certs`
-   is a documented prerequisite).
+The file name is kept because other docs link to it; the content is the decision
+record, not an argument for the old posture.
 
-## Update (2026-06-21+): partial fail-close under `auto_ca`
+## What the posture used to be (historical)
 
-Auto-CA provisioning v0 (Phase 1) has since landed: the Controller's internal CA
-auto-provisions the conf_sync certs when `conf_sync_security.auto_ca: true`. For that
-path the re-evaluation trigger below ("cert bootstrap lands") has fired, and the
-**data plane now fails closed under `auto_ca`** (see
-`tasks/pending/16-conf-sync-auto-cert-failclose-and-reload.md` §1):
+- 2026-06-21: the previously-*silent* omitted path was made loud — ERROR on both
+  ends plus a `plaintext_default` system-error reason — and the shipped K8s manifests
+  and the default integration stack were flipped to mTLS. The channel still **ran** in
+  plaintext when the section was omitted ("observable, not fail-closed"), justified by
+  "conf_sync is data-plane critical and there is no cert bootstrap yet".
+- 2026-07-xx: auto-CA provisioning (Phase 1 + rotation Phase 2) landed, which removed
+  the "no cert bootstrap" premise, and the gateway began failing closed for
+  `auto_ca: true` + omitted certs. Only the legacy no-`auto_ca` omitted path stayed
+  plaintext.
 
-- `auto_ca: true` + omitted `tls`/`certs` → gateway fails fast at startup (misconfig;
-  no plaintext, no retry).
-- `auto_ca: true` + certs configured but Secret not yet provisioned → gateway retries
-  client init within the startup-probe budget; it never downgrades to plaintext.
-- `skip_tls: true` stays the only explicit plaintext escape hatch (overrides `auto_ca`
-  with a high-visibility WARN).
+## The decision (2026-07-14)
 
-The **legacy omitted path (no `auto_ca`) is unchanged** — still observable-but-not-fail-closed
-(`plaintext_default`), for backward compatibility. The global fail-close flip (reject
-plaintext even without `auto_ca`) remains deferred as a fast-follow with a migration note
-(`tasks/pending/14-mesh-identity-plane-scale-taxes.md` §2.5).
+The operator-responsibility model in this project is "do not hard-reject a configuration
+that is *still safe*; validate, WARN, and expose an alertable signal instead". A
+plaintext channel shipping TLS private keys is **not a still-safe configuration** — it is
+an exposure — so the model never applied to it. A metric only helps a cluster that is
+actually alerting on it; a forgotten config block should not silently downgrade the
+transport that carries private keys.
 
-## Why not fail-close / not secure-by-default in code
+Therefore: **plaintext must be an explicit, audited choice, never the consequence of an
+omission.** The explicit escape hatch (`skip_tls: true`) already existed, so the
+migration cost for an affected deployment is one config block.
 
-conf_sync is **data-plane critical** (the Gateway cannot serve traffic without it)
-and Edgion has **no auto cert bootstrap yet** (`tasks/pending/13-conf-sync-spiffe-cert-bootstrap.md`).
-Fail-close on omission would brick fresh deploys lacking certs; code-level
-secure-by-default needs certs that do not exist without #13. This is the deliberate
-opposite of fed_sync, which **does** fail-close because it is auxiliary, not
-data-plane critical (see [fed-proxy-mtls-fail-close.md](fed-proxy-mtls-fail-close.md)).
+## Behavior now
 
-## Fix suggestions NOT accepted (here)
+| Configuration | Behavior |
+|---|---|
+| `auto_ca: true` (shipped K8s default, both configmaps) | mTLS. Certs auto-provisioned + rotated by the Controller's internal CA. Gateway refuses to connect in plaintext under `auto_ca`. |
+| File-mode `certs` / `tls` paths | mTLS. Unchanged. |
+| `skip_tls: true` | **Plaintext, still supported** — the only plaintext path. ERROR log on both ends + `edgion_system_error_state{reason="skip_tls"}`. A `skip_tls` that overrides `auto_ca` additionally raises a higher-severity WARN. |
+| **Section omitted entirely** | **Refuses to start** (non-zero exit) on both the Controller and the Gateway. |
 
-- "Add a fail-close / `allow_plaintext_conf_sync` opt-in" — a non-fail-close flag is
-  decorative (plaintext runs either way); a meaningful one collapses into fail-close,
-  rejected above for data-plane safety + missing cert bootstrap.
-- "Reuse `no_tls_configured` for the metric" — that reason means *refused to start*
-  (federation fail-close); conf_sync is *running degraded*, hence a distinct
-  `plaintext_default`.
+Since 2026-07-14 the **checked-in `config/edgion-{controller,gateway,controller-etcd}.yaml` carry
+file-mode mTLS**, not `skip_tls` — a bare `cargo run` speaks mTLS once the operator bootstraps
+the cert set. Certs are generated into `<work_dir>/certs/grpc/primary/` — integration scripts
+generate them inside their own per-run work directory, and a bare `cargo run` requires an explicit
+`edgion-cli gen-certs` into the repo root (no test script populates the repo root); nothing
+injects or rewrites the transport block any more. `skip_tls: true` survives only in
+`run_conf_sync_skip_tls_metric_test.sh` (its subject) and the conformance stack (deliberate, and
+commented). A finding of the shape "the dev/test configs default to plaintext" is therefore
+**stale** — verify against the current configs before re-filing.
 
-## Re-evaluation triggers (DO re-open when any holds)
+Implementation:
 
-- Cert bootstrap (#13) lands → revisit code-level secure-by-default / fail-close.
-- conf_sync stops carrying resolved Secrets.
-- An in-pod loopback hop is introduced (Istio-agent-style) so the cross-network hop
-  is separately securable.
+- Shared guard: `ConfSyncSecurityConfig::ensure_transport_configured()`
+  (`edgion-common/src/conf_sync/config.rs`). It is deliberately **not** part of
+  `validate()`, which must stay lenient for consumers that merely parse the block.
+  It also treats a bare `auto_ca: true` (no cert paths — the K8s default) as a
+  *configured* transport, not the omitted state.
+- Controller: `edgion-controller/src/cli/mod.rs` (startup, before any listener is bound)
+  and `ConfigSyncGrpcServer::accept_skip_tls_or_refuse`
+  (`edgion-controller/src/conf_sync/conf_server/grpc_server.rs`).
+- Gateway: `edgion-gateway/src/cli/mod.rs` (`create_config_sync_client`) and
+  `ConfigSyncClient::new` (`edgion-gateway/src/conf_sync/conf_client/grpc_client.rs`).
+
+## Retired: the `plaintext_default` metric reason
+
+`edgion_system_error_state{reason="plaintext_default"}` meant "a secret-carrying channel
+is *running* in plaintext because the config was omitted". That state is now unreachable,
+so the reason constant and all its references were deleted. Alerts should key on
+`reason="skip_tls"` (the explicit opt-in) instead. `no_tls_configured` remains
+federation-only ("refused to start").
+
+## Reviewing a new finding in this area
+
+- "conf_sync ships Secrets over plaintext by default" → **already fixed**; the only
+  plaintext path is an explicit operator opt-in. Not a defect.
+- "Make `skip_tls` fail-close too" → **rejected**: it is the deliberate emergency escape
+  hatch, is loud (ERROR + metric + WARN when it overrides `auto_ca`), and removing it
+  leaves an operator with a broken cert chain no way to recover.
+- Re-open only if conf_sync stops carrying resolved Secrets (the fail-close could then be
+  relaxed), or if an in-pod loopback hop is introduced so the cross-network hop is
+  separately securable.
 
 ## Reference
 
-- Spec: `docs/superpowers/specs/2026-06-21-conf-sync-plaintext-default-observability-design.md`
-- Industry baseline: Istio secure xDS (15012/mTLS) default + plaintext as a separate
-  discouraged port; Envoy SDS requires a secured channel. Neither fail-closes the data
-  plane, but both achieve secure-by-default via auto-provisioned certs (Edgion lacks
-  this until #13).
+- Original observability spec (historical):
+  `docs/superpowers/specs/2026-06-21-conf-sync-plaintext-default-observability-design.md`
+- Cert rotation / auto-CA design:
+  `docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md`
+- Industry baseline: Istio secure xDS (15012/mTLS) with plaintext as a separate,
+  explicitly-selected port — the same "plaintext only when you ask for it" shape.

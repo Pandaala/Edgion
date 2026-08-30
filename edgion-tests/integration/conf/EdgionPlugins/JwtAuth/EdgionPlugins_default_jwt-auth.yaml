@@ -21,5 +21,4 @@ spec:
         allowTokenInQuery: true
         cookie: jwt
         keyClaimName: key
-        hideCredentials: false
-
+        hideCredentials: true

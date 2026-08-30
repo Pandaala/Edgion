@@ -102,30 +102,16 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.set_conf_processor(processor, self.cache_data.clone());
     }
 
-    pub fn get_sync_version(&self) -> u64 {
-        let cache = self.cache_data.read();
-        cache.sync_version()
-    }
-
-    pub fn set_sync_version(&self, version: u64) {
-        let mut cache = self.cache_data.write();
-        cache.set_sync_version(version);
-    }
-
     /// Replace all cached resources; keys are `resource.key_name()` (namespace/name).
+    /// Test-only: production resets go through `CacheData::reset` directly
+    /// (see `event_dispatch.rs`), not this wrapper.
+    #[cfg(test)]
     pub fn reset(&self, resources: Vec<T>, sync_version: u64)
     where
         T: ResourceMeta,
     {
         let mut cache = self.cache_data.write();
         cache.reset(resources, sync_version);
-    }
-
-    pub fn list(&self) -> ListData<T>
-    where
-        T: Clone,
-    {
-        self.list_owned()
     }
 
     /// List all data as owned values (cloned from internal Arc storage)
@@ -152,28 +138,14 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.keys().cloned().collect()
     }
 
-    pub fn is_empty(&self) -> bool {
-        let cache = self.cache_data.read();
-        cache.is_empty()
-    }
-
     pub fn len(&self) -> usize {
         let cache = self.cache_data.read();
         cache.len()
     }
 
-    pub fn trigger_update_event_by_key(&self, key: &str) {
-        let mut cache = self.cache_data.write();
-        cache.add_compress_event(
-            key.to_string(),
-            edgion_common::conf_sync::traits::ResourceChange::EventUpdate,
-        );
-
-        tracing::info!(
-            component = "cache_client",
-            key = %key,
-            "Manually triggered update event for resource"
-        );
+    pub fn is_empty(&self) -> bool {
+        let cache = self.cache_data.read();
+        cache.is_empty()
     }
 }
 

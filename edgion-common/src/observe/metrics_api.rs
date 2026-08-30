@@ -13,6 +13,7 @@
 //! guarded by a `OnceLock<PrometheusHandle>`, so subsequent callers in the
 //! same process see a `Result::Ok(())` instead of a panic.
 
+use crate::observe::cardinality_guard::{CardinalityGuard, CardinalityMode};
 use axum::{
     response::{IntoResponse, Response},
     routing::get,
@@ -41,6 +42,9 @@ pub struct RecorderConfig<'a> {
     pub service: &'static str,
     pub idle_timeout_secs: u64,
     pub histogram_buckets: &'a [(Matcher, Vec<f64>)],
+    /// Max distinct series before the guard acts. 0 disables the guard.
+    pub cardinality_cap: usize,
+    pub cardinality_mode: CardinalityMode,
 }
 
 /// Install the global Prometheus recorder.
@@ -65,9 +69,16 @@ pub fn install_global_recorder(cfg: RecorderConfig<'_>) -> Result<(), String> {
             .map_err(|e| format!("Failed to set buckets: {}", e))?;
     }
 
-    let handle = builder
-        .install_recorder()
-        .map_err(|e| format!("Failed to install Prometheus recorder: {}", e))?;
+    let recorder = builder.build_recorder();
+    let handle = recorder.handle();
+
+    let install = if cfg.cardinality_cap > 0 {
+        let guarded = CardinalityGuard::new(recorder, cfg.cardinality_cap, cfg.cardinality_mode);
+        metrics::set_global_recorder(guarded).map_err(|e| format!("set_global_recorder: {e:?}"))
+    } else {
+        metrics::set_global_recorder(recorder).map_err(|e| format!("set_global_recorder: {e:?}"))
+    };
+    install?;
 
     // If another thread raced us between the `get()` check above and this
     // point, prefer the first winner and drop our handle silently. This is
@@ -122,4 +133,21 @@ pub fn create_metrics_router() -> Router {
     Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/health", get(health_handler))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn guard_self_metrics_registered_when_enabled() {
+        use crate::observe::cardinality_guard::{CardinalityGuard, CardinalityMode};
+        use metrics_exporter_prometheus::PrometheusBuilder;
+        // Construct a guard directly (do not touch the process-global recorder,
+        // which can only be set once): a fresh recorder wrapped at cap>0 renders
+        // the two self-metric names.
+        let rec = PrometheusBuilder::new().build_recorder();
+        let h = rec.handle();
+        let _g = CardinalityGuard::new(rec, 10_000, CardinalityMode::Enforce);
+        let out = h.render();
+        assert!(out.contains("edgion_metrics_cardinality_limit_active"));
+    }
 }

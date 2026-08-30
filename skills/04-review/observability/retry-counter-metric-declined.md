@@ -13,7 +13,7 @@ description: Proposal to add a gateway_retries_total{reason} Prometheus counter 
 The proposed `gateway_retries_total{reason="per_try_timeout|connect_fail|status|reuse"}`
 counter contradicts the project's observability design
 (`skills/03-coding/observability/01-metrics.md`): data-plane exceptions go
-through the access log (`AccessLogEntry.errors` + `EdgionStatus`), finer
+through the access log (`AccessLogEntry.diagnostics` + `EdgionErrorCode`), finer
 observation goes through access-log aggregation, and the explicit pre-add
 check — "can a field already in the access log express it via aggregation?" —
 answers yes here. The access log emits one `backend_context.upstreams[]` entry

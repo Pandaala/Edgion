@@ -9,12 +9,6 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// API group for EdgionTls
-pub const EDGION_TLS_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionTls
-pub const EDGION_TLS_KIND: &str = "EdgionTls";
-
 /// TLS protocol version (similar to Cloudflare's Minimum TLS Version).
 ///
 /// **Security note**: `Tls10` and `Tls11` are **formally deprecated by IETF
@@ -117,6 +111,10 @@ fn is_default_verify_depth(depth: &u8) -> bool {
 pub struct EdgionTlsSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hosts: Vec<String>,
     pub secret_ref: SecretObjectReference,
     /// mTLS client authentication configuration (optional)
@@ -171,7 +169,13 @@ pub struct EdgionTlsSpec {
 #[serde(rename_all = "camelCase")]
 pub struct EdgionTlsStatus {
     /// Parents describe the status of the TLS config with respect to each parent Gateway.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live EdgionTls). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }
 

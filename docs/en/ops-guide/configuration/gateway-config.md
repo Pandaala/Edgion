@@ -10,17 +10,43 @@ edgion-gateway reads its configuration from a YAML file. The default path is `co
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:12151"  # Required: Controller gRPC address
+  server_addrs: ["http://127.0.0.1:12151"]  # Required: Controller gRPC address
   admin_listen: "127.0.0.1:12001"        # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
+  # geoip:                               # MUST be nested under `gateway:` — a top-level `geoip:` key is
+  #                                       # silently dropped, with no error. See docs/en/ops-guide/gateway/geoip.md
+  #   db_path: /var/lib/edgion/geoip/db.mmdb
+  #   update_url: https://mirror.internal/geo.mmdb
 
-# ─── gRPC channel security (optional mTLS) ────────────────────────
+# ─── gRPC channel security (REQUIRED) ─────────────────────────────
+# Omitting this section makes the Gateway REFUSE TO START. Pick exactly one of the
+# three options below, and keep it consistent with the Controller's configuration.
+#
+# Option 1 — Kubernetes: the Controller's internal CA provisions the client cert.
+# NOTE: on the GATEWAY, `auto_ca` alone is NOT enough — auto_ca implies mTLS, so the cert
+# paths must also be set (the Gateway exits non-zero with "auto_ca=true but no cert paths
+# are configured" otherwise). They point at the Secret the Controller provisions
+# (`edgion-conf-sync-certs`), mounted at /etc/edgion/conf-sync-certs/ by the shipped
+# manifests. Only the CONTROLLER may set a bare `auto_ca: true` (it mints its own identity
+# in memory).
+conf_sync_security:
+  auto_ca: true
+  tls:
+    cert: /etc/edgion/conf-sync-certs/client.crt
+    key: /etc/edgion/conf-sync-certs/client.key
+    ca: /etc/edgion/conf-sync-certs/ca.crt
+#
+# Option 2 — file-mode mTLS:
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/client.crt   # Gateway client certificate (PEM)
 #     key: certs/grpc/client.key    # Client private key (PEM)
 #     ca: certs/grpc/ca.crt         # CA to verify Controller server certificate
-#     skip_tls: false               # true = emergency plaintext fallback, logs ERROR
+#
+# Option 3 — explicit plaintext opt-in (local dev / non-production only, logs ERROR):
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 logging:
   # System logs only — does NOT affect business log paths
@@ -85,10 +111,21 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS maximum precision cap
   gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
 
-# ─── Log redaction (off by default) ────────────────────────────────
+# ─── OIDC introspection TinyUFO limits ────────────────────────────
+
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+
+# LRU defaults, including OIDC access-token caching.
+lru_cache:
+  default_capacity: 1024
+  default_shards: 0
+
+# ─── Log redaction (replace by default) ────────────────────────────
 
 access_log_sensitive:
-  mode: off                       # off | replace | wrap
+  mode: replace                   # off | replace | wrap
   # replace_with: "***"           # Replacement string when mode=replace
   # wrap_prefix: "<E>"            # Prefix when mode=wrap
   # wrap_suffix: "</E>"           # Suffix when mode=wrap
@@ -112,10 +149,11 @@ The probe port is intentionally **not** added to the gateway Service; kubelet pr
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:12151` |
+| `server_addrs` | `Array<String>` | **Required** | Controller conf_sync gRPC addresses, e.g. `["http://127.0.0.1:12151"]`. One address is exactly the previous single-address behavior; multiple addresses enable etcd-mode HA — the gateway rotates through the list to find the leader and fails over on `kill`/demotion. `--server-addr` is repeatable on the CLI |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback (`127.0.0.1:12001`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 12001:12001`. |
 | `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
+| `geoip` | `GeoIpConfig` | *(empty — no `db_path`)* | GeoIP database + updater settings, used by the `GeoIpLocation` plugin (HTTP `EdgionPlugin` and L4 `EdgionStreamPlugin`, one config shape). **Must be nested under `gateway:`** — see [GeoIP Restriction](../gateway/geoip.md) for the full field reference and required pitfalls. |
 
 ### Gateway admin API authentication
 
@@ -166,18 +204,62 @@ curl -H "Authorization: Bearer $(kubectl -n <ns> get secret \
 > kubectl -n <ns> rollout restart deployment/edgion-gateway
 > ```
 
-### conf_sync_security.tls
+### conf_sync_security
 
-Optional. When present, Gateway connects to Controller gRPC using mTLS. When absent, gRPC runs in plaintext (compatible with older versions).
+**Required.** The conf_sync gRPC channel delivers resolved Secrets (TLS private keys, backend
+credentials) to the Gateway, so its transport must be chosen explicitly.
+
+**Omitting the `conf_sync_security` section entirely makes the Gateway refuse to start**
+(non-zero exit, with an actionable error). Configure exactly one of:
+
+| Configuration | Result |
+|---------------|--------|
+| `auto_ca: true` **plus** `tls` cert paths | mTLS — the Controller's internal CA provisions the client cert (recommended on Kubernetes) |
+| `auto_ca: true` **alone**, no cert paths | **Refuses to start** — `auto_ca` implies mTLS, so the Gateway needs the paths to the provisioned cert files |
+| `certs` / legacy `tls` block with `cert` + `key` + `ca` | File-mode mTLS |
+| `tls.skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
+| *(section omitted)* | **Refuses to start** |
+
+> **`auto_ca` is asymmetric — do not copy the Controller's block.** The **Controller** needs
+> only `auto_ca: true`: it mints its own server identity in memory. The **Gateway** needs
+> `auto_ca: true` **and** the `tls` cert paths, because its client cert arrives as a
+> Controller-provisioned Secret that must be read from disk. A bare `auto_ca: true` on the
+> Gateway exits non-zero with `conf_sync_security.auto_ca=true but no cert paths are
+> configured`.
+
+The choice must match the Controller's — a mismatch causes a handshake failure.
+
+> **Migration**: omitting the section used to mean "plaintext gRPC". Deployments that relied on
+> that will now fail to start. Pick one:
+>
+> ```yaml
+> # (a) Kubernetes — auto_ca + the provisioned cert paths (matches the shipped ConfigMap)
+> conf_sync_security:
+>   auto_ca: true
+>   tls:
+>     cert: /etc/edgion/conf-sync-certs/client.crt
+>     key: /etc/edgion/conf-sync-certs/client.key
+>     ca: /etc/edgion/conf-sync-certs/ca.crt
+>
+> # (b) file-mode mTLS
+> conf_sync_security:
+>   tls: { cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
+>
+> # (c) keep plaintext, explicitly (INSECURE)
+> conf_sync_security:
+>   tls: { skip_tls: true }
+> ```
+
+#### conf_sync_security.tls
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cert` | `String` | — | Client certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
-| `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and connects in plaintext (logs ERROR) |
+| `skip_tls` | `Boolean` | `false` | Explicit plaintext opt-in: `true` skips TLS and connects in plaintext (logs ERROR and raises `edgion_system_error_state{reason="skip_tls"}`) |
 
-When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
+When mTLS is enabled, the URI scheme of `gateway.server_addrs` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
 ### logging
 
@@ -189,6 +271,11 @@ When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically s
 | `json_format` | `Boolean` | `false` | Emit structured JSON logs |
 | `console` | `Boolean` | `true` | Also write logs to stdout |
 | `buffer_size` | `Integer` | `10000` | Async log buffer size |
+
+The Gateway always caps `pingora_core::protocols::http::v1::client` and
+`pingora_proxy::proxy_h1` at `error`, even if `RUST_LOG` or `log_level` requests a more verbose
+level. These upstream Pingora modules contain complete HTTP/1 request-header diagnostics and
+cannot be enabled below `error`; other targets retain normal module-level filtering.
 
 ### server
 
@@ -236,16 +323,31 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 
 ### access_log_sensitive
 
-Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **Disabled (`off`) by default** — all sensitive values are emitted in plaintext.
+Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **`mode=replace` by default** — sensitive values render `***` out of the box. This is a wider blast radius than the built-in field list alone: the nine built-in fields (`direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client-cert `subject`/`sans`/`cn`), 46 `sensitive()`-marked plugin-log parameters across 13 plugins, DSL `log_warn`/`log_error` user args, ssl.log mTLS-failure cert fields, and — new — any `ext` field declared via [`AccessLogExtern`](../observability/access-log.md) that is not whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | `Enum` | `off` | Redaction mode: `off`, `replace`, or `wrap` |
+| `mode` | `Enum` | `replace` | Redaction mode: `off`, `replace`, or `wrap` |
 | `replace_with` | `String` | `"***"` | Replacement string used when `mode=replace` |
 | `wrap_prefix` | `String` | `"<E>"` | Prefix added when `mode=wrap` |
 | `wrap_suffix` | `String` | `"</E>"` | Suffix added when `mode=wrap` |
 
-Behavior (using `client_addr=192.168.1.10`):
+### Upstream RemoteIp header
+
+`EdgionGatewayConfig.spec.forwardedHeaders.remoteIpHeader` controls the header
+that the Gateway writes on upstream HTTP requests after the final request-stage
+`RemoteIp` has been resolved. It defaults to `X-Real-IP`, matching the existing
+behavior and the common Nginx convention. Operators may choose a custom header,
+for example `X-Edgion-Remote-IP`. The configured name is validated and cannot be
+a hop-by-hop header, `Host`, `Content-Length`, `X-Forwarded-For`, or another
+reserved transport header. The Gateway overwrites an incoming value with its
+canonical value after all request plugins have run.
+
+This output setting is independent from `spec.realIp.realIpHeader`, which names
+the downstream header read by the RealIp extractor. The former propagates the
+resolved identity upstream; the latter establishes it from a trusted proxy.
+
+Behavior (using `direct_peer_ip=192.168.1.10`):
 
 | Mode | Output |
 |------|--------|
@@ -253,13 +355,17 @@ Behavior (using `client_addr=192.168.1.10`):
 | `replace` | `***` |
 | `wrap` | `<E>192.168.1.10</E>` |
 
+**There is no configuration that gives readable `path` + masked `AccessLogExtern` cookie.** `off` makes the whitelist inert (every `ext` field clear); `wrap` writes the raw value into the local log file/stdout (tagged for a downstream ES/ClickHouse pipeline to drop, but present locally). Pick one of the two trade-offs deliberately — this is a design choice, not a gap.
+
+**The repo's own `config/edgion-gateway.yaml` — the file this page documents as the default path — ships `mode: off`, not the `replace` default described above.** That file is the local-dev and integration-harness config; the integration suites assert on `path` and on plugin-log values written through `sensitive(...)`, which need real, unmasked values. A config file with no `access_log_sensitive` section at all gets the `replace` default; running the binary against the repo's shipped file does not, because that file's `access_log_sensitive.mode` is set explicitly. The release image bakes no config (`cicd/docker/Dockerfile.runtime`), so a Kubernetes deployment is unaffected by this file.
+
 ## Common Scenarios
 
 ### Connecting to a Remote Controller
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:12151"
+  server_addrs: ["http://10.0.0.5:12151"]
 ```
 
 ### Enabling Daily Log Rotation for Access Logs
@@ -287,9 +393,27 @@ rate_limit:
   gateway_instance_count: 3   # Running 3 Gateway replicas
 ```
 
+### OIDC Introspection TinyUFO Limits
+
+```yaml
+tiny_ufo_ttl_cache:
+  default_max_entries: 1024
+  default_max_logical_bytes: 4MiB
+```
+
+These process defaults apply when OIDC introspection omits its
+`tinyUfoTtlCache` override. An override must set `maxEntries` and
+`maxLogicalBytes` together. The total logical budget controls TinyUFO record
+weights for one cache instance and is not an exact allocator or RSS limit;
+enforce the Gateway process hard limit with Kubernetes/cgroup memory limits.
+OIDC access-token caching uses the independent `lru_cache` defaults. LDAP
+authentication is never cached.
+Absolute safety ceilings are 65,536 cache entries, 4,194,304 TinyUFO weight
+units (256 MiB of 64-byte logical units). These ceilings are not defaults.
+
 ### Redacting Sensitive Fields in Access Logs
 
-Replace sensitive values (client IPs, SNI, client-certificate fields, etc.) with a placeholder in the access log:
+`mode: replace` is already the default, so the sensitive built-in fields (client IPs, SNI, client-certificate fields, `AccessLogExtern` `ext` fields not on the whitelist, etc.) are masked out of the box. Only add the block explicitly if you want to override `replace_with`, or opt back into plaintext:
 
 ```yaml
 access_log_sensitive:
@@ -301,7 +425,7 @@ access_log_sensitive:
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:12151"  # scheme is automatically switched to https://
+  server_addrs: ["http://10.0.0.5:12151"]  # scheme is automatically switched to https://
 
 conf_sync_security:
   tls:
@@ -314,5 +438,6 @@ conf_sync_security:
 
 - [Controller Configuration](./controller-config.md)
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
+- [GeoIP Restriction](../gateway/geoip.md)
 - [Access Log Format](../observability/access-log.md)
 - [Working Directory Behavior](../../dev-guide/work-directory.md)

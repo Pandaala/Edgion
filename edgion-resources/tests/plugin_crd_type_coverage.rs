@@ -39,6 +39,7 @@
 //! non-(request-only) variants are listed; every other variant defaults to
 //! request-stage-only, exactly as that match does.
 
+use edgion_resources::resources::edgion_plugins::{applicable_stages_by_name, HTTP_PLUGIN_STAGE_EXCEPTIONS};
 use schemars::schema_for;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -59,27 +60,29 @@ const STAGE_FIELD_KEYS: &[(&str, &str)] = &[
     ("upstreamResponseBodyFilterPlugins", RESPONSE_BODY_FILTER),
 ];
 
-/// Non-(request-only) variants and the stages they are valid for. Mirrors the
-/// exception arms of `applicable_stages` (validate.rs); every variant NOT listed
-/// here is request-stage-only. Keep this in lockstep with that match — a
-/// misspelled key is caught by `stage_exception_keys_are_real_variants`.
-const STAGE_EXCEPTIONS: &[(&str, &[&str])] = &[
-    ("ResponseHeaderModifier", &[RESPONSE_FILTER]),
-    ("DebugAccessLogToHeader", &[RESPONSE_FILTER]),
-    ("ResponseRewrite", &[RESPONSE_FILTER]),
-    ("BandwidthLimit", &[RESPONSE_BODY_FILTER]),
-    ("Dsl", &[REQUEST, RESPONSE_FILTER]),
-    ("ExtProc", &[REQUEST, RESPONSE_ASYNC]),
-];
-
-/// Stages a variant is valid for: an explicit exception, else request-only.
+/// Stages a variant is valid for, read from the authority in `validate.rs`.
+///
+/// This guard used to keep its own `STAGE_EXCEPTIONS` mirror of
+/// `applicable_stages`. That mirror is gone: `HTTP_PLUGIN_STAGE_EXCEPTIONS` is
+/// now a `pub const` in `src/`, and this reads it. A drift guard that has to
+/// duplicate the table it guards can drift itself, which is exactly what
+/// happened to the equivalent mirror beside `define_resources!`.
 fn stages_for(variant: &str) -> BTreeSet<&'static str> {
-    for (name, stages) in STAGE_EXCEPTIONS {
-        if *name == variant {
-            return stages.iter().copied().collect();
-        }
+    let s = applicable_stages_by_name(variant);
+    let mut out = BTreeSet::new();
+    if s.request {
+        out.insert(REQUEST);
     }
-    [REQUEST].into_iter().collect()
+    if s.upstream_response_filter {
+        out.insert(RESPONSE_FILTER);
+    }
+    if s.upstream_response_body_filter {
+        out.insert(RESPONSE_BODY_FILTER);
+    }
+    if s.upstream_response {
+        out.insert(RESPONSE_ASYNC);
+    }
+    out
 }
 
 /// Authoritative set of plugin `type` discriminator values, read from the
@@ -140,18 +143,93 @@ fn crd_stage_enums() -> Vec<(&'static str, Vec<String>)> {
         .collect()
 }
 
+/// Restores the compile-time guarantee that the old exhaustive `match` in
+/// `applicable_stages` provided.
+///
+/// The stage table is now a lookup keyed by `type_name()`, so a typo'd key
+/// would silently make its plugin request-only instead of failing the build.
+/// Validating the keys against `schema_for!(EdgionPlugin)` is strictly stronger
+/// than the match was: it checks the names the CRD and `plugin_policy` actually
+/// consume, not the enum declaration.
 #[test]
 fn stage_exception_keys_are_real_variants() {
     let variants = rust_variant_type_names();
-    let bad: Vec<&str> = STAGE_EXCEPTIONS
+    let bad: Vec<&str> = HTTP_PLUGIN_STAGE_EXCEPTIONS
         .iter()
         .map(|(name, _)| *name)
         .filter(|name| !variants.contains(*name))
         .collect();
     assert!(
         bad.is_empty(),
-        "STAGE_EXCEPTIONS names a non-existent EdgionPlugin variant: {bad:?} — \
-         fix the typo or update the table to match `applicable_stages` in validate.rs."
+        "HTTP_PLUGIN_STAGE_EXCEPTIONS names a non-existent EdgionPlugin variant: {bad:?} — \
+         fix the typo in edgion_plugins/validate.rs; the key must equal the variant's `type_name()`."
+    );
+}
+
+/// No plugin type is listed as request-only-and-also-a-response-stage entry.
+///
+/// A duplicate of a variant's own name across stage enums is legitimate (`Dsl`,
+/// `Wasm`), so this asserts the stronger property: every entry in a
+/// response-stage enum is genuinely valid at that stage per the authority.
+#[test]
+fn stage_exception_table_has_no_request_only_entries() {
+    let bogus: Vec<&str> = HTTP_PLUGIN_STAGE_EXCEPTIONS
+        .iter()
+        .filter(|(_, s)| !s.upstream_response_filter && !s.upstream_response_body_filter && !s.upstream_response)
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        bogus.is_empty(),
+        "HTTP_PLUGIN_STAGE_EXCEPTIONS lists request-only plugin(s) {bogus:?} — the table is for \
+         NON-request-only plugins; request-only is the default and needs no entry."
+    );
+}
+
+/// Direction-3: every entry in a response-stage enum is genuinely valid there.
+///
+/// Nothing else catches this. Direction-1 is a deliberate SUPERSET check (a
+/// stage enum may carry extra entries), and Direction-2 only rejects names that
+/// match no variant at all — so a request-only plugin wrongly listed in
+/// `upstreamResponseFilterPlugins` would slip past both, and an operator could
+/// apply it at a stage where it silently never runs.
+///
+/// Only the two response-stage enums are checked. `requestPlugins` is
+/// deliberately lenient (it lists response-stage plugins too — see the
+/// module-level note on lenient admission), so an entry there implies nothing
+/// about the variant's real stages.
+///
+/// This asserts against `applicable_stages_by_name`, the same authority
+/// Direction-1 reads. Before the stage table was single-sourced it could only
+/// assert the weaker "is declared in the mirror table".
+#[test]
+fn response_stage_enum_entries_are_valid_at_that_stage() {
+    let stage_enums = crd_stage_enums();
+
+    let mut undeclared: Vec<String> = Vec::new();
+    for (field, stage) in STAGE_FIELD_KEYS {
+        if *stage == REQUEST {
+            continue;
+        }
+        let entries: &[String] = stage_enums
+            .iter()
+            .find(|(f, _)| f == field)
+            .map(|(_, e)| e.as_slice())
+            .unwrap_or(&[]);
+        for e in entries {
+            if !stages_for(e).contains(stage) {
+                undeclared.push(format!("{field}: {e}"));
+            }
+        }
+    }
+    undeclared.sort();
+    assert!(
+        undeclared.is_empty(),
+        "CRD lists plugin type(s) in a non-request stage enum that are NOT valid at that \
+         stage:\n  {undeclared:?}\n\
+         Fix one of two ways: if the plugin really does run at that stage, add it to \
+         HTTP_PLUGIN_STAGE_EXCEPTIONS in edgion_plugins/validate.rs (and wire the matching \
+         gateway constructor); otherwise remove the entry from edgion_plugins_crd.yaml — an \
+         operator could apply it there today and it would silently never run."
     );
 }
 
@@ -208,4 +286,31 @@ fn no_stage_enum_has_dead_or_duplicate_entries() {
          Fix: remove the stale/duplicate value(s) from edgion_plugins_crd.yaml, \
          or rename them to a real EdgionPlugin variant."
     );
+}
+
+#[test]
+fn logical_waf_schema_is_top_level_strict_and_not_a_stage_discriminator() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd/edgion_plugins_crd.yaml");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+    let doc: Value = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
+    let props = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"];
+    let waf = &props["waf"];
+
+    assert_eq!(waf["type"], "object");
+    assert_eq!(waf["additionalProperties"], false);
+    assert_eq!(waf["required"], serde_json::json!(["rules"]));
+    assert_eq!(
+        waf["properties"]["mode"]["enum"],
+        serde_json::json!(["on", "detectionOnly"])
+    );
+    assert!(waf["properties"]["rules"]["minLength"]
+        .as_u64()
+        .is_some_and(|value| value > 0));
+
+    for (field, _) in STAGE_FIELD_KEYS {
+        let entries = props[field]["items"]["properties"]["type"]["enum"]
+            .as_array()
+            .expect("stage discriminator is an array");
+        assert!(!entries.iter().any(|entry| entry == "Waf"));
+    }
 }

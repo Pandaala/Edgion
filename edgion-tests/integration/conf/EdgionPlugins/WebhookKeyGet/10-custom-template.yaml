@@ -60,8 +60,8 @@ spec:
           - name: X-From-Ctx
             template: "${ctx:trace}"
     timeoutMs: 5000
-    successStatusCodes: [200]
-    allowDegradation: false
+    success:
+      statusCodes: [200]
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1
@@ -70,7 +70,12 @@ metadata:
   name: wh10-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh10_result
+      from: ctx
+      name: wh10_result
   requestPlugins:
+    # CtxSet MUST run first: webhook template reads ${ctx:trace}.
     - enable: true
       type: CtxSet
       config:
@@ -81,16 +86,19 @@ spec:
               type: header
               name: X-Request-ID
             default: "no-trace"
+    # WebhookKeyGet AFTER CtxSet — otherwise ${ctx:trace} is empty.
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
           - name: wh10_result
-            from:
-              type: webhook
-              webhookRef: "edgion-default/wh10-resolver"
-              extract:
-                # X-From-Header is a custom template header "${header:X-User-Id}".
-                # Reading it back proves the ${header:...} token resolved against the
-                # current request view and was injected into the outbound request.
-                source: body
-                path: "data.echo_headers.x-from-header"
+            webhookRef: "edgion-default/wh10-resolver"
+            extract:
+              # X-From-Header is a custom template header "${header:X-User-Id}".
+              # Reading it back proves the ${header:...} token resolved against the
+              # current request view and was injected into the outbound request.
+              source: body
+              path: "data.echo_headers.x-from-header"
             default: "fallback"
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -98,8 +106,6 @@ kind: HTTPRoute
 metadata:
   name: wh10-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh10_result"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

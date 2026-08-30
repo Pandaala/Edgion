@@ -1,4 +1,5 @@
 pub mod backend_tls;
+pub mod edgion_backend_traffic_policy;
 pub mod gateway_class_params;
 pub mod gateway_frontend_validation;
 pub mod grpc_route;
@@ -12,6 +13,7 @@ pub mod tls_route;
 pub use backend_tls::{
     BackendTlsStatusTestSuite, BtlspFlapInitialTestSuite, BtlspFlapInvalidTestSuite, BtlspFlapValidTestSuite,
 };
+pub use edgion_backend_traffic_policy::EbtpAncestorStatusTestSuite;
 pub use gateway_class_params::{GcParamsFlapMissingTestSuite, GcParamsFlapPresentTestSuite};
 pub use gateway_frontend_validation::GatewayFrontendValidationStatusTestSuite;
 pub use grpc_route::GrpcRouteStatusTestSuite;

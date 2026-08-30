@@ -3,6 +3,14 @@ kind: HTTPRoute
 metadata:
   name: percent-mirror-100
   namespace: edgion-test
+  annotations:
+    # Exercise the edgion.io/mirror-* tuning annotation parse path end-to-end:
+    # sane values must not break mirroring (tuning effects themselves are not
+    # externally observable through the capture endpoint).
+    edgion.io/mirror-connect-timeout-ms: "2000"
+    edgion.io/mirror-write-timeout-ms: "2000"
+    edgion.io/mirror-max-buffered-chunks: "8"
+    edgion.io/mirror-max-concurrent: "256"
 spec:
   parentRefs:
     - name: percent-mirror-gateway

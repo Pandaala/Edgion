@@ -33,7 +33,10 @@ command -v python3 >/dev/null || { log_warn "python3 not installed; SKIP"; exit 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+UTILS_DIR="${PROJECT_ROOT}/edgion-tests/integration/scripts/utils"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 if [[ ! -x "$CONTROLLER_BIN" ]]; then
     log_warn "edgion-controller binary not found at $CONTROLLER_BIN; SKIP"
@@ -78,6 +81,9 @@ trap cleanup EXIT
 log_section "Setup"
 mkdir -p "$CONFIG_DIR" "$CONF_WATCH_DIR" "$LOG_DIR"
 ln -s "${PROJECT_ROOT}/config/crd" "${CONFIG_DIR}/crd"
+# conf_sync is mTLS by default: put the certs where the emitted block expects them
+# (work-dir relative), then let the shared emitter write the transport block.
+conf_sync_distribute_certs "$WORK_DIR"
 
 cat > "${CONFIG_DIR}/edgion-controller.yaml" <<EOF
 work_dir: "${WORK_DIR}"
@@ -102,6 +108,7 @@ conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
 EOF
+conf_sync_security_block server >> "${CONFIG_DIR}/edgion-controller.yaml"
 
 NAMESPACE="ns-list-keys"
 FIXTURE_COUNT=25

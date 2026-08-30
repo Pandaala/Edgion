@@ -13,7 +13,7 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        ipSource: remoteAddr
+        ipSource: RemoteIp
         defaultAction: allow
         denyRefs:
           - name: ecd-same-ns-data

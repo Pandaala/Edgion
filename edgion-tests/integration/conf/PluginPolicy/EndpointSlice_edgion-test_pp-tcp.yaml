@@ -1,0 +1,18 @@
+# Endpoints for the pp-tcp Service (local test_server TCP echo on 30010).
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: pp-tcp
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: pp-tcp
+addressType: IPv4
+ports:
+  - name: tcp-30010
+    port: 30010
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

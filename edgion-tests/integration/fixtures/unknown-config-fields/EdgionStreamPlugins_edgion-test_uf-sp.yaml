@@ -1,0 +1,22 @@
+# DELIBERATELY MALFORMED (unknown-field negative test):
+# "denys" is a typo for the real field "deny", covering EdgionStreamPlugins
+# (the sweep in conf_corpus_unknown_fields.rs also walks stream-plugin
+# documents). Expect "plugins[0].config.denys" to be reported.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: uf-sp
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: allow
+        allow:
+          - name: localhost
+            cidrs:
+              - "127.0.0.0/8"
+        denys:
+          - name: blocked
+            cidrs:
+              - "1.2.3.4/32"

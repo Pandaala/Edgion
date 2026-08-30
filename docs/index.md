@@ -4,11 +4,14 @@ layout: home
 hero:
   name: Edgion
   text: High-Performance Kubernetes Gateway
-  tagline: Built on Pingora and Kubernetes Gateway API — HTTP, gRPC, TCP, UDP, TLS, WebSocket
+  tagline: Built on Pingora and Kubernetes Gateway API — HTTP, gRPC, TCP, UDP, TLS, WebSocket, and AI Gateway
   actions:
     - theme: brand
       text: Get Started
       link: /en/getting-started/installation-and-deployment
+    - theme: alt
+      text: AI Gateway
+      link: /en/ai-gateway/
     - theme: alt
       text: 中文文档
       link: /zh-CN/getting-started/installation-and-deployment
@@ -16,10 +19,12 @@ hero:
 features:
   - title: Gateway API v1
     details: Full conformance with Kubernetes Gateway API v1. GatewayClass, Gateway, HTTPRoute, GRPCRoute, TCPRoute, UDPRoute all supported.
+  - title: AI Gateway
+    details: OpenAI-compatible LLM routing with EdgionBackend, credential pools, intelligent selection, bounded failover, usage, and cost accounting.
   - title: Multi-Protocol
     details: HTTP/1.1, HTTP/2, gRPC, TCP, UDP, WebSocket, TLS termination, mTLS, ACME automatic certificate.
   - title: Rich Plugin System
     details: Built-in plugins covering auth, rate limiting, rewriting, observability, and more. Compose plugins at route or gateway level.
   - title: High Performance
-    details: Powered by Cloudflare Pingora. BoringSSL or Rustls backend, jemalloc allocator, async-first architecture.
+    details: Powered by Cloudflare Pingora with the supported BoringSSL backend, jemalloc allocator, and an async-first architecture.
 ---

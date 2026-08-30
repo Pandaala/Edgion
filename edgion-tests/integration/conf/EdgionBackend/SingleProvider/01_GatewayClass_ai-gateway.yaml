@@ -1,0 +1,11 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: ai-gateway-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "AI Gateway integration listener with compression enabled"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: ai-gateway-egc

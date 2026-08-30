@@ -32,6 +32,7 @@ adds jitter, exponential back-off, or metrics instrumentation.
 - `hmac_auth/plugin.rs`         — F-021 (2026-05-27)
 - `jwe_decrypt/plugin.rs`       — F-021 (2026-05-27)
 - `jwt_auth/plugin.rs`          — F-021 (2026-05-27)
+- `header_cert_auth/plugin.rs`  — gw-plugin-auth-b-02 (2026-08-03)
 
 ## Known exceptions (not duplicate logic)
 
@@ -41,10 +42,3 @@ adds jitter, exponential back-off, or metrics instrumentation.
   `if > 0 { sleep }` body — it delegates. This is a stylistic choice (kept
   because the OIDC plugin has many call sites and the receiver-style
   invocation matches the rest of the impl); do not flag.
-
-## Follow-up
-
-- `header_cert_auth/plugin.rs:336` still carries a private copy. It was out
-  of F-021's scope; track separately if a future review wants to clean it
-  up. Same rule applies: replace with a direct call to
-  `auth_common::apply_auth_failure_delay(self.config.auth_failure_delay_ms)`.

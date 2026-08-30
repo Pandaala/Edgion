@@ -8,15 +8,24 @@ description: Use when reviewing session-affinity token findings claiming the CRC
 **Status:** 📝 documented · 2026-05-24 · threat-model comments added, no behavior change
 **Severity:** Low (BadLogic) — undocumented security boundary; self-affecting only, no cross-user impact
 
+> **Update (2026-07-18, weighted-backends fix):** the token derivation moved from CRC32
+> (8 hex chars) to SHA-256 truncated to 64 bits (16 hex chars) because a token is now
+> resolved across ALL of a rule's backendRefs and a 32-bit identity was deemed too
+> collision-prone for a cross-Service identity. Both sites now share one derivation:
+> `build_sp_affinity_map` calls `generate_session_token`. **The decision below is
+> unchanged** — the token is still an unkeyed hash, still a stickiness hint, and the
+> HMAC upgrade is still not accepted. Re-reports of "unkeyed hash is forgeable" close
+> against this entry regardless of the hash function.
+
 ## Conclusion
 
 `generate_session_token` (`edgion-gateway/src/routes/http/session_persistence.rs`) and
 `build_sp_affinity_map` (`edgion-gateway/src/lb/runtime_state/mod.rs`) compute the session-affinity
-token as `format!("{:08x}", crc32fast::hash(addr_str))` — a plain CRC32 of the backend `IP:port`
-with no per-process secret and no MAC. This is **intentional**: session affinity is a
-stickiness/performance feature, not an authentication or access-control boundary. The defect was
-the *absence of a comment saying so*, now fixed by adding a threat-model doc comment to both
-sites. The token computation itself is unchanged.
+token as an unkeyed hash of the backend `IP:port` (originally CRC32, now truncated SHA-256 — see
+the update note above) with no per-process secret and no MAC. This is **intentional**: session
+affinity is a stickiness/performance feature, not an authentication or access-control boundary.
+The original defect was the *absence of a comment saying so*, fixed by adding a threat-model doc
+comment to both sites.
 
 Findings of the form "CRC32 token is trivially pre-computable / forgeable / no HMAC / no MAC
 protection" should be closed against this entry. Adding HMAC is **not accepted** as a fix unless
@@ -34,7 +43,7 @@ traffic.
 **2. A forged token cannot inject an arbitrary address.**
 
 The affinity map (`sp_affinity_get_or_build_key`) is built solely from the service's *real*
-backends. `sp_resolve_target` (`pg_upstream_peer.rs`) does `affinity_map.get(token)`, so a forged
+backends. `sp_resolve_target` (`session_persistence.rs`) does `affinity_map.get(token)`, so a forged
 token can only ever select an already-registered backend of that service — never an attacker-chosen
 address. The resolved sticky target then still passes the normal SSRF / DNS validation in
 `get_peer_with_sp_fallback` (loopback / link-local rejected). So the blast radius is bounded to
@@ -71,5 +80,6 @@ Re-open this decision (and implement the HMAC fix) only if:
 - `edgion-gateway/src/routes/http/session_persistence.rs` — `generate_session_token` (threat-model comment)
 - `edgion-gateway/src/lb/runtime_state/mod.rs` — `build_sp_affinity_map` (threat-model comment),
   `sp_affinity_lookup`, `sp_affinity_get_or_build_key`
-- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` — `sp_resolve_target`,
-  `get_peer_with_sp_fallback` (SSRF validation on the resolved sticky target)
+- `edgion-gateway/src/routes/http/session_persistence.rs` — `sp_resolve_target`
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` — `get_peer_with_sp_fallback`
+  (SSRF validation on the resolved sticky target)

@@ -1,0 +1,36 @@
+# Route for the ConnectTimeout scenario: two rules on the same hostname,
+# split by path prefix so a single HTTP client can hit both backends.
+#   /blackhole -> ct-svc-a (BTP override, must fail fast)
+#   /ok        -> ct-svc-b (no override, must succeed normally)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ct-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ct-gateway
+      namespace: edgion-test
+  hostnames:
+    - "connect-timeout.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /blackhole
+      # No retries: a single connect attempt keeps the assertion tight to one
+      # connectTimeout window instead of (maxRetries + 1) windows.
+      retry:
+        attempts: 0
+      backendRefs:
+        - name: ct-svc-a
+          namespace: edgion-test
+          port: 1
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ok
+      backendRefs:
+        - name: ct-svc-b
+          namespace: edgion-test
+          port: 30001

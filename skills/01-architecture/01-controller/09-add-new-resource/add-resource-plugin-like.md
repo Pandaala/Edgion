@@ -27,7 +27,7 @@ Why it matters:
 
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs` (FileSystem + Etcd)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `EdgionPluginsHandler` demonstrates:
@@ -81,7 +81,7 @@ What to copy:
 - Decide whether preparse is required and wire it through `impl_resource_meta!`
 - Add `ProcessorHandler<T>` with any secret/config resolution logic
 - Register secret refs if runtime data depends on referenced secrets
-- Spawn the processor in both controller centers
+- Spawn the processor in the shared FileSystem/Etcd list and in the Kubernetes controller
 - Add namespaced CRUD and K8s dynamic writer support if operators manage it directly
 - Add `ClientCache<T>` wiring in Gateway
 - Add a store-backed `ConfHandler<T>` for runtime consumption

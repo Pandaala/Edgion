@@ -67,7 +67,7 @@
 //! ctxSet:
 //!   vars:
 //!     - name: "rate_key"
-//!       template: "${header:X-Tenant}_${clientIp}"
+//!       template: "${header:X-Tenant}_${remoteIp}"
 //! ```
 
 use regex::Regex;
@@ -114,7 +114,7 @@ pub struct CtxVarRule {
     pub from: Option<KeyGet>,
 
     /// Template string with variable interpolation
-    /// Supports: ${header:X-Name}, ${query:name}, ${clientIp}, ${path}, ${method}
+    /// Supports: ${header:X-Name}, ${query:name}, ${remoteIp}, ${path}, ${method}
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
 
@@ -315,7 +315,7 @@ pub enum TemplateVarType {
     /// Entry-time raw full URI (frozen).
     RequestUri,
     Method,
-    ClientIp,
+    RemoteIp,
     /// Matched HTTPRoute identity/metadata `${matchedHttpRoute:name|namespace|label.<k>|annotation.<k>}`.
     MatchedHttpRoute,
     /// Matched GRPCRoute identity/metadata `${matchedGrpcRoute:...}`.
@@ -339,7 +339,7 @@ impl TemplateVarType {
             "requestPath" => Ok(Self::RequestPath),
             "requestUri" => Ok(Self::RequestUri),
             "method" => Ok(Self::Method),
-            "clientIp" => Ok(Self::ClientIp),
+            "remoteIp" => Ok(Self::RemoteIp),
             "matchedHttpRoute" => Ok(Self::MatchedHttpRoute),
             "matchedGrpcRoute" => Ok(Self::MatchedGrpcRoute),
             "secretRef" => Ok(Self::SecretRef),
@@ -737,13 +737,13 @@ vars:
         let yaml = r#"
 vars:
   - name: rate_key
-    template: "${header:X-Tenant}_${clientIp}"
+    template: "${header:X-Tenant}_${remoteIp}"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         config.validate().expect("validate should succeed");
         assert_eq!(
             config.vars[0].template,
-            Some("${header:X-Tenant}_${clientIp}".to_string())
+            Some("${header:X-Tenant}_${remoteIp}".to_string())
         );
     }
 
@@ -968,7 +968,7 @@ vars:
 
     #[test]
     fn test_template_compilation() {
-        let compiled = CompiledTemplate::compile("hello ${header:X-User} from ${clientIp}").unwrap();
+        let compiled = CompiledTemplate::compile("hello ${header:X-User} from ${remoteIp}").unwrap();
         let segs = compiled.segments();
         assert_eq!(segs.len(), 4);
         assert!(matches!(&segs[0], TemplateSegment::Literal(s) if s == "hello "));
@@ -977,7 +977,7 @@ vars:
         );
         assert!(matches!(&segs[2], TemplateSegment::Literal(s) if s == " from "));
         assert!(
-            matches!(&segs[3], TemplateSegment::Variable { var_type, var_name } if matches!(var_type, TemplateVarType::ClientIp) && var_name.is_none())
+            matches!(&segs[3], TemplateSegment::Variable { var_type, var_name } if matches!(var_type, TemplateVarType::RemoteIp) && var_name.is_none())
         );
         assert!(compiled.hint_len() > 0);
     }
@@ -991,6 +991,13 @@ vars:
     #[test]
     fn test_template_compilation_unknown_var_type() {
         let result = CompiledTemplate::compile("${unknown:foo}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown variable type"));
+    }
+
+    #[test]
+    fn old_client_ip_template_variable_is_rejected() {
+        let result = CompiledTemplate::compile("${clientIp}");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown variable type"));
     }

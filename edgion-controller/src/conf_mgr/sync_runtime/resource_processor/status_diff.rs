@@ -38,8 +38,8 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
             !parents_status_equal(&old, &new)
         }
         "Gateway" => !gateway_status_equal(&old, &new),
-        "BackendTLSPolicy" => !ancestors_status_equal(&old, &new),
-        "EdgionAcme" => old != new,
+        "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => !ancestors_status_equal(&old, &new),
+        "EdgionAcme" => !acme_status_equal(&old, &new),
         // Simple condition-only resources:
         // GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
         _ => !conditions_only_status_equal(&old, &new),
@@ -112,6 +112,31 @@ fn conditions_only_status_equal(old: &Value, new: &Value) -> bool {
 }
 
 // ============================================================================
+// EdgionAcme status (conditions + ACME-specific fields: phase, order state,
+// certificate/renewal timestamps)
+// ============================================================================
+
+/// Conditions are compared semantically (ignoring `lastTransitionTime`);
+/// every other status field is compared structurally. A raw whole-blob
+/// comparison would include condition `lastTransitionTime` and turn every
+/// reconcile into a "changed" status write under FileSystem/Etcd backends.
+fn acme_status_equal(old: &Value, new: &Value) -> bool {
+    let old_conds = old.get("conditions").unwrap_or(&Value::Null);
+    let new_conds = new.get("conditions").unwrap_or(&Value::Null);
+    if !conditions_equal(old_conds, new_conds) {
+        return false;
+    }
+    let strip = |v: &Value| -> Value {
+        let mut v = v.clone();
+        if let Some(map) = v.as_object_mut() {
+            map.remove("conditions");
+        }
+        v
+    };
+    strip(old) == strip(new)
+}
+
+// ============================================================================
 // Per-parent status (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls)
 // ============================================================================
 
@@ -168,7 +193,7 @@ fn parent_entry_equal(old: &Value, new: &Value) -> bool {
 }
 
 // ============================================================================
-// Per-ancestor status (BackendTLSPolicy)
+// Per-ancestor status (BackendTLSPolicy, EdgionBackendTrafficPolicy)
 // ============================================================================
 
 fn ancestors_status_equal(old: &Value, new: &Value) -> bool {
@@ -275,4 +300,59 @@ fn listener_equal(old: &Value, new: &Value) -> bool {
     let old_conds = old.get("conditions").unwrap_or(&Value::Null);
     let new_conds = new.get("conditions").unwrap_or(&Value::Null);
     conditions_equal(old_conds, new_conds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn acme_status(ltt: &str, cond_status: &str, phase: &str) -> String {
+        format!(
+            r#"{{"conditions":[{{"type":"Accepted","status":"{cond_status}","reason":"Accepted","message":"ok","lastTransitionTime":"{ltt}","observedGeneration":1}}],"phase":"{phase}"}}"#
+        )
+    }
+
+    #[test]
+    fn acme_ltt_only_change_is_not_a_status_change() {
+        let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
+        let new = acme_status("2026-07-19T00:00:00Z", "True", "Ready");
+        assert!(
+            !status_semantically_changed("EdgionAcme", &old, &new),
+            "a lastTransitionTime-only difference must not trigger a status write"
+        );
+    }
+
+    #[test]
+    fn acme_condition_flip_is_a_status_change() {
+        let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
+        let new = acme_status("2026-01-01T00:00:00Z", "False", "Ready");
+        assert!(status_semantically_changed("EdgionAcme", &old, &new));
+    }
+
+    #[test]
+    fn acme_non_condition_field_change_is_a_status_change() {
+        let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
+        let new = acme_status("2026-01-01T00:00:00Z", "True", "Renewing");
+        assert!(status_semantically_changed("EdgionAcme", &old, &new));
+    }
+
+    /// `EdgionBackendTrafficPolicy` (GEP-2648 `status.ancestors[]`, like
+    /// `BackendTLSPolicy`) must dispatch through `ancestors_status_equal`: a
+    /// `lastTransitionTime`-only change is not a semantic change, but a
+    /// `status` flip on a condition is.
+    #[test]
+    fn ebtp_uses_ancestors_comparison() {
+        let old = r#"{"ancestors":[{"ancestorRef":{"name":"gw"},"controllerName":"c","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"m","lastTransitionTime":"2026-01-01T00:00:00Z"}]}]}"#;
+        let new_time_only = old.replace("2026-01-01", "2026-02-02");
+        assert!(
+            !status_semantically_changed("EdgionBackendTrafficPolicy", old, &new_time_only),
+            "lastTransitionTime-only change must not trigger a status write"
+        );
+        let new_flipped = old.replace("\"status\":\"True\"", "\"status\":\"False\"");
+        assert!(status_semantically_changed(
+            "EdgionBackendTrafficPolicy",
+            old,
+            &new_flipped
+        ));
+    }
 }

@@ -5,6 +5,7 @@ use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::BackendTLSPolicy;
 use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
@@ -17,18 +18,138 @@ use std::sync::Arc;
 /// Mirrors `CompiledBackend` for HTTP routes (two-type split).
 #[derive(Clone)]
 pub struct CompiledGrpcBackend {
-    /// Pure backend-ref schema. Owned (not Arc) so the per-request
-    /// `backend_tls_policy` mutation in `handle_grpc_upstream` stays cheap
-    /// (clone-on-select matches the old GRPCBackendRef clone cost).
+    /// Pure backend-ref schema owned by the immutable per-rule generation.
+    /// Request-specific policy winners are stored on `SelectedGrpcBackend`.
     pub schema: GRPCBackendRef,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
+}
+
+/// One immutable gRPC backend slot pinned to its compiled route generation.
+#[derive(Clone)]
+pub struct GrpcBackendHandle {
+    generation: Arc<Vec<CompiledGrpcBackend>>,
+    index: usize,
+}
+
+impl GrpcBackendHandle {
+    pub(crate) fn new(generation: Arc<Vec<CompiledGrpcBackend>>, index: usize) -> Option<Self> {
+        if generation.get(index).is_some() {
+            Some(Self { generation, index })
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    pub fn compiled(&self) -> &CompiledGrpcBackend {
+        &self.generation[self.index]
+    }
+
+    #[inline]
+    pub fn slot(&self) -> usize {
+        self.index
+    }
+
+    #[inline]
+    pub fn policy_target_key(
+        &self,
+        route_namespace: &str,
+    ) -> Option<edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey> {
+        self.compiled().policy_target_key(route_namespace)
+    }
+}
+
+impl std::fmt::Debug for GrpcBackendHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrpcBackendHandle")
+            .field("slot", &self.slot())
+            .field("name", &self.compiled().name)
+            .finish()
+    }
+}
+
+/// The request-stable gRPC backend selection and its captured TLS policy.
+#[derive(Clone, Debug)]
+pub struct SelectedGrpcBackend {
+    logical: GrpcBackendHandle,
+    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+}
+
+impl SelectedGrpcBackend {
+    pub(crate) fn new(logical: GrpcBackendHandle, backend_tls_policy: Option<Arc<BackendTLSPolicy>>) -> Self {
+        Self {
+            logical,
+            backend_tls_policy,
+        }
+    }
+
+    #[inline]
+    pub fn logical(&self) -> &GrpcBackendHandle {
+        &self.logical
+    }
+
+    #[inline]
+    pub fn compiled(&self) -> &CompiledGrpcBackend {
+        self.logical.compiled()
+    }
+
+    #[inline]
+    pub fn slot(&self) -> usize {
+        self.logical.slot()
+    }
+
+    #[inline]
+    pub fn backend_tls_policy(&self) -> Option<&Arc<BackendTLSPolicy>> {
+        self.backend_tls_policy.as_ref()
+    }
+
+    #[inline]
+    pub fn plugin_runtime(&self) -> Arc<PluginRuntime> {
+        Arc::clone(&self.logical.compiled().plugin_runtime)
+    }
+}
+
+impl std::ops::Deref for SelectedGrpcBackend {
+    type Target = CompiledGrpcBackend;
+
+    fn deref(&self) -> &Self::Target {
+        self.logical.compiled()
+    }
 }
 
 impl std::ops::Deref for CompiledGrpcBackend {
     type Target = GRPCBackendRef;
     fn deref(&self) -> &GRPCBackendRef {
         &self.schema
+    }
+}
+
+impl CompiledGrpcBackend {
+    /// Canonical typed policy identity for this authorized gRPC Service ref.
+    pub fn policy_target_key(
+        &self,
+        route_namespace: &str,
+    ) -> Option<edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey> {
+        if self.schema.ref_denied.is_some() {
+            return None;
+        }
+        let group = self.schema.group.as_deref().unwrap_or("");
+        let kind = self.schema.kind.as_deref().unwrap_or("Service");
+        if !matches!(group, "" | "core") || kind != "Service" {
+            return None;
+        }
+        Some(
+            edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+                target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
+                namespace: self
+                    .schema
+                    .namespace
+                    .clone()
+                    .unwrap_or_else(|| route_namespace.to_string()),
+                name: self.schema.name.clone(),
+            },
+        )
     }
 }
 
@@ -125,15 +246,23 @@ pub struct GrpcMatchInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_method_regex: Option<Regex>,
-    /// Opt-in allowlist of `ctx_map` keys to project into the access log for
-    /// this route (`edgion.io/log-ctx-keys`). In-process only.
+    /// Raw route labels for `AccessLogExtern` `from: routeLabel`. In-process
+    /// only — never part of the serialized entry; only declared keys reach `ext`.
     #[serde(skip)]
     #[schemars(skip)]
-    pub log_ctx_keys: crate::ctx::LogCtxKeys,
+    pub labels_meta: crate::ctx::RouteMeta,
+    /// Raw route annotations for `AccessLogExtern` `from: routeAnnotation`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub annotations_meta: crate::ctx::RouteMeta,
 }
 
 impl GrpcMatchInfo {
-    #[allow(clippy::too_many_arguments)] // mirrors the resource fields needed to build a gRPC match unit
+    /// GRPCRoute no longer carries operator log labels (see
+    /// `crate::extract_log_labels`'s doc) — `rsc.labels` is always `None`
+    /// here. `AccessLogExtern`'s `from: routeLabel` / `from: routeAnnotation`
+    /// reads `labels_meta` / `annotations_meta` instead (attached via
+    /// [`GrpcMatchInfo::with_route_meta`]).
     pub fn new(
         route_ns: String,
         route_name: String,
@@ -142,7 +271,6 @@ impl GrpcMatchInfo {
         matched: GRPCRouteMatch,
         sv: u64,
         rule_name: Option<String>,
-        labels: Option<crate::LogLabels>,
     ) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
@@ -212,7 +340,7 @@ impl GrpcMatchInfo {
                 kind: "GRPCRoute".to_string(),
                 ns: route_ns,
                 name: route_name,
-                labels,
+                labels: None,
             },
             rule_id,
             rule_name,
@@ -222,13 +350,15 @@ impl GrpcMatchInfo {
             compiled_header_regexes,
             compiled_service_regex,
             compiled_method_regex,
-            log_ctx_keys: None,
+            labels_meta: None,
+            annotations_meta: None,
         }
     }
 
-    /// Attach the resolved ctx-key allowlist, consuming and returning `self`.
-    pub fn with_log_ctx_keys(mut self, keys: crate::ctx::LogCtxKeys) -> Self {
-        self.log_ctx_keys = keys;
+    /// Attach the route's raw metadata maps, resolved once at route build.
+    pub fn with_route_meta(mut self, labels: crate::ctx::RouteMeta, annotations: crate::ctx::RouteMeta) -> Self {
+        self.labels_meta = labels;
+        self.annotations_meta = annotations;
         self
     }
 }
@@ -259,7 +389,12 @@ pub struct GrpcRouteRuleUnit {
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Per-rule WRR selector over compiled backends (one per rule; gRPC has no
     /// hostname fan-out so there is no per-hostname duplication).
-    pub backend_finder: Arc<BackendSelector<CompiledGrpcBackend>>,
+    pub backend_finder: Arc<BackendSelector<usize>>,
+    /// Per-rule compiled backends in declaration order — the FULL list,
+    /// including weight-0 refs the WRR selector filters out. Session
+    /// persistence resolves an established session across this list before
+    /// weighted selection (GEP-1619: weights govern only new sessions).
+    pub backends: Arc<Vec<CompiledGrpcBackend>>,
 }
 
 impl GrpcRouteRuleUnit {
@@ -291,13 +426,13 @@ impl GrpcRouteRuleUnit {
         }
     }
 
-    /// Build a WRR selector over a rule's compiled backends.
+    /// Build a WRR selector over original backend slot indexes.
     /// gRPC has no hostname fan-out, so one selector per rule suffices.
-    pub fn build_backend_selector(backends: &[CompiledGrpcBackend]) -> Arc<BackendSelector<CompiledGrpcBackend>> {
+    pub fn build_backend_selector(backends: &[CompiledGrpcBackend]) -> Arc<BackendSelector<usize>> {
         let selector = BackendSelector::new();
         if !backends.is_empty() {
             let weights: Vec<Option<i32>> = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
-            selector.init(backends.to_vec(), weights);
+            selector.init((0..backends.len()).collect(), weights);
         }
         Arc::new(selector)
     }
@@ -314,7 +449,7 @@ impl GrpcRouteRuleUnit {
         session: &Session,
         index: &GatewayInfoIndex,
         hostname: &str,
-    ) -> Result<Option<GatewayInfo>, EdError> {
+    ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let req_header = session.req_header();
 
         // Check route-level hostname constraint: gRPC routes are NOT bucketed
@@ -416,5 +551,131 @@ impl GrpcRouteRuleUnit {
                 self.matched_info.match_id
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod backend_handle_tests {
+    use super::*;
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
+    };
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    fn compiled(name: &str, weight: i32, runtime: Arc<PluginRuntime>) -> CompiledGrpcBackend {
+        CompiledGrpcBackend {
+            schema: GRPCBackendRef {
+                name: name.to_string(),
+                namespace: Some("backend-ns".to_string()),
+                port: Some(8080),
+                weight: Some(weight),
+                group: None,
+                kind: Some("Service".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied: None,
+            },
+            plugin_runtime: runtime,
+        }
+    }
+
+    fn tls_policy(name: &str, hostname: &str) -> Arc<BackendTLSPolicy> {
+        Arc::new(BackendTLSPolicy {
+            metadata: ObjectMeta {
+                namespace: Some("backend-ns".to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "api".to_string(),
+                    section_name: None,
+                }],
+                resolved_target_class: None,
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: hostname.to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: None,
+                },
+                options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                use_system_ca: true,
+            },
+            status: None,
+        })
+    }
+
+    #[test]
+    fn grpc_backend_handles_stay_within_hot_path_budget() {
+        assert_eq!(std::mem::size_of::<GrpcBackendHandle>(), 16);
+        assert_eq!(std::mem::size_of::<SelectedGrpcBackend>(), 24);
+        assert_eq!(std::mem::size_of::<Option<SelectedGrpcBackend>>(), 24);
+    }
+
+    #[test]
+    fn handle_projects_exact_duplicate_slot_and_pins_generation_runtime() {
+        let old_runtime = Arc::new(PluginRuntime::new());
+        let generation = Arc::new(vec![
+            compiled("api", 0, Arc::new(PluginRuntime::new())),
+            compiled("api", 1, Arc::clone(&old_runtime)),
+        ]);
+        let logical = GrpcBackendHandle::new(Arc::clone(&generation), 1).unwrap();
+        let selected = SelectedGrpcBackend::new(logical, None);
+        let replacement = Arc::new(vec![compiled("new", 1, Arc::new(PluginRuntime::new()))]);
+        drop(generation);
+
+        assert_eq!(selected.slot(), 1);
+        assert_eq!(selected.name, "api");
+        assert!(Arc::ptr_eq(&selected.plugin_runtime(), &old_runtime));
+        assert!(!Arc::ptr_eq(&selected.logical.generation, &replacement));
+    }
+
+    #[test]
+    fn handle_rejects_out_of_range_index() {
+        let generation = Arc::new(vec![compiled("api", 1, Arc::new(PluginRuntime::new()))]);
+        assert!(GrpcBackendHandle::new(generation, 1).is_none());
+    }
+
+    #[test]
+    fn selector_returns_original_slot_and_filters_weight_zero_only_for_new_requests() {
+        let generation = vec![
+            compiled("sticky", 0, Arc::new(PluginRuntime::new())),
+            compiled("active", 1, Arc::new(PluginRuntime::new())),
+        ];
+        let selector = GrpcRouteRuleUnit::build_backend_selector(&generation);
+
+        for _ in 0..8 {
+            assert_eq!(selector.select().unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn selected_backend_pins_tls_policy_and_selection_is_allocation_free() {
+        let runtime = Arc::new(PluginRuntime::new());
+        let generation = Arc::new(vec![compiled("api", 1, Arc::clone(&runtime))]);
+        let old_policy = tls_policy("old", "old.example.com");
+        let current_policy = tls_policy("new", "new.example.com");
+
+        let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let logical = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
+            let selected = SelectedGrpcBackend::new(logical, Some(Arc::clone(&old_policy)));
+            let projected_runtime = selected.plugin_runtime();
+            drop(projected_runtime);
+            selected
+        });
+
+        assert!(Arc::ptr_eq(selected.backend_tls_policy().unwrap(), &old_policy));
+        assert!(!Arc::ptr_eq(selected.backend_tls_policy().unwrap(), &current_policy));
+        assert_eq!(
+            selected.backend_tls_policy().unwrap().spec.validation.hostname,
+            "old.example.com"
+        );
+        assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 }

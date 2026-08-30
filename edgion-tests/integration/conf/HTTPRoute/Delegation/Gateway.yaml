@@ -1,0 +1,15 @@
+# HTTPRoute delegation test Gateway.
+# The parent route lives in the same namespace (edgion-test), so the default
+# allowedRoutes policy (Same) admits it; delegation children never attach to
+# listeners and are unaffected by listener policy.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: delegation-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31932

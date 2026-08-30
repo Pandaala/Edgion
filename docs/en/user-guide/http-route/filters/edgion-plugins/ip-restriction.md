@@ -58,7 +58,7 @@ filters:
 | `deny` | Array\<Object\> | none | Denylist groups (blacklist). Highest priority: IPs in a deny group are always denied. |
 | `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the resource's namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
 | `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
-| `ipSource` | Enum | `clientIp` | IP source. `clientIp`: reads `remote_addr` (pre-processed by the RealIp plugin or global `spec.realIp`; falls back to the TCP peer IP if neither is configured). `remoteAddr`: always the TCP connection peer address (never forgeable). |
+| `ipSource` | Enum | `RemoteIp` | IP source. `RemoteIp`: reads the resolved client identity (pre-processed by the RealIp plugin or global `spec.realIp`; falls back to the effective L4 remote IP when neither is configured). `DirectPeerIp`: always the physical transport peer address. |
 | `status` | Integer | `403` | HTTP status code returned when denied (100..=599). |
 | `message` | String | none | Custom message returned when denied. |
 | `defaultAction` | Enum | `allow` | Action when an IP matches no rule. Allowed values: `allow` / `deny`. |
@@ -243,11 +243,11 @@ filters:
 
 ### 6. Behind a Load Balancer (trust the real client IP)
 
-When the gateway sits behind a proxy/load balancer, the TCP peer is the proxy. Configure the RealIp plugin first to derive the true client IP from `X-Forwarded-For` / `X-Real-IP`; then `ipSource: clientIp` matches against the real IP.
+When the gateway sits behind a proxy/load balancer, the TCP peer is the proxy. Configure the RealIp plugin first to derive `RemoteIp` from `X-Forwarded-For` / `X-Real-IP`; then `ipSource: RemoteIp` matches against the resolved client.
 
 ```yaml
 filters:
-  # RealIp normalizes remote_addr from trusted proxies first
+  # RealIp resolves remote_ip from trusted proxies first
   - type: RealIp
     config:
       trustedIps:
@@ -257,33 +257,33 @@ filters:
   # IpRestriction reads the normalized client IP
   - type: IpRestriction
     config:
-      ipSource: "clientIp"
+      ipSource: "RemoteIp"
       allow:
         - name: clients
           cidrs: ["203.0.113.0/24"]
 ```
 
-> **Warning:** `ipSource: clientIp` is only as trustworthy as the upstream that sets `X-Forwarded-For`. Without RealIp configured, `clientIp` falls back to the TCP peer IP (safe, not forgeable). If clients can reach the gateway directly, do not trust forwarded headers — use `ipSource: remoteAddr` or configure RealIp with the exact trusted-proxy ranges.
+> **Warning:** `ipSource: RemoteIp` is only as trustworthy as the configured PROXY/RealIp trust boundary. Without RealIp configured, it uses the effective L4 remote IP. If clients can reach the gateway directly, do not trust forwarded headers — use `ipSource: DirectPeerIp` or configure RealIp with the exact trusted-proxy ranges.
 
 ---
 
 ## IP Source Selection
 
-### `ipSource: clientIp` (Default)
+### `ipSource: RemoteIp` (Default)
 
-Reads `remote_addr`, which the RealIp plugin or global `spec.realIp` pre-processes from proxy headers. Without RealIp configured, it falls back to the TCP connection IP (not forgeable).
+Reads `RemoteIp`, which the RealIp plugin or global `spec.realIp` resolves from proxy headers. Without RealIp configured, it falls back to the effective L4 remote IP.
 
 ```yaml
 filters:
   - type: IpRestriction
     config:
-      ipSource: "clientIp"  # Default
+      ipSource: "RemoteIp"  # Default
       allow:
         - name: clients
           cidrs: ["203.0.113.0/24"]
 ```
 
-### `ipSource: remoteAddr`
+### `ipSource: DirectPeerIp`
 
 Always uses the TCP connection's peer address (direct connection IP); never forgeable.
 
@@ -295,7 +295,7 @@ Always uses the TCP connection's peer address (direct connection IP); never forg
 filters:
   - type: IpRestriction
     config:
-      ipSource: "remoteAddr"
+      ipSource: "DirectPeerIp"
       allow:
         - name: lb
           cidrs: ["10.0.0.0/8"]  # Only allow internal load balancers
@@ -397,7 +397,7 @@ filters:
 
 3. **Review rules regularly** — remove IPs that are no longer needed; update changed office IPs.
 
-4. **Pair `clientIp` with RealIp** — only trust forwarded client IPs when the RealIp plugin (or global `spec.realIp`) sanitizes them from known trusted proxies. Otherwise use `remoteAddr`.
+4. **Pair `RemoteIp` with RealIp** — only trust forwarded client IPs when the RealIp plugin (or global `spec.realIp`) sanitizes them from known trusted proxies. Otherwise use `DirectPeerIp`.
 
 5. **Combine with authentication** — IP restriction is defense-in-depth, not a substitute for authentication.
 
@@ -420,7 +420,7 @@ filters:
 
 1. **Overly broad ranges in production** (for example `0.0.0.0/0`, which allows all IPs).
 2. **Relying solely on IP restriction for authentication** — IPs can be spoofed, especially on internal networks.
-3. **Trusting `clientIp` without RealIp** on a gateway that clients can reach directly (forwarded-header spoofing bypass).
+3. **Trusting `RemoteIp` without RealIp** on a gateway that clients can reach directly (forwarded-header spoofing bypass).
 4. **Forgetting IPv6** — configure both families when IPv6 traffic is possible.
 
 ---
@@ -431,7 +431,7 @@ filters:
 
 **Cause**:
 - CIDR range misconfigured
-- Wrong `ipSource` (behind a proxy but using `remoteAddr` without RealIp)
+- Wrong `ipSource` (behind a proxy but using `DirectPeerIp` when the policy requires the resolved client)
 
 **Solution**: Check the request logs for the actual matched IP and the `X-Forwarded-For` header, then align `ipSource` (and configure RealIp if behind a proxy).
 
@@ -439,7 +439,7 @@ filters:
 
 **Cause**: The proxy/load balancer is not setting `X-Forwarded-For`, or RealIp is not configured.
 
-**Solution**: Configure the RealIp plugin with the trusted proxy ranges, or temporarily use `ipSource: remoteAddr` and allow the load balancer IP.
+**Solution**: Configure the RealIp plugin with the trusted proxy ranges, or use `ipSource: DirectPeerIp` intentionally and allow the load balancer IP.
 
 ### Issue 3: Rules Not Taking Effect
 
@@ -508,7 +508,7 @@ spec:
     # IP allowlist
     - type: IpRestriction
       config:
-        ipSource: "clientIp"
+        ipSource: "RemoteIp"
         allow:
           - name: internal
             cidrs:
@@ -541,7 +541,7 @@ spec:
     # IP denylist
     - type: IpRestriction
       config:
-        ipSource: "clientIp"
+        ipSource: "RemoteIp"
         deny:
           - name: abuse
             cidrs:

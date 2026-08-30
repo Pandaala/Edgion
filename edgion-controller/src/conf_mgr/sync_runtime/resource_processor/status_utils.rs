@@ -11,7 +11,7 @@
 //! require data-plane feedback unavailable in our async gRPC architecture.
 //! PartiallyInvalid condition is supported for routes with partially invalid rules.
 
-use chrono::{SecondsFormat, Utc};
+use edgion_common::time::now_rfc3339;
 use edgion_resources::resources::common::Condition;
 
 /// Standard Gateway API condition types
@@ -28,6 +28,18 @@ pub mod condition_types {
     pub const PARTIALLY_INVALID: &str = "PartiallyInvalid";
     /// Listener configuration has been sent to the data plane (listener-level)
     pub const PROGRAMMED: &str = "Programmed";
+    /// One or more plugin entries are restricted by the controller plugin
+    /// policy (Edgion-specific, not a Gateway API condition). True = hits
+    /// exist; the condition is removed entirely when there are no hits.
+    pub const PLUGIN_POLICY_RESTRICTED: &str = "PluginPolicyRestricted";
+    /// The operator-authored document carries one or more keys the schema
+    /// does not recognize (Edgion-specific, not a Gateway API condition).
+    /// True = findings exist; the condition is removed entirely when there
+    /// are none. Advisory only: the typo'd key is ignored exactly as it was
+    /// before this check existed, `Accepted` is untouched, and the config
+    /// still syncs to the data plane unchanged — see
+    /// `skills/00-design-rules.md` (unknown-key detection).
+    pub const UNKNOWN_CONFIG_FIELDS: &str = "UnknownConfigFields";
 }
 
 /// Standard Gateway API condition reasons
@@ -78,7 +90,10 @@ pub mod condition_reasons {
     pub const INVALID: &str = "Invalid";
     /// TLS listener mode is not supported (e.g. Mixed mode for TLSRoute)
     pub const UNSUPPORTED_TLS_MODE: &str = "UnsupportedTLSMode";
-    /// Listener field value is not supported by the current implementation.
+    /// A field value is not supported by the current implementation. Used on
+    /// `Accepted` (listener fields, and HTTPRoute AI attachment / retry-cap
+    /// violations that reject the whole route) and, on the same HTTPRoute path,
+    /// to clear a stale `PartiallyInvalid=True` once the route serves nothing.
     pub const UNSUPPORTED_VALUE: &str = "UnsupportedValue";
     /// HTTPS/TLS listener missing tls block or certificateRefs
     pub const INVALID_TLS_CONFIGURATION: &str = "InvalidTLSConfiguration";
@@ -126,7 +141,14 @@ pub mod condition_reasons {
 
     // PartiallyInvalid reasons
     pub const RULE_INVALID: &str = "RuleInvalid";
+    pub const INVALID_CREDENTIALS: &str = "InvalidCredentials";
     pub const ALL_RULES_VALID: &str = "AllRulesValid";
+
+    /// Reason for PluginPolicyRestricted=True.
+    pub const RESTRICTED_BY_POLICY: &str = "RestrictedByPolicy";
+
+    /// Reason for UnknownConfigFields=True.
+    pub const UNKNOWN_FIELDS_DETECTED: &str = "UnknownFieldsDetected";
 }
 
 // ============================================================================
@@ -151,6 +173,8 @@ pub enum AcceptedError {
     ParentNotFound { parent_name: String },
     /// Resource failed validation or preparse (generic validation error)
     Invalid { message: String },
+    /// A supported extension was attached with an unsupported value/shape.
+    UnsupportedValue { message: String },
 }
 
 impl AcceptedError {
@@ -162,6 +186,7 @@ impl AcceptedError {
             Self::NoMatchingParent { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::ParentNotFound { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::Invalid { .. } => condition_reasons::INVALID,
+            Self::UnsupportedValue { .. } => condition_reasons::UNSUPPORTED_VALUE,
         }
     }
 
@@ -183,6 +208,7 @@ impl AcceptedError {
                 format!("Parent Gateway '{}' not found", parent_name)
             }
             Self::Invalid { message } => message.clone(),
+            Self::UnsupportedValue { message } => message.clone(),
         }
     }
 
@@ -201,6 +227,11 @@ pub enum ResolvedRefsError {
     InvalidKind { kind: String, name: String },
     /// Backend Service not found
     BackendNotFound { namespace: String, name: String },
+    /// Referenced EdgionBackend not found.
+    EdgionBackendNotFound { namespace: String, name: String },
+    /// Referenced LinkSys credential source is absent or is not currently a
+    /// valid credentialSource desired snapshot.
+    LinkSysNotFound { namespace: String, name: String },
     /// Referenced Secret not found
     SecretNotFound { namespace: String, name: String },
     /// Cross-namespace reference denied by ReferenceGrant policy.
@@ -228,9 +259,22 @@ pub enum ResolvedRefsError {
     /// Edgion extension · The Secret exists but is missing one or more required
     /// `data` keys (e.g. `password` for basic-auth, `tls.key` for TLS certs).
     MissingKeys { keys: Vec<&'static str> },
+    /// A SecretMatch-selected, operator-named data key is absent.
+    SecretMatchKeyMissing {
+        namespace: String,
+        name: String,
+        key: String,
+    },
     /// Edgion extension · A Secret data value could not be decoded (non-UTF-8,
     /// malformed JSON, etc.). `key` identifies the offending field.
     DecodeError { key: &'static str, detail: String },
+    /// A SecretMatch-selected value exists but is not usable as a non-empty UTF-8 token.
+    SecretMatchValueInvalid {
+        namespace: String,
+        name: String,
+        key: String,
+        detail: &'static str,
+    },
     /// Edgion extension · The `Secret.type` is not in the resolver's accepted
     /// whitelist (e.g. pointing an `kubernetes.io/tls` Secret at a basic-auth
     /// credential slot).
@@ -245,6 +289,14 @@ pub enum ResolvedRefsError {
     /// loop (see the tls-06 design). The condition reason is the coarse
     /// `INVALID_CERTIFICATE`; `detail` carries the specific human-readable cause.
     CertContentInvalid { detail: String },
+    /// Edgion extension · route delegation: a named child route referenced by
+    /// a delegating rule (`backendRef {kind: HTTPRoute | GRPCRoute}`) does not
+    /// exist. `kind` names the route kind of the missing child.
+    DelegationChildNotFound {
+        kind: &'static str,
+        namespace: String,
+        name: String,
+    },
 }
 
 impl ResolvedRefsError {
@@ -252,13 +304,16 @@ impl ResolvedRefsError {
         match self {
             Self::InvalidKind { .. } => condition_reasons::INVALID_KIND,
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::EdgionBackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
+            Self::LinkSysNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
             Self::EdgionConfigDataNotFound { .. } => condition_reasons::INVALID_EDGION_CONFIG_DATA_REF,
-            Self::MissingKeys { .. } => condition_reasons::MISSING_KEYS,
-            Self::DecodeError { .. } => condition_reasons::DECODE_ERROR,
+            Self::MissingKeys { .. } | Self::SecretMatchKeyMissing { .. } => condition_reasons::MISSING_KEYS,
+            Self::DecodeError { .. } | Self::SecretMatchValueInvalid { .. } => condition_reasons::DECODE_ERROR,
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
             Self::CertContentInvalid { .. } => condition_reasons::INVALID_CERTIFICATE,
+            Self::DelegationChildNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
         }
     }
 
@@ -269,6 +324,12 @@ impl ResolvedRefsError {
             }
             Self::BackendNotFound { namespace, name } => {
                 format!("Service '{}/{}' not found", namespace, name)
+            }
+            Self::EdgionBackendNotFound { namespace, name } => {
+                format!("EdgionBackend '{}/{}' not found", namespace, name)
+            }
+            Self::LinkSysNotFound { namespace, name } => {
+                format!("LinkSys credential source '{}/{}' not found", namespace, name)
             }
             Self::SecretNotFound { namespace, name } => {
                 format!("Secret '{}/{}' not found", namespace, name)
@@ -297,9 +358,18 @@ impl ResolvedRefsError {
             Self::MissingKeys { keys } => {
                 format!("Secret is missing required data keys: {}", keys.join(", "))
             }
+            Self::SecretMatchKeyMissing { namespace, name, key } => {
+                format!("Secret '{namespace}/{name}' is missing required data key '{key}'")
+            }
             Self::DecodeError { key, detail } => {
                 format!("credential decode failed for key '{}': {}", key, detail)
             }
+            Self::SecretMatchValueInvalid {
+                namespace,
+                name,
+                key,
+                detail,
+            } => format!("Secret '{namespace}/{name}' data key '{key}' is unusable: {detail}"),
             Self::InvalidSecretType { got, allowed } => {
                 format!(
                     "Secret.type {:?} is not accepted for this credential (allowed: {:?})",
@@ -307,6 +377,9 @@ impl ResolvedRefsError {
                 )
             }
             Self::CertContentInvalid { detail } => detail.clone(),
+            Self::DelegationChildNotFound { kind, namespace, name } => {
+                format!("Delegation child {} '{}/{}' not found", kind, namespace, name)
+            }
         }
     }
 }
@@ -315,10 +388,9 @@ impl ResolvedRefsError {
 // Condition helpers
 // ============================================================================
 
-/// Get current time in RFC3339 format
-pub fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
-}
+// `now_rfc3339()` (the canonical operator-/K8s-facing timestamp shape) now lives in
+// `edgion_common::time` so control-plane code outside this module can reuse it
+// without inlining a bare `Utc::now().to_rfc3339()`. Imported at the top of the file.
 
 /// Create a condition with True status
 pub fn condition_true(
@@ -481,9 +553,14 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             ResolvedRefsError::InvalidSecretType { .. } => 3,
             ResolvedRefsError::EdgionConfigDataNotFound { .. } => 4,
             ResolvedRefsError::BackendNotFound { .. } => 5,
+            ResolvedRefsError::EdgionBackendNotFound { .. } => 5,
+            ResolvedRefsError::LinkSysNotFound { .. } => 5,
+            // Delegation child missing is the same severity class as a missing
+            // Service backend (both surface as BACKEND_NOT_FOUND).
+            ResolvedRefsError::DelegationChildNotFound { .. } => 5,
             ResolvedRefsError::SecretNotFound { .. } => 6,
-            ResolvedRefsError::DecodeError { .. } => 7,
-            ResolvedRefsError::MissingKeys { .. } => 8,
+            ResolvedRefsError::DecodeError { .. } | ResolvedRefsError::SecretMatchValueInvalid { .. } => 7,
+            ResolvedRefsError::MissingKeys { .. } | ResolvedRefsError::SecretMatchKeyMissing { .. } => 8,
         }
     }
 
@@ -502,6 +579,8 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
 
 /// Set standard conditions (Accepted, ResolvedRefs) for a resource's parent status.
 /// Uses empty `accepted_errors`; `resolved_refs_errors` controls the ResolvedRefs condition.
+/// Test-only: production handlers call `set_parent_conditions_full` directly.
+#[cfg(test)]
 pub fn set_parent_conditions(
     conditions: &mut Vec<Condition>,
     resolved_refs_errors: &[ResolvedRefsError],

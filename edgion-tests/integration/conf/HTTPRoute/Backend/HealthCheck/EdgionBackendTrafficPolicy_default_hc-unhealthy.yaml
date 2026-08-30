@@ -1,0 +1,21 @@
+# Active HTTP health check whose probe path always returns 503, so every
+# backend endpoint is marked unhealthy.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: hc-unhealthy-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: hc-unhealthy
+  healthCheck:
+    active:
+      type: http
+      path: /status/503
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses:
+        - 200

@@ -14,7 +14,7 @@
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::EdgionHttpContext;
 use bytes::Bytes;
-use edgion_resources::EdgionStatus;
+use edgion_resources::EdgionErrorCode;
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
@@ -25,14 +25,20 @@ use pingora_proxy::Session;
 
 /// Conditionally shut down the session after sending an error response.
 ///
-/// For HTTP/2: skip shutdown. The preceding `write_response_body(_, true)` already
-/// sent END_STREAM on the H2 stream, which is the correct way to terminate an
-/// HTTP/2 stream. Calling `session.shutdown()` would trigger an abrupt TCP-level
-/// close via the Pingora framework, causing transient EOF errors for subsequent
-/// connections being accepted on the same listener port.
-///
 /// For HTTP/1.x: proceed with shutdown to close the TCP connection, since there is
-/// no stream-level termination mechanism in HTTP/1.
+/// no stream-level termination mechanism in HTTP/1. Pingora's H1 arm of
+/// `HttpSession::shutdown` resolves to `underlying_stream.shutdown()`.
+///
+/// For HTTP/2: skip. The preceding `write_response_body(_, true)` already sent
+/// END_STREAM on the H2 stream, which is the correct way to terminate it. The skip
+/// documents that intent; it is not load-bearing. Pingora's H2 arm of
+/// `HttpSession::shutdown` never touches TCP — it only sends
+/// `RST_STREAM(INTERNAL_ERROR)`, and only when the stream has not already ended —
+/// so on this path the call would be a no-op either way.
+///
+/// `PluginSession::shutdown` (`plugins/runtime/session_adapter.rs`) deliberately
+/// does NOT mirror this `is_http2()` gate; see that function for why the divergence
+/// is intentional.
 async fn shutdown_after_error_response(session: &mut Session) {
     if !session.is_http2() {
         session.shutdown().await;
@@ -118,21 +124,50 @@ pub(crate) async fn send_grpc_trailers_only(
     server_header_opts: &ServerHeaderOpts,
     http_status: u16,
 ) -> pingora_core::Result<()> {
-    if ctx.request_info.response_committed {
+    let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
+    send_grpc_status_trailers_only(session, ctx, server_header_opts, grpc_status, Some(grpc_message)).await
+}
+
+/// Same wire shape as [`send_grpc_trailers_only`], but the gRPC status is given
+/// directly instead of being derived from an HTTP status.
+///
+/// Used by the response-stage denial path: a plugin's `ErrGrpcError` names the
+/// gRPC code itself, and there is no HTTP status that round-trips through
+/// [`http_to_grpc_status`] back to an arbitrary code — routing it through one
+/// would silently flatten, say, `RESOURCE_EXHAUSTED` into `INTERNAL`.
+pub(crate) async fn send_grpc_status_trailers_only(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+    grpc_status: u16,
+    grpc_message: Option<&str>,
+) -> pingora_core::Result<()> {
+    if !ctx.claim_final_response(200) {
         return Ok(());
     }
 
-    let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
-
-    ctx.request_info.status = Some(200);
-    ctx.request_info.grpc_status = Some(grpc_status);
-    ctx.request_info.response_committed = true;
+    ctx.request_info.set_grpc_status(grpc_status);
 
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
+    // Response-stage plugin mutations target this fresh local reply, not the
+    // discarded upstream response. Apply them after gateway defaults so
+    // conditional operations observe the reply's real initial header set.
+    ctx.drain_pending_response_header_ops(&mut resp);
+    // The local-reply queue is shared by all plugins. Reassert the mandatory
+    // trailers-only framing and media type even if a non-ExtProc producer
+    // queued an unsafe operation.
+    resp.remove_header(&http::header::CONTENT_LENGTH);
+    resp.remove_header(&http::header::TRANSFER_ENCODING);
+    // grpc-status/message belong exclusively to the canonical terminal shape:
+    // native gRPC adds them to its trailers-only HEADERS below, while gRPC-Web
+    // encodes them into the 0x80 trailer body frame. Never let queued values
+    // survive in the initial response headers.
+    resp.remove_header("grpc-status");
+    resp.remove_header("grpc-message");
     resp.insert_header("content-type", "application/grpc")
         .expect("static ASCII header literal, cannot fail");
-    send_grpc_trailers_only_frame(session, resp, grpc_status, Some(grpc_message)).await
+    send_grpc_trailers_only_frame(session, resp, grpc_status, grpc_message).await
 }
 
 /// ASCII byte set for gRPC `grpc-message` percent-encoding.
@@ -180,7 +215,7 @@ pub fn http_to_grpc_status(http_status: u16) -> (u16, &'static str) {
 
 /// Shared nginx-style HTML error response writer used by every `end_response_<code>` helper.
 ///
-/// Handles the `response_committed` guard, sets `ctx.request_info.status`, builds the
+/// Claims final-response ownership, records the selected status, builds the
 /// response header with the standard `Content-Type: text/html`, writes the nginx-style
 /// body (only `title` varies between status codes), and tears down the session.
 ///
@@ -195,12 +230,9 @@ async fn send_html_error(
     status: u16,
     title: &str,
 ) -> pingora_core::Result<()> {
-    if ctx.request_info.response_committed {
+    if !ctx.claim_final_response(status) {
         return Ok(());
     }
-
-    ctx.request_info.status = Some(status);
-    ctx.request_info.response_committed = true;
 
     let mut resp = ResponseHeader::build(status, None)?;
     server_header_opts.apply_to_response(&mut resp);
@@ -314,23 +346,27 @@ pub async fn end_response_502(
 /// [`ErrTerminateRequest`](edgion_resources::filters::PluginRunningResult::ErrTerminateRequest)
 /// without writing a response.
 ///
-/// - If `response_committed` is already true (spec-compliant plugin wrote its own
+/// - If final-response ownership is already claimed (spec-compliant plugin wrote its own
 ///   response), this is a no-op — the plugin's response stands.
-/// - Otherwise: adds [`EdgionStatus::PluginTerminateWithoutResponse`] to the access
+/// - Otherwise: adds [`EdgionErrorCode::PluginTerminateWithoutResponse`] to the access
 ///   log and writes a 502 (HTTP) / gRPC INTERNAL=13 fallback response.
 ///
-/// The `let _ =` at call sites is intentional: a write error on a broken downstream
-/// socket is not actionable. Pingora surfaces it via connection state.
+/// Call sites may discard the returned write error because this function records
+/// the independent downstream delivery failure before returning it.
 pub async fn terminate_with_fallback(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    if ctx.request_info.response_committed {
+    if ctx.response_write_started() {
         return Ok(());
     }
-    ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
-    end_response_502(session, ctx, server_header_opts).await
+    ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
+    let result = end_response_502(session, ctx, server_header_opts).await;
+    if result.is_err() {
+        ctx.record_error(EdgionErrorCode::ClientClosed);
+    }
+    result
 }
 
 /// Send 503 Service Temporarily Unavailable error response (nginx-style).
@@ -356,48 +392,177 @@ pub async fn end_response_503(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::EdgionHttpContext;
-    use edgion_resources::EdgionStatus;
+    use crate::{EdgionHttpContext, PendingHeaderOp};
+    use edgion_resources::EdgionErrorCode;
+    use pingora_core::modules::http::grpc_web::GrpcWeb;
+    use pingora_core::modules::http::HttpModules;
+    use pingora_proxy::Session;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// When `response_committed` is true, `terminate_with_fallback` must be a no-op:
-    /// it must NOT push `PluginTerminateWithoutResponse` into `ctx.edgion_status`.
-    /// This test validates the guard branch directly without needing a live Session.
-    #[test]
-    fn terminate_with_fallback_noop_when_committed() {
-        let mut ctx = EdgionHttpContext::new();
-        ctx.request_info.response_committed = true;
-
-        // Pre-condition: no errors recorded yet
-        assert!(ctx.edgion_status.is_empty());
-
-        // Simulate the guard that terminate_with_fallback checks first
-        if !ctx.request_info.response_committed {
-            ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
-        }
-
-        // Because response_committed was true, no error should have been added
-        assert!(
-            ctx.edgion_status.is_empty(),
-            "terminate_with_fallback must not add errors when response_committed = true"
-        );
-        assert!(
-            !ctx.edgion_status
-                .contains(&EdgionStatus::PluginTerminateWithoutResponse),
-            "PluginTerminateWithoutResponse must not appear when response was already committed"
-        );
+    async fn closed_downstream_session() -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"GET /fallback-test HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        drop(client);
+        session
     }
 
-    /// Pin the discriminant of `EdgionStatus::PluginTerminateWithoutResponse`
-    /// to 50202. Access logs serialize the variant name, not this integer, so
-    /// the value is internal — but the `<http>_<sub>` encoding is a documented
-    /// convention (see `EdgionStatus::http_status`) and the assertion guards
-    /// against accidental renumbering.
+    async fn live_downstream_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    async fn live_grpc_web_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut modules = HttpModules::new();
+        modules.add_module(Box::new(GrpcWeb));
+        let mut session = Session::new_h1_with_modules(stream, &modules);
+        client
+            .write_all(
+                b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Type: application/grpc-web\r\nContent-Length: 0\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        **session
+            .downstream_modules_ctx
+            .get_mut::<GrpcWebBridge>()
+            .expect("gRPC-Web bridge module") = GrpcWebCtx::Upgrade;
+        (session, client)
+    }
+
+    #[tokio::test]
+    async fn response_stage_exact_grpc_reply_drains_allowed_ops_and_reasserts_invariants() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
+            name: "x-ext-proc".to_string(),
+            value: "allowed".to_string(),
+        });
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+            name: "content-type".to_string(),
+            value: "text/plain".to_string(),
+        });
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+            name: "content-length".to_string(),
+            value: "999".to_string(),
+        });
+
+        send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))
+            .await
+            .unwrap();
+
+        let written = session.response_written().expect("trailers-only response");
+        assert_eq!(written.status.as_u16(), 200);
+        assert_eq!(written.headers.get("x-ext-proc").unwrap(), "allowed");
+        assert_eq!(written.headers.get("content-type").unwrap(), "application/grpc");
+        assert!(written.headers.get("content-length").is_none());
+        assert!(written.headers.get("transfer-encoding").is_none());
+        assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
+        assert!(!ctx.has_pending_response_header_ops());
+    }
+
+    #[tokio::test]
+    async fn grpc_web_exact_reply_strips_conflicting_status_headers_and_encodes_canonical_trailer() {
+        let (mut session, mut client) = live_grpc_web_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        for op in [
+            PendingHeaderOp::Append {
+                name: "x-ext-proc".to_string(),
+                value: "allowed".to_string(),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-status".to_string(),
+                value: "1".to_string(),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-message".to_string(),
+                value: "conflict".to_string(),
+            },
+        ] {
+            ctx.queue_pending_response_header_op(op);
+        }
+
+        send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))
+            .await
+            .unwrap();
+
+        let written = session.response_written().expect("gRPC-Web response header");
+        assert_eq!(written.headers.get("x-ext-proc").unwrap(), "allowed");
+        assert!(written.headers.get("grpc-status").is_none());
+        assert!(written.headers.get("grpc-message").is_none());
+
+        let mut wire = Vec::new();
+        while let Ok(Ok(read)) =
+            tokio::time::timeout(std::time::Duration::from_millis(20), client.read_buf(&mut wire)).await
+        {
+            if read == 0 {
+                break;
+            }
+        }
+        let wire = String::from_utf8_lossy(&wire);
+        assert!(wire.contains("x-ext-proc: allowed\r\n"));
+        assert!(!wire.contains("grpc-status: 1\r\n"));
+        assert!(!wire.contains("grpc-message: conflict\r\n"));
+        assert!(wire.contains("grpc-status:8\r\ngrpc-message:quota\r\n"));
+    }
+
+    #[tokio::test]
+    async fn terminate_fallback_writer_failure_records_client_closed() {
+        let mut session = closed_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+
+        assert!(
+            terminate_with_fallback(&mut session, &mut ctx, &ServerHeaderOpts::default(),)
+                .await
+                .is_err()
+        );
+
+        assert_eq!(ctx.final_downstream_status(), Some(502));
+        assert!(ctx
+            .diagnostics
+            .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::ClientClosed));
+    }
+
+    /// When response ownership is claimed, `terminate_with_fallback` must be a no-op:
+    /// it must NOT record `PluginTerminateWithoutResponse` in diagnostics.
+    /// This test validates the guard branch directly without needing a live Session.
     #[test]
-    fn plugin_terminate_without_response_discriminant() {
-        assert_eq!(
-            EdgionStatus::PluginTerminateWithoutResponse as u32,
-            50202u32,
-            "PluginTerminateWithoutResponse discriminant must remain 50202 (502_02 convention)"
+    fn terminate_with_fallback_noop_when_response_write_started() {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.claim_final_response(204));
+
+        // Pre-condition: no errors recorded yet
+        assert!(ctx.diagnostics.is_empty());
+
+        // Simulate the guard that terminate_with_fallback checks first
+        if !ctx.response_write_started() {
+            ctx.record_error(EdgionErrorCode::PluginTerminateWithoutResponse);
+        }
+
+        // Because response ownership was claimed, no error should have been added.
+        assert!(
+            ctx.diagnostics.is_empty(),
+            "terminate_with_fallback must not add errors after response ownership is claimed"
+        );
+        assert!(
+            !ctx.diagnostics
+                .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse),
+            "PluginTerminateWithoutResponse must not appear after response write ownership is claimed"
         );
     }
 

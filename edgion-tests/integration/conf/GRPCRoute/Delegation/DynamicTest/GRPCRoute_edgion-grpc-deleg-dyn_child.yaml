@@ -1,0 +1,18 @@
+# Initial child: narrows the delegated scope to SayHello. The updates/
+# overlay switches the narrowed method to StreamNumbers to prove
+# child-change -> parent re-flatten -> gateway hot reload.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: child
+  namespace: edgion-grpc-deleg-dyn
+spec:
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: child-dyn-grpc-svc
+          port: 30021

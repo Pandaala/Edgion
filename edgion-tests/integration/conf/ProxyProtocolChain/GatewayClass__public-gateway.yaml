@@ -1,0 +1,17 @@
+# GatewayClass for the two-hop chain test.
+#
+# Unlike the ProxyProtocolInbound fixture set this one DOES carry a
+# parametersRef. Without it `real_ip_extractor` is None, hop 2 reports hop 1's
+# address for the configured RemoteIp header and every IP-based plugin, and a test asserting only on
+# X-Forwarded-For would pass while the chain had already lost the client.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: public-gateway
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "Edgion gateway chain test"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: chain-egc

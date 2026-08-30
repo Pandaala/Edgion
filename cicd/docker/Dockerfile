@@ -6,7 +6,7 @@
 #   BINARY: Target binary name (default: edgion-gateway)
 #   BUILD_TYPE: Build type - bin or example (default: bin)
 #   FEATURES: Cargo features (default: default, which includes boringssl)
-#   RUST_VERSION: Rust version (default: 1.92)
+#   RUST_VERSION: Rust version (default: 1.96.1)
 #
 # Usage:
 #   # Build bin targets
@@ -18,7 +18,7 @@
 #   docker build --build-arg BUILD_TYPE=example --build-arg BINARY=test_client -t edgion/edgion-test-client:0.1.0 -f docker/Dockerfile .
 
 # Build arguments
-ARG RUST_VERSION=1.92
+ARG RUST_VERSION=1.96.1
 ARG BINARY=edgion-gateway
 ARG BUILD_TYPE=bin
 ARG FEATURES=default
@@ -104,9 +104,9 @@ RUN case "${PROFILE}" in \
       *)         PROFILE_FLAG="--profile ${PROFILE}" ;; \
     esac; \
     if [ "$BUILD_TYPE" = "example" ]; then \
-      cargo chef cook ${PROFILE_FLAG} -p edgion-tests --recipe-path recipe.json; \
+      cargo chef cook --locked ${PROFILE_FLAG} -p edgion-tests --recipe-path recipe.json; \
     else \
-      cargo chef cook ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --recipe-path recipe.json; \
+      cargo chef cook --locked ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --recipe-path recipe.json; \
     fi
 
 # Copy source code
@@ -123,13 +123,13 @@ RUN case "${PROFILE}" in \
     esac; \
     if [ "$BUILD_TYPE" = "example" ]; then \
       echo "Building edgion-tests bin: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} -p edgion-tests --bin "${BINARY}"; \
+      cargo build --locked ${PROFILE_FLAG} -p edgion-tests --bin "${BINARY}"; \
       cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
       touch /app/edgion-cli-binary; \
     else \
       echo "Building bin: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --bin "${BINARY}"; \
-      cargo build ${PROFILE_FLAG} -p edgion-cli --bin edgion-cli; \
+      cargo build --locked ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --bin "${BINARY}"; \
+      cargo build --locked ${PROFILE_FLAG} -p edgion-cli --bin edgion-cli; \
       cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
       cp /app/target/${OUT_DIR}/edgion-cli /app/edgion-cli-binary; \
     fi
@@ -195,6 +195,14 @@ EXPOSE 80 443 10080 10443 18443 19000 19002 19010 12151 12101
 # Restart-loop entrypoint: when the binary is killed (e.g. by kubectl exec pkill during hot-patch),
 # the shell restarts it automatically without triggering a K8s pod restart.
 # This enables: kubectl cp new-binary → pkill → binary restarts in-place.
+#
+# WARNING — this loop MASKS every fail-close exit. A binary that refuses to start on a bad
+# config (e.g. a missing `conf_sync_security` section: both binaries exit non-zero by design)
+# is simply relaunched every second, so the container stays Running and never reaches
+# CrashLoopBackOff. Symptom: "the pod is Running but does nothing" — check the container
+# LOGS for the startup error rather than the pod status/restart count.
+# This is a dev/test-image-only hazard: released images are built from Dockerfile.runtime,
+# which `exec`s the binary directly and surfaces a fail-close as a proper CrashLoopBackOff.
 ENTRYPOINT ["/bin/sh", "-c"]
 CMD ["while true; do /usr/local/edgion/${BINARY}; echo '[edgion] process exited, restarting in 1s...'; sleep 1; done"]
 

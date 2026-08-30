@@ -16,7 +16,7 @@ spec:
         key:                 #  key  key 
           - type: header
             name: "X-Rate-Key"
-        onMissingKey: Allow  #  key 
+        onKeyMiss: Allow  #  key 
         rejectStatus: 429
         rejectMessage: "Rate limit exceeded - try again later"
         showLimitHeaders: true
@@ -27,14 +27,13 @@ spec:
       config:
         rate: 100
         interval: "1m"
-        key:                 #  key ， "_" 
-          - type: clientIp
+        key:                 # Multi-key: each part is length-prefixed, then joined with "_"
+          - type: remoteIp
           - type: header
             name: "X-API-Key"
           - type: path
-        onMissingKey: Allow
+        onKeyMiss: Allow
         rejectStatus: 429
         rejectMessage: "API rate limit exceeded"
         showLimitHeaders: true
-
 

@@ -1,1 +1,1 @@
-pub use edgion_resources::resources::common::EdgionService;
+pub use edgion_resources::resources::common::ServiceBackendKind;

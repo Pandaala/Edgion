@@ -143,7 +143,7 @@ spec:
 
 ## 与 IP Restriction 的配合
 
-RealIp 和 [IP Restriction](./ip-restriction.md) 通常配合使用。RealIp 解析真实客户端 IP 并存储在请求上下文中；IP Restriction 随后读取该解析地址（`get_real_client_ip()`）进行允许/拒绝决策。顺序很重要——两者均在请求阶段运行，因此请将 RealIp 列在 IpRestriction **之前**，使允许/拒绝检查看到的是真实客户端 IP 而非代理 IP：
+RealIp 和 [IP Restriction](./ip-restriction.md) 通常配合使用。RealIp 解析 `RemoteIp` 并存储在请求上下文中；IP Restriction 随后读取该解析地址（`get_remote_ip()`）进行允许/拒绝决策。顺序很重要——两者均在请求阶段运行，因此请将 RealIp 列在 IpRestriction **之前**，使允许/拒绝检查看到的是解析后的客户端身份而非代理 IP：
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -188,6 +188,18 @@ spec:
 **A**：`trustedIps` 必须非空，`realIpHeader` 不能为空，且 `cidrs` 中每条必须是合法的 IP 或 CIDR（例如 `10.0.0.0/8`，而不是 `10.0.0/8`）。插件在解析时会报告出错的字段。
 
 ---
+
+## 迁移到 DirectPeerIp 和 RemoteIp
+
+该预发布版本采用一次性硬重命名：`client_addr`/`client-addr` 对应
+`DirectPeerIp`/`direct_peer_ip`，`remote_addr`/`remote-addr` 对应
+`RemoteIp`/`remote_ip`。请同时更新 `IpSource`、`KeyGet`、模板、DSL、访问日志
+查询和后端断言；不保留兼容别名或双写日志字段。DSL 中的
+`req.client_ip` → `req.direct_peer_ip` 是需要物理对端的调用方的精确重命名；
+普通客户端身份、限流和实验分桶场景应选择 `req.remote_ip`。`RealIp` 继续表示解析机制本身。
+向上游传递的 Header 通过
+`EdgionGatewayConfig.spec.forwardedHeaders.remoteIpHeader` 独立配置，默认值为
+`X-Real-IP`。
 
 ## 完整配置示例
 

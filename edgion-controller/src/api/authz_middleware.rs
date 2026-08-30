@@ -29,7 +29,7 @@ use axum::{
 use http::{Request, StatusCode};
 
 use super::authz_classifier::{bounded_kind_label, classify};
-use crate::authz::{Authorizer, Role};
+use crate::authz::{Authorizer, Role, Verb};
 
 /// Paths that bypass authz entirely (the static public set — probes + public
 /// auth endpoints). Delegates to the canonical source of truth so this can never
@@ -118,6 +118,13 @@ pub async fn authz_layer(State(authorizer): State<Arc<Authorizer>>, req: Request
             return forbidden();
         }
     };
+
+    // Self-introspection is inherent once authentication has supplied a Role.
+    // It is deliberately handled outside CenterPolicy so it cannot be granted,
+    // revoked, or matched by an RBAC wildcard.
+    if verb == Verb::AccessSelf {
+        return next.run(req).await;
+    }
 
     if authorizer.authorize(&role, verb, &kind_str).allowed() {
         next.run(req).await

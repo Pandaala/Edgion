@@ -61,7 +61,7 @@ spec:
       config:
         redisRef: "default/shared-redis"
         key:
-          - type: clientIp
+          - type: remoteIp
         policies:
           - rate: 100
             interval: "1s"
@@ -89,9 +89,9 @@ spec:
 |-----------|------|---------|-------------|
 | `redisRef` | String | — (required) | Redis LinkSys resource reference in `"namespace/name"` format. Only alphanumeric characters, `-`, and `_` are allowed |
 | `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
-| `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting dimension list. Multiple keys are joined with `_`. See Key Configuration below |
-| `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
-| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onMissingKey` |
+| `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
+| `onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
+| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onKeyMiss` |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
 | `rejectMessage` | String | none | JSON response body on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to return rate limit response headers |
@@ -121,7 +121,7 @@ Each entry in the `policies` array contains:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `rate` | Integer | — (required) | Maximum requests (or cost units) allowed per interval. Must be > 0 |
-| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"1d"`, or combined like `"1h30m"`. Minimum: 100ms |
+| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"24h"`, or combined like `"1h30m"`. Minimum: 100ms |
 | `algorithm` | Enum | `SlidingWindow` | Rate limiting algorithm. See algorithm table below |
 
 #### Algorithm Reference
@@ -142,25 +142,56 @@ Identical to the [RateLimit plugin](rate-limit.md). Supported key types:
 
 | type | Requires `name` | Description |
 |------|-----------------|-------------|
-| `clientIp` | No | Client IP address (after real IP extraction) |
+| `remoteIp` | No | Resolved client IP address |
+| `directPeerIp` | No | Physical transport peer IP before PROXY, RealIp, or forwarded-header processing |
+| `host` | No | Entry-time request authority, normalized by stripping an unambiguous port and trailing dot and converting ASCII letters to lowercase |
 | `header` | Yes | Value of a specific request header |
 | `cookie` | Yes | Value of a specific cookie |
 | `query` | Yes | Value of a specific query parameter |
 | `path` | No | Request path |
 | `method` | No | HTTP method |
 | `ctx` | Yes | Context variable set by another plugin |
-| `clientIpAndPath` | No | Combined client IP and path |
+| `remoteIpAndPath` | No | Combined resolved client IP and path |
+| `requestPath` | No | Entry-time raw request path before plugin rewrites |
 
 Example of combining multiple keys:
 
 ```yaml
 key:
-  - type: clientIp
+  - type: directPeerIp
+  - type: host
   - type: header
     name: "X-API-Key"
 ```
 
-The resulting Redis key looks like: `edgion:rl:sw:192.168.1.1_apikey123`
+Use `directPeerIp` when the policy means the physical peer that connected to Edgion. Use
+`remoteIp` only when the deployment intentionally treats trusted PROXY protocol or RealIp/XFF
+processing as the client identity boundary. The two values are deliberately distinct.
+
+`host` uses the same frozen, canonical authority snapshot used for route selection. It covers an
+absolute-form URI authority, HTTP/1 Host, and HTTP/2 `:authority`; a plugin that later rewrites Host
+does not move the request into a different rate-limit bucket.
+
+The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policyIndex}:{rateLimitKey}`, e.g. `edgion:rl:default/api-limiter/#0:sw:0:11:192.168.1.1_9:apikey123` — with multiple keys configured, each part of the rate limiting key carries its `<byte-length>:` prefix so that two different value tuples can never share a bucket. A single configured key is used verbatim (`edgion:rl:default/api-limiter/#0:sw:0:192.168.1.1`).
+
+`{pluginScope}` identifies the plugin entry that owns the bucket: `<namespace>/<name>/<alias>` for the EdgionPlugins resource this plugin is declared in, or `<namespace>/<name>/#<index>` when the entry has no `alias`. Every Gateway instance derives the same string from the same resource, so cluster-wide counting is unaffected — but two unrelated EdgionPlugins resources can no longer index the same buckets, even when their `keyPrefix` and `key` sources are identical. Without it, a client that controls one plugin's key source could craft a value matching another plugin's composed key, and — more commonly — two default-configured plugins would silently share one set of per-IP buckets. Renaming the resource or its `alias`, or reordering unaliased entries, moves the plugin to a fresh namespace and restarts its counters; set an `alias` to pin the scope across reordering. An alias must be unique within its stage array: a duplicate sets `Accepted=False` on the resource, and the Gateway additionally drops the repeated alias so that entry falls back to its `#<index>` scope — a duplicate can never merge two entries' buckets.
+
+Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimit`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
+
+Omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onKeyMiss` / `defaultKey` do not apply to it.
+
+For a composite key, a missing component is encoded as a `-` slot as long as at least one other
+component resolves. `onKeyMiss` applies only when every configured source is missing. If a header
+or cookie must be present, enforce that requirement with a deny-capable plugin such as
+[RequestRestriction](request-restriction.md) or
+[RequestAccessPolicy](request-access-policy.md) before RateLimitRedis. A RateLimitRedis run
+condition only selects traffic to count; when it does not match, the limiter is skipped and the
+request continues. `onKeyMiss: Deny` alone does not require every component.
+
+Do not use secrets such as complete Authorization credentials as descriptors: generated Redis keys
+are operationally inspectable. `maxKeyLen` bounds bytes in each Redis key, not the number of
+distinct keys. Prefer stable, bounded-cardinality identifiers and size Redis for the number of
+active buckets a client-controlled descriptor can create.
 
 ---
 
@@ -220,7 +251,7 @@ spec:
       config:
         redisRef: "default/shared-redis"
         key:
-          - type: clientIp
+          - type: remoteIp
         policies:
           - rate: 100
             interval: "1s"
@@ -270,7 +301,7 @@ spec:
         key:
           - type: header
             name: "X-API-Key"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         policies:
           - rate: 50
             interval: "1s"
@@ -324,7 +355,7 @@ spec:
         key:
           - type: header
             name: "Authorization"
-        onMissingKey: Deny
+        onKeyMiss: Deny
         onRedisFailure: Deny
         policies:
           - rate: 1000
@@ -337,6 +368,75 @@ spec:
           remaining: "X-Premium-Remaining"
           retryIn: "X-Retry-After"
 ```
+
+### 4. Conditional Global Policy with a Composite Bucket
+
+The plugin entry can select requests with shared conditions and then count them with a separate
+composite descriptor. This example limits each physical peer + normalized host + tenant header for
+only `/v1/expensive` requests. A missing tenant header is counted in the composite `-` bucket; if
+the header is mandatory, reject it separately before this limiter.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: expensive-api-limit
+  namespace: production
+spec:
+  requestPlugins:
+    - type: RateLimitRedis
+      alias: expensive-api
+      conditions:
+        run:
+          allOf:
+            - type: keyMatch
+              key:
+                type: host
+              values: ["api.example.com"]
+            - type: keyMatch
+              key:
+                type: path
+              regex: ["^/v1/expensive(?:/|$)"]
+      config:
+        redisRef: "production/shared-redis"
+        key:
+          - type: directPeerIp
+          - type: host
+          - type: header
+            name: X-Tenant-ID
+        onKeyMiss: Deny
+        onRedisFailure: Deny
+        policies:
+          - rate: 30
+            interval: 1m
+            algorithm: SlidingWindow
+---
+apiVersion: edgion.io/v1
+kind: EdgionGatewayConfig
+metadata:
+  name: production-gateway
+spec:
+  globalPluginsRef:
+    - name: expensive-api-limit
+      namespace: production
+```
+
+`globalPluginsRef` runs before route-level plugins for every request handled under that Gateway
+configuration; the entry's `conditions.run` narrows which requests consume quota.
+
+Do not use a client-controlled `keyExist` run condition to enforce a required field: a false run
+condition skips the limiter and allows processing to continue. Required-field rejection belongs in
+a preceding deny-capable policy.
+
+For one quota shared by every selected request, replace the composite list with an explicitly empty
+list:
+
+```yaml
+key: []
+```
+
+The empty descriptor is still namespaced by the owning plugin resource and entry alias, so unrelated
+plugin entries do not accidentally share the bucket.
 
 ---
 

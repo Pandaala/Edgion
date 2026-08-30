@@ -32,10 +32,11 @@ spec:
         #  body，
       conditions:
         skip:
-          - type: keyExist
-            key:
-              type: header
-              name: "X-Skip-KeyExist-Header"
+          anyOf:
+            - type: keyExist
+              key:
+                type: header
+                name: "X-Skip-KeyExist-Header"
 
     # 1.2 KeyExist + Query source (skip when ?skip_query=1 exists)
     - enable: true
@@ -47,10 +48,11 @@ spec:
           X-KeyExist-Query-Ran: "true"
       conditions:
         skip:
-          - type: keyExist
-            key:
-              type: query
-              name: "skip_query"
+          anyOf:
+            - type: keyExist
+              key:
+                type: query
+                name: "skip_query"
 
     # 1.3 KeyExist + Cookie source (run when session_id cookie exists)
     - enable: true
@@ -62,10 +64,11 @@ spec:
           X-KeyExist-Cookie-Ran: "true"
       conditions:
         run:
-          - type: keyExist
-            key:
-              type: cookie
-              name: "session_id"
+          allOf:
+            - type: keyExist
+              key:
+                type: cookie
+                name: "session_id"
 
     # =========================================================================
     # 2. KeyMatch Tests - 
@@ -81,11 +84,13 @@ spec:
           X-KeyMatch-Exact-Ran: "true"
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: "X-Env"
-            value: "production"
+          allOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "X-Env"
+              values:
+                - "production"
 
     # 2.2 KeyMatch regex (run when User-Agent matches ^TestBot.*)
     - enable: true
@@ -97,12 +102,13 @@ spec:
           X-KeyMatch-Regex-Ran: "true"
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: "User-Agent"
-            regex:
-              - "^TestBot.*"
+          allOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "User-Agent"
+              regex:
+                - "^TestBot.*"
 
     # 2.3 KeyMatch query param (run when version=v2)
     - enable: true
@@ -114,11 +120,13 @@ spec:
           X-KeyMatch-Query-Ran: "true"
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: query
-              name: "version"
-            value: "v2"
+          allOf:
+            - type: keyMatch
+              key:
+                type: query
+                name: "version"
+              values:
+                - "v2"
 
     # 2.4 KeyMatch with multiple regex patterns (run when UA matches Mozilla OR Chrome OR Safari)
     - enable: true
@@ -130,14 +138,15 @@ spec:
           X-KeyMatch-MultiRegex-Ran: "true"
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: "User-Agent"
-            regex:
-              - "^Mozilla.*"
-              - "^Chrome.*"
-              - "(?i:^safari.*)"   # case-insensitive
+          allOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "User-Agent"
+              regex:
+                - "^Mozilla.*"
+                - "^Chrome.*"
+                - "(?i:^safari.*)"   # case-insensitive
 
     # 2.5 KeyMatch with multiple exact values (run when X-Region is us-east OR us-west OR eu-west)
     - enable: true
@@ -149,15 +158,16 @@ spec:
           X-KeyMatch-MultiValues-Ran: "true"
       conditions:
         run:
-          - type: keyMatch
-            key:
-              type: header
-              name: "X-Region"
-            values:
-              - "us-east"
-              - "us-west"
-              - "eu-west"
-              - "ap-northeast"
+          allOf:
+            - type: keyMatch
+              key:
+                type: header
+                name: "X-Region"
+              values:
+                - "us-east"
+                - "us-west"
+                - "eu-west"
+                - "ap-northeast"
 
     # =========================================================================
     # 3. TimeRange Tests - 
@@ -173,9 +183,10 @@ spec:
           X-TimeRange-Valid-Ran: "true"
       conditions:
         run:
-          - type: timeRange
-            after: "2020-01-01T00:00:00Z"
-            before: "2099-12-31T23:59:59Z"
+          allOf:
+            - type: timeRange
+              after: "2020-01-01T00:00:00Z"
+              before: "2099-12-31T23:59:59Z"
 
     # 3.2 TimeRange expired (never runs - time already passed)
     - enable: true
@@ -187,9 +198,10 @@ spec:
           X-TimeRange-Expired-Ran: "true"
       conditions:
         run:
-          - type: timeRange
-            after: "2020-01-01T00:00:00Z"
-            before: "2020-12-31T23:59:59Z"
+          allOf:
+            - type: timeRange
+              after: "2020-01-01T00:00:00Z"
+              before: "2020-12-31T23:59:59Z"
 
     # =========================================================================
     # 4. Probability Tests - 
@@ -205,8 +217,9 @@ spec:
           X-Probability-100-Ran: "true"
       conditions:
         run:
-          - type: probability
-            ratio: 1.0
+          allOf:
+            - type: probability
+              ratio: 1.0
 
     # 4.2 Probability 0% (never runs)
     - enable: true
@@ -218,8 +231,9 @@ spec:
           X-Probability-0-Ran: "true"
       conditions:
         run:
-          - type: probability
-            ratio: 0.0
+          allOf:
+            - type: probability
+              ratio: 0.0
 
     # 4.3 Probability deterministic (based on X-User-ID header)
     - enable: true
@@ -231,11 +245,12 @@ spec:
           X-Probability-Deterministic-Ran: "true"
       conditions:
         run:
-          - type: probability
-            ratio: 0.5
-            key:
-              type: header
-              name: "X-User-ID"
+          allOf:
+            - type: probability
+              ratio: 0.5
+              key:
+                type: header
+                name: "X-User-ID"
 
     # =========================================================================
     # 5. Include Tests - 
@@ -251,12 +266,13 @@ spec:
           X-Include-Path-Ran: "true"
       conditions:
         run:
-          - type: include
-            key:
-              type: path
-            values:
-              - "/api/*"
-              - "/v1/*"
+          allOf:
+            - type: keyMatch
+              key:
+                type: path
+              regex:
+                - "^/api/.*"
+                - "^/v1/.*"
 
     # 5.2 Include method (run for POST, PUT methods)
     - enable: true
@@ -268,12 +284,13 @@ spec:
           X-Include-Method-Ran: "true"
       conditions:
         run:
-          - type: include
-            key:
-              type: method
-            values:
-              - "POST"
-              - "PUT"
+          allOf:
+            - type: keyMatch
+              key:
+                type: method
+              values:
+                - "POST"
+                - "PUT"
 
     # 5.3 Include with regex patterns (run for /api/v[0-9]+/* or /internal/*)
     - enable: true
@@ -285,14 +302,14 @@ spec:
           X-Include-Regex-Ran: "true"
       conditions:
         run:
-          - type: include
-            key:
-              type: path
-            values:
-              - "/static/*"
-            regex:
-              - "^/api/v[0-9]+/.*"
-              - "(?i:^/internal/.*)"   # case-insensitive
+          allOf:
+            - type: keyMatch
+              key:
+                type: path
+              regex:
+                - "^/static/.*"
+                - "^/api/v[0-9]+/.*"
+                - "(?i:^/internal/.*)"   # case-insensitive
 
     # =========================================================================
     # 6. Exclude Tests - 
@@ -308,13 +325,15 @@ spec:
           X-Exclude-Path-Ran: "true"
       conditions:
         skip:
-          - type: exclude
-            key:
-              type: path
-            values:
-              - "/health"
-              - "/ready"
-              - "/metrics"
+          anyOf:
+            - type: keyMatch
+              negate: true
+              key:
+                type: path
+              values:
+                - "/health"
+                - "/ready"
+                - "/metrics"
 
     # 6.2 Exclude method (skip for OPTIONS requests)
     - enable: true
@@ -326,11 +345,13 @@ spec:
           X-Exclude-Method-Ran: "true"
       conditions:
         skip:
-          - type: exclude
-            key:
-              type: method
-            values:
-              - "OPTIONS"
+          anyOf:
+            - type: keyMatch
+              negate: true
+              key:
+                type: method
+              values:
+                - "OPTIONS"
 
     # 6.3 Exclude with regex patterns (skip for /debug/* or /admin/*)
     - enable: true
@@ -342,13 +363,15 @@ spec:
           X-Exclude-Regex-Ran: "true"
       conditions:
         skip:
-          - type: exclude
-            key:
-              type: path
-            values:
-              - "/health"
-            regex:
-              - "^/debug/.*"
-              - "^/admin/.*"
+          anyOf:
+            - type: keyMatch
+              negate: true
+              key:
+                type: path
+              values:
+                - "/health"
+              regex:
+                - "^/debug/.*"
+                - "^/admin/.*"
 
 

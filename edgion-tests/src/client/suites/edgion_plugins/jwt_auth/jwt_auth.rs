@@ -224,34 +224,38 @@ impl JwtAuthTestSuite {
         )
     }
 
-    /// Test: JWT in query parameter works only when the route opts in.
+    /// Test: JWT in query authenticates but is not forwarded upstream.
     /// The backing config sets `allowTokenInQuery: true`; the query path is off
     /// by default (RFC 6750 §2.3/§5.3).
     fn test_jwt_in_query() -> TestCase {
         TestCase::new(
             "jwt_in_query",
-            "Valid JWT in query parameter returns 200 (allowTokenInQuery enabled)",
+            "Valid query JWT authenticates and hideCredentials strips it upstream",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
 
                     let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
-                    let url = format!("{}/health?jwt={}", ctx.http_url(), jwt);
+                    let url = format!("{}/webhook/resolve?jwt={}&keep=query", ctx.http_url(), jwt);
 
                     let request = client.get(&url).header("host", "jwt-test.example.com");
 
                     match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 200 {
+                        Ok(response) if response.status().is_success() => {
+                            let body = response.json::<serde_json::Value>().await.unwrap_or_default();
+                            let args = &body["data"]["echo_args"];
+                            if args.get("jwt").is_none() && args["keep"] == "query" {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "JWT in query accepted, returned 200".to_string(),
+                                    "Query JWT stripped and unrelated query preserved".to_string(),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                                TestResult::failed(start.elapsed(), format!("Unexpected upstream query echo: {}", args))
                             }
+                        }
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
@@ -260,35 +264,42 @@ impl JwtAuthTestSuite {
         )
     }
 
-    /// Test: JWT in cookie should work
+    /// Test: JWT in cookie authenticates but is not forwarded upstream.
     fn test_jwt_in_cookie() -> TestCase {
         TestCase::new(
             "jwt_in_cookie",
-            "Valid JWT in cookie returns 200",
+            "Valid cookie JWT authenticates and hideCredentials strips it upstream",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
-                    let url = format!("{}/health", ctx.http_url());
+                    let url = format!("{}/webhook/resolve", ctx.http_url());
 
                     let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
 
                     let request = client
                         .get(&url)
                         .header("host", "jwt-test.example.com")
-                        .header("Cookie", format!("jwt={}", jwt));
+                        .header("Cookie", format!("jwt={}; keep=cookie", jwt));
 
                     match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 200 {
+                        Ok(response) if response.status().is_success() => {
+                            let body = response.json::<serde_json::Value>().await.unwrap_or_default();
+                            let cookies = &body["data"]["echo_cookies"];
+                            if cookies.get("jwt").is_none() && cookies["keep"] == "cookie" {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "JWT in cookie accepted, returned 200".to_string(),
+                                    "Cookie JWT stripped and unrelated cookie preserved".to_string(),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Unexpected upstream cookie echo: {}", cookies),
+                                )
                             }
+                        }
+                        Ok(response) => {
+                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }

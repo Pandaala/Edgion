@@ -29,11 +29,14 @@ use reqwest::Client;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::link_sys::http_client::{
+    apply_outbound_policy, build_outbound_client, OutboundClientConfig, OutboundRedirect,
+};
+
 /// Global shared HTTP client with connection pooling.
 ///
 /// Uses OnceLock for lazy initialization; reqwest::Client is designed to be shared.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-static INSECURE_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// Get an Arc-wrapped HTTP client for sharing (e.g. in spawned tasks).
 /// Uses the default secure client.
@@ -54,74 +57,80 @@ pub fn get_http_client_arc() -> std::sync::Arc<Client> {
 /// - TLS enabled (rustls)
 pub fn get_http_client() -> &'static Client {
     HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .pool_max_idle_per_host(32)
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::error!(component = "http_client", error = %e, "Failed to build HTTP client");
-                std::process::exit(1);
-            })
+        build_outbound_client(OutboundClientConfig {
+            pool_max_idle_per_host: Some(32),
+            connect_timeout: Some(Duration::from_secs(5)),
+            total_timeout: Some(Duration::from_secs(10)),
+            redirect: OutboundRedirect::Deny,
+            // Plugin dependency traffic must never inherit HTTP(S)_PROXY from
+            // the gateway process. Proxy routing would bypass the canonical
+            // dial-time egress resolver/classifier.
+            disable_proxy: true,
+            ..Default::default()
+        })
+        .unwrap_or_else(|e| {
+            tracing::error!(component = "http_client", error = %e, "Failed to build HTTP client");
+            std::process::exit(1);
+        })
     })
 }
 
-/// Get HTTP client by TLS verification mode.
+/// Build a dedicated outbound client for a webhook / forward_auth connection.
 ///
-/// - `ssl_verify=true`: return default secure client.
-/// - `ssl_verify=false`: return client with certificate verification disabled.
-pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
-    if ssl_verify {
-        return get_http_client();
-    }
-
-    INSECURE_HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .pool_max_idle_per_host(32)
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .danger_accept_invalid_certs(true)
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::error!(component = "http_client", error = %e, "Failed to build insecure HTTP client");
-                std::process::exit(1);
-            })
-    })
-}
-
-/// Build an HTTP client for external HTTP connections based on an optional TLS config.
-///
-/// When `tls` is `Some`, builds a custom client with the configured TLS settings
-/// (insecure_skip_verify, custom CA, client certs). When `None`, returns `None` to
-/// indicate the caller should use `get_http_client()` for connection pooling.
-///
-/// `insecure_skip_verify` is gated through the shared
-/// [`link_sys::tls::apply_insecure_skip_verify`] helper, which refuses to honour the flag
-/// when `EDGION_ENV=production`.
+/// Returns `None` only when neither a TLS block nor a DNS resolver is supplied —
+/// i.e. when the shared global client is safe to use. A URL target always supplies
+/// a resolver, so it always gets a dedicated client (design spec 2.6).
 pub fn build_webhook_client(
     tls_config: &Option<edgion_resources::resources::common::TlsConfig>,
+    dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
 ) -> Option<anyhow::Result<Client>> {
-    let tls = tls_config.as_ref()?;
+    if tls_config.is_none() && dns_resolver.is_none() {
+        return None;
+    }
+    Some(build_outbound_client(OutboundClientConfig {
+        pool_max_idle_per_host: Some(32),
+        connect_timeout: Some(Duration::from_secs(5)),
+        total_timeout: Some(Duration::from_secs(10)),
+        redirect: OutboundRedirect::Deny,
+        disable_proxy: true,
+        tls: tls_config.clone(),
+        tls_context: Some("Webhook"),
+        dns_resolver,
+        ..Default::default()
+    }))
+}
 
-    let mut builder = Client::builder()
-        .pool_max_idle_per_host(32)
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none());
-
-    builder = match crate::link_sys::tls::apply_insecure_skip_verify(builder, tls, "Webhook") {
-        Ok(b) => b,
-        Err(e) => return Some(Err(e)),
-    };
-
-    builder = match crate::link_sys::tls::apply_to_reqwest_builder(builder, tls, "Webhook") {
-        Ok(b) => b,
-        Err(e) => return Some(Err(e)),
-    };
-
-    Some(builder.build().map_err(anyhow::Error::from))
+/// Build a pooled outbound reqwest client with an explicit timeout policy.
+///
+/// Centralizes the pool + redirect policy shared by plugin outbound clients,
+/// while letting each caller pick its own connect timeout and decide whether to
+/// impose a client-level total timeout.
+///
+/// - `connect_timeout`: TCP/TLS connect deadline.
+/// - `total_timeout`: `Some(d)` sets reqwest's whole-request timeout; `None`
+///   omits it — for streaming-body callers that enforce their own deadline.
+///
+/// Always sets `redirect::none` (redirect-following is an SSRF surface) and
+/// `pool_max_idle_per_host(32)`. This is the request_mirror client shape; the
+/// other outbound sites (task 03) will extend the signature with redirect /
+/// proxy / pool parameters rather than call this unchanged.
+pub fn build_pooled_outbound_client(
+    connect_timeout: Duration,
+    total_timeout: Option<Duration>,
+) -> reqwest::Result<Client> {
+    apply_outbound_policy(
+        Client::builder(),
+        OutboundClientConfig {
+            pool_max_idle_per_host: Some(32),
+            connect_timeout: Some(connect_timeout),
+            total_timeout,
+            redirect: OutboundRedirect::Deny,
+            disable_proxy: true,
+            ..Default::default()
+        },
+    )
+    .expect("pooled outbound config has no TLS; apply_outbound_policy is infallible here")
+    .build()
 }
 
 /// Canonical hop-by-hop headers that MUST NOT be forwarded to upstream services.
@@ -136,7 +145,7 @@ pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "proxy-authenticate",
     "proxy-authorization",
     "te",
-    "trailers",
+    "trailer",
     "transfer-encoding",
     "upgrade",
 ];
@@ -200,7 +209,8 @@ mod tests {
         assert!(is_hop_by_hop("transfer-encoding"));
         assert!(is_hop_by_hop("upgrade"));
         assert!(is_hop_by_hop("te"));
-        assert!(is_hop_by_hop("trailers"));
+        assert!(is_hop_by_hop("trailer"));
+        assert!(!is_hop_by_hop("trailers"));
         assert!(is_hop_by_hop("proxy-authenticate"));
         assert!(is_hop_by_hop("proxy-authorization"));
 
@@ -266,17 +276,5 @@ mod tests {
         let client2 = get_http_client();
         // Both should point to the same instance
         assert!(std::ptr::eq(client1, client2));
-    }
-
-    #[test]
-    fn test_get_http_client_with_ssl_verify_returns_expected_instances() {
-        let secure1 = get_http_client_with_ssl_verify(true);
-        let secure2 = get_http_client();
-        assert!(std::ptr::eq(secure1, secure2));
-
-        let insecure1 = get_http_client_with_ssl_verify(false);
-        let insecure2 = get_http_client_with_ssl_verify(false);
-        assert!(std::ptr::eq(insecure1, insecure2));
-        assert!(!std::ptr::eq(secure1, insecure1));
     }
 }

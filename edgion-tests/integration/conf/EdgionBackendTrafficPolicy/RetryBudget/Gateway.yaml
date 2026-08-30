@@ -1,0 +1,18 @@
+# Gateway for the EdgionBackendTrafficPolicy/RetryBudget integration scenario
+# (Task 8 of the retry-budget / retryConstraint feature). Plain HTTP listener;
+# the client-facing hop carries no TLS for this scenario. Port from ports.json
+# key "EdgionBackendTrafficPolicy/RetryBudget".
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: rb-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31942
+      allowedRoutes:
+        namespaces:
+          from: All

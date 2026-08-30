@@ -26,7 +26,10 @@ use std::sync::{Arc, OnceLock};
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 
 pub(crate) const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
-pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
+pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid/PluginPolicyRestricted:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
+
+pub(crate) const COND_COUNT_METRIC_NAME: &str = "edgion_controller_status_conditions_max";
+pub(crate) const COND_COUNT_METRIC_HELP: &str = "Largest single .status.conditions array length on a resource. Emitted only when it reaches the configured threshold (default 20), so healthy fleets emit nothing. A bounded conditions array that keeps growing is a status-write loop (single-controller death-loop) or cross-controller condition pollution; the value is the array length.";
 
 /// Runtime-configurable safety ceiling: if a snapshot would exceed this,
 /// it is truncated and a single `tracing::error!` is emitted. Default 1000,
@@ -42,6 +45,22 @@ pub(crate) fn set_hard_cap(cap: usize) {
 #[inline]
 fn hard_cap() -> usize {
     HARD_CAP.load(Ordering::Relaxed)
+}
+
+/// Threshold (largest single conditions-array length) at or above which a
+/// resource is emitted as an `edgion_controller_status_conditions_max` series.
+/// Default 20, settable via [`set_status_conditions_threshold`] from CLI startup.
+static COND_COUNT_THRESHOLD: AtomicUsize = AtomicUsize::new(20);
+
+/// Install the configured conditions-array threshold. Called once from
+/// controller CLI startup before [`spawn_snapshot_loop`].
+pub(crate) fn set_status_conditions_threshold(threshold: usize) {
+    COND_COUNT_THRESHOLD.store(threshold, Ordering::Relaxed);
+}
+
+#[inline]
+fn cond_count_threshold() -> usize {
+    COND_COUNT_THRESHOLD.load(Ordering::Relaxed)
 }
 
 /// One condition trigger referenced in the `err` / `warn` label payload.
@@ -60,6 +79,11 @@ pub(crate) struct Entry {
     pub name: String,
     pub err_conditions: Vec<ConditionRef>,
     pub warn_conditions: Vec<ConditionRef>,
+    /// Largest single `conditions` array length seen anywhere in this
+    /// resource (0 when it has no conditions). Drives the
+    /// `edgion_controller_status_conditions_max` sentinel. Kept last so it is
+    /// the lowest-priority `Ord` key and does not perturb existing ordering.
+    pub max_conditions_len: usize,
 }
 
 /// Renderer closure signature: pushes `Entry` values for one kind's store.
@@ -108,8 +132,8 @@ pub(crate) struct Condition {
 ///
 /// Err triggers:
 /// - `Accepted:False`, `ResolvedRefs:False`, `Programmed:False`
-/// - `Conflicted:True`, `ListenersNotValid:True` (inverse semantics —
-///   True is bad for these two)
+/// - `Conflicted:True`, `ListenersNotValid:True`, `PluginPolicyRestricted:True`
+///   (inverse semantics — True is bad for these three)
 ///
 /// Warn triggers:
 /// - `Ready:False`
@@ -118,12 +142,23 @@ pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, V
     let mut err_list = Vec::new();
     let mut warn_list = Vec::new();
     for c in conditions {
+        // NOTE: `UnknownConfigFields` is deliberately ABSENT from this match,
+        // in both severities. It
+        // reports an operator typo in a document that still syncs to the
+        // data plane unchanged — not resource ill-health — so it must not
+        // move the `edgion_controller_resource_abnormal` gauge the way
+        // `PluginPolicyRestricted` does. The `_ => {}` arm below already
+        // ignores it correctly; do not "complete" this match by adding an
+        // arm for it. See
+        // `status_metrics_test.rs::classify_tests::unknown_config_fields_true_produces_no_series`
+        // for the pin.
         match (c.type_.as_str(), c.status.as_str()) {
             ("Accepted", "False")
             | ("ResolvedRefs", "False")
             | ("Programmed", "False")
             | ("Conflicted", "True")
-            | ("ListenersNotValid", "True") => err_list.push(ConditionRef {
+            | ("ListenersNotValid", "True")
+            | ("PluginPolicyRestricted", "True") => err_list.push(ConditionRef {
                 type_: c.type_.clone(),
                 status: c.status.clone(),
             }),
@@ -191,14 +226,57 @@ fn extract_condition(v: &serde_json::Value) -> Option<Condition> {
     Some(Condition { type_, status })
 }
 
+/// Largest length of any single `"conditions": [ ... ]` array anywhere in the
+/// resource JSON (resource-level, per-parent, per-listener, ...). Distinct from
+/// [`scan_conditions`], which flattens every array together: a status-write
+/// loop appends to *one* array, so its length — not the flattened total — is
+/// the loop signal (and it avoids false positives on a legitimately multi-parent
+/// / multi-listener resource whose arrays are individually small).
+pub(crate) fn max_conditions_array_len(value: &serde_json::Value) -> usize {
+    let mut max = 0usize;
+    walk_max(value, &mut max);
+    max
+}
+
+fn walk_max(value: &serde_json::Value, max: &mut usize) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                if k == "conditions" {
+                    if let serde_json::Value::Array(arr) = v {
+                        if arr.len() > *max {
+                            *max = arr.len();
+                        }
+                    }
+                } else {
+                    walk_max(v, max);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                walk_max(item, max);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Render a sorted snapshot to Prometheus text format. Returns empty
 /// string on empty input so the wrapper handler can skip appending
 /// entirely.
 pub(crate) fn render_snapshot(entries: &[Entry]) -> String {
-    if entries.is_empty() {
+    // A snapshot Entry may be present only because its conditions array is
+    // bloated (rendered by `render_conditions_max`), with no err/warn triggers.
+    // Such an entry must NOT emit a `resource_abnormal` series.
+    let abnormal: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| !e.err_conditions.is_empty() || !e.warn_conditions.is_empty())
+        .collect();
+    if abnormal.is_empty() {
         return String::new();
     }
-    let mut out = String::with_capacity(128 + entries.len() * 128);
+    let mut out = String::with_capacity(128 + abnormal.len() * 128);
     out.push_str("# HELP ");
     out.push_str(METRIC_NAME);
     out.push(' ');
@@ -207,7 +285,7 @@ pub(crate) fn render_snapshot(entries: &[Entry]) -> String {
     out.push_str("# TYPE ");
     out.push_str(METRIC_NAME);
     out.push_str(" gauge\n");
-    for e in entries {
+    for e in abnormal {
         let err_json = serialize_conditions_for_label(e, &e.err_conditions, "err");
         let warn_json = serialize_conditions_for_label(e, &e.warn_conditions, "warn");
         out.push_str(METRIC_NAME);
@@ -222,6 +300,40 @@ pub(crate) fn render_snapshot(entries: &[Entry]) -> String {
         out.push_str("\",warn=\"");
         append_escaped(&mut out, &warn_json);
         out.push_str("\"} 1\n");
+    }
+    out
+}
+
+/// Render the `edgion_controller_status_conditions_max` block for every entry
+/// whose largest conditions array reached the threshold. Returns "" when none
+/// qualify (so the wrapper appends nothing and no bare HELP/TYPE is emitted).
+/// The gauge value is the array length, so an operator sees how bloated it is.
+pub(crate) fn render_conditions_max(entries: &[Entry]) -> String {
+    let threshold = cond_count_threshold();
+    let hot: Vec<&Entry> = entries.iter().filter(|e| e.max_conditions_len >= threshold).collect();
+    if hot.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(128 + hot.len() * 96);
+    out.push_str("# HELP ");
+    out.push_str(COND_COUNT_METRIC_NAME);
+    out.push(' ');
+    out.push_str(COND_COUNT_METRIC_HELP);
+    out.push('\n');
+    out.push_str("# TYPE ");
+    out.push_str(COND_COUNT_METRIC_NAME);
+    out.push_str(" gauge\n");
+    for e in hot {
+        out.push_str(COND_COUNT_METRIC_NAME);
+        out.push_str("{kind=\"");
+        out.push_str(e.kind);
+        out.push_str("\",namespace=\"");
+        append_escaped(&mut out, &e.namespace);
+        out.push_str("\",name=\"");
+        append_escaped(&mut out, &e.name);
+        out.push_str("\"} ");
+        out.push_str(&e.max_conditions_len.to_string());
+        out.push('\n');
     }
     out
 }
@@ -254,7 +366,12 @@ fn serialize_conditions_for_label(entry: &Entry, conditions: &[ConditionRef], bu
 }
 
 /// Escape `\` and `"` per Prometheus text-format conventions.
-fn append_escaped(out: &mut String, s: &str) {
+///
+/// `pub(crate)` so `observe::unknown_fields_registry`'s metric renderer can
+/// reuse the exact same escaping rather than re-implementing it — a raw `"`
+/// or `\` inside a finding path would otherwise corrupt the exposition
+/// format.
+pub(crate) fn append_escaped(out: &mut String, s: &str) {
     for c in s.chars() {
         match c {
             '\\' => out.push_str("\\\\"),
@@ -265,13 +382,14 @@ fn append_escaped(out: &mut String, s: &str) {
     }
 }
 
-/// Scan one kind's store and push any abnormal resources into `out`.
+/// Scan one kind's store and push every abnormal OR conditions-bloated resource
+/// into `out`.
 ///
 /// Expects K to serialize to JSON with at least:
 /// - `.metadata.namespace` (string; "" for cluster-scoped resources)
 /// - `.metadata.name` (string)
 /// - `.status.conditions[]` or nested variants (handled by
-///   [`scan_conditions`])
+///   [`scan_conditions`] / [`max_conditions_array_len`])
 ///
 /// Any resource that fails to serialize is skipped with a single
 /// `tracing::warn!`; we do not propagate the failure.
@@ -279,6 +397,7 @@ pub(crate) fn render_kind<K>(kind: &'static str, store: &dyn RawStore<K>, out: &
 where
     K: serde::Serialize,
 {
+    let threshold = cond_count_threshold();
     for obj in store.snapshot() {
         let json = match serde_json::to_value(&*obj) {
             Ok(v) => v,
@@ -295,13 +414,22 @@ where
 
         let (ns, name) = extract_identity(&json);
         let conds = scan_conditions(&json);
-        if let Some((err_conditions, warn_conditions)) = classify(&conds) {
+        let max_conditions_len = max_conditions_array_len(&json);
+        let classified = classify(&conds);
+        // Emit an Entry when the resource is abnormal (has err/warn conditions)
+        // OR when its largest conditions array is bloated past the threshold —
+        // a bloated array is often all-`True`/clean, so `classify` alone would
+        // miss it. Both predicates keep the series set bounded to anomalies.
+        let bloated = max_conditions_len >= threshold;
+        if classified.is_some() || bloated {
+            let (err_conditions, warn_conditions) = classified.unwrap_or_default();
             out.push(Entry {
                 kind,
                 namespace: ns,
                 name,
                 err_conditions,
                 warn_conditions,
+                max_conditions_len,
             });
         }
     }
@@ -399,6 +527,26 @@ pub(crate) async fn metrics_handler() -> Response {
             text.push('\n');
         }
         text.push_str(&block);
+    }
+    let cond_block = render_conditions_max(snap.as_ref());
+    if !cond_block.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&cond_block);
+    }
+
+    // `edgion_controller_unknown_config_fields` — separate data source
+    // (live `unknown_fields_registry` scan of `spec.unknown_fields`, not
+    // the status-condition snapshot above), appended at the same seam.
+    // See `unknown_fields_registry::render_unknown_config_fields_metric`
+    // for why it deliberately does NOT reuse `classify()`.
+    let unknown_fields_block = crate::observe::unknown_fields_registry::render_unknown_config_fields_metric();
+    if !unknown_fields_block.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&unknown_fields_block);
     }
 
     (

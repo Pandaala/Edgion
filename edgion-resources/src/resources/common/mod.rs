@@ -1,26 +1,33 @@
 //! Common reusable types for Edgion custom resources.
 
+pub mod byte_size;
 pub mod external_http;
 pub mod group_name;
 pub mod log_labels;
 pub mod outbound_request;
+pub mod outbound_tls;
 pub mod secret_object_ref;
 pub mod secret_slot;
-pub mod service_kind;
+pub mod service_backend_kind;
+pub mod success;
 pub mod tls;
 
+pub use byte_size::parse_byte_size;
 pub use external_http::{
-    validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff, PassiveHealthCheck,
-    ResolvedSecrets, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookTarget,
+    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
+    PassiveHealthCheck, ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry,
+    WebhookServiceRef, WebhookTarget,
 };
-pub use log_labels::{resolve_log_ctx_keys, resolve_log_labels};
+pub use log_labels::resolve_log_labels;
 pub use outbound_request::{
     CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
 };
+pub use outbound_tls::{OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidation};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
-pub use service_kind::EdgionService;
-pub use tls::{TlsCerts, TlsConfig};
+pub use service_backend_kind::ServiceBackendKind;
+pub use success::{classify_detail, validate_success, BodyPredicate, PredicateOp, SuccessOutcome, SuccessSpec};
+pub use tls::TlsConfig;
 
 // ---- Types shared across all route resources ----
 // (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, etc.)
@@ -75,6 +82,7 @@ pub struct ParentReference {
 
     /// Port is the network port this Route targets
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 }
 
@@ -91,6 +99,24 @@ impl ParentReference {
         let namespace = self.namespace.as_deref().or(route_namespace).unwrap_or("default");
         format!("{}/{}", namespace, self.name)
     }
+}
+
+/// PolicyAncestorStatus describes the status of a policy with respect to an
+/// ancestor resource. Ancestors refer to the Gateway(s) that this policy
+/// is associated with.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyAncestorStatus {
+    /// AncestorRef corresponds with a ParentRef in the spec that this
+    /// PolicyAncestorStatus struct describes the status of.
+    pub ancestor_ref: ParentReference,
+
+    /// ControllerName is a domain/path string that indicates the name of the
+    /// controller that wrote this status.
+    pub controller_name: String,
+
+    /// Conditions describes the status of the Policy with respect to the given Ancestor.
+    pub conditions: Vec<Condition>,
 }
 
 /// Cross-namespace reference denial info
@@ -139,26 +165,11 @@ pub struct Condition {
 
 /// Resolved, comparable TCP keepalive configuration for an L4 upstream.
 ///
-/// Deliberately an Edgion-local type rather than Pingora's `TcpKeepalive`:
-/// it is `PartialEq`/`Eq` (Pingora's is not). Converted to Pingora's runtime
-/// type at the data-plane edge via [`TcpKeepaliveConfig::to_pingora`].
+/// Deliberately an Edgion-local type rather than a data-plane runtime type so
+/// the shared schema crate does not depend on a specific proxy implementation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TcpKeepaliveConfig {
     pub idle: std::time::Duration,
     pub interval: std::time::Duration,
     pub count: usize,
-}
-
-impl TcpKeepaliveConfig {
-    /// Convert to Pingora's runtime keepalive type. `user_timeout` is
-    /// Linux-only; `Duration::ZERO` tells the kernel to use the system default.
-    pub fn to_pingora(&self) -> pingora_core::protocols::l4::ext::TcpKeepalive {
-        pingora_core::protocols::l4::ext::TcpKeepalive {
-            idle: self.idle,
-            interval: self.interval,
-            count: self.count,
-            #[cfg(target_os = "linux")]
-            user_timeout: std::time::Duration::ZERO,
-        }
-    }
 }

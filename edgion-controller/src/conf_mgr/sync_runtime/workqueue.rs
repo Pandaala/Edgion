@@ -118,15 +118,6 @@ impl WorkItem {
             trigger_chain: TriggerChain::default(),
         }
     }
-
-    /// Create a work item with a trigger chain (cross-resource requeue)
-    pub fn with_chain(key: String, chain: TriggerChain) -> Self {
-        Self {
-            key,
-            enqueue_time: Instant::now(),
-            trigger_chain: chain,
-        }
-    }
 }
 
 // ==================== Pending entry ====================
@@ -243,16 +234,14 @@ impl WorkqueueMetrics {
         self.depth.load(Ordering::Relaxed)
     }
 
+    /// Test-only: exercised by `tests/workqueue_test.rs`; no production caller.
+    #[cfg(test)]
     pub fn get_adds_total(&self) -> u64 {
         self.adds_total.load(Ordering::Relaxed)
     }
 
     pub fn inc_delayed(&self) {
         self.delayed_total.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn get_delayed_total(&self) -> u64 {
-        self.delayed_total.load(Ordering::Relaxed)
     }
 
     /// Edge-triggered high-water entry check, called after `inc_depth`.
@@ -457,11 +446,6 @@ impl Workqueue {
             tracing::debug!(queue = %name, "Delay loop exited");
         });
     }
-
-    /// Get the queue name
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }
 
 /// Promote a delayed item to the ready queue.
@@ -525,7 +509,9 @@ async fn promote_delayed_item(
 }
 
 impl Workqueue {
-    /// Get metrics reference
+    /// Get metrics reference. Test-only: exercised by `tests/workqueue_test.rs`;
+    /// no production caller.
+    #[cfg(test)]
     pub fn metrics(&self) -> Arc<WorkqueueMetrics> {
         self.metrics.clone()
     }
@@ -703,16 +689,6 @@ impl Workqueue {
     /// Check if queue is empty
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty()
-    }
-
-    /// Check if a key is in the ready queue (pending)
-    pub fn contains(&self, key: &str) -> bool {
-        self.pending.contains_key(key)
-    }
-
-    /// Check if a key is in the delay queue (scheduled)
-    pub fn is_scheduled(&self, key: &str) -> bool {
-        self.scheduled.contains(key)
     }
 
     /// Get the configuration

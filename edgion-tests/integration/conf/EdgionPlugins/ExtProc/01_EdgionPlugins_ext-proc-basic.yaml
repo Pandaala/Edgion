@@ -20,14 +20,5 @@ spec:
           timeoutMs: 2000
         processingMode:
           requestHeaderMode: SEND
-        failureModeAllow: false
-  upstreamResponsePlugins:
-    - enable: true
-      type: ExtProc
-      config:
-        grpcService:
-          target: "127.0.0.1:30041"
-          timeoutMs: 2000
-        processingMode:
           responseHeaderMode: SEND
         failureModeAllow: false

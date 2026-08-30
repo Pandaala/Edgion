@@ -66,7 +66,10 @@ impl RadixPath {
             (true, false) => 1,  // static prefix
             (true, true) => 0,   // param prefix (lowest)
         };
-        let path_char_count = normalized.len();
+        // Unicode character count, not `str::len()` (UTF-8 byte length): the spec
+        // wording is "characters", and a multi-byte literal must not be weighted
+        // as if it were several characters long.
+        let path_char_count = normalized.chars().count();
         let priority_weight = path_char_count * 4 + type_bonus;
 
         Self {
@@ -84,16 +87,6 @@ impl RadixPath {
     /// This returns the normalized path.
     pub fn tree_key(&self) -> &str {
         &self.normalized
-    }
-
-    /// Return a string describing the match type for debugging.
-    pub fn match_type_str(&self) -> &str {
-        match (self.is_prefix_match, self.has_params) {
-            (true, true) => "ParamPrefix",
-            (true, false) => "Prefix",
-            (false, true) => "Param",
-            (false, false) => "Exact",
-        }
     }
 }
 
@@ -184,7 +177,6 @@ mod tests {
         assert!(!path.is_prefix_match);
         assert_eq!(path.segment_count, 1);
         assert!(!path.has_params);
-        assert_eq!(path.match_type_str(), "Exact");
     }
 
     #[test]
@@ -194,7 +186,6 @@ mod tests {
         assert!(path.is_prefix_match);
         assert_eq!(path.segment_count, 1);
         assert!(!path.has_params);
-        assert_eq!(path.match_type_str(), "Prefix");
     }
 
     #[test]
@@ -204,7 +195,6 @@ mod tests {
         assert!(!path.is_prefix_match);
         assert_eq!(path.segment_count, 2);
         assert!(path.has_params);
-        assert_eq!(path.match_type_str(), "Param");
     }
 
     #[test]
@@ -214,7 +204,6 @@ mod tests {
         assert!(path.is_prefix_match);
         assert_eq!(path.segment_count, 2);
         assert!(path.has_params);
-        assert_eq!(path.match_type_str(), "ParamPrefix");
     }
 
     #[test]
@@ -232,6 +221,22 @@ mod tests {
         let exact = RadixPath::new("/api/users", 0, false);
         let prefix = RadixPath::new("/api/users", 0, true);
         assert!(exact.priority_weight > prefix.priority_weight);
+    }
+
+    // Locks the Gateway API "largest number of characters" wording: the weight is
+    // derived from the Unicode character count, NOT the UTF-8 byte length.
+    #[test]
+    fn test_priority_weight_counts_chars_not_bytes() {
+        // "/cafe" is 5 chars / 5 bytes; "/café" is 5 chars / 6 bytes.
+        let ascii = RadixPath::new("/cafe", 0, false);
+        let multibyte = RadixPath::new("/café", 1, false);
+        assert_eq!(multibyte.priority_weight, 5 * 4 + 3);
+        assert_eq!(multibyte.priority_weight, ascii.priority_weight);
+
+        // A pattern that is genuinely one character longer still outranks it.
+        let longer = RadixPath::new("/caféx", 2, false);
+        assert_eq!(longer.priority_weight, 6 * 4 + 3);
+        assert!(longer.priority_weight > multibyte.priority_weight);
     }
 
     #[test]
@@ -253,14 +258,6 @@ mod tests {
         let short = RadixPath::new("/api", 0, false);
         let long = RadixPath::new("/api/users/profile", 0, false);
         assert!(long.priority_weight > short.priority_weight);
-    }
-
-    #[test]
-    fn test_match_type_str_variants() {
-        assert_eq!(RadixPath::new("/api", 0, false).match_type_str(), "Exact");
-        assert_eq!(RadixPath::new("/api", 0, true).match_type_str(), "Prefix");
-        assert_eq!(RadixPath::new("/users/:id", 0, false).match_type_str(), "Param");
-        assert_eq!(RadixPath::new("/users/:id", 0, true).match_type_str(), "ParamPrefix");
     }
 
     #[test]

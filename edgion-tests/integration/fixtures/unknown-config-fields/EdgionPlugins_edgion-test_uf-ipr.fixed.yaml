@@ -1,0 +1,24 @@
+# Corrected variant of EdgionPlugins_edgion-test_uf-ipr.yaml: "denys" -> "deny".
+# Applying this over the malformed fixture must drain the diagnostics
+# endpoint to zero for this resource AND remove its UnknownConfigFields
+# status condition (proves clear-before-add / condition removal, not just
+# upsert).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: uf-ipr
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        allow:
+          - name: office
+            cidrs:
+              - "10.0.0.0/8"
+        deny:
+          - name: blocked
+            cidrs:
+              - "1.2.3.4/32"

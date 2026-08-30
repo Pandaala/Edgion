@@ -17,6 +17,7 @@
 #   run_all_integration.sh --no-prepare      # skip top-level cargo build
 #   run_all_integration.sh --skip acme,cli   # exclude specific jobs
 #   run_all_integration.sh --only main,linksys_etcd
+#   run_all_integration.sh --job-timeout-secs 3600 --run-timeout-secs 21600
 #   run_all_integration.sh --help
 #
 # Behaviour:
@@ -39,13 +40,17 @@ NC='\033[0m'
 # ── Paths ───────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+SHELL_COMPAT="${SCRIPT_DIR}/../utils/shell_compat.sh"
+DEADLINE_RUNNER="${SCRIPT_DIR}/../utils/run_with_deadline.py"
+PREPARE_SCRIPT="${SCRIPT_DIR}/../utils/prepare.sh"
+# shellcheck source=../utils/shell_compat.sh
+source "$SHELL_COMPAT"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/run_all_${TIMESTAMP}"
 
 # ── Job definitions ─────────────────────────────────────────────────────────
-# Each job is "<name>|<command>". Names are stable identifiers used by
-# --skip / --only and the report. Commands are evaluated with `eval` so they
-# can reference variables (e.g. $MAIN_FULL_FLAG) computed at runtime.
+# Names are stable identifiers used by --skip / --only and the report. The
+# command is resolved immediately before launch so runtime flags are included.
 JOB_NAMES=(
     "main"
     "linksys_etcd"
@@ -64,7 +69,7 @@ job_command() {
         linksys_es)   echo "${SCRIPT_DIR}/link_sys/run_es_test.sh --no-build" ;;
         linksys_otlp)  echo "${SCRIPT_DIR}/link_sys/run_otlp_test.sh --no-build" ;;
         linksys_kafka) echo "${SCRIPT_DIR}/link_sys/run_kafka_test.sh --no-build" ;;
-        acme)         echo "${SCRIPT_DIR}/run_acme_test.sh" ;;
+        acme)         echo "${SCRIPT_DIR}/run_acme_test.sh --no-build" ;;
         cli)          echo "${SCRIPT_DIR}/test_cli_commands.sh" ;;
         file_watcher) echo "${SCRIPT_DIR}/test_file_watcher.sh" ;;
         *)            return 1 ;;
@@ -76,6 +81,9 @@ DO_PREPARE=true
 FULL_TEST=false
 SKIP_LIST=""
 ONLY_LIST=""
+JOB_TIMEOUT_SECONDS="${EDGION_RUN_ALL_JOB_TIMEOUT_SECONDS:-3600}"
+RUN_TIMEOUT_SECONDS="${EDGION_RUN_ALL_TIMEOUT_SECONDS:-21600}"
+DEADLINE_GRACE_SECONDS="${EDGION_DEADLINE_GRACE_SECONDS:-10}"
 
 show_help() {
     sed -n '2,27p' "${BASH_SOURCE[0]}"
@@ -96,6 +104,12 @@ while [[ $# -gt 0 ]]; do
         --only)
             if [ $# -lt 2 ]; then echo "Missing argument for --only" >&2; exit 2; fi
             ONLY_LIST="$2"; shift 2 ;;
+        --job-timeout-secs)
+            if [ $# -lt 2 ]; then echo "Missing argument for --job-timeout-secs" >&2; exit 2; fi
+            JOB_TIMEOUT_SECONDS="$2"; shift 2 ;;
+        --run-timeout-secs)
+            if [ $# -lt 2 ]; then echo "Missing argument for --run-timeout-secs" >&2; exit 2; fi
+            RUN_TIMEOUT_SECONDS="$2"; shift 2 ;;
         -h|--help) show_help; exit 0 ;;
         *) echo "Unknown option: $1" >&2; show_help >&2; exit 2 ;;
     esac
@@ -103,6 +117,27 @@ done
 
 if [ -n "$SKIP_LIST" ] && [ -n "$ONLY_LIST" ]; then
     echo "Error: --skip and --only are mutually exclusive" >&2
+    exit 2
+fi
+
+validate_positive_seconds() {
+    local label="$1" value="$2"
+    case "$value" in
+        ''|*[!0-9]*)
+            echo "Error: ${label} must be a positive integer" >&2
+            exit 2
+            ;;
+    esac
+    if [ "$value" -lt 1 ]; then
+        echo "Error: ${label} must be at least 1" >&2
+        exit 2
+    fi
+}
+validate_positive_seconds "job timeout" "$JOB_TIMEOUT_SECONDS"
+validate_positive_seconds "run timeout" "$RUN_TIMEOUT_SECONDS"
+validate_positive_seconds "deadline grace" "$DEADLINE_GRACE_SECONDS"
+if [ ! -f "$DEADLINE_RUNNER" ]; then
+    echo "Error: deadline runner not found: ${DEADLINE_RUNNER}" >&2
     exit 2
 fi
 
@@ -170,33 +205,96 @@ human_duration() {
     fi
 }
 
+OVERALL_START=$(date +%s)
+
+remaining_run_seconds() {
+    local now elapsed
+    now=$(date +%s)
+    elapsed=$((now - OVERALL_START))
+    echo $((RUN_TIMEOUT_SECONDS - elapsed))
+}
+
+bounded_job_timeout() {
+    local remaining
+    remaining=$(remaining_run_seconds)
+    if [ "$remaining" -lt "$JOB_TIMEOUT_SECONDS" ]; then
+        echo "$remaining"
+    else
+        echo "$JOB_TIMEOUT_SECONDS"
+    fi
+}
+
+CURRENT_WATCHDOG_PID=""
+forward_termination() {
+    local signal_name="$1" exit_code=143
+    [ "$signal_name" = "INT" ] && exit_code=130
+    if [ -n "$CURRENT_WATCHDOG_PID" ] && kill -0 "$CURRENT_WATCHDOG_PID" 2>/dev/null; then
+        kill -"$signal_name" "$CURRENT_WATCHDOG_PID" 2>/dev/null || true
+        wait "$CURRENT_WATCHDOG_PID" 2>/dev/null || true
+    fi
+    exit "$exit_code"
+}
+trap 'forward_termination INT' INT
+trap 'forward_termination TERM' TERM
+
+declare -a RESULT_NAMES=()
+declare -a RESULT_STATUS=()
+declare -a RESULT_DURATION=()
+declare -a RESULT_LOG=()
+BUILD_BLOCKED=false
+BUILD_BLOCKED_STATUS="NOT_STARTED"
+
 # ── Top-level build (optional, single pass) ────────────────────────────────
 mkdir -p "$WORK_DIR"
 log_info "Run-all work directory: $WORK_DIR"
 
 if $DO_PREPARE; then
-    log_section "Build: cargo build (top-level, once)"
-    if (cd "$PROJECT_ROOT" && cargo build \
-        -p edgion-controller --bin edgion-controller \
-        -p edgion-gateway --bin edgion-gateway \
-        -p edgion-cli --bin edgion-cli \
-        -p edgion-tests --bin test_server) \
-        2>&1 | tee "${WORK_DIR}/build.log" | tail -5; then
+    log_section "Build: prepare integration artifacts (top-level, once)"
+    build_start=$(date +%s)
+    build_timeout=$(bounded_job_timeout)
+    if [ "$build_timeout" -lt 1 ]; then
+        echo "Whole-run deadline reached before build" > "${WORK_DIR}/build.log"
+        build_rc=124
+    else
+        PREPARE_ARGS=("$PREPARE_SCRIPT")
+        if $FULL_TEST && job_selected main; then
+            PREPARE_ARGS+=("--full-test")
+        fi
+        python3 "$DEADLINE_RUNNER" --timeout-secs "$build_timeout" --grace-secs "$DEADLINE_GRACE_SECONDS" -- \
+            "${PREPARE_ARGS[@]}" \
+            > "${WORK_DIR}/build.log" 2>&1 &
+        CURRENT_WATCHDOG_PID=$!
+        set +e
+        wait "$CURRENT_WATCHDOG_PID"
+        build_rc=$?
+        set -e
+        CURRENT_WATCHDOG_PID=""
+        tail -5 "${WORK_DIR}/build.log"
+    fi
+    build_duration=$(( $(date +%s) - build_start ))
+    if [ "$build_rc" -eq 0 ]; then
         log_success "Build complete"
+    elif [ "$build_rc" -eq 124 ]; then
+        log_error "Top-level build timed out after ${build_timeout}s — see ${WORK_DIR}/build.log"
+        RESULT_NAMES+=("build")
+        RESULT_STATUS+=("TIMEOUT")
+        RESULT_DURATION+=("$build_duration")
+        RESULT_LOG+=("${WORK_DIR}/build.log")
+        BUILD_BLOCKED=true
+        BUILD_BLOCKED_STATUS="TIMEOUT"
     else
         log_error "Top-level build failed — see ${WORK_DIR}/build.log"
-        exit 1
+        RESULT_NAMES+=("build")
+        RESULT_STATUS+=("FAIL")
+        RESULT_DURATION+=("$build_duration")
+        RESULT_LOG+=("${WORK_DIR}/build.log")
+        BUILD_BLOCKED=true
     fi
 else
-    log_info "Skipping top-level build (--no-prepare). Children may still rebuild incrementally."
+    log_info "Skipping top-level build (--no-prepare); required artifacts must already exist."
 fi
 
 # ── Run jobs ────────────────────────────────────────────────────────────────
-declare -a RESULT_NAMES=()
-declare -a RESULT_STATUS=()
-declare -a RESULT_DURATION=()
-declare -a RESULT_LOG=()
-
 run_job() {
     local name="$1"
     local cmd
@@ -210,10 +308,28 @@ run_job() {
     local start_ts end_ts
     start_ts=$(date +%s)
 
+    local timeout_seconds
+    timeout_seconds=$(bounded_job_timeout)
+    if [ "$timeout_seconds" -lt 1 ]; then
+        RESULT_NAMES+=("$name")
+        RESULT_DURATION+=("0")
+        RESULT_LOG+=("$log_file")
+        RESULT_STATUS+=("TIMEOUT")
+        echo "Whole-run deadline reached before job start" > "$log_file"
+        log_error "${name} not started: whole-run deadline reached"
+        return 0
+    fi
+
+    python3 "$DEADLINE_RUNNER" \
+        --timeout-secs "$timeout_seconds" \
+        --grace-secs "$DEADLINE_GRACE_SECONDS" \
+        -- bash -c "$cmd" > "$log_file" 2>&1 &
+    CURRENT_WATCHDOG_PID=$!
     set +e
-    eval "$cmd" > "$log_file" 2>&1
+    wait "$CURRENT_WATCHDOG_PID"
     local rc=$?
     set -e
+    CURRENT_WATCHDOG_PID=""
 
     end_ts=$(date +%s)
     local duration=$((end_ts - start_ts))
@@ -224,6 +340,10 @@ run_job() {
     if [ $rc -eq 0 ]; then
         RESULT_STATUS+=("PASS")
         log_success "${name} passed in $(human_duration "$duration")"
+    elif [ $rc -eq 124 ]; then
+        RESULT_STATUS+=("TIMEOUT")
+        log_error "${name} timed out after $(human_duration "$timeout_seconds") — see ${log_file}"
+        log_warn "Continuing with remaining jobs..."
     else
         RESULT_STATUS+=("FAIL")
         log_error "${name} failed (rc=${rc}) in $(human_duration "$duration") — see ${log_file}"
@@ -231,10 +351,19 @@ run_job() {
     fi
 }
 
-OVERALL_START=$(date +%s)
 for name in "${JOB_NAMES[@]}"; do
     if job_selected "$name"; then
-        run_job "$name"
+        if $BUILD_BLOCKED; then
+            blocked_log="${WORK_DIR}/${name}.log"
+            echo "Not started because the top-level build did not complete" > "$blocked_log"
+            RESULT_NAMES+=("$name")
+            RESULT_STATUS+=("$BUILD_BLOCKED_STATUS")
+            RESULT_DURATION+=("0")
+            RESULT_LOG+=("$blocked_log")
+            log_error "${name} not started because the top-level build did not complete"
+        else
+            run_job "$name"
+        fi
     else
         log_info "Skipping job: ${name}"
     fi
@@ -247,11 +376,15 @@ log_section "Integration Suite Report"
 
 passed=0
 failed=0
+timed_out=0
 for i in "${!RESULT_NAMES[@]}"; do
     if [ "${RESULT_STATUS[$i]}" = "PASS" ]; then
         passed=$((passed + 1))
     else
         failed=$((failed + 1))
+        if [ "${RESULT_STATUS[$i]}" = "TIMEOUT" ]; then
+            timed_out=$((timed_out + 1))
+        fi
     fi
 done
 
@@ -275,7 +408,7 @@ done
 printf '%s\n' "------------------------------------------------------------------------"
 
 ran=$((passed + failed))
-echo "Ran: ${ran}    Passed: ${passed}    Failed: ${failed}    Total time: $(human_duration "$OVERALL_DURATION")"
+echo "Ran: ${ran}    Passed: ${passed}    Failed: ${failed}    Timed out: ${timed_out}    Total time: $(human_duration "$OVERALL_DURATION")"
 
 # Save machine-readable summary
 {
@@ -284,6 +417,7 @@ echo "Ran: ${ran}    Passed: ${passed}    Failed: ${failed}    Total time: $(hum
     echo "ran=${ran}"
     echo "passed=${passed}"
     echo "failed=${failed}"
+    echo "timed_out=${timed_out}"
     for i in "${!RESULT_NAMES[@]}"; do
         echo "${RESULT_NAMES[$i]}=${RESULT_STATUS[$i]}:${RESULT_DURATION[$i]}"
     done

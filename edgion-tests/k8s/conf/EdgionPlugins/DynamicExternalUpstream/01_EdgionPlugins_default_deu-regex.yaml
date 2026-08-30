@@ -8,6 +8,9 @@ metadata:
 spec:
   requestPlugins:
     - type: DynamicExternalUpstream
+      dye:
+        request:
+          - name: X-Dynamic-External-Upstream
       config:
         from:
           type: header
@@ -26,6 +29,5 @@ spec:
             port: 30002
             tls: false
             overrideHost: eu-central.internal
-        onMissing: skip
-        onNoMatch: skip
-        debugHeader: true
+        onMissing: fallback
+        onNoMatch: fallback

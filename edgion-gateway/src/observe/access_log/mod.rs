@@ -2,10 +2,12 @@
 
 mod backfill;
 mod entry;
+mod log_ext;
 mod logger;
 
 pub use backfill::{run_backfill, BackfillSummary};
 pub use entry::AccessLogEntry;
+pub use log_ext::{collect, LogExt};
 pub use logger::AccessLogger;
 
 use anyhow::{anyhow, Result};

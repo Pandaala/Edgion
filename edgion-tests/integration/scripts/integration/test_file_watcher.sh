@@ -34,6 +34,9 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+UTILS_DIR="${PROJECT_ROOT}/edgion-tests/integration/scripts/utils"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/file_watcher_test_${TIMESTAMP}"
@@ -119,7 +122,23 @@ start_controller() {
         exit 1
     fi
 
+    # This test otherwise drives the controller purely from CLI flags, but
+    # conf_sync_security has no flag and an omitted section is fail-close (the
+    # binary refuses to start). Emit a minimal config file carrying ONLY the
+    # transport block (mTLS, from the shared emitter); every other setting still
+    # comes from the flags below (CLI takes precedence over the config file).
+    # The certs are distributed into WORK_DIR, which is also --work-dir, so the
+    # emitter's work-dir relative paths resolve.
+    #
+    # NOTE: this file lives in WORK_DIR, NOT in CONFIG_DIR — CONFIG_DIR is the
+    # watched resource directory and a binary config dropped in there would be
+    # picked up by the file watcher under test.
+    conf_sync_distribute_certs "$WORK_DIR"
+    local controller_conf="${WORK_DIR}/edgion-controller.yaml"
+    conf_sync_security_block server > "$controller_conf"
+
     "$controller_bin" \
+        --config-file "$controller_conf" \
         --work-dir "$WORK_DIR" \
         --log-dir "$LOG_DIR" \
         --conf-dir "$CONFIG_DIR" \

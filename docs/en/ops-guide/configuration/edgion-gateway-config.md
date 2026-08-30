@@ -11,7 +11,7 @@ EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configur
 | Typical use | Process connection params, log paths, rate limit precision | Timeout policies, security rules, global plugins, real IP extraction |
 
 **When to use Gateway YAML vs EdgionGatewayConfig:**
-- Change the Controller gRPC address → Gateway YAML `gateway.server_addr`
+- Change the Controller gRPC address → Gateway YAML `gateway.server_addrs`
 - Change Admin / Metrics ports → Gateway YAML (process startup layer)
 - Configure HTTP timeouts, real IP, global plugins → EdgionGatewayConfig
 
@@ -71,15 +71,29 @@ spec:
     tlsProxyLogRecord: true
     rejectDuplicateHost: true
 
+  requestBody:
+    enabled: true
+    defaultMemoryBufferSize: "128KiB"
+    # maxMemoryBufferSize: "1MiB"
+    defaultMaxBodySize: "32MiB"
+    # maxBodySize: "64MiB"
+    storageOperationTimeout: "5s"
+
   globalPluginsRef:
     - name: "global-cors"
       namespace: "edgion-system"
 
+  accessLogExtern:
+    unmaskedKeys:
+      header: [user-agent, origin, content-type, content-length, accept, x-request-id]
+      respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+      query: []
+      cookie: []
+      ctx: []
+
   preflightPolicy:
     mode: "cors-standard"
     statusCode: 204
-
-  enableReferenceGrantValidation: false
 
   linkSys:
     webhookMaxResponseBytes: 16384   # Hard cap for LinkSys webhook response body (16 KiB)
@@ -99,14 +113,14 @@ spec:
 | `gracefulShutdownTimeoutS` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
 | `upstreamKeepalivePoolSize` | `Integer` | `128` | Upstream keepalive connection pool size |
 | `errorLog` | `String` | — | Pingora internal error log file path |
-| `enableCompression` | `Boolean` | `false` | Enable response compression for downstream clients |
+| `enableCompression` | `Boolean` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed to preserve incremental delivery |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
 
 ### spec.httpTimeout.client
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `readTimeout` | `Duration` | `60s` | Timeout for reading a client request |
+| `readTimeout` | `Duration` | `60s` | Timeout for reading a client request, including each request-body chunk on both HTTP/1 and HTTP/2. The timer resets on every received chunk, so a stalled upload is released while a progressing one is never limited in overall duration. Note: this also bounds gRPC client-streaming/bidi requests — raise it if clients legitimately idle longer between messages |
 | `writeTimeout` | `Duration` | `60s` | Timeout for writing a response to the client |
 | `keepaliveTimeout` | `Duration` | `75s` | HTTP keepalive idle timeout |
 
@@ -129,7 +143,7 @@ Timeouts for L4 relays — plain TCP, TLS-terminated, and TLS-passthrough. UDP h
 
 **Secure by default:** If you omit the entire `tcpTimeout` section, the `1h` idle timeout and `10s` connect timeout still apply — every L4 relay is bounded without configuration.
 
-**Opt-out and risk:** Set `idleTimeout: "0"` (or `"0s"`) to disable the idle timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime. Setting `connectTimeout: "0"` likewise removes the application-level connect bound, falling back to the OS TCP retransmit timeout (~2m on Linux).
+**Opt-out and risk:** Set `idleTimeout: "0s"` (any zero-valued duration; a bare `"0"` is not valid GEP-2257 and is rejected at admission) to disable the idle timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime. Setting `connectTimeout: "0s"` likewise removes the application-level connect bound, falling back to the OS TCP retransmit timeout (~2m on Linux).
 
 > **Known limitation:** An idle timeout does not stop a determined trickle attacker (a byte every N seconds resets the clock, on either the read or write half). Bounding that would require a total-duration cap, which would sever legitimate long-idle connections (DB pools, message queues, long-poll, SSH) and is not a sane default.
 
@@ -171,6 +185,28 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in any 
 | `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
 | `rejectDuplicateHost` | `Boolean` | `true` | Reject HTTP/1.1 requests carrying more than one `Host` header line with `400 Bad Request` (RFC 9110 §7.2 Host smuggling defense). Disable only as a transitional escape hatch for legacy middleware that emits duplicate `Host` lines |
 
+### spec.requestBody
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | `Boolean` | `true` | Runtime capture switch. When disabled, body-aware plugins fail closed with the normal body-unavailable result |
+| `defaultMemoryBufferSize` | `String` | `128KiB` | Default in-memory bytes before disk spill |
+| `maxMemoryBufferSize` | `String` | unset | Effective business override for the memory spill threshold; falls back to `defaultMemoryBufferSize` |
+| `defaultMaxBodySize` | `String` | `32MiB` | Default complete request-body cap |
+| `maxBodySize` | `String` | unset | Effective business override for the body cap; falls back to `defaultMaxBodySize` |
+| `storageOperationTimeout` | `String` | `5s` | Non-zero deadline for one disk-backed request-body operation, including waiting for storage-I/O admission and executing the file operation |
+
+All sizes must be positive human-readable byte sizes. The effective memory
+threshold must not exceed the effective body cap. Values are parsed when the
+configuration update is published. Each new request copies the resolved policy
+from an immutable snapshot without parsing sizes or taking a blocking lock. A
+plugin's `body.maxBodySize` may further tighten the limit for that plugin.
+`storageOperationTimeout` uses the shared GEP-2257 duration syntax (`500ms`,
+`5s`, `1m`) and must be greater than zero. A storage deadline is reported as a
+gateway-local storage failure, not as a downstream body-read timeout. Capture
+failure disables HTTP/1 connection reuse when unread body bytes may remain;
+HTTP/2 resets only the affected stream.
+
 ### spec.globalPluginsRef
 
 Global plugins applied to all routes under this GatewayClass, executed before route-level plugins.
@@ -181,18 +217,63 @@ globalPluginsRef:
     namespace: "edgion-system" # Defaults to "default"
 ```
 
+### spec.accessLogExtern
+
+The masking whitelist for [`AccessLogExtern`](../observability/access-log.md#extending-the-log-accesslogextern)-declared
+access-log fields. Platform-owned — cluster-scoped, next to `globalPluginsRef`
+— so a namespaced `EdgionPlugins` cannot widen masking for the whole fleet.
+
+```yaml
+accessLogExtern:
+  unmaskedKeys:
+    header:     [user-agent, origin, content-type, content-length, accept, x-request-id]
+    respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+    query:      []
+    cookie:     []
+    ctx:        []
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `unmaskedKeys.header` | `[]String` | `[user-agent, origin, content-type, content-length, accept, x-request-id]` | Request header names logged in clear (case-insensitive) |
+| `unmaskedKeys.respHeader` | `[]String` | `[content-type, content-length, cache-control, retry-after, x-request-id]` | Response header names logged in clear (case-insensitive) |
+| `unmaskedKeys.query` | `[]String` | `[]` | Query parameter names logged in clear (case-sensitive) |
+| `unmaskedKeys.cookie` | `[]String` | `[]` | Cookie names logged in clear (case-sensitive) |
+| `unmaskedKeys.ctx` | `[]String` | `[]` | Ctx-var names logged in clear (case-sensitive) |
+
+The whitelist is keyed by source type, not one flat list — a header named
+`user-agent` is harmless, a cookie of the same name is not. `query`/`cookie`/`ctx`
+default empty because their key names are entirely business-defined; there is
+no name that is safe by default across every cluster. A miss still emits the
+field, masked, rather than dropping it. `routeLabel`/`routeAnnotation` sources
+are never masked and bypass this whitelist entirely. A hard blocklist (credential
+headers, claim/payload ctx keys) cannot be named regardless of this whitelist.
+Enforcement is two-part: a declaration naming a blocked key is **reported** on
+the resource's `Accepted=False` status condition at `EdgionPlugins` ingest
+(admission is lenient — the resource still lands in the cache conf_sync
+serves to the gateway), and then actually **dropped at gateway load** by
+`compile_plugins`'s field `retain()`, which discards any declared field whose
+validation error is set before the spec is stored. Widening the blocklist
+requires a code change, not a CR edit.
+
+**Omitting a `unmaskedKeys` list keeps that list's default, it does not empty
+it.** `UnmaskedKeys` fills each missing list from its own default, so
+`unmaskedKeys: {ctx: [tenant_id]}` does not mean "only `tenant_id` is
+unmasked" — it also keeps the default `header` and `respHeader` lists shown
+above. To unmask only `tenant_id` and drop the header defaults, list every
+category explicitly, e.g. `header: []`.
+
+**Effective scope is per-listener, not per-Gateway**: when two Gateways of
+different GatewayClasses share the same bind address/port, only the first
+Gateway's `EdgionGatewayConfig` — including this whitelist — is bound for that
+listener.
+
 ### spec.preflightPolicy
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | `String` | `cors-standard` | `cors-standard`: intercept OPTIONS requests with `Origin` + `ACRM`; `all-options`: intercept all OPTIONS requests |
-| `statusCode` | `Integer` | `204` | Preflight response status code when no CORS plugin is attached |
-
-### spec.enableReferenceGrantValidation
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `enableReferenceGrantValidation` | `Boolean` | `false` | Enforce ReferenceGrant validation for cross-namespace references |
+| `mode` | `String` | `cors-standard` | `cors-standard`: select OPTIONS requests with `Origin` + `ACRM`; `all-options`: select all OPTIONS requests for global handling. A route CORS filter still decides whether to respond locally. See [Preflight Policy](../gateway/preflight-policy.md). |
+| `statusCode` | `Integer` | `204` | Final preflight response status (200-599) when no CORS plugin is attached |
 
 ### spec.linkSys
 

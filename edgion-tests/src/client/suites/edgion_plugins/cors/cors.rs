@@ -151,6 +151,14 @@ impl CorsPluginTestSuite {
                             if let Err(e) = assert_header_absent(&resp, "access-control-max-age") {
                                 return TestResult::failed(start.elapsed(), e);
                             }
+                            // Allow-Methods / Allow-Headers are preflight-response-only
+                            // (WHATWG Fetch 3.2.2/3.2.3) and must be absent here.
+                            if let Err(e) = assert_header_absent(&resp, "access-control-allow-methods") {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
+                            if let Err(e) = assert_header_absent(&resp, "access-control-allow-headers") {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
                             // Expose-Headers should be present
                             if let Err(e) =
                                 assert_header_contains(&resp, "access-control-expose-headers", "X-Custom-Header")

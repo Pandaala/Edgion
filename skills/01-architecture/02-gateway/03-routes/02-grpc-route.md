@@ -111,7 +111,7 @@ Specifics:
 Edgion honors the client-supplied `grpc-timeout` header end-to-end:
 
 1. `pg_request_filter::build_request_metadata` parses the header (format `{number}{unit}` with units `H | M | S | m | u | n`) via `grpc_timeout::parse_grpc_timeout`. The resulting deadline is stored as `ctx.request_info.grpc_client_deadline = start_time.checked_add(parsed_value)`.
-2. `pg_upstream_peer::upstream_peer` short-circuits with `EdgionStatus::GrpcClientDeadlineExceeded` (504 → `grpc-status: 4`) when the deadline is already past at peer-selection time.
+2. `pg_upstream_peer::upstream_peer` short-circuits with `EdgionErrorCode::GrpcClientDeadlineExceeded` (raw control status 504 → downstream HTTP 200 + `grpc-status: 4`) when the deadline is already past at peer-selection time.
 3. `pg_upstream_peer::configure_peer_timeouts` folds `grpc_remaining()` into the upstream `read/write_timeout` via `min(backend_timeout, route_request_remaining, grpc_remaining)`. The existing zero-duration guard prevents `Duration::ZERO` from reaching Pingora.
 4. `pg_upstream_request_filter` rewrites the outgoing `grpc-timeout` header to the formatted remaining time so downstream gRPC servers see a consistent deadline.
 5. Retry-decision sites (`pg_fail_to_connect`, `pg_error_while_proxy`, `pg_upstream_response_filter` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, so a tight client deadline blocks LB picks and circuit-breaker counter increments the caller has already given up on.

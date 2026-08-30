@@ -39,7 +39,7 @@ When a review re-reports any of:
 1. "`check_stream_plugins` emits `tracing::warn!` per connection on
    unparseable client address / missing ESP"
 2. "the TCP deny reason should be a dynamic `format!` carrying `store_key` /
-   `client_addr` (parity with the TLS `ctx.err_log = Some(format!(...))`)"
+   `direct_peer_ip` (parity with the TLS `ctx.err_log = Some(format!(...))`)"
 3. "`StreamPluginConnectionFilter::should_accept`
    (`edgion-gateway/src/plugins/stream/connection_filter_bridge.rs`) collapses
    `StreamPluginResult::Deny(reason)` to `false` with no `tracing` / counter /
@@ -106,5 +106,5 @@ reporting that no such counter has landed yet.
   hot-path prohibition outranks the (otherwise access-log-available) signal.
 - Unit regressions in `edgion_tcp.rs`:
   `fail_close_when_store_key_missing_in_tcp` and
-  `fail_close_when_tcp_client_addr_unparseable` now assert the exact
+  `fail_close_when_tcp_direct_peer_ip_unparseable` now assert the exact
   `StreamPluginCheck::Deny(reason)` strings.

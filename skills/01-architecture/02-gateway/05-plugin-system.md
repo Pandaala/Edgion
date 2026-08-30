@@ -37,7 +37,7 @@ pub struct PluginRuntime {
 }
 ```
 
-**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. The legacy `from_httproute_filters()` / `from_grpcroute_filters()` are `#[deprecated]` and forward to the new entries with rule scope by default. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log.
+**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Use only these scope-specific entries. The deprecated forwarding methods still present in code are pre-release removal debt and must not be called or copied. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
 
 ## Conditional execution
 
@@ -51,29 +51,76 @@ Plugins defined in EdgionPlugins are automatically wrapped with a `Conditional*`
 | `ConditionalUpstreamResponse` | `UpstreamResponse` |
 
 Condition model (`PluginConditions`):
-- **skip** conditions: if any condition matches, skip plugin execution.
-- **run** conditions: all conditions must match to execute the plugin; otherwise skip.
+- `skip`: evaluate its `ConditionSet` first; a match skips plugin execution.
+- `run`: when `skip` did not match, execute only if its `ConditionSet` matches.
+- Each set has exactly one top-level `allOf` or `anyOf`. `allOf` contains
+  direct conditions. `anyOf` contains direct conditions or one-level
+  `{ name?, allOf: [...] }` groups. Deeper or reverse nesting, mixed top-level
+  keys, empty arrays, and blank group names are invalid.
 
 Condition kinds include:
 - `KeyExist` — whether a key exists (e.g., header, query param).
-- `KeyMatch` — exact / multi-value / regex match against a key value.
-- `Include` — whether the key value is in a given set (supports values list and regex).
-- `Exclude` — value not in the set (the inverse of Include).
+- `KeyMatch` — flattened `MatchCore`: exact `values` (no singular `value`) and/or `regex`. No wildcards. `caseSensitive` defaults to true and applies to `values` only. `negate: true` is the exclude spelling.
 - `TimeRange` — whether the current time falls within a given range.
 - `Probability` — probabilistic execution (e.g., 10% sampling).
 
-Condition evaluation has three paths:
-- `evaluate_detail` (async): used by async phases (RequestFilter, UpstreamResponse), takes `&mut PluginLog`.
-- `evaluate_detail_sync` (sync): used by sync phases that need to write `cond_skip` into the outer PluginLog (`ConditionalUpstreamResponseFilter`).
-- `evaluate_sync` / `Condition::evaluate_sync_silent`: **body phase only**, no log, zero allocation. Internally goes through `KeyMatchCondition::evaluate_sync_silent` / `IncludeCondition::evaluate_sync_silent` / `ExcludeCondition::evaluate_sync_silent`. **Do NOT call `evaluate_detail_sync` in the body phase**; doing so reintroduces per-chunk PluginLog allocation.
+Every variant carries `negate` (default false), applied after an ordinary request-value miss (missing is base false; missing + `negate: true` is true). A Controller-owned reference payload that is unresolved is a separate state and always remains a non-match; `negate` must never invert it. `keyMatch` with `key.type: path` normalizes exact `values` at load time (regex is never normalized).
+
+`keyMatch`, `jwtClaimMatch`, and `mtlsMatch` require at least one non-empty
+`values` or `regex` list. This invariant is enforced by the shared `Condition`
+validation path for every consumer; plugin-specific validators must not carry
+partial copies of it. A present `values` list must not be empty, even when a
+non-empty `regex` list is also present.
+
+`jwtClaimMatch.claim` is required and must be non-empty after trimming. This
+accessor invariant is also owned by shared `Condition` validation, before any
+runtime claim extraction or `negate` handling.
+
+`secretMatch` carries both a request-side `key: KeyGet` and a required
+`secretKey` selecting exactly one entry from `secretRef`. The Controller never
+ORs unrelated Secret data values. A missing, non-UTF-8, or blank selected value
+leaves `resolvedValues` absent and is reported through `ResolvedRefs=False`.
+
+Unresolved-reference policy is consumer-specific. Active entry/body `PluginConditions` seal the EdgionPlugins runtime fail-closed. `RequestRestriction` fails with the generic 500 response in `Deny` mode but treats an incomplete `Allow` group as unavailable and continues with sibling groups. `RequestAccessPolicy` likewise treats an incomplete allow candidate as unavailable. Dye remains non-blocking: an unresolved dye condition does not match. Missing or denied references retain the Controller status signal. `secretMatch` also reports an unusable selected data key; other present-but-unusable Secret consumers may rely on their resolver-specific status or warning plus Gateway enforcement. These paths do not add a per-request metric or tracing call.
+
+The Gateway converts schema-level `ConditionSet` / `PluginConditions` values
+into one shared immutable compiled representation when it builds the plugin
+runtime. Besides preserving the regexes compiled during preparse, this step builds a
+header-only HMAC verifier once and retains its credential map for the lifetime of the
+runtime snapshot. Entry wrappers, secondary body gates, dye rules, RequestRestriction,
+and RequestAccessPolicy must use this compiled representation; constructing an HMAC
+verifier from schema configuration during request evaluation is a hot-path bug.
+
+Compiled set evaluation exposes log-less and detailed synchronous paths plus a
+body-aware asynchronous path. They share the same ordered short-circuit
+semantics. The body phase and dye use the log-less path; request/response
+filters use the detailed path and may write `cond_skip` into the outer
+`PluginLog`.
+
+**Condition match-only logging threshold.** Count atomic `Condition` leaves once
+when the logical decision scope is compiled. A scope with zero or one atomic
+leaf MUST NOT emit match-only condition descriptors: the plugin outcome,
+`cond_skip`, or policy decision already carries the useful result, and repeating
+the sole match on every request is observability noise. Emit match-only atomic
+descriptors only when the scope contains more than one leaf and the matched
+path helps explain a genuinely composite decision. For `PluginConditions`, the
+scope is the combined `skip` plus `run` gate; for RequestRestriction it is the
+whole restriction expression; for RequestAccessPolicy it is one typed
+rule/candidate's supplemental condition expression. This threshold never
+suppresses `cond_skip`, final allow/deny/reject records, named-group
+attribution, unresolved/error diagnostics, or body-read failures. Compute the
+flag at runtime construction, never by recounting leaves per request.
+
+Body phase: call the compiled conditions' log-less evaluation path, never the
+detailed path that produces a skip descriptor.
 
 Gateway API standard filters (added through the private `add_from_httproute_filters_inner`; the public entries are the scope-explicit `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` mentioned above) are not wrapped with conditions and always execute.
 
-Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:include,method"`.
+Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 
 ### ⚠️ Critical constraint: regex must be compiled during preparse
 
-`KeyMatch`, `Include`, and `Exclude` support a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
+`KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
 
 **compile call chain** (one-time, triggered when resources are received via gRPC list/watch):
 
@@ -81,8 +128,9 @@ Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:include,method"`.
 resource.pre_parse()                        # event_dispatch.rs
   → EdgionPlugins::preparse()              # edgion_plugins/mod.rs
       → compile_conditions()               # iterate all entries, call PluginConditions::compile()
-          → Condition::compile()           # conditions/types.rs
-              → KeyMatchCondition::compile() / IncludeCondition::compile() / ExcludeCondition::compile()
+          → Condition::compile()           # conditions.rs
+              → KeyMatchCondition::compile()
+                  → MatchCore::compile(normalize_paths)
       → add_from_*()                       # plugin_runtime.rs (the cloned conditions are already compiled at this point)
 ```
 
@@ -98,8 +146,9 @@ resource.pre_parse()                        # event_dispatch.rs
 **Hard constraints to follow when designing new plugins, conditions, or wrappers**:
 
 1. **Do not add `&mut PluginLog` to `UpstreamResponseBodyFilter::run_upstream_response_body_filter`**. The trait signature is the contract; it promises no per-chunk logging in this phase. If diagnostics are truly needed someday, follow #4.
-2. **When implementing a new body-phase filter**, do not call `log.push*` or `log.set_*` inside the filter — there is no log; use `tracing::debug!` for dev logs.
-3. **When adding a new body-phase wrapper** (similar to `ConditionalUpstreamResponseBodyFilter`), do not create temporary logs via `PluginLog::new(...)`. Condition evaluation must go through `PluginConditions::evaluate_sync` or the `Condition::evaluate_sync_silent` chain — not `evaluate_detail_sync`.
+2. **When implementing a new body-phase filter**, do not call `log.push*`, `log.set_*`, or any
+   `tracing::` macro. Use bounded metrics or per-request aggregation emitted outside the per-chunk path.
+3. **When adding a new body-phase wrapper** (similar to `ConditionalUpstreamResponseBodyFilter`), do not create temporary logs via `PluginLog::new(...)`. Condition evaluation must go through `CompiledPluginConditions::evaluate`, never `evaluate_detail`.
 4. **For "body-phase summaries"** (e.g., how many times this request hit rate limiting): aggregate per-request, not push per-chunk. Add an aggregation slot in `EdgionHttpContext`, accumulate during the body phase, and emit once at the end of the request into `stage_logs`. **Never** write per-chunk execution traces into the access log.
 5. **ExtensionRef body path**: use `ExtensionRefFilter::resolve_runtime_silent`, **not** `prepare_execution` (the latter calls `start_edgion_plugins_log`).
 6. **Resource / configuration error diagnostics** ("referenced EdgionPlugins not found", "wrong kind", etc.) should be surfaced in Controller preparse / status conditions; **do not** rely on body-phase runtime logs as a backstop — body phase silently no-ops, and per-chunk error logs are themselves a DoS risk.
@@ -108,10 +157,17 @@ resource.pre_parse()                        # event_dispatch.rs
 
 - [ ] No `&mut PluginLog` added to the `UpstreamResponseBodyFilter` trait or its impls.
 - [ ] No heap allocations on the body-phase hot path (`PluginLog::new(...)`, `String::from(...)`, `format!(...)`, `Vec::new()`, etc.).
-- [ ] Condition evaluation uses the silent chain (grep for `evaluate_sync_silent` / `evaluate_sync` rather than `evaluate_detail_sync`).
+- [ ] Condition evaluation on the body path calls `CompiledPluginConditions::evaluate` (grep for `evaluate_detail` on the body path — must be absent).
 - [ ] No `ctx.pending_edgion_plugins_logs.push` or `session.start_edgion_plugins_log` calls on the body path.
 
-## HTTP plugin list (29 total)
+## HTTP plugin inventory
+
+The schema enum `EdgionPlugin` in
+`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` is the authoritative inventory.
+Do not rely on a hard-coded total: adding or removing an enum variant must be reflected in the
+gateway creation factory and stage support. The current inventory includes Gateway API filters and
+custom plugins such as FaultInjection, TraceContext, ExtProc, RequestAccessPolicy, Canary, and Wasm.
+The category tables below are a conceptual guide, not an exhaustive registry.
 
 ### Authentication (8)
 
@@ -157,7 +213,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | DynamicExternalUpstream | `dynamic_external_upstream` | Dynamic external upstream (specify external address at runtime) |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | Dynamic internal upstream (select K8s Service at runtime) |
 | DirectEndpoint | `direct_endpoint` | Specify a backend endpoint address directly |
-| RegionRoute | `region_route` | Multi-region traffic routing: references a ServiceRegionRoute EdgionConfigData (`serviceRegionRouteRef`) → clusterRef → ClusterRegionRoute EdgionConfigData. The Gateway queries EdgionConfigDataGatewayStore at runtime; uses ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). No baseInfo, no auto failover. |
+| RegionRoute | `region_route` | Multi-region traffic routing. All logic AND the base `regions` table live in the plugin config: ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). An optional `overrideRef` names a `RegionRouteOverride` EdgionConfigData, looked up in EdgionConfigDataGatewayStore per request; it is data-only and never carries logic — the type declares `enable`/`active`/`regions` but only `regions` is consumed (whole-replace); the envelope `spec.enable` is what takes an overlay out of service. Fail-to-base on disabled/missing/type-mismatched/invalid overlay. No auto failover. |
 
 ### Other (8)
 
@@ -199,7 +255,7 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 
 ```
 edgion-gateway/src/plugins/
-├── http/                          # HTTP plugin directory (28; with DebugAccessLogToHeader in gateway_api_filters/, total 29)
+├── http/                          # HTTP plugins; authoritative variants live in EdgionPlugin
 │   ├── basic_auth/                # one subdirectory per plugin
 │   ├── jwt_auth/
 │   ├── cors/
@@ -235,7 +291,7 @@ edgion-gateway/src/plugins/
         ├── response_header_modifier.rs
         ├── request_redirect.rs
         ├── url_rewrite.rs
-        ├── extension_ref.rs       # ExtensionRef (route/backend filter list referencing EdgionPlugins, Gateway API standard) — nested form removed; see docs/zh-CN/migrations/<version>-extension-ref.md
+        ├── extension_ref.rs       # ExtensionRef (route/backend filter list referencing EdgionPlugins, Gateway API standard) — nested form removed; see docs/en/migrations/<version>-extension-ref.md
         ├── cors_filter.rs
         └── debug_access_log.rs
 ```

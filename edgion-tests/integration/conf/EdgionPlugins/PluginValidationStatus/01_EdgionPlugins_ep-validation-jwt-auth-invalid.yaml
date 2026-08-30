@@ -1,5 +1,5 @@
 # Scenario: JwtAuth plugin with no credential source and no anonymous
-# Expect: Accepted=False/Invalid, message contains "secretRef"
+# Expect: Accepted=False/Invalid, message contains "issuerGroups"
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -11,4 +11,4 @@ spec:
       type: JwtAuth
       config:
         algorithm: HS256
-        # No secretRef, no secretRefs, no anonymous — validation must reject this
+        # No issuerGroups and no anonymous identity — validation must reject this

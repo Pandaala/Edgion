@@ -25,7 +25,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
+UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 # Ports chosen to avoid conflicts with the main integration stack (12101/12151)
 # and the Center no-auth test (58100/58110).
@@ -136,11 +139,16 @@ run_phase1() (
     fi
 
     # Minimal controller config — NO [local_auth], NO [auth] section.
+    # conf_sync is mTLS by default: certs land under the work dir (TMPDIR) at the
+    # work-dir relative paths the shared emitter writes into the config below.
+    conf_sync_distribute_certs "$TMPDIR"
+
     cat > "$TMPDIR/controller.yaml" <<EOF
 conf_center:
   type: file_system
   conf_dir: ${CONF_DIR}
 EOF
+    conf_sync_security_block server >> "$TMPDIR/controller.yaml"
 
     local CTRL_PID=""
     cleanup_phase1() {
@@ -246,11 +254,16 @@ run_phase2() (
 
     # Minimal controller config — still NO [local_auth] section.
     # Credentials come entirely from the env vars set below.
+    # conf_sync is mTLS by default: certs land under the work dir (TMPDIR) at the
+    # work-dir relative paths the shared emitter writes into the config below.
+    conf_sync_distribute_certs "$TMPDIR"
+
     cat > "$TMPDIR/controller.yaml" <<EOF
 conf_center:
   type: file_system
   conf_dir: ${CONF_DIR}
 EOF
+    conf_sync_security_block server >> "$TMPDIR/controller.yaml"
 
     local CTRL_PID=""
     cleanup_phase2() {

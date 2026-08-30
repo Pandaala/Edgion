@@ -29,11 +29,75 @@ pub fn evaluate_template(compiled: &CompiledTemplate, session: &dyn PluginSessio
     result
 }
 
+/// Why bounded template evaluation could not produce a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateEvaluationError {
+    /// A referenced request value was not present.
+    MissingVariable,
+    /// The rendered UTF-8 value would exceed the caller's byte budget.
+    TooLarge,
+}
+
+/// Evaluate a template without ever growing the output past `max_bytes`.
+///
+/// Unlike the legacy convenience evaluator, this API treats a missing source
+/// as an error. Consumers that mutate request bodies need that distinction so
+/// an absent value cannot silently become an empty JSON string.
+pub fn evaluate_template_bounded(
+    compiled: &CompiledTemplate,
+    session: &dyn PluginSession,
+    max_bytes: usize,
+) -> Result<String, TemplateEvaluationError> {
+    let mut result = String::with_capacity(compiled.hint_len().min(max_bytes));
+    for segment in compiled.segments() {
+        let value = match segment {
+            TemplateSegment::Literal(lit) => std::borrow::Cow::Borrowed(lit.as_str()),
+            TemplateSegment::Variable { var_type, var_name } => {
+                std::borrow::Cow::Owned(resolve_var_present(var_type, var_name.as_deref(), session)?)
+            }
+        };
+        if result
+            .len()
+            .checked_add(value.len())
+            .is_none_or(|new_len| new_len > max_bytes)
+        {
+            return Err(TemplateEvaluationError::TooLarge);
+        }
+        result.push_str(&value);
+    }
+    Ok(result)
+}
+
+fn resolve_var_present(
+    var_type: &TemplateVarType,
+    var_name: Option<&str>,
+    session: &dyn PluginSession,
+) -> Result<String, TemplateEvaluationError> {
+    let value = match var_type {
+        TemplateVarType::Header => var_name.and_then(|n| session.header_value(n)),
+        TemplateVarType::Query => var_name.and_then(|n| session.get_query_param(n)),
+        TemplateVarType::Cookie => var_name.and_then(|n| session.get_cookie(n)),
+        TemplateVarType::Ctx => var_name.and_then(|n| session.get_ctx_var(n)),
+        TemplateVarType::Path => Some(session.get_path().to_string()),
+        TemplateVarType::Uri => Some(session.get_uri()),
+        TemplateVarType::RequestPath => Some(session.get_request_path().to_string()),
+        TemplateVarType::RequestUri => Some(session.get_request_uri()),
+        TemplateVarType::Method => Some(session.get_method().to_string()),
+        TemplateVarType::RemoteIp => Some(session.remote_ip().to_string()),
+        TemplateVarType::MatchedHttpRoute => var_name
+            .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Http, n)),
+        TemplateVarType::MatchedGrpcRoute => var_name
+            .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Grpc, n)),
+        TemplateVarType::SecretRef => None,
+    };
+    value.ok_or(TemplateEvaluationError::MissingVariable)
+}
+
 /// Resolve a single variable by type and optional name.
 ///
 /// Returns the resolved value, or an empty string when the named source is
 /// absent from the session.
-pub fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> String {
+pub(crate) fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> String {
     match var_type {
         TemplateVarType::Header => var_name.and_then(|n| session.header_value(n)).unwrap_or_default(),
         TemplateVarType::Query => var_name.and_then(|n| session.get_query_param(n)).unwrap_or_default(),
@@ -44,7 +108,7 @@ pub fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: 
         TemplateVarType::RequestPath => session.get_request_path().to_string(),
         TemplateVarType::RequestUri => session.get_request_uri(),
         TemplateVarType::Method => session.get_method().to_string(),
-        TemplateVarType::ClientIp => session.remote_addr().to_string(),
+        TemplateVarType::RemoteIp => session.remote_ip().to_string(),
         TemplateVarType::MatchedHttpRoute => var_name
             .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Http, n))
             .unwrap_or_default(),
@@ -170,5 +234,37 @@ mod tests {
             .withf(|n| n == "X-Inject")
             .return_const(Some("${header:Authorization}".to_string()));
         assert_eq!(evaluate_template(&compiled, &session), "${header:Authorization}");
+    }
+
+    #[test]
+    fn bounded_template_rejects_missing_variable() {
+        let compiled = compile("${header:X-Absent}");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|n| n == "X-Absent")
+            .return_const(None);
+        assert_eq!(
+            evaluate_template_bounded(&compiled, &session, 64),
+            Err(TemplateEvaluationError::MissingVariable)
+        );
+    }
+
+    #[test]
+    fn bounded_template_checks_before_append() {
+        let compiled = compile("prefix-${header:X-Value}");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|n| n == "X-Value")
+            .return_const(Some("value".to_string()));
+        assert_eq!(
+            evaluate_template_bounded(&compiled, &session, 11),
+            Err(TemplateEvaluationError::TooLarge)
+        );
+        assert_eq!(
+            evaluate_template_bounded(&compiled, &session, 12).unwrap(),
+            "prefix-value"
+        );
     }
 }

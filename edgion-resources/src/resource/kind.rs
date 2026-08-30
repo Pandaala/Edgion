@@ -23,6 +23,8 @@ pub enum ResourceKind {
     BackendTLSPolicy = 18,
     EdgionAcme = 20,
     ConfigMap = 21,
+    EdgionBackendTrafficPolicy = 22,
+    EdgionBackend = 23,
 }
 
 impl ResourceKind {
@@ -55,6 +57,8 @@ impl ResourceKind {
             ResourceKind::BackendTLSPolicy => "BackendTLSPolicy",
             ResourceKind::EdgionAcme => "EdgionAcme",
             ResourceKind::ConfigMap => "ConfigMap",
+            ResourceKind::EdgionBackendTrafficPolicy => "EdgionBackendTrafficPolicy",
+            ResourceKind::EdgionBackend => "EdgionBackend",
         }
     }
 
@@ -95,14 +99,33 @@ impl ResourceKind {
                 ResourceKind::ReferenceGrant => {}
                 ResourceKind::BackendTLSPolicy => {}
                 ResourceKind::EdgionAcme => {}
-                ResourceKind::ConfigMap => {} // NOTE: When adding a new ResourceKind variant:
-                                              // 1. Add it to this match
-                                              // 2. Add corresponding entry in src/resource/defs.rs
-                                              // The compiler will ensure both are in sync.
+                ResourceKind::ConfigMap => {}
+                ResourceKind::EdgionBackendTrafficPolicy => {}
+                ResourceKind::EdgionBackend => {} // NOTE: When adding a new ResourceKind variant:
+                                                  // 1. Add it to this match
+                                                  // 2. Add corresponding entry in src/resource/defs.rs
+                                                  // The compiler will ensure both are in sync.
             }
         }
         // Trigger the check
         check(ResourceKind::Unspecified);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResourceKind;
+
+    #[test]
+    fn edgion_backend_exclusively_owns_wire_value_23() {
+        assert_eq!(ResourceKind::EdgionBackend as i32, 23);
+        assert_eq!(ResourceKind::try_from(23).ok(), Some(ResourceKind::EdgionBackend));
+        assert_eq!(ResourceKind::EdgionBackend.as_str(), "EdgionBackend");
+        assert_eq!(
+            ResourceKind::from_kind_name("EdgionBackend"),
+            Some(ResourceKind::EdgionBackend)
+        );
+        assert_eq!(ResourceKind::from_kind_name("UnknownResource"), None);
     }
 }
 
@@ -156,6 +179,8 @@ impl ResourceKind {
             "backendtlspolicy" | "backendtlspolicies" => Some(ResourceKind::BackendTLSPolicy),
             "edgionacme" => Some(ResourceKind::EdgionAcme),
             "configmap" => Some(ResourceKind::ConfigMap),
+            "edgionbackendtrafficpolicy" => Some(ResourceKind::EdgionBackendTrafficPolicy),
+            "edgionbackend" => Some(ResourceKind::EdgionBackend),
             _ => None,
         }
     }

@@ -1,13 +1,11 @@
-# EWMA LB + retry-on-503 — regression for FinalizeMode::Discard not updating EWMA.
-# After a retry storm, the gateway must still route healthy traffic across both endpoints.
+# EWMA LB + retry-on-503 integration coverage.
+# Exact Discard state mutation belongs to the LB unit tests; this route verifies
+# the observable retry-attempt chain through the request access log.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: lb-ewma-rs-gateway
   namespace: edgion-test
-  annotations:
-    edgion.io/metrics-test-key: "lb-ewma-rs"
-    edgion.io/metrics-test-type: "lb"
 spec:
   gatewayClassName: public-gateway
   listeners:

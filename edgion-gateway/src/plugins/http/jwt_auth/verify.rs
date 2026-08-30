@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::credentials::{build_decoding_key, JwtIssuerGroupStore};
+use super::credentials::JwtIssuerGroupStore;
 use super::to_jwt_algorithm;
 use crate::plugins::runtime::PluginLog;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{JwtAuthConfig, ResolvedJwtIssuerGroup};
@@ -70,8 +70,8 @@ pub(super) fn verify_jwt(
     };
 
     // 4. Route to group (exact iss match; no normalization).
-    let group = match store.lookup_by_iss(iss) {
-        Some(g) => Arc::clone(g),
+    let cached_group = match store.lookup_by_iss(iss) {
+        Some(g) => g,
         None => {
             plugin_log.push("Deny unknown iss"); // NO iss value in log
             return Err(VerifyDeny::UnknownIss);
@@ -82,6 +82,7 @@ pub(super) fn verify_jwt(
     //    Without this, an attacker could submit alg=HS256 token claiming an
     //    RS-issuer's iss and force HMAC verification with the public key
     //    used as the symmetric secret (classic JWT alg-confusion attack).
+    let group = &cached_group.resolved;
     if header.alg != to_jwt_algorithm(group.algorithm) {
         plugin_log.push("Deny bad algorithm"); // NO group/iss/alg value
         return Err(VerifyDeny::BadAlgorithm);
@@ -89,8 +90,12 @@ pub(super) fn verify_jwt(
 
     // 6. Resolve kid within THIS group only (key_claim_name is plugin-level).
     let kid = peek.get(&config.key_claim_name).and_then(|v| v.as_str());
-    let cred = match kid.and_then(|k| group.credentials.get(k)) {
-        Some(c) => c,
+    let decoding_key = match kid.and_then(|k| cached_group.lookup_decoding_key(k)) {
+        Some(Ok(key)) => key,
+        Some(Err(_reason)) => {
+            plugin_log.push("Deny invalid credentials");
+            return Err(VerifyDeny::InvalidCredentials);
+        }
         None => {
             plugin_log.push("Deny missing key"); // NO group/iss/kid value
             return Err(VerifyDeny::MissingKey);
@@ -111,15 +116,7 @@ pub(super) fn verify_jwt(
     }
     validation.leeway = config.lifetime_grace_period;
 
-    let decoding_key = match build_decoding_key(group.algorithm, cred, config) {
-        Ok(k) => k,
-        Err(_reason) => {
-            plugin_log.push("Deny invalid credentials");
-            return Err(VerifyDeny::InvalidCredentials);
-        }
-    };
-
-    let decoded = match decode::<Value>(token, &decoding_key, &validation) {
+    let decoded = match decode::<Value>(token, decoding_key, &validation) {
         Ok(d) => d,
         Err(e) => {
             plugin_log.push(classify_jwt_decode_error(&e));
@@ -142,7 +139,7 @@ pub(super) fn verify_jwt(
     }
 
     Ok(VerifyOk {
-        group,
+        group: Arc::clone(group),
         iss: iss.to_string(),
         claims: decoded.claims,
     })
@@ -215,7 +212,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
-        let store = JwtIssuerGroupStore::new(by_iss);
+        let store = JwtIssuerGroupStore::new(by_iss, false);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -231,7 +228,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
-        let store = JwtIssuerGroupStore::new(by_iss);
+        let store = JwtIssuerGroupStore::new(by_iss, false);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -247,7 +244,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a); // no slash
-        let store = JwtIssuerGroupStore::new(by_iss);
+        let store = JwtIssuerGroupStore::new(by_iss, false);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -268,7 +265,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
-        let store = JwtIssuerGroupStore::new(by_iss);
+        let store = JwtIssuerGroupStore::new(by_iss, false);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -289,7 +286,7 @@ mod tests {
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
         by_iss.insert("https://b.example".to_string(), group_b);
-        let store = JwtIssuerGroupStore::new(by_iss);
+        let store = JwtIssuerGroupStore::new(by_iss, false);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 

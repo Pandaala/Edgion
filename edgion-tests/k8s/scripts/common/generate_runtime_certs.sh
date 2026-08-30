@@ -109,7 +109,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -out "${TMP_DIR}/edge-tls.crt" \
   -days 365 \
   -subj "/CN=test.example.com" \
-  -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:gateway-tls.test.com,DNS:default.example.com,DNS:both-absent-tls.example.com" \
+  -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:gateway-tls.test.com,DNS:default.example.com,DNS:both-absent-tls.example.com,DNS:*.example.com" \
   >/dev/null 2>&1
 
 openssl ecparam -name prime256v1 -genkey -noout -out "${TMP_DIR}/edge-tls-ecdsa.key" 2>/dev/null

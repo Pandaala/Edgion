@@ -24,9 +24,3 @@ spec:
       backendRefs:
         - name: lb-ch-service
           port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyConsistentHash
-                name: header.x-user-id

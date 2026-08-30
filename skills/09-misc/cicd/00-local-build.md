@@ -13,8 +13,12 @@ Use this skill to answer:
 
 ## Facts to check first
 
-- The default features are `allocator-jemalloc` + `boringssl`
-- proto compilation comes from the repository root `build.rs`, so a working `protoc` is required locally
+- Gateway default features are `allocator-jemalloc` + `boringssl`; the Gateway
+  always builds against the Edgion Pingora fork
+- The Edgion Pingora dependencies follow the `edgion_v3` branch, while the
+  committed `Cargo.lock` pins the exact commit. Use `--locked` when reproducing
+  CI or release builds.
+- proto generation is owned by member build scripts (notably `edgion-common/build.rs`), so a working `protoc` is required locally
 - The Docker build environment explicitly installs the following dependencies; treat it as a trustworthy reference for local dependencies:
   - `cmake`
   - `protobuf-compiler`
@@ -52,6 +56,12 @@ cargo build --release -p edgion-tests --bin test_server --bin test_client
 > differently and lands in `target/<triple>/production/`. To reproduce the
 > shipped artifact, follow
 > [02-github-workflow.md → Reproduce the release binary builds](02-github-workflow.md#reproduce-the-release-binary-builds).
+>
+> Normal local development may omit `--locked`; Cargo can then refresh the
+> lockfile when dependency changes are intentional. CI/release reproduction
+> must add `--locked` and must not rewrite `Cargo.lock`. After advancing the
+> Pingora fork, review that only its source-family entries changed and run
+> `python3 cicd/checks/check_pingora_source_policy.py`.
 
 ## Feature combinations
 
@@ -61,15 +71,15 @@ Common combinations:
 # Default: jemalloc + boringssl
 cargo build
 
-# rustls experimental build
-cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
-
 # mimalloc + boringssl
-cargo build --release --no-default-features --features "allocator-mimalloc,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl"
 
 # system allocator + boringssl
-cargo build --release --no-default-features --features "allocator-system,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
 ```
+
+The Gateway's rustls backend feature is an unsupported future-development seam
+and is not a local-build target. See `tasks/todo/rustls-gateway-tls-support.md`.
 
 For more detailed feature semantics:
 
@@ -115,7 +125,7 @@ sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 | BoringSSL build failure | Whether `cmake` is installed; whether `boringssl` is enabled in the current features |
 | OpenSSL / `pkg-config` / `ssl` link failure | Whether `pkg-config`, `libssl-dev`, or the platform-equivalent OpenSSL development package is installed |
 | ARM64 cross-compilation failure | Whether the `aarch64` cross compiler is installed and the target is set up correctly |
-| Build succeeds but the Gateway TLS path is unavailable | Whether you mistakenly used the `rustls` combination; the Gateway TLS runtime currently still depends mainly on `boringssl` / `openssl` |
+| Build succeeds but a custom Gateway TLS callback/path is unavailable | Check that the supported `boringssl` backend is enabled; the dormant rustls feature has no Gateway runtime contract |
 
 ## When you need a clean, reproducible build environment
 

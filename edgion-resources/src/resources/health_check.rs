@@ -3,7 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Health check configuration parsed from `edgion.io/health-check` annotation.
+/// Health check configuration, configured via the `EdgionBackendTrafficPolicy`
+/// resource's `spec.healthCheck` section.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceHealthCheck {
@@ -33,15 +34,18 @@ pub struct ActiveHealthCheckConfig {
     pub path: Option<String>,
 
     /// Optional health check port override.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<u16>,
 
-    /// Interval between probes (e.g. "10s", "1m").
+    /// Interval between probes (GEP-2257 duration, e.g. "10s", "1m").
     #[serde(default = "default_interval")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
-    /// Probe timeout (e.g. "3s", "500ms").
+    /// Probe timeout (GEP-2257 duration, e.g. "3s", "500ms").
     #[serde(default = "default_timeout")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub timeout: String,
 
     /// Consecutive successes before marking healthy.
@@ -57,13 +61,13 @@ pub struct ActiveHealthCheckConfig {
     pub expected_statuses: Vec<u16>,
 
     /// Optional Host header override for HTTP checks.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
 
     /// gRPC Health Check service name.
     /// Empty string (default) checks the overall server health.
     /// Only used when type is "grpc".
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grpc_service_name: Option<String>,
 }
 

@@ -78,14 +78,17 @@ spec:
                           type: string
                           description: "Timeout for reading request from client (e.g., '60s', '1m')"
                           default: "60s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         writeTimeout:
                           type: string
                           description: "Timeout for writing response to client"
                           default: "60s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         keepaliveTimeout:
                           type: string
                           description: "HTTP keepalive timeout"
                           default: "75s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     backend:
                       type: object
                       description: "Backend-side timeout settings"
@@ -94,14 +97,17 @@ spec:
                           type: string
                           description: "Timeout for connecting to upstream backend"
                           default: "5s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         defaultRequestTimeout:
                           type: string
                           description: "Total request timeout including retries"
                           default: "60s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         defaultIdleTimeout:
                           type: string
                           description: "Idle timeout for backend connection pool"
                           default: "300s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
 
                 # ============================================
                 # Max Retries
@@ -153,6 +159,20 @@ spec:
                       format: int32
 
                 # ============================================
+                # Upstream Forwarded Header Configuration
+                # ============================================
+                forwardedHeaders:
+                  type: object
+                  description: "Gateway-owned headers sent to upstream requests"
+                  properties:
+                    remoteIpHeader:
+                      type: string
+                      description: "Header receiving the final resolved RemoteIp on upstream requests"
+                      pattern: "^[A-Za-z0-9!#$%&'*+\\-.^_`|~]+$"
+                      maxLength: 256
+                      default: "X-Real-IP"
+
+                # ============================================
                 # Security Protection Configuration
                 # ============================================
                 securityProtect:
@@ -184,6 +204,34 @@ spec:
                       description: "Reject HTTP/1.1 requests with more than one Host header (default true)"
                       default: true
 
+                requestBody:
+                  type: object
+                  description: "GatewayClass-wide request-body buffering policy."
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                      description: "Runtime capture switch. A body-capable binary still refuses capture when false."
+                    defaultMemoryBufferSize:
+                      type: string
+                      default: "128KiB"
+                      description: "Default request-body bytes retained in memory before spilling to disk."
+                    maxMemoryBufferSize:
+                      type: string
+                      description: "Optional business override for the in-memory spill threshold."
+                    defaultMaxBodySize:
+                      type: string
+                      default: "32MiB"
+                      description: "Default complete request-body cap."
+                    maxBodySize:
+                      type: string
+                      description: "Optional business override for the complete request-body cap."
+                    storageOperationTimeout:
+                      type: string
+                      default: "5s"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                      description: "Non-zero wall-clock deadline shared by admission and execution of one request-body storage file operation."
+
                 # ============================================
                 # Global Plugins Reference
                 # ============================================
@@ -204,6 +252,42 @@ spec:
                         description: "Namespace of the EdgionPlugins resource (defaults to 'default')"
 
                 # ============================================
+                # Access Log Extension Policy (masking whitelist)
+                # ============================================
+                accessLogExtern:
+                  type: object
+                  description: "Access log extension policy: which keys bypass masking"
+                  properties:
+                    unmaskedKeys:
+                      type: object
+                      description: >-
+                        Per-source lists of keys logged in clear. Everything else is
+                        masked per the gateway's access_log_sensitive.mode. Header
+                        names match case-insensitively; query/cookie/ctx names are
+                        case-sensitive.
+                      properties:
+                        header:
+                          type: array
+                          items:
+                            type: string
+                        respHeader:
+                          type: array
+                          items:
+                            type: string
+                        query:
+                          type: array
+                          items:
+                            type: string
+                        cookie:
+                          type: array
+                          items:
+                            type: string
+                        ctx:
+                          type: array
+                          items:
+                            type: string
+
+                # ============================================
                 # Preflight Policy Configuration
                 # ============================================
                 preflightPolicy:
@@ -220,16 +304,8 @@ spec:
                       description: "Status code to return when no CORS plugin is configured (default: 204)"
                       format: int32
                       default: 204
-                      minimum: 100
+                      minimum: 200
                       maximum: 599
-
-                # ============================================
-                # ReferenceGrant Validation
-                # ============================================
-                enableReferenceGrantValidation:
-                  type: boolean
-                  description: "Enable ReferenceGrant validation for cross-namespace references (default: true)"
-                  default: true
 
                 tcpTimeout:
                   type: object
@@ -239,12 +315,12 @@ spec:
                       type: string
                       description: "Idle timeout for the established L4 relay (default 1h; '0'/'0s' disables)"
                       default: "1h"
-                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     connectTimeout:
                       type: string
                       description: "Upper bound for establishing the upstream TCP connection (default 10s; '0'/'0s' disables)"
                       default: "10s"
-                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                 loadBalancing:
                   type: object
                   description: "Gateway-wide load-balancing configuration"
@@ -265,6 +341,106 @@ spec:
                       description: "Global hard cap for webhook response body size in bytes (default 16384)"
                       format: int64
                       default: 16384
+                outboundTls:
+                  type: object
+                  description: "Cluster-wide default for plugin / LinkSys outbound TLS"
+                  properties:
+                    verify:
+                      type: boolean
+                      description: "Global default for outbound TLS peer verification; defaults to true"
+                    validation:
+                      type: object
+                      description: "CA trust configuration for outbound TLS connections"
+                      properties:
+                        caCertificateRefs:
+                          type: array
+                          description: "References to CA certificate resources (Secret or ConfigMap)"
+                          items:
+                            type: object
+                            properties:
+                              group:
+                                type: string
+                                description: "Group of the referent; defaults to empty string (core)"
+                              kind:
+                                type: string
+                                description: "Kind of the referent; e.g. Secret or ConfigMap"
+                              name:
+                                type: string
+                                description: "Name of the referent"
+                              namespace:
+                                type: string
+                                description: "Namespace of the referent. Required for cluster-scoped EGC; refs without namespace are skipped"
+                            required: [kind, name]
+                        wellKnownCACertificates:
+                          type: string
+                          description: "Use well-known system CA certificates (e.g. Mozilla roots)"
+                          enum: [System]
+                        hostname:
+                          type: string
+                          description: "Optional SNI override and default SAN check hostname"
+                          maxLength: 253
+                          pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                        subjectAltNames:
+                          type: array
+                          description: "Subject alternative names to verify in the server certificate"
+                          items:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                                description: "SAN type"
+                                enum: [Hostname, URI]
+                              hostname:
+                                type: string
+                                description: "Hostname SAN value (used when type is Hostname)"
+                                maxLength: 253
+                                pattern: '^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                              uri:
+                                type: string
+                                description: "URI SAN value (used when type is URI)"
+                            required: [type]
+                    clientCertificateRef:
+                      type: object
+                      description: "Reference to a kubernetes.io/tls Secret for mTLS client identity"
+                      properties:
+                        group:
+                          type: string
+                          description: "Group of the referent; defaults to empty string (core)"
+                        kind:
+                          type: string
+                          description: "Kind of the referent; defaults to Secret"
+                        name:
+                          type: string
+                          description: "Name of the referent"
+                        namespace:
+                          type: string
+                          description: "Namespace of the referent"
+                      required: [name]
+                dnsResolver:
+                  type: object
+                  description: "Data-plane default DNS resolver for ServiceExternalName backends"
+                  properties:
+                    linkSysRef:
+                      type: object
+                      description: "Reference to an httpdns LinkSys resource (namespace required; cluster-scoped EGC)"
+                      properties:
+                        namespace:
+                          type: string
+                          description: "Namespace of the httpdns LinkSys resource"
+                        name:
+                          type: string
+                          description: "Name of the httpdns LinkSys resource"
+                      required: [namespace, name]
+                    servers:
+                      type: array
+                      description: "Inline standard-DNS server list (ip[:port]); mutually exclusive with linkSysRef"
+                      items:
+                        type: string
+                    cacheTtl:
+                      type: string
+                      description: "Data-plane resolution cache TTL (default 5s)"
+                      default: "5s"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
 
             status:
               type: object

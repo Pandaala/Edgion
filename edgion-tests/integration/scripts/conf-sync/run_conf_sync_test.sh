@@ -226,7 +226,7 @@ verify_no_secret_leak() {
         local resp
         resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{}')
         # No PEM private key and no raw kubernetes.io/tls Secret data keys may appear.
-        if echo "$resp" | grep -Eq 'BEGIN (RSA |EC |)PRIVATE KEY|"tls\.key"|"tls\.crt"'; then
+        if echo "$resp" | grep -Eq 'BEGIN (RSA |EC )?PRIVATE KEY|"tls\.key"|"tls\.crt"'; then
             all_ok=false
             log_error "  configclient/${kind}: plaintext secret material leaked in response"
         fi

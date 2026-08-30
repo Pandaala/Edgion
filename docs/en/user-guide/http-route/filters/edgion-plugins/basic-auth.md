@@ -356,7 +356,7 @@ filters:
     config:
       rate: 10           # 10 per second
       burst: 20
-      key: "$remote_addr"
+      key: "$remote_ip"
 
   # Then do Basic Auth
   - type: BasicAuth

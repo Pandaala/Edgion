@@ -98,6 +98,11 @@ struct AcmeParseScenario {
 }
 
 async fn run_acme_parse_scenario(scenario: AcmeParseScenario) {
+    // `parse` reaches `notify_resource_changed` -> `get_sender()`, which reads the
+    // process-global `ACME_SERVICE`. Serialize against the ACME service tests that
+    // install a handle into that global (see `ACME_TEST_MUTEX`).
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+
     let secrets: HashMap<String, Secret> = scenario.secrets.into_iter().collect();
     let (ctx, _runtime) = make_ctx(secrets);
     let handler = EdgionAcmeHandler::new();
@@ -369,6 +374,10 @@ async fn test_acme_dns_resolve_scenarios() {
 
 #[tokio::test]
 async fn test_on_delete_clears_refs() {
+    // `parse` below reaches `notify_resource_changed` -> `get_sender()`; serialize
+    // against the ACME service tests that install a handle (see `ACME_TEST_MUTEX`).
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+
     let (key, secret) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
     let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
     let handler = EdgionAcmeHandler::new();
@@ -391,6 +400,45 @@ async fn test_on_delete_clears_refs() {
 
     let refs = ctx.secret_ref_manager().get_refs("default/acme-account");
     assert!(!refs.contains(&owner), "reference should be cleared after on_delete");
+}
+
+#[tokio::test]
+async fn test_validate_rejects_invalid_gep2257_durations() {
+    let handler = EdgionAcmeHandler::new();
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut acme = make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "cf-token", None);
+    assert!(
+        handler.validate(&acme, &ctx).is_empty(),
+        "baseline dns01 resource must validate cleanly"
+    );
+
+    // Bare integers (the pre-GEP-2257 form) must be rejected on every duration field.
+    acme.spec.renewal.renew_before = "30".to_string();
+    acme.spec.renewal.check_interval = "86400".to_string();
+    acme.spec.renewal.fail_backoff = "bogus".to_string();
+    if let AcmeChallenge::Dns01 {
+        propagation_timeout,
+        propagation_check_interval,
+        ..
+    } = &mut acme.spec.challenge
+    {
+        *propagation_timeout = "120".to_string();
+        *propagation_check_interval = "5".to_string();
+    }
+    let errors = handler.validate(&acme, &ctx);
+    for field in [
+        "renewal.renewBefore",
+        "renewal.checkInterval",
+        "renewal.failBackoff",
+        "challenge.propagationTimeout",
+        "challenge.propagationCheckInterval",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.contains(field)),
+            "expected a validation error for {field}, got: {errors:?}"
+        );
+    }
 }
 
 fn make_acme_dns01(
@@ -427,8 +475,8 @@ fn make_acme_dns01(
                     name: dns_secret_name.to_string(),
                     namespace: dns_secret_ns.map(|s| s.to_string()),
                 },
-                propagation_timeout: 120,
-                propagation_check_interval: 5,
+                propagation_timeout: "120s".to_string(),
+                propagation_check_interval: "5s".to_string(),
             },
             renewal: Default::default(),
             external_account_binding: None,

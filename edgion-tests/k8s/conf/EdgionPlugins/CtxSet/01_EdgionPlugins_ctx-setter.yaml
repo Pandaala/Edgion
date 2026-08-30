@@ -6,6 +6,22 @@ metadata:
   name: ctx-setter-test
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: tenant_id
+      from: ctx
+      name: tenant_id
+    - key: rate_key
+      from: ctx
+      name: rate_key
+    - key: method_lower
+      from: ctx
+      name: method_lower
+    - key: tier
+      from: ctx
+      name: tier
+    - key: api_version
+      from: ctx
+      name: api_version
   requestPlugins:
     # CtxSet 
     - enable: true
@@ -21,7 +37,7 @@ spec:
 
           # 2. 
           - name: rate_key
-            template: "${header:X-Tenant-Id}_${clientIp}"
+            template: "${header:X-Tenant-Id}_${remoteIp}"
 
           # 3. 
           - name: method_lower
@@ -46,5 +62,4 @@ spec:
           - name: api_version
             from:
               type: path
-
 

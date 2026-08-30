@@ -8,6 +8,32 @@ use edgion_resources::resource::meta::extract_resource_metadata;
 
 /// Apply command - creates or updates resources from YAML files
 pub async fn apply(client: &EdgionClient, file_path: &str, dry_run: bool) -> Result<()> {
+    apply_path(client, file_path, dry_run).await
+}
+
+/// Apply multiple input paths in order while reusing the same client.
+pub async fn apply_many(client: &EdgionClient, file_paths: &[String], dry_run: bool) -> Result<()> {
+    let mut failures = Vec::new();
+
+    for file_path in file_paths {
+        if let Err(error) = apply_path(client, file_path, dry_run).await {
+            failures.push(format!("{}: {error:#}", file_path));
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Failed to apply {} of {} input path(s):\n{}",
+            failures.len(),
+            file_paths.len(),
+            failures.join("\n")
+        )
+    }
+}
+
+async fn apply_path(client: &EdgionClient, file_path: &str, dry_run: bool) -> Result<()> {
     let path = Path::new(file_path);
 
     if !path.exists() {
@@ -206,7 +232,20 @@ mod tests {
             .expect("apply with --file should parse");
         match cli.command {
             Commands::Apply { file, dry_run } => {
-                assert_eq!(file, "config.yaml");
+                assert_eq!(file, vec!["config.yaml"]);
+                assert!(!dry_run);
+            }
+            other => panic!("expected Apply, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_parses_repeated_apply_file_flags_in_order() {
+        let cli = Cli::try_parse_from(["edgion-cli", "apply", "--file", "base.yaml", "--file", "route.yaml"])
+            .expect("apply with repeated --file should parse");
+        match cli.command {
+            Commands::Apply { file, dry_run } => {
+                assert_eq!(file, vec!["base.yaml", "route.yaml"]);
                 assert!(!dry_run);
             }
             other => panic!("expected Apply, got {:?}", other),

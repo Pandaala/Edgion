@@ -2,7 +2,8 @@
 //!
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
-use super::common::{Condition, ParentReference};
+use super::common::PolicyAncestorStatus;
+use super::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass};
 use super::gateway::SecretObjectReference;
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
@@ -10,11 +11,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// API group for BackendTLSPolicy
-pub const BACKEND_TLS_POLICY_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for BackendTLSPolicy
-pub const BACKEND_TLS_POLICY_KIND: &str = "BackendTLSPolicy";
 /// Implementation-specific option key for upstream mTLS client certificate Secret reference.
 ///
 /// Value format:
@@ -37,6 +33,11 @@ pub const OPTION_CLIENT_CERTIFICATE_REF: &str = "edgion.io/client-certificate-re
 pub struct BackendTLSPolicySpec {
     /// TargetRefs identifies the API object(s) to apply the policy to.
     pub target_refs: Vec<BackendTLSPolicyTargetRef>,
+
+    /// Controller-resolved target capability used to gate runtime publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
 
     /// Validation contains backend TLS validation configuration.
     pub validation: BackendTLSPolicyValidation,
@@ -86,6 +87,11 @@ pub struct BackendTLSPolicySpec {
 pub struct BackendTLSPolicyAlpha3Spec {
     /// TargetRefs identifies the API object(s) to apply the policy to.
     pub target_refs: Vec<BackendTLSPolicyTargetRef>,
+
+    /// Controller-resolved target capability used to gate runtime publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
 
     /// Validation contains backend TLS validation configuration.
     pub validation: BackendTLSPolicyValidation,
@@ -138,6 +144,29 @@ pub struct BackendTLSPolicyTargetRef {
     pub section_name: Option<String>,
 }
 
+impl BackendTLSPolicyTargetRef {
+    /// Parse the accepted direct policy target group/kind pair.
+    pub fn target_kind(&self) -> Result<PolicyTargetKind, String> {
+        match (self.group.as_str(), self.kind.as_str()) {
+            ("" | "core", "Service") => Ok(PolicyTargetKind::Service),
+            ("edgion.io", "EdgionBackend") => Ok(PolicyTargetKind::EdgionBackend),
+            _ => Err(format!(
+                "targetRef {}/{} {}: supported targets are core-group Service or edgion.io/EdgionBackend",
+                self.group, self.kind, self.name
+            )),
+        }
+    }
+
+    /// Resolve this same-namespace reference to the canonical policy identity.
+    pub fn canonical_key(&self, namespace: &str) -> Result<PolicyTargetKey, String> {
+        Ok(PolicyTargetKey {
+            target_kind: self.target_kind()?,
+            namespace: namespace.to_string(),
+            name: self.name.clone(),
+        })
+    }
+}
+
 /// BackendTLSPolicyValidation contains backend TLS validation configuration.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -151,6 +180,10 @@ pub struct BackendTLSPolicyValidation {
     /// 1. Hostname MUST be used as the SNI to connect to the backend
     /// 2. Hostname MUST be used for authentication and MUST match the certificate
     ///    served by the matching backend.
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: String,
 
     /// SubjectAltNames contains one or more Subject Alternative Names.
@@ -166,8 +199,12 @@ pub struct BackendTLSPolicyValidation {
 }
 
 /// BackendTLSPolicyCACertificateRef identifies a ConfigMap or Secret containing a CA certificate bundle.
-/// Note: Per Gateway API spec, caCertificateRef can only reference resources in the same namespace.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+///
+/// For BackendTLSPolicy, per Gateway API spec, refs must be in the same namespace as the policy;
+/// `namespace` is ignored by the `DirectSameNs` fetch strategy. For non-BTP consumers (e.g.
+/// EdgionGatewayConfig outbound TLS), an explicit `namespace` enables cross-namespace trust-anchor
+/// references subject to a `ReferenceGrant` when the `GrantGated` fetch strategy is used.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicyCACertificateRef {
     /// Group is the group of the referent. For example, "".
@@ -180,6 +217,14 @@ pub struct BackendTLSPolicyCACertificateRef {
 
     /// Name is the name of the referent.
     pub name: String,
+
+    /// Namespace of the referent. When absent the controller infers the same namespace
+    /// as the owning resource. For cluster-scoped resources (e.g. EdgionGatewayConfig)
+    /// this field is required; refs without a namespace are skipped.
+    /// Cross-namespace refs require a matching ReferenceGrant when the `GrantGated`
+    /// fetch strategy is in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// SubjectAltName represents a Subject Alternative Name.
@@ -193,6 +238,10 @@ pub struct SubjectAltName {
     /// Hostname contains Subject Alternative Name specified in DNS name format.
     /// Required when Type is set to Hostname, ignored otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// URI contains Subject Alternative Name specified in a full URI format.
@@ -217,6 +266,52 @@ pub enum WellKnownCACertificates {
     System,
 }
 
+/// Runtime validation twin for BackendTLSPolicy hostname and SAN admission rules.
+///
+/// Controller FS/etcd ingest and Gateway defensive publication must not rely on
+/// Kubernetes schema validation having run first.
+pub fn backend_tls_identity_validation_errors(validation: &BackendTLSPolicyValidation) -> Vec<String> {
+    use regex::Regex;
+
+    let mut errors = Vec::new();
+    let precise_hostname = Regex::new(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+        .expect("canonical precise-hostname pattern must compile");
+    if validation.hostname.len() > crate::gwapi_types::HOSTNAME_MAX_LEN as usize
+        || !precise_hostname.is_match(&validation.hostname)
+    {
+        errors.push("validation.hostname must be a valid precise hostname".to_string());
+    }
+
+    if let Some(subject_alt_names) = &validation.subject_alt_names {
+        if subject_alt_names.is_empty() || subject_alt_names.len() > 5 {
+            errors.push("validation.subjectAltNames must contain between one and five entries".to_string());
+        }
+        let hostname =
+            Regex::new(crate::gwapi_types::HOSTNAME_PATTERN).expect("canonical hostname pattern must compile");
+        for san in subject_alt_names {
+            let valid = match san.san_type {
+                SubjectAltNameType::Hostname => {
+                    san.uri.is_none()
+                        && san.hostname.as_ref().is_some_and(|value| {
+                            value.len() <= crate::gwapi_types::HOSTNAME_MAX_LEN as usize && hostname.is_match(value)
+                        })
+                }
+                SubjectAltNameType::URI => {
+                    san.hostname.is_none()
+                        && san.uri.as_ref().is_some_and(|value| {
+                            value.len() <= crate::gwapi_types::HOSTNAME_MAX_LEN as usize
+                                && url::Url::parse(value).is_ok()
+                        })
+                }
+            };
+            if !valid {
+                errors.push("validation.subjectAltNames contains an invalid typed value".to_string());
+            }
+        }
+    }
+    errors
+}
+
 /// Parse implementation-specific client certificate Secret reference from a BTP options map.
 ///
 /// Supported value format:
@@ -226,19 +321,15 @@ pub enum WellKnownCACertificates {
 pub fn parse_client_certificate_option(
     options: Option<&HashMap<String, String>>,
 ) -> Result<Option<SecretObjectReference>, String> {
-    let raw = options
-        .and_then(|o| o.get(OPTION_CLIENT_CERTIFICATE_REF))
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-
-    let Some(raw) = raw else {
+    let Some(raw) = options.and_then(|options| options.get(OPTION_CLIENT_CERTIFICATE_REF)) else {
         return Ok(None);
     };
+    let raw = raw.trim();
 
-    if raw.contains('/') {
+    if !valid_kube_name(raw) {
         let msg = format!(
-            "Option {} must be a secret name in the same namespace, got '{}'",
-            OPTION_CLIENT_CERTIFICATE_REF, raw
+            "Option {} must be a valid same-namespace Secret name",
+            OPTION_CLIENT_CERTIFICATE_REF
         );
         return Err(msg);
     }
@@ -249,6 +340,20 @@ pub fn parse_client_certificate_option(
         name: raw.to_string(),
         namespace: None,
     }))
+}
+
+fn valid_kube_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        })
 }
 
 /// Read-only view over the fields shared by `BackendTLSPolicySpec` and
@@ -262,6 +367,7 @@ pub trait BtpSpecView {
     fn resolved_ca_certificates(&self) -> Option<&[Secret]>;
     fn resolved_client_certificate(&self) -> Option<&Secret>;
     fn use_system_ca(&self) -> bool;
+    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass>;
 
     fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
         parse_client_certificate_option(self.options())
@@ -287,6 +393,9 @@ impl BtpSpecView for BackendTLSPolicySpec {
     fn use_system_ca(&self) -> bool {
         self.use_system_ca
     }
+    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass> {
+        self.resolved_target_class
+    }
 }
 
 impl BtpSpecView for BackendTLSPolicyAlpha3Spec {
@@ -308,6 +417,9 @@ impl BtpSpecView for BackendTLSPolicyAlpha3Spec {
     fn use_system_ca(&self) -> bool {
         self.use_system_ca
     }
+    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass> {
+        self.resolved_target_class
+    }
 }
 
 impl BackendTLSPolicy {
@@ -325,27 +437,6 @@ impl BackendTLSPolicy {
     pub fn name(&self) -> &str {
         self.metadata.name.as_deref().unwrap_or("")
     }
-
-    /// Check if this policy applies to a given target
-    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy.
-    pub fn applies_to(&self, group: &str, kind: &str, name: &str, namespace: Option<&str>) -> bool {
-        let policy_ns = self.namespace();
-
-        self.spec.target_refs.iter().any(|target| {
-            let matches = target.group == group && target.kind == kind && target.name == name;
-
-            if !matches {
-                return false;
-            }
-
-            // Check namespace match - target must be in the same namespace as the policy
-            match (namespace, policy_ns) {
-                (Some(resource_ns), Some(policy_ns)) => policy_ns == resource_ns,
-                (None, None) => true,
-                _ => false,
-            }
-        })
-    }
 }
 
 impl From<BackendTLSPolicyAlpha3> for BackendTLSPolicy {
@@ -354,6 +445,7 @@ impl From<BackendTLSPolicyAlpha3> for BackendTLSPolicy {
             metadata: alpha3.metadata,
             spec: BackendTLSPolicySpec {
                 target_refs: alpha3.spec.target_refs,
+                resolved_target_class: alpha3.spec.resolved_target_class,
                 validation: alpha3.spec.validation,
                 options: alpha3.spec.options,
                 resolved_ca_certificates: alpha3.spec.resolved_ca_certificates,
@@ -371,6 +463,7 @@ impl From<BackendTLSPolicy> for BackendTLSPolicyAlpha3 {
             metadata: v1.metadata,
             spec: BackendTLSPolicyAlpha3Spec {
                 target_refs: v1.spec.target_refs,
+                resolved_target_class: v1.spec.resolved_target_class,
                 validation: v1.spec.validation,
                 options: v1.spec.options,
                 resolved_ca_certificates: v1.spec.resolved_ca_certificates,
@@ -394,26 +487,13 @@ pub struct BackendTLSPolicyStatus {
     /// Ancestors is a list of ancestor resources (usually Gateways) that are
     /// associated with the policy, and the status of the policy with respect to
     /// each ancestor.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"ancestors": []` replaces it. Do not add skip_serializing_if here.
+    #[serde(default)]
     pub ancestors: Vec<PolicyAncestorStatus>,
-}
-
-/// PolicyAncestorStatus describes the status of a policy with respect to an
-/// ancestor resource. Ancestors refer to the Gateway(s) that this policy
-/// is associated with.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PolicyAncestorStatus {
-    /// AncestorRef corresponds with a ParentRef in the spec that this
-    /// PolicyAncestorStatus struct describes the status of.
-    pub ancestor_ref: ParentReference,
-
-    /// ControllerName is a domain/path string that indicates the name of the
-    /// controller that wrote this status.
-    pub controller_name: String,
-
-    /// Conditions describes the status of the Policy with respect to the given Ancestor.
-    pub conditions: Vec<Condition>,
 }
 
 #[cfg(test)]
@@ -435,6 +515,7 @@ mod tests {
                     name: "svc".to_string(),
                     section_name: None,
                 }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
                 validation: BackendTLSPolicyValidation {
                     ca_certificate_refs: None,
                     hostname: "backend.example.com".to_string(),
@@ -481,6 +562,77 @@ mod tests {
     }
 
     #[test]
+    fn test_client_certificate_secret_ref_rejects_empty_and_invalid_names() {
+        for value in ["", "   ", "Invalid_Name", "-leading", "trailing-"] {
+            let policy = make_policy(Some(HashMap::from([(
+                OPTION_CLIENT_CERTIFICATE_REF.to_string(),
+                value.to_string(),
+            )])));
+            assert!(policy.client_certificate_secret_ref().is_err(), "accepted {value:?}");
+        }
+    }
+
+    #[test]
+    fn backend_tls_runtime_identity_validation_covers_hostname_and_typed_sans() {
+        let mut validation = BackendTLSPolicyValidation {
+            ca_certificate_refs: None,
+            hostname: "backend.example.com".to_string(),
+            subject_alt_names: Some(vec![
+                SubjectAltName {
+                    san_type: SubjectAltNameType::Hostname,
+                    hostname: Some("*.example.com".to_string()),
+                    uri: None,
+                },
+                SubjectAltName {
+                    san_type: SubjectAltNameType::URI,
+                    hostname: None,
+                    uri: Some("spiffe://trust.example/workload".to_string()),
+                },
+            ]),
+            well_known_ca_certificates: Some(WellKnownCACertificates::System),
+        };
+        assert!(backend_tls_identity_validation_errors(&validation).is_empty());
+
+        validation.hostname.clear();
+        assert!(!backend_tls_identity_validation_errors(&validation).is_empty());
+        validation.hostname = "backend.example.com".to_string();
+
+        for sans in [
+            Vec::new(),
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: None,
+                uri: None,
+            }],
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: Some("backend.example.com".to_string()),
+                uri: Some("spiffe://trust.example/workload".to_string()),
+            }],
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::URI,
+                hostname: None,
+                uri: Some("not an absolute uri".to_string()),
+            }],
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::URI,
+                hostname: None,
+                uri: Some(format!("https://example.com/{}", "a".repeat(240))),
+            }],
+            (0..6)
+                .map(|index| SubjectAltName {
+                    san_type: SubjectAltNameType::Hostname,
+                    hostname: Some(format!("backend-{index}.example.com")),
+                    uri: None,
+                })
+                .collect(),
+        ] {
+            validation.subject_alt_names = Some(sans);
+            assert!(!backend_tls_identity_validation_errors(&validation).is_empty());
+        }
+    }
+
+    #[test]
     fn test_well_known_ca_certificates_system_serialization() {
         let validation = BackendTLSPolicyValidation {
             ca_certificate_refs: None,
@@ -520,6 +672,46 @@ mod tests {
         let policy = make_policy(None);
         let json = serde_json::to_value(&policy.spec).unwrap();
         assert!(json.get("useSystemCa").is_none());
+    }
+
+    #[test]
+    fn canonical_target_identity_is_typed() {
+        let service = BackendTLSPolicyTargetRef {
+            group: "core".to_string(),
+            kind: "Service".to_string(),
+            name: "shared".to_string(),
+            section_name: Some("https".to_string()),
+        };
+        let backend = BackendTLSPolicyTargetRef {
+            group: "edgion.io".to_string(),
+            kind: "EdgionBackend".to_string(),
+            name: "shared".to_string(),
+            section_name: None,
+        };
+
+        assert_eq!(
+            service.canonical_key("tenant").unwrap().target_kind,
+            PolicyTargetKind::Service
+        );
+        assert_eq!(
+            backend.canonical_key("tenant").unwrap().target_kind,
+            PolicyTargetKind::EdgionBackend
+        );
+        assert_ne!(
+            service.canonical_key("tenant").unwrap(),
+            backend.canonical_key("tenant").unwrap()
+        );
+    }
+
+    #[test]
+    fn resolved_target_class_is_transport_only() {
+        let policy = make_policy(None);
+        let json = serde_json::to_value(&policy.spec).unwrap();
+        assert_eq!(json["resolvedTargetClass"], "service");
+
+        let schema = schemars::schema_for!(BackendTLSPolicySpec);
+        let schema_json = serde_json::to_value(schema).unwrap();
+        assert!(!schema_json.to_string().contains("resolvedTargetClass"));
     }
 
     #[test]
