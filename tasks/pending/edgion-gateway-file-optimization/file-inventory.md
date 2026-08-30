@@ -54,9 +54,9 @@
 | `conf-sync-cache-client` | 4 | 0 | 0 | 0 | pending |
 | `conf-sync-conf-client` | 5 | 0 | 0 | 0 | pending |
 | `conf-sync-root` | 1 | 0 | 0 | 0 | pending |
-| `config-edgion-gateway` | 2 | 0 | 0 | 0 | pending |
-| `config-gateway-class` | 2 | 0 | 0 | 0 | pending |
-| `config-root` | 1 | 0 | 0 | 0 | pending |
+| `config-edgion-gateway` | 2 | 1 | 1 | 0 | complete |
+| `config-gateway-class` | 2 | 0 | 2 | 0 | complete |
+| `config-root` | 1 | 0 | 1 | 0 | complete |
 | `crate-entry` | 2 | 0 | 0 | 0 | pending |
 | `crate-root` | 2 | 0 | 0 | 0 | pending |
 | `external-tests` | 1 | 0 | 0 | 0 | pending |
@@ -232,11 +232,11 @@
 | `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | pending | — |
 | `edgion-gateway/src/conf_sync/conf_client/rotation.rs` | `conf-sync-conf-client` | source | pending | — |
 | `edgion-gateway/src/conf_sync/mod.rs` | `conf-sync-root` | source | pending | — |
-| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | pending | — |
-| `edgion-gateway/src/config/edgion_gateway/mod.rs` | `config-edgion-gateway` | source | pending | — |
-| `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | pending | — |
-| `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | pending | — |
-| `edgion-gateway/src/config/mod.rs` | `config-root` | source | pending | — |
+| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | optimized | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/edgion_gateway/mod.rs` | `config-edgion-gateway` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/mod.rs` | `config-root` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking; OBS-METRICS-001 baseline: arm64 Rust 1.96.1 reports 1120 bytes against the committed 1104-byte lock |
 | `edgion-gateway/src/geoip/config.rs` | `geoip` | source | pending | — |
 | `edgion-gateway/src/geoip/info.rs` | `geoip` | source | pending | — |

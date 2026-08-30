@@ -135,3 +135,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: SSE tests 62/62; gateway all-target check; `cargo fmt --all -- --check`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `4327da2b`
+
+### `CONFIG-001` — GatewayClass and EdgionGatewayConfig snapshot handlers
+
+- Outcome: mixed (1 optimized, 4 reviewed-no-change)
+- Files reviewed: all 5 files under `config/`, covering the root exports, GatewayClass store/handler, and EdgionGatewayConfig immutable snapshot/handler
+- Changes: precomputed the deterministic lowest-store-key EGC DNS resolver winner when publishing the immutable snapshot, replacing a full config-map scan on every ExternalName or routed-external upstream selection; added winner, partial-update replacement, loaded-value independence, and empty full-set reset coverage.
+- Generality and architecture review: independent review approved the one-file change with no findings. Request-body sizes/timeouts and RemoteIp headers remain resolved and atomically published off the request hot path; full and partial writes remain serialized; empty full sets clear the snapshot and restore process-global defaults; GatewayClass authoritative reads remain in `ConfigClient`; logs expose counts/names and validation categories only, never specs or resolved certificate material. Returning an owned DNS config still performs one bounded winner clone; changing consumers to an Arc API was rejected as unnecessary cross-batch churn.
+- Verification: config tests 91/91; focused DNS snapshot test 1/1; `cargo fmt --all -- --check`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `4621d075`
