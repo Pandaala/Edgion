@@ -32,6 +32,31 @@ fn scan_limiter() -> &'static Arc<Semaphore> {
     LIMITER.get_or_init(|| Arc::new(Semaphore::new(SCAN_CONCURRENCY)))
 }
 
+pub(super) async fn run_blocking_scan<T, F>(work: F) -> Result<T, BodyOperationError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, BodyOperationError> + Send + 'static,
+{
+    run_blocking_scan_with_limiter(work, Arc::clone(scan_limiter())).await
+}
+
+async fn run_blocking_scan_with_limiter<T, F>(work: F, limiter: Arc<Semaphore>) -> Result<T, BodyOperationError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, BodyOperationError> + Send + 'static,
+{
+    let permit = limiter
+        .acquire_owned()
+        .await
+        .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?
+}
+
 fn storage_io_limiter() -> &'static Arc<Semaphore> {
     static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
     LIMITER.get_or_init(|| Arc::new(Semaphore::new(STORAGE_IO_CONCURRENCY)))
@@ -2585,6 +2610,49 @@ mod tests {
         fn finish(self) -> Result<Self::Output, BodyOperationError> {
             Ok(self.ran_off_caller)
         }
+    }
+
+    struct FinishCountingScanner {
+        finishes: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl RawBodyScanner for FinishCountingScanner {
+        type Output = ();
+
+        fn requires_blocking_context(&self) -> bool {
+            true
+        }
+
+        fn push(&mut self, _: &[u8]) -> Result<ScanControl, BodyOperationError> {
+            unreachable!("finish-only scanner must not receive body bytes")
+        }
+
+        fn finish(self) -> Result<Self::Output, BodyOperationError> {
+            self.finishes.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn blocking_work_waits_for_scan_lane_admission() {
+        let limiter = Arc::new(Semaphore::new(1));
+        let held = Arc::clone(&limiter).acquire_owned().await.unwrap();
+        let finishes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scanner = FinishCountingScanner {
+            finishes: Arc::clone(&finishes),
+        };
+        let mut future = Box::pin(run_blocking_scan_with_limiter(move || scanner.finish(), limiter));
+
+        poll_fn(|context| match future.as_mut().poll(context) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(_) => panic!("blocking finish bypassed scan-lane admission"),
+        })
+        .await;
+        assert_eq!(finishes.load(Ordering::Acquire), 0);
+
+        drop(held);
+        future.await.unwrap();
+        assert_eq!(finishes.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]

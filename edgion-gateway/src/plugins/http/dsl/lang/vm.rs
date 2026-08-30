@@ -30,9 +30,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession};
-use crate::request_body::{
-    BodyOperationError, BodyTextOperation, BodyTextResult, LossyTextScanner, RawBodyScanner, TextBodyScanner,
-};
+use crate::request_body::{BodyOperationError, BodyTextOperation, BodyTextResult, LossyTextScanner, TextBodyScanner};
 use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
@@ -1075,13 +1073,9 @@ impl Vm {
                         });
                     };
                     let result = match input {
-                        Value::Str(text) => {
-                            let mut scanner = JsonPathScanner::new(path.clone(), self.limits.max_string_len)
-                                .await
-                                .map_err(map_body_error)?;
-                            let _ = scanner.push(text.as_bytes()).map_err(map_body_error)?;
-                            scanner.finish().map_err(map_body_error)?
-                        }
+                        Value::Str(text) => JsonPathScanner::scan_owned(text, path.clone(), self.limits.max_string_len)
+                            .await
+                            .map_err(map_body_error)?,
                         Value::Body(_) => {
                             let cap = session.ctx().request_body_config.max_body_size_bytes;
                             let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;

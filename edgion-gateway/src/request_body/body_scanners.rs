@@ -173,12 +173,6 @@ pub(crate) enum JsonScanValue {
     TooLong,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum JsonDuplicatePolicy {
-    LastWins,
-    RejectSelected,
-}
-
 static JSON_SCAN_LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 async fn acquire_json_scan_permit() -> Result<OwnedSemaphorePermit, BodyOperationError> {
@@ -208,6 +202,25 @@ impl JsonPathScanner {
             worker: Some(worker),
             disconnected: false,
         })
+    }
+}
+
+impl JsonPathScanner {
+    pub(crate) async fn scan_owned(
+        input: Arc<str>,
+        path: DefiniteJsonPath,
+        limit: usize,
+    ) -> Result<JsonScanValue, BodyOperationError> {
+        let permit = acquire_json_scan_permit().await?;
+        super::storage::run_blocking_scan(move || {
+            let _permit = permit;
+            Ok(parse_json(
+                serde_json::Deserializer::from_slice(input.as_bytes()),
+                path.segments(),
+                limit,
+            ))
+        })
+        .await
     }
 }
 
@@ -282,18 +295,10 @@ pub(crate) struct JsonSelectPlan {
     root: Arc<JsonSelectNode>,
     outputs: Arc<[(Arc<str>, usize)]>,
     capture_count: usize,
-    duplicate_policy: JsonDuplicatePolicy,
 }
 
 impl JsonSelectPlan {
     pub(crate) fn new(entries: impl IntoIterator<Item = (String, DefiniteJsonPath)>) -> Self {
-        Self::with_duplicate_policy(entries, JsonDuplicatePolicy::LastWins)
-    }
-
-    pub(crate) fn with_duplicate_policy(
-        entries: impl IntoIterator<Item = (String, DefiniteJsonPath)>,
-        duplicate_policy: JsonDuplicatePolicy,
-    ) -> Self {
         let mut root = MutableJsonSelectNode::new();
         let mut capture_count = 0usize;
         let outputs = entries
@@ -307,7 +312,6 @@ impl JsonSelectPlan {
             root: root.freeze(),
             outputs: outputs.into(),
             capture_count,
-            duplicate_policy,
         }
     }
 
@@ -441,9 +445,19 @@ fn parse_json_stream(
     _permit: OwnedSemaphorePermit,
 ) -> JsonScanValue {
     let reader = ChannelReader::new(receiver);
-    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    parse_json(serde_json::Deserializer::from_reader(reader), &segments, limit)
+}
+
+fn parse_json<'de, R>(
+    mut deserializer: serde_json::Deserializer<R>,
+    segments: &[JsonPathSegment],
+    limit: usize,
+) -> JsonScanValue
+where
+    R: serde_json::de::Read<'de>,
+{
     let result = SelectSeed {
-        segments: &segments,
+        segments,
         index: 0,
         limit,
     }
@@ -579,7 +593,7 @@ struct ExpectedKeyVisitor<'a> {
 }
 
 struct SelectedMapKey {
-    selected: Option<(Arc<str>, Arc<JsonSelectNode>)>,
+    selected: Option<Arc<JsonSelectNode>>,
     retained: Option<Arc<str>>,
     overlong_for_parent: bool,
 }
@@ -619,18 +633,13 @@ impl Visitor<'_> for SelectedMapKeyVisitor<'_> {
     }
 
     fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        let selected = self
-            .node
-            .members
-            .get_key_value(value)
-            .map(|(key, node)| (Arc::clone(key), Arc::clone(node)));
+        let selected_entry = self.node.members.get_key_value(value);
+        let selected = selected_entry.map(|(_, node)| Arc::clone(node));
         let (retained, overlong_for_parent) = if self.retain_for_parent {
             if !encoded_string_fits(value, self.limit).map_err(E::custom)? {
                 (None, true)
             } else {
-                let key = selected
-                    .as_ref()
-                    .map_or_else(|| Arc::from(value), |(key, _)| Arc::clone(key));
+                let key = selected_entry.map_or_else(|| Arc::from(value), |(key, _)| Arc::clone(key));
                 (Some(key), false)
             }
         } else {
@@ -669,19 +678,15 @@ struct JsonSelectState {
     retained_bytes: usize,
     retained_by_capture: Vec<usize>,
     limit: usize,
-    rejected: Vec<bool>,
-    duplicate_policy: JsonDuplicatePolicy,
 }
 
 impl JsonSelectState {
-    fn new(capture_count: usize, limit: usize, duplicate_policy: JsonDuplicatePolicy) -> Self {
+    fn new(capture_count: usize, limit: usize) -> Self {
         Self {
             values: vec![JsonScanValue::Missing; capture_count],
             retained_bytes: 0,
             retained_by_capture: vec![0; capture_count],
             limit,
-            rejected: vec![false; capture_count],
-            duplicate_policy,
         }
     }
 
@@ -696,9 +701,6 @@ impl JsonSelectState {
     }
 
     fn set(&mut self, capture: usize, value: JsonScanValue) {
-        if self.rejected.get(capture).copied().unwrap_or(true) {
-            return;
-        }
         let Some(slot) = self.values.get_mut(capture) else {
             return;
         };
@@ -722,17 +724,6 @@ impl JsonSelectState {
             *slot = value;
         }
     }
-
-    fn reject(&mut self, captures: &[usize]) {
-        for &capture in captures {
-            if capture < self.values.len() {
-                self.rejected[capture] = true;
-                self.values[capture] = JsonScanValue::Missing;
-                self.retained_bytes = self.retained_bytes.saturating_sub(self.retained_by_capture[capture]);
-                self.retained_by_capture[capture] = 0;
-            }
-        }
-    }
 }
 
 fn parse_json_select_stream(
@@ -743,11 +734,7 @@ fn parse_json_select_stream(
 ) -> Vec<JsonScanValue> {
     let reader = ChannelReader::new(receiver);
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
-    let state = Rc::new(RefCell::new(JsonSelectState::new(
-        plan.capture_count,
-        limit,
-        plan.duplicate_policy,
-    )));
+    let state = Rc::new(RefCell::new(JsonSelectState::new(plan.capture_count, limit)));
     let result = JsonSelectSeed {
         node: Arc::clone(&plan.root),
         state: Rc::clone(&state),
@@ -957,8 +944,6 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
     {
         let encode_current = self.emit_to_parent || self.capture_current;
         let mut output = BoundedMapAccumulator::new(self.limit);
-        let reject_duplicates = self.state.borrow().duplicate_policy == JsonDuplicatePolicy::RejectSelected;
-        let mut selected_keys = reject_duplicates.then(std::collections::HashSet::new);
         while let Some(key) = map.next_key_seed(SelectedMapKeySeed {
             node: &self.node,
             retain_for_parent: encode_current && output.accepts_candidates(),
@@ -969,23 +954,14 @@ impl<'de> Visitor<'de> for JsonSelectVisitor {
             }
             let retain_for_parent = key.retained.is_some();
             let value = match key.selected {
-                Some((selected_key, node)) => {
-                    if selected_keys
-                        .as_mut()
-                        .is_some_and(|selected_keys| !selected_keys.insert(selected_key))
-                    {
-                        self.state.borrow_mut().reject(&node.descendant_captures);
-                        map.next_value::<IgnoredAny>()?;
-                        BoundedJson::new(self.limit)
-                    } else {
-                        self.state.borrow_mut().reset(&node.descendant_captures);
-                        map.next_value_seed(JsonSelectSeed {
-                            node,
-                            state: Rc::clone(&self.state),
-                            emit_to_parent: retain_for_parent,
-                            limit: self.limit,
-                        })?
-                    }
+                Some(node) => {
+                    self.state.borrow_mut().reset(&node.descendant_captures);
+                    map.next_value_seed(JsonSelectSeed {
+                        node,
+                        state: Rc::clone(&self.state),
+                        emit_to_parent: retain_for_parent,
+                        limit: self.limit,
+                    })?
                 }
                 None if retain_for_parent => map.next_value_seed(BoundedSeed { limit: self.limit })?,
                 None => {
@@ -1555,6 +1531,25 @@ mod tests {
         scanner.finish().unwrap()
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn owned_json_path_scan_preserves_last_wins_limits_and_invalid_input() {
+        let path = DefiniteJsonPath::parse("$.value").unwrap();
+        let result = JsonPathScanner::scan_owned(Arc::from(r#"{"value":"old","value":"new"}"#), path.clone(), 8)
+            .await
+            .unwrap();
+        assert!(matches!(result, JsonScanValue::Value(Value::Str(value)) if &*value == "new"));
+
+        let result = JsonPathScanner::scan_owned(Arc::from(r#"{"value":"too long for limit"}"#), path.clone(), 8)
+            .await
+            .unwrap();
+        assert!(matches!(result, JsonScanValue::TooLong));
+
+        let result = JsonPathScanner::scan_owned(Arc::from(r#"{"value":1} trailing"#), path, 8)
+            .await
+            .unwrap();
+        assert!(matches!(result, JsonScanValue::Missing));
+    }
+
     async fn scan_json_select(
         input: &[&[u8]],
         entries: &[(&str, &str)],
@@ -1845,9 +1840,8 @@ mod tests {
         .deserialize(&mut deserializer)
         .unwrap();
 
-        let (selected, _) = key.selected.unwrap();
+        assert!(key.selected.is_some());
         let retained = key.retained.unwrap();
-        assert!(Arc::ptr_eq(canonical, &selected));
         assert!(Arc::ptr_eq(canonical, &retained));
 
         let mut deserializer = serde_json::Deserializer::from_str(r#""body-sized-irrelevant-key""#);
