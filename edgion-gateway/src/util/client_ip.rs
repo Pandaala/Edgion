@@ -1,6 +1,9 @@
 //! Canonical extraction of the immutable direct peer and effective transport client.
 
 use pingora_core::protocols::l4::socket::SocketAddr;
+use std::net::SocketAddr as StdSocketAddr;
+
+use crate::ctx::canonicalize_ip;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransportClientAddrs {
@@ -22,16 +25,16 @@ pub fn resolve_transport_client_addrs(
 ) -> TransportClientAddrs {
     let effective = effective.and_then(SocketAddr::as_inet);
     let remote_ip = effective
-        .map(|addr| crate::ctx::canonicalize_ip(addr.ip()))
+        .map(|addr| canonicalize_ip(addr.ip()))
         .unwrap_or_else(|| missing_ip.to_string());
-    let remote_port = effective.map_or(0, std::net::SocketAddr::port);
+    let remote_port = effective.map_or(0, StdSocketAddr::port);
 
     let raw = raw.and_then(SocketAddr::as_inet);
     TransportClientAddrs {
         direct_peer_ip: raw
-            .map(|addr| crate::ctx::canonicalize_ip(addr.ip()))
+            .map(|addr| canonicalize_ip(addr.ip()))
             .unwrap_or_else(|| remote_ip.clone()),
-        direct_peer_port: raw.map_or(remote_port, std::net::SocketAddr::port),
+        direct_peer_port: raw.map_or(remote_port, StdSocketAddr::port),
         remote_ip,
         remote_port,
     }

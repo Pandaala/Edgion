@@ -27,6 +27,7 @@
 //! Result: RemoteIp = "203.0.113.1"
 //! ```
 
+use edgion_resources::matcher::ip_cidr_helpers::to_cidr_format;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::IpGroup;
 use pingora_http::RequestHeader;
@@ -81,7 +82,7 @@ impl RealIpExtractor {
 
         for group in trusted_ips {
             for cidr in &group.cidrs {
-                match edgion_resources::matcher::ip_cidr_helpers::to_cidr_format(cidr) {
+                match to_cidr_format(cidr) {
                     Ok(norm) => match builder.insert(&norm, &group.name) {
                         Ok(_) => valid_count += 1,
                         Err(e) => {
@@ -141,9 +142,8 @@ impl RealIpExtractor {
         self.trusted_proxy_matcher.as_ref().is_some_and(|m| m.contains(ip))
     }
 
-    /// Cold path for debug logging. Returns the matched trusted-proxy
-    /// group name (longest-prefix), or `None` when the IP is not trusted
-    /// or no matcher is configured.
+    /// Returns the matched trusted-proxy group name (longest-prefix), or
+    /// `None` when the IP is not trusted or no matcher is configured.
     pub fn matched_trusted_group(&self, ip: &IpAddr) -> Option<&str> {
         self.trusted_proxy_matcher.as_ref().and_then(|m| m.matched_group(ip))
     }
@@ -483,6 +483,15 @@ mod tests {
             result, "10.0.0.50",
             "hop cap must stop traversal and return the last trusted IP within cap, not the forged leftmost"
         );
+    }
+
+    #[test]
+    fn test_zero_max_trusted_hops_stops_at_first_trusted_header_ip() {
+        let groups = vec![group("internal", &["10.0.0.0/8"])];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, Some(0)).unwrap();
+
+        let result = extractor.extract_from_header_value("10.0.0.1:45678", "1.2.3.4, 10.0.0.50, 10.0.0.99");
+        assert_eq!(result, "10.0.0.99");
     }
 
     /// With the cap, a legitimate untrusted IP within the allowed hop window

@@ -71,44 +71,34 @@ impl ProxyProtocolV2Builder {
         self.add_tlv(PP2_TYPE_AUTHORITY, hostname.as_bytes().to_vec())
     }
 
+    fn encode_address_block(&self, buf: &mut Vec<u8>) {
+        match (self.src.ip(), self.dst.ip()) {
+            (IpAddr::V4(src_ip), IpAddr::V4(dst_ip)) => {
+                buf.extend_from_slice(&src_ip.octets());
+                buf.extend_from_slice(&dst_ip.octets());
+            }
+            (src_ip, dst_ip) => {
+                let src_ip = match src_ip {
+                    IpAddr::V4(ip) => ip.to_ipv6_mapped(),
+                    IpAddr::V6(ip) => ip,
+                };
+                let dst_ip = match dst_ip {
+                    IpAddr::V4(ip) => ip.to_ipv6_mapped(),
+                    IpAddr::V6(ip) => ip,
+                };
+                buf.extend_from_slice(&src_ip.octets());
+                buf.extend_from_slice(&dst_ip.octets());
+            }
+        }
+        buf.extend_from_slice(&self.src.port().to_be_bytes());
+        buf.extend_from_slice(&self.dst.port().to_be_bytes());
+    }
+
     /// Encode the complete PP2 binary header
     pub fn build(&self) -> Vec<u8> {
-        let (af_proto, addr_len, addr_bytes) = match (self.src.ip(), self.dst.ip()) {
-            (IpAddr::V4(src_ip), IpAddr::V4(dst_ip)) => {
-                let mut addr = Vec::with_capacity(12);
-                addr.extend_from_slice(&src_ip.octets()); // 4 bytes
-                addr.extend_from_slice(&dst_ip.octets()); // 4 bytes
-                addr.extend_from_slice(&self.src.port().to_be_bytes()); // 2 bytes
-                addr.extend_from_slice(&self.dst.port().to_be_bytes()); // 2 bytes
-                (PP2_AF_INET_STREAM, 12u16, addr)
-            }
-            (IpAddr::V6(src_ip), IpAddr::V6(dst_ip)) => {
-                let mut addr = Vec::with_capacity(36);
-                addr.extend_from_slice(&src_ip.octets()); // 16 bytes
-                addr.extend_from_slice(&dst_ip.octets()); // 16 bytes
-                addr.extend_from_slice(&self.src.port().to_be_bytes()); // 2 bytes
-                addr.extend_from_slice(&self.dst.port().to_be_bytes()); // 2 bytes
-                (PP2_AF_INET6_STREAM, 36u16, addr)
-            }
-            // Mixed address families: map v4 to v4-mapped v6
-            (IpAddr::V4(src_v4), IpAddr::V6(dst_ip)) => {
-                let src_ip = src_v4.to_ipv6_mapped();
-                let mut addr = Vec::with_capacity(36);
-                addr.extend_from_slice(&src_ip.octets());
-                addr.extend_from_slice(&dst_ip.octets());
-                addr.extend_from_slice(&self.src.port().to_be_bytes());
-                addr.extend_from_slice(&self.dst.port().to_be_bytes());
-                (PP2_AF_INET6_STREAM, 36u16, addr)
-            }
-            (IpAddr::V6(src_ip), IpAddr::V4(dst_v4)) => {
-                let dst_ip = dst_v4.to_ipv6_mapped();
-                let mut addr = Vec::with_capacity(36);
-                addr.extend_from_slice(&src_ip.octets());
-                addr.extend_from_slice(&dst_ip.octets());
-                addr.extend_from_slice(&self.src.port().to_be_bytes());
-                addr.extend_from_slice(&self.dst.port().to_be_bytes());
-                (PP2_AF_INET6_STREAM, 36u16, addr)
-            }
+        let (af_proto, addr_len) = match (self.src.ip(), self.dst.ip()) {
+            (IpAddr::V4(_), IpAddr::V4(_)) => (PP2_AF_INET_STREAM, 12u16),
+            _ => (PP2_AF_INET6_STREAM, 36u16),
         };
 
         let tlv_total: usize = self.tlvs.iter().map(|t| t.encoded_len()).sum();
@@ -126,7 +116,7 @@ impl ProxyProtocolV2Builder {
         // Payload length (address block + TLVs) in network byte order
         buf.extend_from_slice(&(payload_len as u16).to_be_bytes());
         // Address block
-        buf.extend_from_slice(&addr_bytes);
+        self.encode_address_block(&mut buf);
         // TLVs
         for tlv in &self.tlvs {
             tlv.encode(&mut buf);
@@ -282,6 +272,23 @@ mod tests {
         assert_eq!(&header[16..26], &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(&header[26..28], &[0xFF, 0xFF]);
         assert_eq!(&header[28..32], &[192, 168, 1, 1]);
+    }
+
+    #[test]
+    fn test_mixed_v6_v4_maps_destination_to_v6() {
+        let src = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 1234, 0, 0));
+        let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 5678));
+
+        let header = ProxyProtocolV2Builder::new(src, dst).build();
+
+        assert_eq!(header[13], PP2_AF_INET6_STREAM);
+        assert_eq!(header.len(), 52);
+        assert_eq!(&header[16..32], &Ipv6Addr::LOCALHOST.octets());
+        assert_eq!(&header[32..42], &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&header[42..44], &[0xFF, 0xFF]);
+        assert_eq!(&header[44..48], &[192, 0, 2, 1]);
+        assert_eq!(&header[48..50], &1234u16.to_be_bytes());
+        assert_eq!(&header[50..52], &5678u16.to_be_bytes());
     }
 
     #[test]

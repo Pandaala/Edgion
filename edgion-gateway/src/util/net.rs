@@ -1,9 +1,9 @@
-use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
-use pingora_core::{Error as PingoraError, ErrorType};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 pub(crate) use edgion_common::egress::{classify_ip, IpClass};
+use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
+use pingora_core::{Error as PingoraError, ErrorType};
 
 /// Category of backend address blocked for security reasons.
 ///
@@ -14,6 +14,16 @@ pub enum BlockedBackendReason {
     Localhost,
     /// 169.254.0.0/16 (incl. cloud metadata 169.254.169.254) or fe80::/10
     LinkLocal,
+}
+
+fn parse_ip_literal(domain: &str) -> Option<IpAddr> {
+    IpAddr::from_str(domain).ok().or_else(|| {
+        domain
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .and_then(|inner| Ipv6Addr::from_str(inner).ok())
+            .map(IpAddr::V6)
+    })
 }
 
 /// Classify whether a backend address should be rejected before dialing.
@@ -54,13 +64,11 @@ pub async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<Soc
     // "::1:9090") is itself a valid IPv6 address and only resolves via lookup_host's
     // last-colon host:port heuristic — fragile and ambiguous. Parsing the literal here
     // is RFC-correct and also avoids a needless resolver round-trip.
-    if let Ok(ip) = IpAddr::from_str(domain) {
+    if let Some(ip) = parse_ip_literal(domain) {
         return Ok(SocketAddr::new(ip, port));
     }
 
-    let addr_str = format!("{}:{}", domain, port);
-
-    let mut addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
+    let mut addrs = tokio::net::lookup_host((domain, port)).await.map_err(|e| {
         PingoraError::explain(
             ErrorType::ConnectError,
             format!("DNS resolution failed for {}: {}", domain, e),
@@ -94,14 +102,11 @@ pub fn host_without_port(host: &str) -> &str {
             None => host,
         }
     } else {
-        // IPv4 / reg-name: strip a single trailing `:port` (digits only). The
-        // `count() == 1` guard rejects a bare (unbracketed) IPv6 literal such as
-        // `2001:db8::1` — which has >1 colon and no valid port to strip — so it is
-        // returned unchanged instead of being mangled into `2001:db8:`.
-        match host.rfind(':') {
-            Some(pos) if host.matches(':').count() == 1 && host[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => {
-                &host[..pos]
-            }
+        // IPv4 / reg-name: strip a single trailing `:port` (digits only).
+        // With more than one colon, `suffix` contains a colon and fails the
+        // digit-only check, leaving bare IPv6 literals unchanged.
+        match host.split_once(':') {
+            Some((name, suffix)) if suffix.bytes().all(|byte| byte.is_ascii_digit()) => name,
             _ => host,
         }
     }
@@ -110,6 +115,15 @@ pub fn host_without_port(host: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bracketed_ip_literal_accepts_only_ipv6() {
+        assert_eq!(
+            parse_ip_literal("[2001:db8::1]"),
+            Some(IpAddr::V6("2001:db8::1".parse().unwrap()))
+        );
+        assert_eq!(parse_ip_literal("[127.0.0.1]"), None);
+    }
 
     #[test]
     fn test_host_without_port() {
@@ -121,6 +135,8 @@ mod tests {
         assert_eq!(host_without_port("example.com:80"), "example.com");
         assert_eq!(host_without_port("example.com"), "example.com");
         assert_eq!(host_without_port("127.0.0.1:8080"), "127.0.0.1");
+        // Preserve the historical treatment of an empty port suffix.
+        assert_eq!(host_without_port("example.com:"), "example.com");
         // Non-numeric suffix after ':' is not a port, so it is preserved as-is.
         assert_eq!(host_without_port("host:notaport"), "host:notaport");
         // Malformed IPv6 (no closing bracket) is returned unchanged.
@@ -256,6 +272,14 @@ mod tests {
             .expect("multi-group ipv6 literal resolves");
         assert_eq!(addr.ip().to_string(), "2001:db8::1");
         assert_eq!(addr.port(), 8443);
+
+        // Region endpoint parsing retains brackets around IPv6 authorities.
+        // A fully bracketed IP literal must take the same resolver-free path.
+        let addr = resolve_domain("[2001:db8::1]", 9443)
+            .await
+            .expect("bracketed multi-group ipv6 literal resolves");
+        assert_eq!(addr.ip().to_string(), "2001:db8::1");
+        assert_eq!(addr.port(), 9443);
     }
 
     #[tokio::test]
