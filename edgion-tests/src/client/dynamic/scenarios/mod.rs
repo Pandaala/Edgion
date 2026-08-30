@@ -26,3 +26,4 @@ pub mod route_delegation_dynamic;
 pub mod sp_backend_change;
 pub mod sp_weighted;
 pub mod tcp_esp_reload;
+pub mod waf_dynamic;

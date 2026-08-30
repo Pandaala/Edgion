@@ -54,7 +54,7 @@ Same as HTTPRoute: produce a RouteParentStatus for each parentRef and set the Ac
 
 GRPCRoute's ConfHandler compiles routes into `GlobalGrpcRouteManagers`:
 
-0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane
+0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane. Flattening stamps every rule- and backend-level ExtensionRef with its declaring GRPCRoute namespace; authored `resolvedNamespace` values are cleared before flattening in filesystem/etcd modes
 1. **preparse**: in the route cache, call `route.preparse()` to build runtime structures
 2. **Route units**: each rule is compiled into a `GrpcRouteRuleUnit` containing `GrpcMatchInfo` (service, method, header matching)
 3. **Domain matching**: use resolved_hostnames (preferred) or spec.hostnames as the match domain; with no hostname, use `*` (wildcard)

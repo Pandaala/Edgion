@@ -53,6 +53,9 @@ mimalloc = { workspace = true, optional = true }
 # Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
 edgion-resources.workspace = true
 
+# Runtime-independent native WAF engine.
+edgion-waf.workspace = true
+
 # Shared common crate (config loader, observe, secret store, link core, etc.)
 edgion-common.workspace = true
 

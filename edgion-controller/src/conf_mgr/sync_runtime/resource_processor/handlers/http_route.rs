@@ -191,11 +191,12 @@ impl HttpRouteHandler {
         }
     }
 
-    /// Register rule-level EdgionPlugins ExtensionRefs for plugin-change requeue.
+    /// Register all EdgionPlugins ExtensionRefs for plugin-change requeue.
     ///
-    /// BackendRef filters deliberately do not participate: protocol gateway
-    /// plugins are route-rule policies. Replacing the full ref set on every
-    /// reconcile also handles delete-to-create coalescing.
+    /// BackendRef filters participate because a referenced generation that
+    /// adds or removes WAF changes this route's ownership validity. Replacing
+    /// the full ref set on every reconcile also handles delete-to-create
+    /// coalescing.
     fn register_plugin_refs(route: &HTTPRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         let manager = &ctx.runtime().plugin_ref_mgr;
@@ -211,7 +212,13 @@ impl HttpRouteHandler {
             .flatten()
         {
             for rule in rules {
-                for filter in rule.filters.iter().flatten() {
+                let filters = rule.filters.iter().flatten().chain(
+                    rule.backend_refs
+                        .iter()
+                        .flatten()
+                        .flat_map(|backend_ref| backend_ref.filters.iter().flatten()),
+                );
+                for filter in filters {
                     if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
                         continue;
                     }
@@ -321,6 +328,25 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
 
+        // This is controller-owned transport metadata. Kubernetes prunes it
+        // via schemars, while filesystem/etcd inputs need the same explicit
+        // defense before delegated copies are stamped with their declaring
+        // namespace.
+        for rule in route.spec.rules.iter_mut().flatten() {
+            for filter in rule.filters.iter_mut().flatten().chain(
+                rule.backend_refs
+                    .iter_mut()
+                    .flatten()
+                    .flat_map(|backend_ref| backend_ref.filters.iter_mut().flatten()),
+            ) {
+                if filter.filter_type == HTTPRouteFilterType::ExtensionRef {
+                    if let Some(extension_ref) = filter.extension_ref.as_mut() {
+                        extension_ref.resolved_namespace = None;
+                    }
+                }
+            }
+        }
+
         // Terminal identity is controller-owned transport metadata. Stamp the
         // root rules before flattening so non-delegating siblings inherit it;
         // delegated child terminals are stamped by the flattener itself.
@@ -400,7 +426,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         if let Some(rules) = &mut route.spec.resolved_rules {
             let mut resolved_index = 0usize;
             rules.retain(|rule| {
-                let reason = protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime());
+                let reason = backend_waf_invalid_reason(rule, route_ns, _ctx.runtime())
+                    .or_else(|| protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime()));
                 let keep = reason.is_none();
                 if let Some(reason) = reason {
                     delegation_outcome.issues.push(DelegationIssue::RuleDropped {
@@ -635,6 +662,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     .map(|message| (index, message))
             })
             .collect();
+        let ownership_accepted_errors = backend_waf_ownership_errors(route, route_ns, _ctx.runtime());
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, route_ns, _ctx.runtime());
         let ref_denied_list = collect_ref_denied_list(route);
@@ -684,6 +712,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let protocol_rejects_route = !protocol_invalid_rules.is_empty() && serves_no_rule;
 
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        validation_accepted_errors.extend(ownership_accepted_errors.clone());
         if protocol_rejects_route {
             for (index, message) in &protocol_invalid_rules {
                 validation_accepted_errors.push(AcceptedError::UnsupportedValue {
@@ -691,6 +720,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 });
             }
         }
+        let route_rejected = protocol_rejects_route || !ownership_accepted_errors.is_empty();
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -719,11 +749,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // the route at all; flipping it to False would drop the entire route
                 // from the data-plane route table.
                 //
-                // The single exception is `protocol_rejects_route`: an AI protocol violation that
-                // leaves no rule serving at all. There the whole-route drop is the
-                // intended outcome (AI-3), so Accepted=False carries the reasons and
-                // PartiallyInvalid is never set True below (an earlier True is
-                // cleared to False).
+                // Exceptions are an AI protocol violation that leaves no rule
+                // serving and a backend-scoped WAF ownership violation. WAF is
+                // request-wide, so a late backend attachment makes the route's
+                // election ambiguous even when a sibling rule could serve.
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -754,7 +783,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // `protocol_rejects_route` already rejected the whole route: a route
                 // that serves nothing must not also claim rules are active.
                 let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
-                if !protocol_rejects_route && (own_invalid || !delegation_dropped.is_empty()) {
+                if !route_rejected && (own_invalid || !delegation_dropped.is_empty()) {
                     let mut reasons: Vec<String> = Vec::new();
                     if own_invalid {
                         reasons.extend(invalid_details.iter().map(|(i, r)| format!("rules[{i}]: {r}")));
@@ -777,7 +806,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     // Clear a stale True. A route rejected wholesale must not be
                     // cleared with the generic "all rules are valid" wording —
                     // that would contradict the Accepted=False sitting next to it.
-                    let (reason, message) = if protocol_rejects_route {
+                    let (reason, message) = if route_rejected {
                         (
                             condition_reasons::UNSUPPORTED_VALUE,
                             "Route not accepted; no rule is active",
@@ -1607,12 +1636,56 @@ fn find_controller_invalid_rule_details(
         if already_invalid.contains(&index) {
             continue;
         }
+        if let Some(reason) = backend_waf_invalid_reason(rule, route_ns, runtime) {
+            details.push((index, reason));
+            continue;
+        }
         if let Some(reason) = protocol_rule_invalid_reason_with_runtime(rule, route_ns, runtime) {
             details.push((index, reason));
         }
     }
     details.sort_by_key(|(index, _)| *index);
     details
+}
+
+fn backend_waf_invalid_reason(
+    rule: &HTTPRouteRule,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Option<String> {
+    rule.backend_refs
+        .iter()
+        .flatten()
+        .enumerate()
+        .find_map(|(index, backend_ref)| {
+            backend_ref.filters.iter().flatten().find_map(|filter| {
+                if filter.filter_type != HTTPRouteFilterType::ExtensionRef {
+                    return None;
+                }
+                filter.extension_ref.as_ref().and_then(|extension_ref| {
+                    super::route_utils::backend_waf_extension_ref_error(runtime, route_namespace, index, extension_ref)
+                })
+            })
+        })
+}
+
+fn backend_waf_ownership_errors(
+    route: &HTTPRoute,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<AcceptedError> {
+    route
+        .spec
+        .rules
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, rule)| {
+            backend_waf_invalid_reason(rule, route_namespace, runtime).map(|message| AcceptedError::UnsupportedValue {
+                message: format!("rules[{index}]: {message}"),
+            })
+        })
+        .collect()
 }
 
 /// Find rules that are invalid, returning `(index, reason)` for each.
@@ -1699,6 +1772,33 @@ mod tests {
             20,
             Arc::new(ControllerRuntime::default()),
         )
+    }
+
+    fn make_ctx_with_raw_waf(namespace: &str, name: &str) -> HandlerContext {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::new()),
+            runtime.clone(),
+        ));
+        let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionPlugins",
+            "metadata": {"namespace": namespace, "name": name},
+            "spec": {"waf": {
+                "rules": "SecAction \\\"id:1,phase:1,pass\\\""
+            }}
+        }))
+        .expect("WAF fixture must deserialize");
+        let raw = Arc::new(LocalRawStore::new());
+        raw.upsert(format!("{namespace}/{name}"), Arc::new(plugins));
+        processor.set_raw_store(raw);
+        runtime.processor_registry.register(processor);
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
     fn make_ctx_with_raw_ai_backend(namespace: &str, name: &str) -> HandlerContext {
@@ -2581,7 +2681,14 @@ modelRoutes:
                 "resolvedRules": [{
                     "backendRefs": [{
                         "group": "edgion.io", "kind": "EdgionBackend",
-                        "name": "models-a", "namespace": "child"
+                        "name": "models-a", "namespace": "child",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": {
+                                "group": "edgion.io", "kind": "EdgionPlugins",
+                                "name": "backend-plugins", "resolvedNamespace": "child"
+                            }
+                        }]
                     }],
                     "filters": [{
                         "type": "ExtensionRef",
@@ -2612,11 +2719,16 @@ modelRoutes:
         dependencies.sort();
         assert_eq!(
             dependencies,
-            vec!["child/ai-plugins".to_string(), "infra/parent-plugins".to_string()]
+            vec![
+                "child/ai-plugins".to_string(),
+                "child/backend-plugins".to_string(),
+                "infra/parent-plugins".to_string()
+            ]
         );
 
         let resolved = route.spec.resolved_rules.as_mut().unwrap();
         resolved[0].backend_refs.as_mut().unwrap()[0].name = "models-b".to_string();
+        resolved[0].backend_refs.as_mut().unwrap()[0].filters = None;
         resolved[0].filters = None;
         let second_tuples = vec![(
             Some("edgion.io".to_string()),
@@ -2636,6 +2748,82 @@ modelRoutes:
             vec!["infra/parent-plugins".to_string()],
             "operator-declared refs must survive removal from effective rules"
         );
+    }
+
+    #[tokio::test]
+    async fn backend_waf_is_controller_invalid_and_registered_for_requeue() {
+        let ctx = make_ctx_with_raw_waf("apps", "waf");
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"namespace": "apps", "name": "route"},
+            "spec": {"rules": [{
+                "backendRefs": [{
+                    "name": "service", "port": 80,
+                    "filters": [{
+                        "type": "ExtensionRef",
+                        "extensionRef": {
+                            "group": "edgion.io", "kind": "EdgionPlugins", "name": "waf"
+                        }
+                    }]
+                }]
+            }]}
+        }))
+        .expect("HTTPRoute fixture must deserialize");
+
+        let details = find_controller_invalid_rule_details(&route, "apps", ctx.runtime());
+        assert_eq!(details.len(), 1);
+        assert!(details[0].1.contains("cannot contain WAF"), "{:?}", details[0]);
+        let accepted = backend_waf_ownership_errors(&route, "apps", ctx.runtime());
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].reason(), condition_reasons::UNSUPPORTED_VALUE);
+        assert!(accepted[0].message().contains("rules[0]"));
+
+        HttpRouteHandler::register_plugin_refs(&route, &ctx);
+        let route_ref = HttpRouteHandler::create_resource_ref(&route);
+        assert_eq!(
+            ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key()),
+            vec!["apps/waf".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_clears_authored_extension_ref_namespace_metadata() {
+        let ctx = make_ctx();
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"namespace": "apps", "name": "route"},
+            "spec": {"rules": [{
+                "filters": [{"type": "ExtensionRef", "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "rule", "resolvedNamespace": "injected"
+                }}],
+                "backendRefs": [{"name": "service", "port": 80, "filters": [{
+                    "type": "ExtensionRef", "extensionRef": {
+                        "group": "edgion.io", "kind": "EdgionPlugins", "name": "backend", "resolvedNamespace": "injected"
+                    }
+                }]}]
+            }]}
+        }))
+        .expect("HTTPRoute fixture must deserialize");
+
+        let parsed = match HttpRouteHandler::default().parse(route, &ctx).await {
+            ProcessResult::Continue(route) => route,
+            other => panic!("unexpected parse result: {other:?}"),
+        };
+        let rule = &parsed.spec.rules.as_ref().unwrap()[0];
+        assert!(rule.filters.as_ref().unwrap()[0]
+            .extension_ref
+            .as_ref()
+            .unwrap()
+            .resolved_namespace
+            .is_none());
+        assert!(rule.backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[0]
+            .extension_ref
+            .as_ref()
+            .unwrap()
+            .resolved_namespace
+            .is_none());
     }
 
     #[test]

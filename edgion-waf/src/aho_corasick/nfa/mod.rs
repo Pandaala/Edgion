@@ -8,6 +8,26 @@ use super::{AutomatonKind, BuildError, BuildLimits, MatchKind, PatternId, Select
 pub(super) use build::BuildGraph;
 use contiguous::ContiguousNfa;
 use sparse::SparseNfa;
+use std::mem::size_of;
+
+pub(crate) fn phrase_build_projection(patterns: usize, bytes: usize, limits: BuildLimits) -> Option<usize> {
+    if patterns == 0 {
+        return Some(0);
+    }
+    let states = limits.max_states.min(bytes.checked_add(1)?);
+    let transitions = limits.max_transitions.min(bytes);
+    let outputs = limits.max_outputs.min(patterns);
+    let root_fanout = transitions.min(256);
+    let transition_charge = size_of::<(u8, usize)>().checked_add(4 * size_of::<usize>())?;
+    states
+        .checked_mul(size_of::<build::BuildState>())?
+        .checked_add(transitions.checked_mul(transition_charge)?)?
+        .checked_add(outputs.checked_mul(size_of::<PatternId>())?)?
+        .checked_add(patterns.checked_mul(size_of::<usize>())?)?
+        .checked_add(states.checked_mul(size_of::<usize>())?)?
+        .checked_add(root_fanout.checked_mul(size_of::<(u8, usize)>())?)?
+        .checked_add(limits.max_compiled_bytes)
+}
 
 #[derive(Debug)]
 pub(super) enum Backend {

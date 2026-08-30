@@ -81,6 +81,12 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // and alias two distinct store entries.
     let resource_key = spec.key_name();
 
+    if let Some(waf) = spec.spec.waf.as_ref() {
+        if let Err(error) = runtime.add_waf(waf) {
+            errors.push(format!("waf: {error}"));
+        }
+    }
+
     // Compile regex conditions on all plugin entries once, before building the
     // runtime. This avoids per-request Regex::new() in the fallback path of
     // condition evaluators. add_from_* clones the (now-compiled) conditions into
@@ -631,7 +637,7 @@ mod compile_plugins_tests {
     };
     use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
     use edgion_resources::resources::edgion_plugins::{
-        EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
+        EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry, WafConfig, WafMode,
     };
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
 
@@ -644,6 +650,163 @@ mod compile_plugins_tests {
             add: None,
             remove: None,
         })
+    }
+
+    fn waf_resource(rules: &str) -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some("native-waf".to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                waf: Some(WafConfig {
+                    rules: rules.to_string(),
+                    mode: WafMode::On,
+                    priority: 0,
+                }),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn valid_waf_builds_one_logical_filter_for_each_supported_gateway_hook() {
+        let compiled = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny,status:403\"\n",
+        ));
+
+        assert!(compiled.is_activatable);
+        assert!(compiled.preparse_errors.is_empty());
+        assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1);
+        assert_eq!(compiled.plugin_runtime.upstream_response_plugins_count(), 1);
+        assert_eq!(compiled.plugin_runtime.upstream_response_body_plugins_count(), 0);
+        assert_eq!(compiled.plugin_runtime.upstream_response_async_plugins_count(), 1);
+    }
+
+    #[test]
+    fn invalid_waf_update_retains_the_last_known_good_generation() {
+        let valid = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n",
+        ));
+        let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+        assert!(!invalid.is_activatable);
+        assert!(invalid.retain_previous_on_invalid_update);
+        assert!(invalid.preparse_errors.iter().any(|error| error.starts_with("waf: ")));
+
+        let store = PluginStore::new();
+        store.update(
+            HashMap::from([("default/native-waf".to_string(), Arc::clone(&valid))]),
+            &HashSet::new(),
+        );
+        store.update(
+            HashMap::from([("default/native-waf".to_string(), invalid)]),
+            &HashSet::new(),
+        );
+
+        let retained = store
+            .get_plugin_runtime("default/native-waf")
+            .expect("valid WAF generation remains published");
+        assert!(Arc::ptr_eq(&retained, &valid.plugin_runtime));
+    }
+
+    #[test]
+    fn waf_store_publishes_atomically_and_pins_in_flight_generations() {
+        let key = "default/native-waf".to_string();
+        let first = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /first\" \"id:1,phase:1,deny\"\n",
+        ));
+        let second = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /second\" \"id:2,phase:1,deny\"\n",
+        ));
+        let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+        let recovered = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /third\" \"id:3,phase:1,deny\"\n",
+        ));
+        let store = PluginStore::new();
+
+        store.replace_all(HashMap::from([(key.clone(), Arc::clone(&first))]));
+        let in_flight_first = store.get_plugin_runtime(&key).expect("first generation is published");
+
+        store.update(HashMap::from([(key.clone(), Arc::clone(&second))]), &HashSet::new());
+        let in_flight_second = store.get_plugin_runtime(&key).expect("second generation is published");
+        assert!(Arc::ptr_eq(&in_flight_first, &first.plugin_runtime));
+        assert!(Arc::ptr_eq(&in_flight_second, &second.plugin_runtime));
+        assert!(!Arc::ptr_eq(&in_flight_first, &in_flight_second));
+
+        store.replace_all(HashMap::from([(key.clone(), invalid)]));
+        let retained = store
+            .get_plugin_runtime(&key)
+            .expect("invalid full snapshot retains the second generation");
+        assert!(Arc::ptr_eq(&retained, &in_flight_second));
+
+        store.update(HashMap::from([(key.clone(), Arc::clone(&recovered))]), &HashSet::new());
+        let active_recovered = store
+            .get_plugin_runtime(&key)
+            .expect("recovered generation is published");
+        assert!(Arc::ptr_eq(&active_recovered, &recovered.plugin_runtime));
+
+        store.update(HashMap::new(), &HashSet::from([key.clone()]));
+        assert!(store.get_plugin_runtime(&key).is_none());
+        assert_eq!(in_flight_first.request_plugins_count(), 1);
+        assert_eq!(in_flight_second.request_plugins_count(), 1);
+        assert_eq!(active_recovered.request_plugins_count(), 1);
+    }
+
+    #[test]
+    fn waf_reload_storm_never_publishes_an_invalid_or_partial_runtime() {
+        let key = "default/native-waf".to_string();
+        let first = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /first\" \"id:1,phase:1,deny\"\n",
+        ));
+        let second = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /second\" \"id:2,phase:1,deny\"\n",
+        ));
+        let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+        let store = Arc::new(PluginStore::new());
+        store.replace_all(HashMap::from([(key.clone(), Arc::clone(&first))]));
+
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let store = Arc::clone(&store);
+                let key = key.clone();
+                let first_runtime = Arc::clone(&first.plugin_runtime);
+                let second_runtime = Arc::clone(&second.plugin_runtime);
+                scope.spawn(move || {
+                    for _ in 0..10_000 {
+                        let runtime = store
+                            .get_plugin_runtime(&key)
+                            .expect("reload never removes the active WAF");
+                        assert!(
+                            Arc::ptr_eq(&runtime, &first_runtime) || Arc::ptr_eq(&runtime, &second_runtime),
+                            "only complete valid generations may be observed"
+                        );
+                    }
+                });
+            }
+
+            let store = Arc::clone(&store);
+            let key = key.clone();
+            let first = Arc::clone(&first);
+            let second = Arc::clone(&second);
+            let invalid = Arc::clone(&invalid);
+            scope.spawn(move || {
+                for iteration in 0..2_000 {
+                    let generation = match iteration % 3 {
+                        0 => Arc::clone(&first),
+                        1 => Arc::clone(&invalid),
+                        _ => Arc::clone(&second),
+                    };
+                    store.update(HashMap::from([(key.clone(), generation)]), &HashSet::new());
+                }
+            });
+        });
+
+        let active = store
+            .get_plugin_runtime(&key)
+            .expect("a complete generation remains after the storm");
+        assert!(Arc::ptr_eq(&active, &first.plugin_runtime) || Arc::ptr_eq(&active, &second.plugin_runtime));
     }
 
     /// A `ResponseHeaderModifier` plugin placed under `requestPlugins` is a
@@ -1239,6 +1402,7 @@ mod compile_plugins_tests {
                 ),
             ),
             ("access_log_extern_blocked", ep_with_blocked_access_log_extern()),
+            ("waf_bad_syntax", waf_resource("SecRule invalid-(")),
         ];
 
         for (name, ep) in cases {

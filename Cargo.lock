@@ -1731,6 +1731,7 @@ dependencies = [
  "edgion-common",
  "edgion-dsl",
  "edgion-resources",
+ "edgion-waf",
  "edgion-wasm",
  "etcd-client",
  "expect-test",
@@ -1826,6 +1827,7 @@ dependencies = [
  "chrono",
  "clap",
  "edgion-dsl",
+ "edgion-waf",
  "hex",
  "http",
  "jsonptr",
@@ -1915,7 +1917,13 @@ dependencies = [
 name = "edgion-waf"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "regex-automata",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha1",
  "thiserror 2.0.20",
 ]
 

@@ -10,10 +10,10 @@ use crate::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::A
 use crate::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
-use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::prelude_resources::{EdgionPlugins, Gateway};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::gateway::AllowedRoutes;
-use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
 use edgion_resources::ResourceKind;
 
 /// Result of validating a parentRef for acceptance.
@@ -26,6 +26,36 @@ pub struct AcceptedResult {
     /// Protocols of the matched listeners (e.g. "HTTPS", "TLS", "HTTP").
     /// Populated alongside matched_listeners; same order is NOT guaranteed.
     pub matched_listener_protocols: Vec<String>,
+}
+
+/// Return the validation error for an EdgionPlugins backend filter whose
+/// desired resource declares the request-wide WAF.
+///
+/// Backend filters execute only after backend selection, which is too late to
+/// participate in the Global/Gateway/Route WAF ownership election. The raw
+/// desired generation is intentional: EdgionPlugins requeues dependents before
+/// its processed cache is replaced, so the cache may still contain the prior
+/// generation during this route reconcile.
+pub(super) fn backend_waf_extension_ref_error(
+    runtime: &ControllerRuntime,
+    route_namespace: &str,
+    backend_index: usize,
+    extension_ref: &LocalObjectReference,
+) -> Option<String> {
+    if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io") || extension_ref.kind != "EdgionPlugins"
+    {
+        return None;
+    }
+    let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);
+    let processor = runtime.processor_registry.get("EdgionPlugins")?;
+    let key = format!("{namespace}/{}", extension_ref.name);
+    let plugins = processor
+        .get_raw_any(&key)
+        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())?;
+    plugins.spec.waf.as_ref()?;
+    Some(format!(
+        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain WAF; attach WAF at Global, Gateway, or Route scope"
+    ))
 }
 
 /// Check if a listener's namespace policy allows a route from the given namespace.

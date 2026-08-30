@@ -15,6 +15,7 @@ use crate::EdgionHttpContext;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{RequestBodyAction, RequestBodyEvent, Session};
+use std::time::Instant;
 
 type Handlers = Vec<sync_wrapper::SyncWrapper<Box<dyn crate::plugins::runtime::RequestBodyStreamHandler>>>;
 
@@ -74,6 +75,23 @@ pub async fn request_body_filter_action(
         ctx.request_body_stream = handlers;
     }
 
+    // Native WAF observes the post-mutation bytes that are about to be sent
+    // upstream. A terminating body handler has already returned above, so an
+    // unforwarded chunk is never charged as inspected by the WAF.
+    if let Some(verdict) = run_waf_body_stream(body.as_deref().unwrap_or_default(), event, ctx) {
+        if let ChunkVerdict::Terminate {
+            status,
+            grpc_status,
+            body: reply,
+            header_ops,
+        } = verdict
+        {
+            pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
+            write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
+            return Ok(RequestBodyAction::Terminate);
+        }
+    }
+
     // Observation sees the exact post-mutation bytes about to reach the
     // mirror tee and primary upstream. It is synchronous, read-only and
     // failure-open, so it cannot change the body action or backpressure path.
@@ -83,6 +101,85 @@ pub async fn request_body_filter_action(
 
     pg_request_body_filter::request_body_filter(edgion_http, session, body, event, ctx).await?;
     Ok(RequestBodyAction::Continue)
+}
+
+fn run_waf_body_stream(chunk: &[u8], event: RequestBodyEvent, ctx: &mut EdgionHttpContext) -> Option<ChunkVerdict> {
+    if !ctx.waf.as_deref().is_some_and(|waf| waf.request_body_streaming()) {
+        return None;
+    }
+    let mut log = crate::plugins::runtime::PluginLog::new("Waf");
+    if event == RequestBodyEvent::Abandoned {
+        let waf = ctx.waf.as_deref_mut()?;
+        waf.abandon_request_body_stream();
+        let elapsed_micros = waf.take_request_body_execution_micros();
+        crate::observe::metrics::record_waf_execution_micros("request_body", elapsed_micros);
+        log.time_cost = Some(elapsed_micros);
+        log.push_err("body-stream-abandoned");
+        ctx.stage_logs.push(StageLogs {
+            stage: "request_body_filters",
+            filters: vec![log],
+            edgion_plugins: Vec::new(),
+        });
+        return Some(ChunkVerdict::Terminate {
+            status: 400,
+            grpc_status: None,
+            body: None,
+            header_ops: Vec::new(),
+        });
+    }
+
+    let started = Instant::now();
+    let result = ctx
+        .waf
+        .as_deref_mut()?
+        .execute_request_body_stream_chunk(chunk, event.is_complete());
+    if result.is_ok() {
+        crate::observe::metrics::record_waf_body_bytes_inspected("request", chunk.len());
+    }
+    let elapsed_micros =
+        u64::try_from(Instant::now().saturating_duration_since(started).as_micros()).unwrap_or(u64::MAX);
+    let waf = ctx.waf.as_deref_mut()?;
+    waf.add_request_body_execution_micros(elapsed_micros);
+    if matches!(&result, Ok(None)) {
+        return None;
+    }
+    let total_micros = waf.take_request_body_execution_micros();
+    crate::observe::metrics::record_waf_execution_micros("request_body", total_micros);
+    log.time_cost = Some(total_micros);
+    match result {
+        Ok(None) => unreachable!("non-terminal streamed WAF result returned above"),
+        Ok(Some(outcome)) => {
+            let intervention = crate::plugins::http::waf::WafPlugin::record_outcome(&outcome, &mut log);
+            ctx.stage_logs.push(StageLogs {
+                stage: "request_body_filters",
+                filters: vec![log],
+                edgion_plugins: Vec::new(),
+            });
+            intervention.map_or(Some(ChunkVerdict::Continue), |(_, status)| {
+                Some(ChunkVerdict::Terminate {
+                    status,
+                    grpc_status: None,
+                    body: None,
+                    header_ops: Vec::new(),
+                })
+            })
+        }
+        Err(error) => {
+            log.push_err("runtime-failed");
+            let status = crate::plugins::http::waf::WafPlugin::runtime_error_status(&error);
+            ctx.stage_logs.push(StageLogs {
+                stage: "request_body_filters",
+                filters: vec![log],
+                edgion_plugins: Vec::new(),
+            });
+            Some(ChunkVerdict::Terminate {
+                status,
+                grpc_status: None,
+                body: None,
+                header_ops: Vec::new(),
+            })
+        }
+    }
 }
 
 /// Write a handler-authored local reply, mirroring the request-stage
@@ -166,7 +263,75 @@ async fn write_terminate_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
+    use edgion_waf::seclang::{RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
+    use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
+
+    fn streaming_waf_context(body_limit: u64) -> EdgionHttpContext {
+        let config = WafConfig {
+            rules: "SecRule REQUEST_BODY \"@pm blocked\" \"id:1,phase:2,deny,status:409\"\n".to_string(),
+            mode: WafMode::On,
+            priority: 0,
+        };
+        let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
+        let request = RequestHead::new(
+            b"POST / HTTP/1.1",
+            b"POST",
+            b"/",
+            b"/",
+            b"HTTP/1.1",
+            b"192.0.2.1",
+            b"request-1",
+            &[],
+        );
+        let mut transaction = Transaction::new_shared_with_modes(
+            generation,
+            request,
+            RuntimeLimits::default(),
+            edgion_waf::seclang::EvaluationMode::Accelerated,
+            RuleEngineMode::On,
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        transaction.start_request_body_stream().unwrap();
+        let owner = Arc::new(());
+        let mut waf = crate::ctx::WafRequestContext::new(Arc::clone(&owner), transaction);
+        assert!(waf.enable_request_body_streaming(&owner, body_limit));
+        let mut ctx = EdgionHttpContext::default();
+        ctx.waf = Some(Box::new(waf));
+        ctx.request_body_stream_active = true;
+        ctx
+    }
+
+    #[test]
+    fn native_waf_stream_scans_cross_chunk_without_body_storage() {
+        let mut ctx = streaming_waf_context(1024);
+
+        assert!(run_waf_body_stream(b"prefix-blo", RequestBodyEvent::Data, &mut ctx).is_none());
+        assert!(matches!(
+            run_waf_body_stream(b"cked", RequestBodyEvent::Data, &mut ctx),
+            Some(ChunkVerdict::Terminate { status: 409, .. })
+        ));
+        assert!(!ctx.request_body.has_cached_body());
+        assert!(!ctx.waf.as_deref().unwrap().request_body_streaming());
+    }
+
+    #[test]
+    fn native_waf_stream_fails_closed_on_gateway_cap_and_abandoned_body() {
+        let mut capped = streaming_waf_context(3);
+        assert!(matches!(
+            run_waf_body_stream(b"four", RequestBodyEvent::Data, &mut capped),
+            Some(ChunkVerdict::Terminate { status: 413, .. })
+        ));
+
+        let mut abandoned = streaming_waf_context(1024);
+        assert!(matches!(
+            run_waf_body_stream(&[], RequestBodyEvent::Abandoned, &mut abandoned),
+            Some(ChunkVerdict::Terminate { status: 400, .. })
+        ));
+        assert!(!abandoned.waf.as_deref().unwrap().request_body_streaming());
+    }
 
     #[test]
     fn terminate_writer_classifies_grpc_route_without_content_type_fact() {

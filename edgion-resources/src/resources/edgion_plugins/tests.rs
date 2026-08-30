@@ -43,6 +43,41 @@ fn test_has_plugins_with_empty_vec() {
 }
 
 #[test]
+fn waf_is_one_top_level_logical_plugin_and_round_trips() {
+    let yaml = r#"
+waf:
+  rules: |
+    SecRule REQUEST_URI "@contains /blocked" "id:1,phase:1,deny,status:403"
+  mode: detectionOnly
+"#;
+    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).expect("WAF configuration parses");
+    let ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec,
+        status: None,
+    };
+
+    assert!(ep.has_plugins());
+    assert_eq!(ep.plugin_count(), 1);
+    assert_eq!(ep.waf().map(|waf| waf.mode), Some(WafMode::DetectionOnly));
+    assert!(ep.validate_plugins().is_empty());
+
+    let serialized = serde_json::to_value(&ep.spec).expect("WAF configuration serializes");
+    assert_eq!(serialized["waf"]["mode"], "detectionOnly");
+    assert!(serialized.get("requestPlugins").is_none());
+}
+
+#[test]
+fn waf_rejects_unknown_configuration_fields() {
+    let yaml = r#"
+waf:
+  rules: 'SecAction "id:1,phase:1,pass"'
+  unexpected: true
+"#;
+    assert!(serde_yaml::from_str::<EdgionPluginsSpec>(yaml).is_err());
+}
+
+#[test]
 fn test_plugin_entry_default_enabled() {
     let entry = RequestFilterEntry::new(make_header_modifier_plugin());
     assert!(entry.is_enabled());

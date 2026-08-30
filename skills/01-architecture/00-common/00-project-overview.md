@@ -12,6 +12,7 @@ flowchart TD
     YAML["YAML / K8s CRD"] --> CC
     CLI["edgion-cli"] --> AdminCtrl
     WasmLib["edgion-wasm"] --> CLI
+    WafLib["edgion-waf"] --> RP
 
     subgraph Controller["edgion-controller"]
         CC["ConfCenter\n(File/K8s/Etcd)"] --> WQ["Workqueue\n(per-kind)"] --> RP["ResourceProcessor\n(validate/preparse/parse)"]
@@ -43,6 +44,7 @@ flowchart TD
         MetricsGw["Metrics API (:12090)"]
     end
     WasmLib --> WasmLoad
+    WafLib --> ProxyHttp
 ```
 
 ## Crate structure
@@ -79,14 +81,17 @@ edgion-tests/                    # Integration test assets, scripts, and validat
 ```
 
 **Design principles**: `edgion-waf` is a runtime-independent leaf that owns the
-native WAF engine without linking another WAF implementation. `edgion-wasm` is an external-dependencies-only leaf
+native WAF engine without linking another WAF implementation. Its strict
+compiler is consumed by `edgion-resources` for control/data-plane validation
+parity, and its transaction runtime is consumed directly by the Gateway.
+`edgion-wasm` is an external-dependencies-only leaf
 consumed by the Gateway before Wasmtime compilation and by the CLI for local
 Wasm inspection. `edgion-dsl` is a leaf and
-`edgion-resources` depends on it for real DSL compilation and static validation;
+`edgion-resources` depends on it and `edgion-waf` for real DSL/WAF compilation and static validation;
 `edgion-common` holds backend-agnostic shared infrastructure; controller,
 gateway, and CLI code stay in their owning crates. The in-repo dependency graph
-remains a DAG (`dsl → resources → common → {controller, gateway, cli}`, plus
-the independent `waf` leaf and `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
+remains a DAG (`{dsl, waf} → resources → common → {controller, gateway, cli}`,
+plus direct `waf → gateway` and `wasm → {gateway, cli}` edges); the Gateway also uses `edgion-dsl`
 directly for VM/runtime integration.
 
 ## EdgionHttpContext — per-request state container

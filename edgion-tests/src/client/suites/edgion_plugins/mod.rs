@@ -58,6 +58,7 @@ mod request_restriction;
 mod resolved_refs;
 mod response_rewrite;
 mod trace_context;
+mod waf;
 mod wasm;
 mod webhook_key_get;
 
@@ -139,5 +140,8 @@ pub use request_restriction::RequestRestrictionTestSuite;
 pub use resolved_refs::ResolvedRefsTestSuite;
 pub use response_rewrite::ResponseRewriteTestSuite;
 pub use trace_context::TraceContextPluginTestSuite;
+pub use waf::{
+    WafDynamicDeletedTestSuite, WafDynamicInitialTestSuite, WafDynamicRecoveredTestSuite, WafDynamicUpdatedTestSuite,
+};
 pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;

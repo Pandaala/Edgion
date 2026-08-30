@@ -18,6 +18,10 @@ metadata:
   name: my-plugins
   namespace: default
 spec:
+  waf:
+    rules: |
+      SecRule REQUEST_URI "@contains /blocked" "id:1,phase:1,deny,status:403"
+    mode: on
   requestPlugins:
     - type: RateLimit           # Plugin type
       config:                   # Plugin configuration (varies by type)
@@ -46,6 +50,16 @@ spec:
 | `OpenidConnect` | OpenID Connect / OAuth2 | ✅ client_secret + session_secret |
 
 ### Security
+
+`spec.waf` is the native logical WAF. It is deliberately not an
+`EdgionPlugin` discriminator and does not appear in any stage array. One
+compiled generation internally owns request-header, request-body,
+response-header, response-safe phase-4, and logging-phase execution. Its
+schema is `{ rules: String, mode: on | detectionOnly }`; source is inline,
+strictly compiled, admin-redacted, and cannot use filesystem/network includes
+or external phrase assets. Invalid updates retain the last activatable
+generation. See
+`docs/en/user-guide/http-route/filters/edgion-plugins/waf.md`.
 
 | Type | Description |
 |------|-------------|
@@ -109,7 +123,7 @@ spec:
 
 ## Plugin Execution Stages
 
-HTTP plugins execute across Pingora's 4 stages:
+Ordinary HTTP plugins execute across Pingora's 4 stages:
 
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
@@ -122,6 +136,11 @@ Each entry uses the flattened wire shape `enable + type + config`. A plugin may
 only be placed in stages admitted by the exhaustive Rust
 `validate::applicable_stages` table; the same resource may contain entries in
 multiple stage arrays. There is no generic `spec.plugins` field.
+
+`spec.waf` is the sole exception to stage-array placement: it is one logical
+top-level configuration whose internal companions run at every supported WAF
+phase. At most one logical WAF may own a request; composing multiple
+WAF-bearing EdgionPlugins references fails closed.
 
 ## Shared condition expressions
 

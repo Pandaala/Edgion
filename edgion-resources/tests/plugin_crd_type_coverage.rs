@@ -287,3 +287,30 @@ fn no_stage_enum_has_dead_or_duplicate_entries() {
          or rename them to a real EdgionPlugin variant."
     );
 }
+
+#[test]
+fn logical_waf_schema_is_top_level_strict_and_not_a_stage_discriminator() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd/edgion-crd/edgion_plugins_crd.yaml");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+    let doc: Value = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
+    let props = &doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"];
+    let waf = &props["waf"];
+
+    assert_eq!(waf["type"], "object");
+    assert_eq!(waf["additionalProperties"], false);
+    assert_eq!(waf["required"], serde_json::json!(["rules"]));
+    assert_eq!(
+        waf["properties"]["mode"]["enum"],
+        serde_json::json!(["on", "detectionOnly"])
+    );
+    assert!(waf["properties"]["rules"]["minLength"]
+        .as_u64()
+        .is_some_and(|value| value > 0));
+
+    for (field, _) in STAGE_FIELD_KEYS {
+        let entries = props[field]["items"]["properties"]["type"]["enum"]
+            .as_array()
+            .expect("stage discriminator is an array");
+        assert!(!entries.iter().any(|entry| entry == "Waf"));
+    }
+}

@@ -218,6 +218,7 @@ pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> Flatt
                         .flatten()
                         .filter(|f| f.filter_type == GRPCRouteFilterType::ExtensionRef)
                         .cloned()
+                        .map(|filter| with_extension_ref_namespace(filter, parent_ns))
                         .collect(),
                 };
                 let attrs = InheritedAttrs {
@@ -526,13 +527,15 @@ fn flatten_child_rules(
                         extension: inherited
                             .extension
                             .iter()
+                            .cloned()
                             .chain(
                                 rule.filters
                                     .iter()
                                     .flatten()
-                                    .filter(|f| f.filter_type == GRPCRouteFilterType::ExtensionRef),
+                                    .filter(|f| f.filter_type == GRPCRouteFilterType::ExtensionRef)
+                                    .cloned()
+                                    .map(|filter| with_extension_ref_namespace(filter, child_ns)),
                             )
-                            .cloned()
                             .collect(),
                     };
                     let next_attrs = InheritedAttrs {
@@ -626,8 +629,14 @@ fn flatten_child_rules(
                 .standard
                 .iter()
                 .chain(inherited.extension.iter())
-                .chain(rule.filters.iter().flatten())
                 .cloned()
+                .chain(
+                    rule.filters
+                        .iter()
+                        .flatten()
+                        .cloned()
+                        .map(|filter| with_extension_ref_namespace(filter, child_ns)),
+                )
                 .collect();
             if combined.is_empty() {
                 None
@@ -641,6 +650,13 @@ fn flatten_child_rules(
         // CHILD namespace as referrer.
         if let Some(backend_refs) = flattened.backend_refs.as_mut() {
             for br in backend_refs.iter_mut() {
+                for filter in br.filters.iter_mut().flatten() {
+                    if filter.filter_type == GRPCRouteFilterType::ExtensionRef {
+                        if let Some(extension_ref) = filter.extension_ref.as_mut() {
+                            extension_ref.resolved_namespace = Some(child_ns.to_string());
+                        }
+                    }
+                }
                 let target_ns = br.namespace.clone().unwrap_or_else(|| child_ns.to_string());
                 br.namespace = Some(target_ns.clone());
                 if target_ns != child_ns {
@@ -668,6 +684,15 @@ fn flatten_child_rules(
         collect_service_tuples(ctx, child_ns, &flattened);
         out_rules.push(flattened);
     }
+}
+
+fn with_extension_ref_namespace(mut filter: GRPCRouteFilter, namespace: &str) -> GRPCRouteFilter {
+    if filter.filter_type == GRPCRouteFilterType::ExtensionRef {
+        if let Some(extension_ref) = filter.extension_ref.as_mut() {
+            extension_ref.resolved_namespace = Some(namespace.to_string());
+        }
+    }
+    filter
 }
 
 enum MergeResult {
@@ -1393,7 +1418,12 @@ mod tests {
                 "filters": [
                     {"type": "ExtensionRef", "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "child-plugin"}}
                 ],
-                "backendRefs": [{"name": "svc", "port": 80}]
+                "backendRefs": [{
+                    "name": "svc", "port": 80,
+                    "filters": [{"type": "ExtensionRef", "extensionRef": {
+                        "group": "edgion.io", "kind": "EdgionPlugins", "name": "child-backend-plugin"
+                    }}]
+                }]
             }]}),
         );
         let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
@@ -1408,6 +1438,27 @@ mod tests {
         assert_eq!(
             filters[2].extension_ref.as_ref().map(|e| e.name.as_str()),
             Some("child-plugin")
+        );
+        assert_eq!(
+            filters[1]
+                .extension_ref
+                .as_ref()
+                .and_then(|e| e.resolved_namespace.as_deref()),
+            Some("infra")
+        );
+        assert_eq!(
+            filters[2]
+                .extension_ref
+                .as_ref()
+                .and_then(|e| e.resolved_namespace.as_deref()),
+            Some("billing")
+        );
+        assert_eq!(
+            rules[0].backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[0]
+                .extension_ref
+                .as_ref()
+                .and_then(|e| e.resolved_namespace.as_deref()),
+            Some("billing")
         );
     }
 

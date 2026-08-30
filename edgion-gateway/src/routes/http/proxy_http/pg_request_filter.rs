@@ -1,4 +1,6 @@
-use super::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
+use super::{
+    resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy,
+};
 use crate::ctx::NormalizedHostname;
 use crate::plugins::http::get_global_plugin_store;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
@@ -188,7 +190,10 @@ pub async fn request_filter(
     // directly without paying any format!() / store-lookup cost.
     // Fetch the global plugin store once and share &PluginStore across both
     // resolve calls to avoid redundant Arc::clone on the hot path.
-    if ctx.resolved_global_plugins.is_none() || ctx.resolved_route_ext_refs.is_none() {
+    if ctx.resolved_global_plugins.is_none()
+        || ctx.resolved_gateway_plugins.is_none()
+        || ctx.resolved_route_ext_refs.is_none()
+    {
         let plugin_store = get_global_plugin_store();
 
         if ctx.resolved_global_plugins.is_none() {
@@ -207,6 +212,30 @@ pub async fn request_filter(
             };
             ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
         }
+
+        if ctx.resolved_gateway_plugins.is_none() {
+            let resolved = resolve_gateway_plugins(&plugin_store, &ctx.gateway_info.plugin_store_keys);
+            ctx.resolved_gateway_plugins = Some(Arc::new(resolved));
+        }
+    }
+
+    let selected_waf = select_waf_owner(
+        ctx.resolved_global_plugins
+            .as_deref()
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        ctx.resolved_gateway_plugins
+            .as_deref()
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        ctx.resolved_route_ext_refs
+            .as_deref()
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    );
+    if !ctx.select_waf(selected_waf) {
+        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
     }
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
@@ -225,16 +254,8 @@ pub async fn request_filter(
     }
 
     // Step 2b: Run Gateway-level plugins (edgion.io/edgion-plugins annotation), after
-    // GatewayClass-global and before route-level. Resolve once into the per-request snapshot.
-    if ctx.resolved_gateway_plugins.is_none() {
-        let keys = ctx.gateway_info.plugin_store_keys.clone();
-        let resolved = if keys.is_empty() {
-            Vec::new()
-        } else {
-            resolve_gateway_plugins(&get_global_plugin_store(), &keys)
-        };
-        ctx.resolved_gateway_plugins = Some(Arc::new(resolved));
-    }
+    // GatewayClass-global and before route-level. The snapshot was resolved
+    // before WAF winner election above.
     if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(Arc::clone) {
         for runtime in plugins.iter() {
             if runtime.request_plugins_count() == 0 {

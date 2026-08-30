@@ -1048,7 +1048,7 @@ pub fn resolve_canary_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerConte
     errors
 }
 
-/// Requeue all Gateways and HTTPRoutes that reference this EdgionPlugins.
+/// Requeue all Gateways, HTTPRoutes, and GRPCRoutes that reference this EdgionPlugins.
 async fn requeue_referencing_resources(ep: &EdgionPlugins, ctx: &HandlerContext) {
     let Some(ep_name) = ep.metadata.name.as_deref().filter(|n| !n.is_empty()) else {
         return;

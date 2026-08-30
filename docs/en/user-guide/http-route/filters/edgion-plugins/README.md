@@ -47,5 +47,6 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [response-rewrite.md](response-rewrite.md) | Response rewrite |
 | [trace-context.md](trace-context.md) | W3C Trace Context propagation |
 | [wasm.md](wasm.md) | Execute a proxy-wasm ABI guest module (WebAssembly) via wasmtime |
+| [waf.md](waf.md) | Native bounded SecLang WAF spanning the supported HTTP transaction phases |
 | [all-endpoint-status.md](all-endpoint-status.md) | Query all backend endpoint statuses |
 | [debug-access-log.md](debug-access-log.md) | Inject access log into response headers (dev only) |

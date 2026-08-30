@@ -98,6 +98,220 @@ pub(crate) struct CurrentPluginEntryIdentity {
     has_alias: bool,
 }
 
+/// Request-owned native WAF state.
+///
+/// The box keeps the large, optional transaction and its reusable matcher /
+/// regex scratch out of the base HTTP context. Future streaming body parser
+/// and window state belongs here as well; it must not use thread-local storage
+/// because a request may move between executor workers.
+pub(crate) struct WafRequestContext {
+    owner: Arc<()>,
+    transaction: Option<edgion_waf::seclang::Transaction<'static>>,
+    request_body_streaming: bool,
+    request_body_streamed_bytes: u64,
+    request_body_stream_limit: u64,
+    request_body_execution_micros: u64,
+    charged_runtime_bytes: i64,
+}
+
+impl WafRequestContext {
+    pub(crate) fn new(owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> Self {
+        let mut context = Self {
+            owner,
+            transaction: Some(transaction),
+            request_body_streaming: false,
+            request_body_streamed_bytes: 0,
+            request_body_stream_limit: 0,
+            request_body_execution_micros: 0,
+            charged_runtime_bytes: 0,
+        };
+        context.refresh_runtime_charge();
+        context
+    }
+
+    pub(crate) fn install(&mut self, owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
+        if !Arc::ptr_eq(&self.owner, &owner) || self.transaction.is_some() {
+            return false;
+        }
+        self.transaction = Some(transaction);
+        self.refresh_runtime_charge();
+        true
+    }
+
+    pub(crate) fn take(&mut self, owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {
+        Arc::ptr_eq(&self.owner, owner)
+            .then(|| self.transaction.take())
+            .flatten()
+    }
+
+    pub(crate) fn enable_request_body_streaming(&mut self, owner: &Arc<()>, body_limit: u64) -> bool {
+        if !Arc::ptr_eq(&self.owner, owner) || self.transaction.is_none() {
+            return false;
+        }
+        self.request_body_streaming = true;
+        self.request_body_stream_limit = body_limit;
+        true
+    }
+
+    pub(crate) const fn request_body_streaming(&self) -> bool {
+        self.request_body_streaming
+    }
+
+    pub(crate) fn execute_request_body_stream_chunk(
+        &mut self,
+        chunk: &[u8],
+        end_of_stream: bool,
+    ) -> Result<Option<edgion_waf::seclang::PhaseOutcome>, edgion_waf::seclang::RuntimeError> {
+        let chunk_bytes = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
+        let next_bytes = self
+            .request_body_streamed_bytes
+            .checked_add(chunk_bytes)
+            .ok_or(edgion_waf::seclang::RuntimeError::Arithmetic)?;
+        if next_bytes > self.request_body_stream_limit {
+            return Err(edgion_waf::seclang::RuntimeError::Body {
+                kind: edgion_waf::seclang::BodyError::ByteLimit {
+                    actual: usize::try_from(next_bytes).unwrap_or(usize::MAX),
+                    limit: usize::try_from(self.request_body_stream_limit).unwrap_or(usize::MAX),
+                },
+            });
+        }
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or(edgion_waf::seclang::RuntimeError::RequestBodyNotPublished)?;
+        let outcome = transaction.execute_request_body_stream_chunk(chunk, end_of_stream)?;
+        self.request_body_streamed_bytes = next_bytes;
+        if end_of_stream || outcome.is_some() {
+            self.request_body_streaming = false;
+        }
+        self.refresh_runtime_charge();
+        Ok(outcome)
+    }
+
+    pub(crate) fn abandon_request_body_stream(&mut self) {
+        self.request_body_streaming = false;
+    }
+
+    pub(crate) fn add_request_body_execution_micros(&mut self, elapsed_micros: u64) {
+        self.request_body_execution_micros = self.request_body_execution_micros.saturating_add(elapsed_micros);
+    }
+
+    pub(crate) fn take_request_body_execution_micros(&mut self) -> u64 {
+        std::mem::take(&mut self.request_body_execution_micros)
+    }
+
+    fn refresh_runtime_charge(&mut self) {
+        let next = self.transaction.as_ref().map_or(0, |transaction| {
+            i64::try_from(transaction.retained_bytes()).unwrap_or(i64::MAX)
+        });
+        let delta = next.saturating_sub(self.charged_runtime_bytes);
+        if delta != 0 {
+            crate::observe::metrics::adjust_waf_runtime_bytes_active(delta);
+            self.charged_runtime_bytes = next;
+        }
+    }
+}
+
+impl Drop for WafRequestContext {
+    fn drop(&mut self) {
+        if self.charged_runtime_bytes != 0 {
+            crate::observe::metrics::adjust_waf_runtime_bytes_active(-self.charged_runtime_bytes);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WafPhase {
+    Request,
+    ResponseHeaders,
+    ResponseComplete,
+}
+
+impl WafPhase {
+    const fn bit(self) -> u8 {
+        match self {
+            Self::Request => 1 << 0,
+            Self::ResponseHeaders => 1 << 1,
+            Self::ResponseComplete => 1 << 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WafPhaseClaim {
+    Execute,
+    Skip,
+    Pending,
+}
+
+enum WafSelection {
+    Pending,
+    None,
+    Selected { owner: Arc<()>, claimed_phases: u8 },
+}
+
+impl WafSelection {
+    fn select(&mut self, owner: Option<Arc<()>>) -> bool {
+        if !matches!(self, Self::Pending) {
+            return false;
+        }
+        *self = owner.map_or(Self::None, |owner| Self::Selected {
+            owner,
+            claimed_phases: 0,
+        });
+        true
+    }
+
+    fn claim(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
+        let Self::Selected {
+            owner: selected,
+            claimed_phases,
+        } = self
+        else {
+            return if matches!(self, Self::Pending) {
+                WafPhaseClaim::Pending
+            } else {
+                WafPhaseClaim::Skip
+            };
+        };
+        if !Arc::ptr_eq(selected, owner) || *claimed_phases & phase.bit() != 0 {
+            return WafPhaseClaim::Skip;
+        }
+        *claimed_phases |= phase.bit();
+        WafPhaseClaim::Execute
+    }
+}
+
+#[cfg(test)]
+mod waf_selection_tests {
+    use super::*;
+
+    #[test]
+    fn winner_selection_and_phase_claims_are_exact_once() {
+        let selected = Arc::new(());
+        let other = Arc::new(());
+        let mut selection = WafSelection::Pending;
+
+        assert_eq!(selection.claim(&selected, WafPhase::Request), WafPhaseClaim::Pending);
+        assert!(selection.select(Some(Arc::clone(&selected))));
+        assert!(!selection.select(Some(Arc::clone(&other))));
+        assert_eq!(selection.claim(&other, WafPhase::Request), WafPhaseClaim::Skip);
+        for phase in [WafPhase::Request, WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
+            assert_eq!(selection.claim(&selected, phase), WafPhaseClaim::Execute);
+            assert_eq!(selection.claim(&selected, phase), WafPhaseClaim::Skip);
+        }
+    }
+
+    #[test]
+    fn no_winner_is_final_and_skips_every_claim() {
+        let owner = Arc::new(());
+        let mut selection = WafSelection::Pending;
+        assert!(selection.select(None));
+        assert!(!selection.select(Some(Arc::clone(&owner))));
+        assert_eq!(selection.claim(&owner, WafPhase::Request), WafPhaseClaim::Skip);
+    }
+}
+
 impl CurrentPluginEntryIdentity {
     pub(crate) fn new(name: &str, alias: Option<&str>) -> Option<Self> {
         if name.is_empty() || name.len() > PLUGIN_ENTRY_NAME_CAPACITY {
@@ -1524,6 +1738,14 @@ pub struct EdgionHttpContext {
     /// invoked. Nested ExtensionRef execution replaces and restores this slot.
     pub(crate) current_plugin_entry: Option<CurrentPluginEntryIdentity>,
 
+    /// The sole native WAF runtime state for this request. Pointer identity on
+    /// its owner token prevents another logical WAF from consuming or replacing
+    /// the selected transaction.
+    pub(crate) waf: Option<Box<WafRequestContext>>,
+
+    /// Request-wide WAF winner and exactly-once phase claims.
+    waf_selection: WafSelection,
+
     // --- Upstream attempts and retry bookkeeping ---
     /// Number of connection attempts to backends
     pub try_cnt: u32,
@@ -1983,6 +2205,14 @@ impl EdgionHttpContext {
         self.ensure_ai_state().attempt_plan = Some(plan);
     }
 
+    pub(crate) fn select_waf(&mut self, owner: Option<Arc<()>>) -> bool {
+        self.waf_selection.select(owner)
+    }
+
+    pub(crate) fn claim_waf_phase(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
+        self.waf_selection.claim(owner, phase)
+    }
+
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
     /// preserving each op's original set/append/conditional/remove semantics. Called
     /// from drain points: upstream-response stage and request-stage termination
@@ -2030,6 +2260,8 @@ impl EdgionHttpContext {
             pending_edgion_plugins_logs: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             current_plugin_entry: None,
+            waf: None,
+            waf_selection: WafSelection::Pending,
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,

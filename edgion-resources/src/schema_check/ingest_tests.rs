@@ -27,6 +27,7 @@ use serde_json::json;
 
 use super::{set_strict_ingest, strict_ingest_enabled};
 use crate::resources::edgion_config_data::EdgionConfigDataSpec;
+use crate::resources::edgion_plugins::edgion_plugins_spec_schema;
 use crate::resources::edgion_plugins::EdgionPluginsSpec;
 use crate::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
 use crate::resources::link_sys::{link_sys_spec_schema, LinkSysSpec, SystemConfig};
@@ -94,6 +95,21 @@ fn gate_on_reports_exact_path_for_plugin_config_typo() {
 
     let spec: EdgionPluginsSpec = serde_json::from_value(doc).expect("well-formed aside from the typo");
     assert_eq!(spec.unknown_fields, vec!["requestPlugins[0].config.denys".to_string()]);
+}
+
+#[test]
+fn waf_schema_walk_reports_nested_unknown_field() {
+    let doc = json!({
+        "waf": {
+            "rules": "SecAction \"id:1,phase:1,pass\"",
+            "unexpected": true
+        }
+    });
+
+    assert_eq!(
+        super::unknown_key_paths(&doc, edgion_plugins_spec_schema()),
+        vec!["waf.unexpected".to_string()]
+    );
 }
 
 // ============================================================

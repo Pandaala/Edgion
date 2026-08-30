@@ -842,6 +842,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .collect()
     }
 
+    fn request_headers_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.inner
+            .req_header()
+            .headers
+            .iter()
+            .map(|(name, value)| (name.as_str().as_bytes().to_vec(), value.as_bytes().to_vec()))
+            .collect()
+    }
+
     fn request_header_values(&self, name: &str) -> Option<Vec<String>> {
         utf8_header_values(&self.inner.req_header().headers, name)
     }
@@ -885,6 +894,22 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn get_method(&self) -> &str {
         self.inner.req_header().method.as_str()
+    }
+
+    fn get_http_protocol(&self) -> String {
+        match self.inner.req_header().version {
+            http::Version::HTTP_09 => "HTTP/0.9",
+            http::Version::HTTP_10 => "HTTP/1.0",
+            http::Version::HTTP_11 => "HTTP/1.1",
+            http::Version::HTTP_2 => "HTTP/2.0",
+            http::Version::HTTP_3 => "HTTP/3.0",
+            _ => "HTTP/1.1",
+        }
+        .to_string()
+    }
+
+    fn get_request_id(&self) -> String {
+        self.ctx.request_info.x_trace_id.clone().unwrap_or_default()
     }
 
     fn get_ctx_var(&self, key: &str) -> Option<String> {
@@ -1017,6 +1042,17 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 .headers
                 .iter()
                 .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string())))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn response_headers_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        match &self.response_header {
+            Some(resp) => resp
+                .headers
+                .iter()
+                .map(|(name, value)| (name.as_str().as_bytes().to_vec(), value.as_bytes().to_vec()))
                 .collect(),
             None => Vec::new(),
         }
@@ -1217,6 +1253,38 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
+    }
+
+    fn install_waf_transaction(
+        &mut self,
+        owner: Arc<()>,
+        transaction: edgion_waf::seclang::Transaction<'static>,
+    ) -> bool {
+        if let Some(waf) = self.ctx.waf.as_deref_mut() {
+            return waf.install(owner, transaction);
+        }
+        self.ctx.waf = Some(Box::new(crate::ctx::WafRequestContext::new(owner, transaction)));
+        true
+    }
+
+    fn take_waf_transaction(&mut self, owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {
+        self.ctx.waf.as_deref_mut()?.take(owner)
+    }
+
+    fn claim_waf_phase(&mut self, owner: &Arc<()>, phase: crate::ctx::WafPhase) -> crate::ctx::WafPhaseClaim {
+        self.ctx.claim_waf_phase(owner, phase)
+    }
+
+    fn enable_waf_request_body_streaming(&mut self, owner: &Arc<()>, body_limit: u64) -> bool {
+        let enabled = self
+            .ctx
+            .waf
+            .as_deref_mut()
+            .is_some_and(|waf| waf.enable_request_body_streaming(owner, body_limit));
+        if enabled {
+            self.ctx.request_body_stream_active = true;
+        }
+        enabled
     }
 
     fn record_error(&mut self, status: edgion_resources::EdgionErrorCode) {

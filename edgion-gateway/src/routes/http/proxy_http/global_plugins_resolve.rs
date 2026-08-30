@@ -69,6 +69,48 @@ pub fn resolve_gateway_plugins(store: &PluginStore, keys: &[String]) -> Vec<Arc<
     out
 }
 
+#[derive(Clone, Copy)]
+enum WafScope {
+    Global = 0,
+    Gateway = 1,
+    Route = 2,
+}
+
+/// Select one request-wide WAF without allocating a candidate list.
+///
+/// Higher configured priority wins. Equal priority prefers the more specific
+/// scope; equal priority and scope retains the first declaration.
+pub(crate) fn select_waf_owner(
+    global: &[Arc<PluginRuntime>],
+    gateway: &[Arc<PluginRuntime>],
+    route: &[Option<Arc<PluginRuntime>>],
+) -> Option<Arc<()>> {
+    let mut winner: Option<(u16, WafScope, Arc<()>)> = None;
+    for (scope, runtime) in global
+        .iter()
+        .map(|runtime| (WafScope::Global, runtime.as_ref()))
+        .chain(gateway.iter().map(|runtime| (WafScope::Gateway, runtime.as_ref())))
+        .chain(
+            route
+                .iter()
+                .filter_map(Option::as_deref)
+                .map(|runtime| (WafScope::Route, runtime)),
+        )
+    {
+        let Some(candidate) = runtime.waf_candidate() else {
+            continue;
+        };
+        let replace = winner.as_ref().is_none_or(|(priority, selected_scope, _)| {
+            candidate.priority() > *priority
+                || (candidate.priority() == *priority && scope as u8 > *selected_scope as u8)
+        });
+        if replace {
+            winner = Some((candidate.priority(), scope, candidate.owner()));
+        }
+    }
+    winner.map(|(_, _, owner)| owner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +166,42 @@ mod tests {
 
     fn clear_store() {
         get_global_plugin_store().replace_all(HashMap::new());
+    }
+
+    fn waf_runtime(priority: u16) -> Arc<PluginRuntime> {
+        use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
+
+        let mut runtime = PluginRuntime::new();
+        runtime
+            .add_waf(&WafConfig {
+                rules: "SecAction \"id:1,phase:1,pass\"".to_string(),
+                mode: WafMode::On,
+                priority,
+            })
+            .expect("test WAF compiles");
+        Arc::new(runtime)
+    }
+
+    #[test]
+    fn waf_selection_uses_priority_scope_and_declaration_order() {
+        let global_high = waf_runtime(20);
+        let route_low = waf_runtime(10);
+        let selected =
+            select_waf_owner(&[Arc::clone(&global_high)], &[], &[Some(route_low)]).expect("one WAF is selected");
+        assert!(Arc::ptr_eq(&selected, &global_high.waf_candidate().unwrap().owner()));
+
+        let global_equal = waf_runtime(30);
+        let gateway_equal = waf_runtime(30);
+        let route_first = waf_runtime(30);
+        let route_second = waf_runtime(30);
+        let selected = select_waf_owner(
+            &[global_equal],
+            &[gateway_equal],
+            &[Some(Arc::clone(&route_first)), None, Some(route_second)],
+        )
+        .expect("one WAF is selected");
+        assert!(Arc::ptr_eq(&selected, &route_first.waf_candidate().unwrap().owner()));
+        assert!(select_waf_owner(&[], &[], &[]).is_none());
     }
 
     fn pref(name: &str, ns: Option<&str>) -> PluginReference {

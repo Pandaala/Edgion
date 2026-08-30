@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 # EdgionDSL language core (compile/validate path shared with the gateway)
 edgion-dsl.workspace = true
+edgion-waf.workspace = true
 
 # Serialization / schema
 serde.workspace = true

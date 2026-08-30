@@ -185,6 +185,45 @@ impl GrpcRouteHandler {
             manager.add_ref(ns.clone(), resource_ref.clone());
         }
     }
+
+    /// Register rule- and backend-level EdgionPlugins ExtensionRefs.
+    ///
+    /// Backend references are required so adding or removing WAF from a plugin
+    /// generation revalidates the route's backend-scope ownership constraint.
+    fn register_plugin_refs(route: &GRPCRoute, ctx: &HandlerContext) {
+        let resource_ref = Self::create_resource_ref(route);
+        let manager = &ctx.runtime().plugin_ref_mgr;
+        manager.clear_resource_refs(&resource_ref);
+
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        for rules in [route.spec.rules.as_deref(), route.spec.resolved_rules.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules {
+                let filters = rule.filters.iter().flatten().chain(
+                    rule.backend_refs
+                        .iter()
+                        .flatten()
+                        .flat_map(|backend_ref| backend_ref.filters.iter().flatten()),
+                );
+                for filter in filters {
+                    if filter.filter_type != GRPCRouteFilterType::ExtensionRef {
+                        continue;
+                    }
+                    let Some(extension_ref) = &filter.extension_ref else {
+                        continue;
+                    };
+                    if (extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
+                        && extension_ref.kind == "EdgionPlugins"
+                    {
+                        let ref_namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(namespace);
+                        manager.add_ref(format!("{ref_namespace}/{}", extension_ref.name), resource_ref.clone());
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for GrpcRouteHandler {
@@ -205,6 +244,23 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     async fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
+
+        // `resolvedNamespace` is controller-owned. Clear any filesystem/etcd
+        // injection before the delegation flattener stamps derived copies.
+        for rule in route.spec.rules.iter_mut().flatten() {
+            for filter in rule.filters.iter_mut().flatten().chain(
+                rule.backend_refs
+                    .iter_mut()
+                    .flatten()
+                    .flat_map(|backend_ref| backend_ref.filters.iter_mut().flatten()),
+            ) {
+                if filter.filter_type == GRPCRouteFilterType::ExtensionRef {
+                    if let Some(extension_ref) = filter.extension_ref.as_mut() {
+                        extension_ref.resolved_namespace = None;
+                    }
+                }
+            }
+        }
 
         // Mark denied cross-namespace references on the operator-authored rules.
         // MUST run BEFORE the delegation flatten: flatten clones non-delegating
@@ -263,12 +319,32 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         // controller-derived: clear any user-provided or stale values.
         route.spec.resolved_rules = None;
         route.spec.delegation_issues = Vec::new();
-        let delegation_outcome = {
+        let mut delegation_outcome = {
             let adapter = RuntimeDelegationLookup {
                 runtime: _ctx.runtime(),
             };
             flatten_route(&route, &adapter)
         };
+        route.spec.resolved_rules = delegation_outcome.resolved_rules.clone();
+
+        // Register before filtering so a plugin update that removes WAF can
+        // restore a previously withdrawn delegated rule.
+        Self::register_plugin_refs(&route, _ctx);
+        if let Some(rules) = &mut route.spec.resolved_rules {
+            let mut resolved_index = 0usize;
+            rules.retain(|rule| {
+                let reason = backend_waf_invalid_reason(rule, route_ns, _ctx.runtime());
+                let keep = reason.is_none();
+                if let Some(reason) = reason {
+                    delegation_outcome.issues.push(DelegationIssue::RuleDropped {
+                        message: format!("resolvedRules[{resolved_index}]: {reason}"),
+                    });
+                }
+                resolved_index += 1;
+                keep
+            });
+            delegation_outcome.resolved_rules = route.spec.resolved_rules.clone();
+        }
 
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route, &delegation_outcome.cross_ns_target_namespaces, _ctx);
@@ -405,6 +481,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
     async fn on_delete(&self, route: &GRPCRoute, ctx: &HandlerContext) {
         let resource_ref = Self::create_resource_ref(route);
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
@@ -458,7 +535,10 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
+        let ownership_accepted_errors = backend_waf_ownership_errors(route, route_ns, _ctx.runtime());
+        validation_accepted_errors.extend(ownership_accepted_errors.clone());
+        let ownership_rejects_route = !ownership_accepted_errors.is_empty();
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
         let mut resolved_refs_errors =
@@ -488,7 +568,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         }
 
         // Per-rule validation: find rules where ALL backend refs are invalid
-        let invalid_indices = find_invalid_rule_indices(route, route_ns);
+        let invalid_indices = find_controller_invalid_rule_indices(route, route_ns, _ctx.runtime());
         let total_rules = route.spec.rules.as_ref().map_or(0, |r| r.len());
         let valid_rules = total_rules - invalid_indices.len();
 
@@ -518,10 +598,9 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                // Note: all_rules_invalid due to backend ref issues should NOT
-                // affect Accepted status. Per Gateway API spec, Accepted reflects
-                // whether the Gateway accepts the route. Backend issues only affect
-                // ResolvedRefs.
+                // Ordinary backend resolution errors do not affect Accepted.
+                // Backend-scoped WAF is different: it cannot join the
+                // request-wide ownership election and rejects the whole route.
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -550,7 +629,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 // delegation drops — a dropped delegated rule never flips
                 // Accepted, matching the per-rule precedent above).
                 let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
-                if own_invalid || !delegation_dropped.is_empty() {
+                if !ownership_rejects_route && (own_invalid || !delegation_dropped.is_empty()) {
                     let mut reasons: Vec<String> = Vec::new();
                     if own_invalid {
                         reasons.push(format!(
@@ -570,14 +649,17 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                         ),
                     );
                 } else if conditions.iter().any(|c| c.type_ == condition_types::PARTIALLY_INVALID) {
+                    let (reason, message) = if ownership_rejects_route {
+                        (
+                            condition_reasons::UNSUPPORTED_VALUE,
+                            "Route not accepted; backend-scoped WAF cannot join the request-wide ownership election",
+                        )
+                    } else {
+                        (condition_reasons::ALL_RULES_VALID, "All rules are valid")
+                    };
                     update_condition(
                         conditions,
-                        condition_false(
-                            condition_types::PARTIALLY_INVALID,
-                            condition_reasons::ALL_RULES_VALID,
-                            "All rules are valid",
-                            generation,
-                        ),
+                        condition_false(condition_types::PARTIALLY_INVALID, reason, message, generation),
                     );
                 }
             }
@@ -816,6 +898,62 @@ pub(crate) fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> V
     invalid_indices
 }
 
+fn find_controller_invalid_rule_indices(
+    route: &GRPCRoute,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<usize> {
+    let mut invalid = find_invalid_rule_indices(route, route_namespace);
+    let already_invalid: HashSet<usize> = invalid.iter().copied().collect();
+    for (index, rule) in route.spec.rules.iter().flatten().enumerate() {
+        if !already_invalid.contains(&index) && backend_waf_invalid_reason(rule, route_namespace, runtime).is_some() {
+            invalid.push(index);
+        }
+    }
+    invalid.sort_unstable();
+    invalid
+}
+
+fn backend_waf_invalid_reason(
+    rule: &edgion_resources::resources::grpc_route::GRPCRouteRule,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Option<String> {
+    rule.backend_refs
+        .iter()
+        .flatten()
+        .enumerate()
+        .find_map(|(index, backend_ref)| {
+            backend_ref.filters.iter().flatten().find_map(|filter| {
+                if filter.filter_type != GRPCRouteFilterType::ExtensionRef {
+                    return None;
+                }
+                filter.extension_ref.as_ref().and_then(|extension_ref| {
+                    super::route_utils::backend_waf_extension_ref_error(runtime, route_namespace, index, extension_ref)
+                })
+            })
+        })
+}
+
+fn backend_waf_ownership_errors(
+    route: &GRPCRoute,
+    route_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Vec<AcceptedError> {
+    route
+        .spec
+        .rules
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, rule)| {
+            backend_waf_invalid_reason(rule, route_namespace, runtime).map(|message| AcceptedError::UnsupportedValue {
+                message: format!("rules[{index}]: {message}"),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,6 +971,116 @@ mod tests {
             20,
             Arc::new(ControllerRuntime::default()),
         )
+    }
+
+    fn make_ctx_with_raw_waf(namespace: &str, name: &str) -> HandlerContext {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::prelude_resources::EdgionPlugins;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::new()),
+            runtime.clone(),
+        ));
+        let plugins: EdgionPlugins = serde_json::from_value(json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionPlugins",
+            "metadata": {"namespace": namespace, "name": name},
+            "spec": {"waf": {
+                "rules": "SecAction \\\"id:1,phase:1,pass\\\""
+            }}
+        }))
+        .expect("WAF fixture must deserialize");
+        let raw = Arc::new(LocalRawStore::new());
+        raw.upsert(format!("{namespace}/{name}"), Arc::new(plugins));
+        processor.set_raw_store(raw);
+        runtime.processor_registry.register(processor);
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
+    }
+
+    #[tokio::test]
+    async fn backend_waf_is_controller_invalid_and_registered_for_requeue() {
+        let ctx = make_ctx_with_raw_waf("apps", "waf");
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": {"namespace": "apps", "name": "route"},
+            "spec": {"rules": [{
+                "backendRefs": [{
+                    "name": "service", "port": 80,
+                    "filters": [{
+                        "type": "ExtensionRef",
+                        "extensionRef": {
+                            "group": "edgion.io", "kind": "EdgionPlugins", "name": "waf"
+                        }
+                    }]
+                }]
+            }]}
+        }))
+        .expect("GRPCRoute fixture must deserialize");
+
+        assert_eq!(
+            find_controller_invalid_rule_indices(&route, "apps", ctx.runtime()),
+            vec![0]
+        );
+        assert!(
+            backend_waf_invalid_reason(&route.spec.rules.as_ref().unwrap()[0], "apps", ctx.runtime())
+                .unwrap()
+                .contains("cannot contain WAF")
+        );
+        let accepted = backend_waf_ownership_errors(&route, "apps", ctx.runtime());
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].reason(), condition_reasons::UNSUPPORTED_VALUE);
+        assert!(accepted[0].message().contains("rules[0]"));
+
+        GrpcRouteHandler::register_plugin_refs(&route, &ctx);
+        let route_ref = GrpcRouteHandler::create_resource_ref(&route);
+        assert_eq!(
+            ctx.runtime().plugin_ref_mgr.get_dependencies(&route_ref.key()),
+            vec!["apps/waf".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_clears_authored_extension_ref_namespace_metadata() {
+        let ctx = make_ctx();
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": {"namespace": "apps", "name": "route"},
+            "spec": {"rules": [{
+                "filters": [{"type": "ExtensionRef", "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "rule", "resolvedNamespace": "injected"
+                }}],
+                "backendRefs": [{"name": "service", "port": 80, "filters": [{
+                    "type": "ExtensionRef", "extensionRef": {
+                        "group": "edgion.io", "kind": "EdgionPlugins", "name": "backend", "resolvedNamespace": "injected"
+                    }
+                }]}]
+            }]}
+        }))
+        .expect("GRPCRoute fixture must deserialize");
+
+        let parsed = match GrpcRouteHandler::default().parse(route, &ctx).await {
+            ProcessResult::Continue(route) => route,
+            other => panic!("unexpected parse result: {other:?}"),
+        };
+        let rule = &parsed.spec.rules.as_ref().unwrap()[0];
+        assert!(rule.filters.as_ref().unwrap()[0]
+            .extension_ref
+            .as_ref()
+            .unwrap()
+            .resolved_namespace
+            .is_none());
+        assert!(rule.backend_refs.as_ref().unwrap()[0].filters.as_ref().unwrap()[0]
+            .extension_ref
+            .as_ref()
+            .unwrap()
+            .resolved_namespace
+            .is_none());
     }
 
     #[tokio::test]

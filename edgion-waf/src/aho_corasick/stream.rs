@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::mem::size_of;
 
-use super::{fold_ascii, AhoCorasick, Anchored, Match, MatchError, MatchKind};
+use super::{fold_ascii, AhoCorasick, Anchored, Match, MatchError, MatchKind, PatternSet};
 
 /// Default reader buffer used by streaming search and replacement.
 pub const DEFAULT_STREAM_BUFFER_BYTES: usize = 8 * 1024;
@@ -98,6 +98,40 @@ impl AhoCorasick {
                 let start = state.absolute_offset - self.backend.pattern_length(pattern_id);
                 on_match(Match::from_validated(pattern_id, start, state.absolute_offset));
                 state.automaton_state = 0;
+            }
+        }
+        if end_of_stream {
+            state.finished = true;
+        }
+        Ok(())
+    }
+
+    /// Consume one byte chunk and accumulate every matching pattern ID.
+    ///
+    /// Unlike the non-overlapping callback API, this keeps the exact automaton
+    /// state after every output and therefore records suffix and overlapping
+    /// patterns across arbitrary chunk boundaries.
+    pub fn try_stream_pattern_set_chunk(
+        &self,
+        state: &mut StreamState,
+        chunk: &[u8],
+        end_of_stream: bool,
+        matches: &mut PatternSet,
+    ) -> Result<(), MatchError> {
+        self.validate_stream_state(state)?;
+        matches.validate_shape(self.pattern_count())?;
+        if state.finished {
+            return Err(MatchError::StreamFinished);
+        }
+        for source_byte in chunk.iter().copied() {
+            let byte = fold_ascii(source_byte, self.ascii_case_insensitive);
+            state.automaton_state = self.backend.next_state(state.automaton_state, byte);
+            state.absolute_offset = state
+                .absolute_offset
+                .checked_add(1)
+                .ok_or(MatchError::StreamOffsetOverflow)?;
+            for pattern_id in self.backend.outputs(state.automaton_state) {
+                matches.insert(pattern_id)?;
             }
         }
         if end_of_stream {

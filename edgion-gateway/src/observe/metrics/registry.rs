@@ -26,6 +26,15 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
+    // Native WAF metrics. Every label is a closed enum-like set; resource
+    // names and rule identifiers deliberately stay in diagnostics instead.
+    pub const WAF_COMPILE_TOTAL: &str = "edgion_gateway_waf_compile_total";
+    pub const WAF_COMPILE_MICROSECONDS_TOTAL: &str = "edgion_gateway_waf_compile_microseconds_total";
+    pub const WAF_GENERATION_BYTES: &str = "edgion_gateway_waf_generation_bytes";
+    pub const WAF_RUNTIME_BYTES_ACTIVE: &str = "edgion_gateway_waf_runtime_bytes_active";
+    pub const WAF_BODY_BYTES_INSPECTED_TOTAL: &str = "edgion_gateway_waf_body_bytes_inspected_total";
+    pub const WAF_EXECUTION_TOTAL: &str = "edgion_gateway_waf_execution_total";
+    pub const WAF_EXECUTION_MICROSECONDS_TOTAL: &str = "edgion_gateway_waf_execution_microseconds_total";
     // Optional GenAI token rate/trend counter. Fixed labels yield at most
     // 2 directions x 3 providers x 2 usage sources = 12 series.
     pub const GENAI_TOKENS_TOTAL: &str = "edgion_gateway_genai_tokens_total";
@@ -439,6 +448,49 @@ pub fn status_group(status: Option<u16>) -> &'static str {
         Some(s) if (500..600).contains(&s) => "5xx",
         _ => "failed",
     }
+}
+
+/// Record one native WAF generation build and its wall-clock cost.
+///
+/// `result` is a closed set (`ok` / `error`). A cumulative microsecond
+/// counter keeps latency observable without adding an unsanctioned histogram.
+pub fn record_waf_compile(result: &'static str, elapsed_micros: u64) {
+    counter!(names::WAF_COMPILE_TOTAL, "result" => result).increment(1);
+    counter!(names::WAF_COMPILE_MICROSECONDS_TOTAL, "result" => result).increment(elapsed_micros);
+}
+
+/// Adjust retained bytes for live compiled WAF generations.
+/// Callers enforce +N/-N symmetry with an RAII lease.
+pub fn adjust_waf_generation_bytes(delta: i64) {
+    let metric = gauge!(names::WAF_GENERATION_BYTES);
+    if delta >= 0 {
+        metric.increment(delta as f64);
+    } else {
+        metric.decrement(delta.unsigned_abs() as f64);
+    }
+}
+
+/// Adjust request-owned WAF runtime memory. The request context owns the
+/// symmetric lifetime and refreshes the charge when scratch grows.
+pub fn adjust_waf_runtime_bytes_active(delta: i64) {
+    let metric = gauge!(names::WAF_RUNTIME_BYTES_ACTIVE);
+    if delta >= 0 {
+        metric.increment(delta as f64);
+    } else {
+        metric.decrement(delta.unsigned_abs() as f64);
+    }
+}
+
+/// Record bytes inspected by the streamed WAF body path.
+pub fn record_waf_body_bytes_inspected(direction: &'static str, bytes: usize) {
+    counter!(names::WAF_BODY_BYTES_INSPECTED_TOTAL, "direction" => direction)
+        .increment(u64::try_from(bytes).unwrap_or(u64::MAX));
+}
+
+/// Record cumulative WAF execution time for a fixed phase name.
+pub fn record_waf_execution_micros(phase: &'static str, elapsed_micros: u64) {
+    counter!(names::WAF_EXECUTION_TOTAL, "phase" => phase).increment(1);
+    counter!(names::WAF_EXECUTION_MICROSECONDS_TOTAL, "phase" => phase).increment(elapsed_micros);
 }
 
 /// Record a mirror request outcome.

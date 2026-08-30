@@ -18,6 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use nfa::{Backend, OutputCursor};
 use prefilter::{Acceleration, Candidate, SearchState};
 
+pub(crate) fn phrase_build_projection(patterns: usize, bytes: usize, limits: BuildLimits) -> Option<usize> {
+    nfa::phrase_build_projection(patterns, bytes, limits)
+}
+
 pub use error::{BuildError, MatchError, PatternIdError, SpanError};
 pub use input::SearchInput;
 pub use match_types::{
@@ -371,10 +375,20 @@ impl AhoCorasick {
             .expect("default unanchored search must be supported")
     }
 
+    /// Return the first match without using optional candidate acceleration.
+    ///
+    /// This is a scalar correctness path for differential validation. It uses
+    /// the same immutable automaton and match semantics as [`Self::find`].
+    pub fn find_reference(&self, haystack: &[u8]) -> Option<Match> {
+        self.validate_input(SearchInput::new(haystack))
+            .expect("default unanchored reference search must be supported");
+        self.find_from_input_with_acceleration(SearchInput::new(haystack), false)
+    }
+
     /// Return the first match for a validated input configuration.
     pub fn try_find(&self, input: SearchInput<'_>) -> Result<Option<Match>, MatchError> {
         self.validate_input(input)?;
-        Ok(self.find_from_input(input))
+        Ok(self.find_from_input_with_acceleration(input, true))
     }
 
     /// Iterate over successive non-overlapping standard matches.
@@ -427,6 +441,10 @@ impl AhoCorasick {
     }
 
     fn find_from_input(&self, input: SearchInput<'_>) -> Option<Match> {
+        self.find_from_input_with_acceleration(input, true)
+    }
+
+    fn find_from_input_with_acceleration(&self, input: SearchInput<'_>, accelerated: bool) -> Option<Match> {
         if input.start() > input.end() {
             return None;
         }
@@ -434,17 +452,17 @@ impl AhoCorasick {
             return self.find_anchored(input.haystack(), input.start(), input.end(), input.is_earliest());
         }
         if input.is_earliest() {
-            return self.find_standard_from(input.haystack(), input.start(), input.end());
+            return self.find_standard_from(input.haystack(), input.start(), input.end(), accelerated);
         }
         match self.match_kind {
-            MatchKind::Standard => self.find_standard_from(input.haystack(), input.start(), input.end()),
+            MatchKind::Standard => self.find_standard_from(input.haystack(), input.start(), input.end(), accelerated),
             MatchKind::LeftmostFirst | MatchKind::LeftmostLongest => {
-                self.find_leftmost_from(input.haystack(), input.start(), input.end())
+                self.find_leftmost_from(input.haystack(), input.start(), input.end(), accelerated)
             }
         }
     }
 
-    fn find_standard_from(&self, haystack: &[u8], start: usize, end: usize) -> Option<Match> {
+    fn find_standard_from(&self, haystack: &[u8], start: usize, end: usize, accelerated: bool) -> Option<Match> {
         let min_pattern_len = self.min_pattern_len()?;
         let mut state = 0_usize;
         if let Some(pattern_id) = self.backend.outputs(state).next() {
@@ -456,7 +474,7 @@ impl AhoCorasick {
         let mut index = start;
         let mut prefilter_state = SearchState::default();
         while index < end {
-            if state == 0 && !self.acceleration.is_none() {
+            if accelerated && state == 0 && !self.acceleration.is_none() {
                 let candidate = self.acceleration.find_candidate(
                     &haystack[..end],
                     index,
@@ -484,7 +502,7 @@ impl AhoCorasick {
         None
     }
 
-    fn find_leftmost_from(&self, haystack: &[u8], start: usize, end: usize) -> Option<Match> {
+    fn find_leftmost_from(&self, haystack: &[u8], start: usize, end: usize, accelerated: bool) -> Option<Match> {
         self.min_pattern_len()?;
         let mut state = 0_usize;
         let mut best = None;
@@ -497,7 +515,7 @@ impl AhoCorasick {
         let mut index = start;
         let mut prefilter_state = SearchState::default();
         while index < end {
-            if state == 0 && !self.acceleration.is_none() {
+            if accelerated && state == 0 && !self.acceleration.is_none() {
                 let candidate = self.acceleration.find_candidate(
                     &haystack[..end],
                     index,
@@ -581,6 +599,14 @@ impl AhoCorasick {
         self.scan_pattern_set_input(SearchInput::new(haystack), matches)
     }
 
+    /// Fill a reusable bitset without using optional candidate acceleration.
+    ///
+    /// This path exists for differential validation of the accelerated scan.
+    pub fn scan_pattern_set_reference(&self, haystack: &[u8], matches: &mut PatternSet) -> Result<(), MatchError> {
+        self.scan_pattern_set_input_inner(SearchInput::new(haystack), matches, false)
+            .map(|_| ())
+    }
+
     /// Fill a reusable bitset and return search-local acceleration diagnostics.
     pub fn scan_pattern_set_with_diagnostics(
         &self,
@@ -600,6 +626,15 @@ impl AhoCorasick {
         &self,
         input: SearchInput<'_>,
         matches: &mut PatternSet,
+    ) -> Result<SearchDiagnostics, MatchError> {
+        self.scan_pattern_set_input_inner(input, matches, true)
+    }
+
+    fn scan_pattern_set_input_inner(
+        &self,
+        input: SearchInput<'_>,
+        matches: &mut PatternSet,
+        accelerated: bool,
     ) -> Result<SearchDiagnostics, MatchError> {
         self.validate_input(input)?;
         matches.validate_shape(self.pattern_count())?;
@@ -622,7 +657,7 @@ impl AhoCorasick {
             input.end()
         };
         while index < end {
-            if state == 0 && !input.anchor_mode().is_anchored() && !self.acceleration.is_none() {
+            if accelerated && state == 0 && !input.anchor_mode().is_anchored() && !self.acceleration.is_none() {
                 let candidate = self.acceleration.find_candidate(
                     &input.haystack()[..end],
                     index,
@@ -1662,6 +1697,94 @@ mod tests {
         });
         assert!(matches!(
             builder.build(patterns),
+            Err(BuildError::CompiledByteLimit { actual, limit })
+                if actual == required && limit == required - 1
+        ));
+    }
+
+    fn two_gram_test_patterns() -> Vec<Vec<u8>> {
+        let rare = b"!#$%&'()*+,-./:;<>?@[]^_`{|}~";
+        (0..17)
+            .map(|index| vec![b'a' + index as u8, rare[index], b'X', b'0' + (index % 10) as u8])
+            .collect()
+    }
+
+    #[test]
+    fn two_gram_prefilter_preserves_all_public_search_semantics() {
+        let patterns = two_gram_test_patterns();
+        let pattern_refs = patterns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut haystack = b"prefix-".to_vec();
+        haystack.extend_from_slice(&patterns[9]);
+        haystack.extend_from_slice(b"-middle-");
+        haystack.extend_from_slice(&patterns[2]);
+        haystack.extend_from_slice(b"-suffix");
+
+        for match_kind in [
+            MatchKind::Standard,
+            MatchKind::LeftmostFirst,
+            MatchKind::LeftmostLongest,
+        ] {
+            for automaton_kind in [
+                AutomatonKind::SparseNfa,
+                AutomatonKind::ContiguousNfa,
+                AutomatonKind::Dfa,
+                AutomatonKind::Auto,
+            ] {
+                let mut builder = Builder::new();
+                builder
+                    .match_kind(match_kind)
+                    .automaton_kind(automaton_kind)
+                    .prefilter(false);
+                let baseline = builder.build(&pattern_refs).unwrap();
+                builder.prefilter(true);
+                let accelerated = builder.build(&pattern_refs).unwrap();
+                assert_eq!(accelerated.acceleration_kind(), AccelerationKind::TwoGram);
+                assert_eq!(accelerated.acceleration_memory_usage(), prefilter::TWO_GRAM_TABLE_LEN);
+                assert_eq!(
+                    match_tuples(accelerated.find_iter(&haystack)),
+                    match_tuples(baseline.find_iter(&haystack)),
+                    "match_kind={match_kind:?}, backend={automaton_kind:?}"
+                );
+
+                let input = SearchInput::new(&haystack).try_range(3, haystack.len() - 2).unwrap();
+                assert_eq!(
+                    match_tuples(accelerated.try_find_iter(input).unwrap()),
+                    match_tuples(baseline.try_find_iter(input).unwrap())
+                );
+                if match_kind == MatchKind::Standard {
+                    assert_eq!(
+                        match_tuples(accelerated.try_find_overlapping_iter(input).unwrap()),
+                        match_tuples(baseline.try_find_overlapping_iter(input).unwrap())
+                    );
+                }
+                let mut expected = baseline.create_pattern_set();
+                let mut actual = accelerated.create_pattern_set();
+                baseline.scan_pattern_set_input(input, &mut expected).unwrap();
+                accelerated.scan_pattern_set_input(input, &mut actual).unwrap();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn two_gram_memory_is_charged_to_the_compiled_limit() {
+        let patterns = two_gram_test_patterns();
+        let pattern_refs = patterns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut builder = Builder::new();
+        builder.prefilter(true);
+        let required = builder.build(&pattern_refs).unwrap().memory_usage();
+
+        builder.limits(BuildLimits {
+            max_compiled_bytes: required,
+            ..BuildLimits::default()
+        });
+        assert_eq!(builder.build(&pattern_refs).unwrap().memory_usage(), required);
+        builder.limits(BuildLimits {
+            max_compiled_bytes: required - 1,
+            ..BuildLimits::default()
+        });
+        assert!(matches!(
+            builder.build(&pattern_refs),
             Err(BuildError::CompiledByteLimit { actual, limit })
                 if actual == required && limit == required - 1
         ));

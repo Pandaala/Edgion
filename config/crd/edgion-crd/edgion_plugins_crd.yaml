@@ -24,6 +24,28 @@ spec:
               type: object
               description: "EdgionPlugins specification"
               properties:
+                waf:
+                  type: object
+                  description: "One native WAF configuration spanning all supported transaction phases"
+                  required: [rules]
+                  additionalProperties: false
+                  properties:
+                    rules:
+                      type: string
+                      minLength: 1
+                      description: "Inline bounded SecLang source; filesystem includes and external assets are not available"
+                    mode:
+                      type: string
+                      description: "Whether disruptive WAF actions are enforced or only reported"
+                      enum: [on, detectionOnly]
+                      default: on
+                    priority:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 65535
+                      default: 0
+                      description: "WAF owner-selection priority; a larger value wins"
                 # ============================================
                 # Request Stage Plugins (async)
                 # ============================================

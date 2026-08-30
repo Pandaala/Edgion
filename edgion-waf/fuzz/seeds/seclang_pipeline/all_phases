@@ -1,0 +1,7 @@
+SecRule REQUEST_HEADERS:X-Fuzz "@contains phase-one" "id:1,phase:1,pass,setvar:tx.score=+1"
+SecRule REQUEST_BODY "@contains phase-two" "id:2,phase:2,pass,setvar:tx.score=+2"
+SecRule RESPONSE_HEADERS:X-Fuzz "@contains phase-three" "id:3,phase:3,pass,setvar:tx.score=+3"
+SecAction "id:4,phase:4,pass,setvar:tx.score=+4"
+SecRule TX:score "@ge 10" "id:5,phase:5,deny,status:409"
+
+phase-one phase-two phase-three

@@ -96,10 +96,14 @@ impl ExtensionRefFilter {
         if !self.is_edgion_plugins() {
             return None;
         }
-        match self.index {
+        let runtime = match self.index {
             Some(idx) => session.resolved_route_ext_ref(idx),
             None => session.pinned_backend_ext_ref(&self.plugin_key()),
+        }?;
+        if self.index.is_none() && runtime.has_waf() {
+            return None;
         }
+        Some(runtime)
     }
 
     /// Helper to prepare plugin execution: validation, lookup, logging setup
@@ -143,6 +147,11 @@ impl ExtensionRefFilter {
                 }
             },
         };
+
+        if self.index.is_none() && plugin_runtime.has_waf() {
+            log.push_err("backend-scoped WAF is not supported");
+            return Err(());
+        }
 
         let token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
         Ok(Some((plugin_runtime, token)))

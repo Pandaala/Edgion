@@ -79,6 +79,8 @@ pub enum AccelerationKind {
     RareBytes,
     /// Verify bounded small-pattern candidates through two-byte scalar fingerprints.
     Packed,
+    /// Shift-Or candidate scan over a fixed 64 KiB two-byte table.
+    TwoGram,
 }
 
 /// Match selection semantics fixed when an automaton is built.
@@ -249,6 +251,11 @@ impl PatternSet {
     /// Return whether no pattern identifier is present.
     pub fn is_empty(&self) -> bool {
         self.words.iter().all(|word| *word == 0)
+    }
+
+    /// Return the retained bitset bytes. Repeated scans do not grow this value.
+    pub fn memory_usage(&self) -> usize {
+        self.words.capacity().saturating_mul(std::mem::size_of::<u64>())
     }
 
     pub(crate) fn validate_shape(&self, expected: usize) -> Result<(), MatchError> {

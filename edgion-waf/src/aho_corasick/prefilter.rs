@@ -6,6 +6,9 @@ const MAX_FILTER_BYTES: usize = 3;
 const MAX_PACKED_PATTERNS: usize = 16;
 const MAX_PACKED_PATTERN_LEN: usize = 64;
 const MAX_PACKED_PATTERN_BYTES: usize = 1_024;
+pub(super) const TWO_GRAM_TABLE_LEN: usize = 1 << 16;
+const TWO_GRAM_MAX_WINDOW_LEN: usize = u8::BITS as usize + 1;
+const TWO_GRAM_MAX_CANDIDATE_RATE_Q32: u64 = 1_u64 << 28;
 const ADAPT_MIN_ATTEMPTS: u16 = 32;
 const ADAPT_MIN_SKIP_PER_ATTEMPT: usize = 4;
 
@@ -83,11 +86,19 @@ struct Packed {
 }
 
 #[derive(Debug)]
+struct TwoGram {
+    table: Box<[u8]>,
+    window_len: u8,
+    hit_bit: u8,
+}
+
+#[derive(Debug)]
 enum AccelerationInner {
     None,
     Start(StartBytes),
     Rare(RareBytes),
     Packed(Packed),
+    TwoGram(TwoGram),
 }
 
 /// Immutable conservative acceleration attached above the exact backend.
@@ -111,6 +122,7 @@ impl Acceleration {
             AccelerationInner::Start(_) => AccelerationKind::StartBytes,
             AccelerationInner::Rare(_) => AccelerationKind::RareBytes,
             AccelerationInner::Packed(_) => AccelerationKind::Packed,
+            AccelerationInner::TwoGram(_) => AccelerationKind::TwoGram,
         }
     }
 
@@ -137,6 +149,7 @@ impl Acceleration {
             AccelerationInner::Start(filter) => filter.find(haystack, at, ascii_case_insensitive),
             AccelerationInner::Rare(filter) => filter.find(haystack, at, ascii_case_insensitive),
             AccelerationInner::Packed(filter) => filter.find(haystack, at, ascii_case_insensitive),
+            AccelerationInner::TwoGram(filter) => filter.find(haystack, at, ascii_case_insensitive),
         };
         match candidate {
             Candidate::None => state.record_none(haystack.len().saturating_sub(at)),
@@ -271,6 +284,30 @@ impl Packed {
     }
 }
 
+impl TwoGram {
+    fn find(&self, haystack: &[u8], at: usize, ascii_case_insensitive: bool) -> Candidate {
+        let window_len = usize::from(self.window_len);
+        if haystack.len().saturating_sub(at) < window_len {
+            return Candidate::None;
+        }
+        let mut previous = fold_ascii(haystack[at], ascii_case_insensitive);
+        let mut state = u8::MAX;
+        for (relative, source) in haystack[at + 1..].iter().copied().enumerate() {
+            let current = fold_ascii(source, ascii_case_insensitive);
+            state = (state << 1) | self.table[usize::from(fingerprint(previous, current))];
+            let boundary = at + relative + 2;
+            if state & self.hit_bit == 0 {
+                return Candidate::Possible {
+                    start: boundary.saturating_sub(window_len).max(at),
+                    scanned: boundary - at,
+                };
+            }
+            previous = current;
+        }
+        Candidate::None
+    }
+}
+
 /// Bounded build-time profile collected in the validated pattern pass.
 #[derive(Debug)]
 pub(super) struct AccelerationBuilder {
@@ -287,6 +324,9 @@ pub(super) struct AccelerationBuilder {
     packed_available: bool,
     packed_entries: Vec<PackedEntry>,
     packed_pattern_bytes: Vec<u8>,
+    two_gram_table: Option<Vec<u8>>,
+    two_gram_min_pattern_len: usize,
+    two_gram_available: bool,
 }
 
 impl AccelerationBuilder {
@@ -305,6 +345,9 @@ impl AccelerationBuilder {
             packed_available: true,
             packed_entries: Vec::new(),
             packed_pattern_bytes: Vec::new(),
+            two_gram_table: None,
+            two_gram_min_pattern_len: usize::MAX,
+            two_gram_available: true,
         }
     }
 
@@ -325,6 +368,7 @@ impl AccelerationBuilder {
         }
         self.add_rare(pattern);
         self.add_packed(pattern_id, pattern)?;
+        self.add_two_gram(pattern)?;
         Ok(())
     }
 
@@ -351,7 +395,42 @@ impl AccelerationBuilder {
         if self.start_count == MAX_FILTER_BYTES {
             return self.build_start();
         }
+        if self.two_gram_available && self.two_gram_table.is_some() {
+            return self.build_two_gram();
+        }
         Ok(Acceleration::none())
+    }
+
+    fn add_two_gram(&mut self, pattern: &[u8]) -> Result<(), BuildError> {
+        if !self.two_gram_available {
+            return Ok(());
+        }
+        if pattern.len() < 2 {
+            self.two_gram_available = false;
+            self.two_gram_table = None;
+            return Ok(());
+        }
+        let table = match &mut self.two_gram_table {
+            Some(table) => table,
+            None => {
+                let mut table = Vec::new();
+                table
+                    .try_reserve_exact(TWO_GRAM_TABLE_LEN)
+                    .map_err(|_| BuildError::Allocation {
+                        component: "two-gram acceleration table",
+                    })?;
+                table.resize(TWO_GRAM_TABLE_LEN, u8::MAX);
+                self.two_gram_table.insert(table)
+            }
+        };
+        self.two_gram_min_pattern_len = self.two_gram_min_pattern_len.min(pattern.len());
+        let window_len = pattern.len().min(TWO_GRAM_MAX_WINDOW_LEN);
+        for position in 0..window_len - 1 {
+            let first = fold_ascii(pattern[position], self.ascii_case_insensitive);
+            let second = fold_ascii(pattern[position + 1], self.ascii_case_insensitive);
+            table[usize::from(fingerprint(first, second))] &= !(1_u8 << position);
+        }
+        Ok(())
     }
 
     fn add_rare(&mut self, pattern: &[u8]) {
@@ -492,6 +571,40 @@ impl AccelerationBuilder {
             memory_usage,
         })
     }
+
+    fn build_two_gram(&mut self) -> Result<Acceleration, BuildError> {
+        let window_len = self.two_gram_min_pattern_len.min(TWO_GRAM_MAX_WINDOW_LEN);
+        let Some(table) = self.two_gram_table.take() else {
+            return Ok(Acceleration::none());
+        };
+        if window_len < 2 {
+            return Ok(Acceleration::none());
+        }
+        let mut zero_counts = [0_u32; TWO_GRAM_MAX_WINDOW_LEN - 1];
+        for mask in table.iter().copied() {
+            for (position, count) in zero_counts[..window_len - 1].iter_mut().enumerate() {
+                *count += u32::from(mask & (1_u8 << position) == 0);
+            }
+        }
+        let mut rate_q32 = 1_u64 << 32;
+        for count in zero_counts[..window_len - 1].iter().copied() {
+            rate_q32 = rate_q32
+                .saturating_mul(u64::from(count))
+                .div_ceil(TWO_GRAM_TABLE_LEN as u64);
+        }
+        if rate_q32 >= TWO_GRAM_MAX_CANDIDATE_RATE_Q32 {
+            return Ok(Acceleration::none());
+        }
+        let table = table.into_boxed_slice();
+        Ok(Acceleration {
+            memory_usage: table.len(),
+            inner: AccelerationInner::TwoGram(TwoGram {
+                table,
+                window_len: window_len as u8,
+                hit_bit: 1_u8 << (window_len - 2),
+            }),
+        })
+    }
 }
 
 fn fingerprint(first: u8, second: u8) -> u16 {
@@ -591,5 +704,51 @@ mod tests {
         }
         assert!(state.disabled);
         assert_eq!(state.skipped_bytes, 0);
+    }
+
+    fn two_gram_patterns() -> Vec<Vec<u8>> {
+        let rare = b"!#$%&'()*+,-./:;<>?@[]^_`{|}~";
+        (0..17)
+            .map(|index| vec![b'a' + index as u8, rare[index], b'X', b'0' + (index % 10) as u8])
+            .collect()
+    }
+
+    #[test]
+    fn two_gram_is_a_bounded_possible_only_fallback() {
+        let patterns = two_gram_patterns();
+        let refs = patterns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let acceleration = build(&refs, MatchKind::Standard, false);
+        assert_eq!(acceleration.kind(), AccelerationKind::TwoGram);
+        assert_eq!(acceleration.memory_usage(), TWO_GRAM_TABLE_LEN);
+
+        for pattern in &patterns {
+            let mut haystack = b"zzzz".to_vec();
+            haystack.extend_from_slice(pattern);
+            let mut state = SearchState::default();
+            assert!(matches!(
+                acceleration.find_candidate(&haystack, 0, false, &mut state),
+                Candidate::Possible { start, .. } if start <= 4
+            ));
+        }
+    }
+
+    #[test]
+    fn two_gram_respects_ascii_folding_and_short_pattern_safety() {
+        let patterns = two_gram_patterns();
+        let refs = patterns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let acceleration = build(&refs, MatchKind::Standard, true);
+        assert_eq!(acceleration.kind(), AccelerationKind::TwoGram);
+        let mut state = SearchState::default();
+        assert!(matches!(
+            acceleration.find_candidate(b"ZZZA!x0", 0, true, &mut state),
+            Candidate::Possible { start, .. } if start <= 3
+        ));
+
+        let mut short = refs.clone();
+        short.push(b"q");
+        assert_ne!(
+            build(&short, MatchKind::Standard, false).kind(),
+            AccelerationKind::TwoGram
+        );
     }
 }

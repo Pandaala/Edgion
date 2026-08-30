@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 use super::conditions::PluginConditions;
 use super::edgion_plugin::{BodyStage, EdgionPlugin};
 use super::entry::{dye_set_clobber_error, RequestFilterEntry};
-use super::EdgionPlugins;
+use super::{EdgionPlugins, PluginValidation};
 use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 
 /// Per-variant stage applicability, mirroring the four
@@ -229,6 +229,12 @@ impl EdgionPlugins {
     /// the module docs for the full contract.
     pub fn validate_plugins(&self) -> Vec<String> {
         let mut errors = Vec::new();
+
+        if let Some(waf) = &self.spec.waf {
+            if let Some(error) = waf.validation_error() {
+                errors.push(format!("waf: {error}"));
+            }
+        }
 
         // Pass 1: condition regex compilation/validation for active entries,
         // in stage order — mirrors `compile_plugin_conditions`. Disabled and

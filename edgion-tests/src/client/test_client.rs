@@ -48,6 +48,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "TcpEspReload",
     "GcParamsFlap",
     "TlsLastKnownGood",
+    "WafDynamic",
 ];
 
 fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
@@ -1289,6 +1290,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/JsonSchemaValidation" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
+        "EdgionPlugins/Waf" => "EdgionPlugins",
         "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
         "HTTPRoute/Protocol/HTTPS" => "EdgionTls/https",
@@ -1362,6 +1364,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "PmdRefFlap"
         | "RateLimitDynamic"
         | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
+        "WafDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "GatewayDynamic" => Some(("Gateway/Dynamic", PortKind::Http)),
         "RouteDelegationDynamic" => Some(("HTTPRoute/Delegation/DynamicTest", PortKind::Http)),
         "GrpcRouteDelegationDynamic" => Some(("GRPCRoute/Delegation/DynamicTest", PortKind::Grpc)),
@@ -2663,6 +2666,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                     std::process::exit(1);
                 }
             }
+        }
+        "EdgionPlugins/Waf" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/Waf tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::WafDynamicInitialTestSuite));
         }
         "EdgionPlugins/DslGrpcError" => {
             if !gateway {

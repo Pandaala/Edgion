@@ -46,6 +46,7 @@ mod response_rewrite;
 mod tiny_ufo_ttl_cache_config;
 mod trace_context;
 mod upstream_fallback;
+mod waf;
 mod wasm;
 mod wasm_oci;
 mod webhook_key_get;
@@ -146,6 +147,7 @@ pub use tiny_ufo_ttl_cache_config::{
 };
 pub use trace_context::TraceContextConfig;
 pub use upstream_fallback::UpstreamFallback;
+pub use waf::{WafConfig, WafMode};
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,
     WasmFetchSpec, WasmRawBase64, WasmRawConfig, WasmRawJson, WasmRawString, WasmSourceSpec, INLINE_WARN_DECODED_BYTES,

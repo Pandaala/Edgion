@@ -122,6 +122,18 @@ pub trait PluginSession: Send + Sync {
     /// Used by plugins that need to forward/inspect all headers (e.g., ForwardAuth).
     fn request_headers(&self) -> Vec<(String, String)>;
 
+    /// Get all request headers without requiring UTF-8 values.
+    ///
+    /// The default preserves compatibility with alternate adapters. The
+    /// Pingora adapter overrides it so security inspection never drops an
+    /// invalid-byte header value.
+    fn request_headers_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.request_headers()
+            .into_iter()
+            .map(|(name, value)| (name.into_bytes(), value.into_bytes()))
+            .collect()
+    }
+
     /// Get every value for one request header without combining duplicates.
     ///
     /// `Some(empty)` means the header is absent. `None` means at least one
@@ -164,6 +176,16 @@ pub trait PluginSession: Send + Sync {
 
     /// Get the HTTP method as &str (zero-copy)
     fn get_method(&self) -> &str;
+
+    /// Get the wire HTTP version used to build SecLang REQUEST_PROTOCOL.
+    fn get_http_protocol(&self) -> String {
+        "HTTP/1.1".to_string()
+    }
+
+    /// Get the bounded request identity used for SecLang UNIQUE_ID.
+    fn get_request_id(&self) -> String {
+        String::new()
+    }
 
     /// Get a context variable by key (set by plugins like KeySet)
     fn get_ctx_var(&self, key: &str) -> Option<String>;
@@ -220,6 +242,14 @@ pub trait PluginSession: Send + Sync {
     /// headers such as `Set-Cookie`. Default returns empty.
     fn response_headers(&self) -> Vec<(String, String)> {
         Vec::new()
+    }
+
+    /// Get response headers without requiring UTF-8 values.
+    fn response_headers_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.response_headers()
+            .into_iter()
+            .map(|(name, value)| (name.into_bytes(), value.into_bytes()))
+            .collect()
     }
 
     /// Get the response status code (available in upstream_response_filter stage)
@@ -349,6 +379,34 @@ pub trait PluginSession: Send + Sync {
 
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
+
+    /// Install the first native WAF transaction for this request.
+    fn install_waf_transaction(
+        &mut self,
+        _owner: Arc<()>,
+        transaction: edgion_waf::seclang::Transaction<'static>,
+    ) -> bool {
+        drop(transaction);
+        false
+    }
+
+    /// Temporarily take this compiled WAF runtime's transaction.
+    fn take_waf_transaction(&mut self, _owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {
+        None
+    }
+
+    /// Claim one request-wide WAF phase. The real Gateway adapter requires a
+    /// completed winner election; the default supports isolated plugin tests
+    /// and alternate adapters that do not own an Edgion request context.
+    fn claim_waf_phase(&mut self, _owner: &Arc<()>, _phase: crate::ctx::WafPhase) -> crate::ctx::WafPhaseClaim {
+        crate::ctx::WafPhaseClaim::Execute
+    }
+
+    /// Mark the selected WAF transaction as a direct Pingora body-stream
+    /// consumer. The real adapter also makes retry eligibility monotonic false.
+    fn enable_waf_request_body_streaming(&mut self, _owner: &Arc<()>, _body_limit: u64) -> bool {
+        true
+    }
 
     /// Append an EdgionErrorCode error to the gateway context so it surfaces in the
     /// access-log diagnostics array. Narrow interface — plugins cannot mutate other

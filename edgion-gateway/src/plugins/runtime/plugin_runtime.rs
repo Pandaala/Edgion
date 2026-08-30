@@ -11,7 +11,7 @@ use crate::runtime::server::http_to_grpc_status;
 use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
-use edgion_resources::resources::edgion_plugins::CorsConfig;
+use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
 use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
@@ -71,6 +71,7 @@ use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
 use crate::plugins::http::trace_context::TraceContext;
+use crate::plugins::http::waf::WafPlugin;
 use crate::plugins::http::wasm::WasmPlugin;
 use crate::plugins::http::webhook_key_get::WebhookKeyGet;
 use crate::plugins::http::AiGuard;
@@ -78,6 +79,23 @@ use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
 };
+
+/// Immutable request-election metadata for one logical native WAF.
+#[derive(Clone)]
+pub(crate) struct WafCandidate {
+    owner: Arc<()>,
+    priority: u16,
+}
+
+impl WafCandidate {
+    pub(crate) fn owner(&self) -> Arc<()> {
+        Arc::clone(&self.owner)
+    }
+
+    pub(crate) const fn priority(&self) -> u16 {
+        self.priority
+    }
+}
 
 pub struct PluginRuntime {
     /// Plugins for request stage (async)
@@ -115,6 +133,8 @@ pub struct PluginRuntime {
     policy_blocks: Vec<(String, u16)>,
     /// Qualified names of Bypass-stamped entries.
     policy_bypassed: Vec<String>,
+    /// Present only when this runtime owns one compiled logical WAF.
+    waf_candidate: Option<WafCandidate>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -201,6 +221,7 @@ impl std::fmt::Debug for PluginRuntime {
                 &self.upstream_response_async_plugins.len(),
             )
             .field("invalid_plugins", &self.invalid_plugins)
+            .field("has_waf", &self.waf_candidate.is_some())
             .finish()
     }
 }
@@ -223,7 +244,39 @@ impl PluginRuntime {
             invalid_plugins: InvalidPlugins::default(),
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
+            waf_candidate: None,
         }
+    }
+
+    /// Compile and attach one logical native WAF across the request-header,
+    /// request-body, response-header, response-window and logging phases.
+    /// Invalid updates retain the last known-good generation.
+    pub fn add_waf(&mut self, config: &WafConfig) -> Result<(), String> {
+        match WafPlugin::try_new(config) {
+            Ok(plugin) => {
+                self.waf_candidate = Some(WafCandidate {
+                    owner: plugin.owner(),
+                    priority: plugin.priority(),
+                });
+                self.add_request_filter(Box::new(plugin.clone()));
+                self.add_upstream_response_filter(Box::new(plugin.clone()));
+                self.add_upstream_response(Box::new(plugin));
+                Ok(())
+            }
+            Err(error) => {
+                self.invalid_plugins
+                    .record_with_policy("Waf", InvalidUpdatePolicy::RetainPrevious);
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn waf_candidate(&self) -> Option<&WafCandidate> {
+        self.waf_candidate.as_ref()
+    }
+
+    pub(crate) fn has_waf(&self) -> bool {
+        self.waf_candidate.is_some()
     }
 
     /// Whether runtime construction found a plugin that cannot be activated.
@@ -443,10 +496,12 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
+                        let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
-                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            self.ext_ref_keys
+                                .push((extension_namespace.to_string(), ext_ref.name.clone()));
                             ext_filter.set_index(idx);
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
@@ -3320,7 +3375,7 @@ mod condition_body_requirement_tests {
 #[cfg(test)]
 mod ext_ref_index_tests {
     use super::*;
-    use edgion_resources::resources::{ForwardAuthConfig, LocalObjectReference};
+    use edgion_resources::resources::{ForwardAuthConfig, GRPCRouteFilter, LocalObjectReference};
 
     fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
         make_ext_ref_filter_with_kind("EdgionPlugins", name)
@@ -3394,6 +3449,25 @@ mod ext_ref_index_tests {
         let filters = vec![make_ext_ref_filter("p1")];
         let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default());
         assert!(rt.ext_ref_keys().is_empty());
+    }
+
+    #[test]
+    fn grpc_rule_scope_uses_controller_resolved_namespace() {
+        let filter: GRPCRouteFilter = serde_json::from_value(serde_json::json!({
+            "type": "ExtensionRef",
+            "extensionRef": {
+                "group": "edgion.io",
+                "kind": "EdgionPlugins",
+                "name": "child-plugin",
+                "resolvedNamespace": "child"
+            }
+        }))
+        .expect("gRPC ExtensionRef fixture must deserialize");
+        let runtime = PluginRuntime::from_grpcroute_filters_for_rule(&[filter], "parent");
+        assert_eq!(
+            runtime.ext_ref_keys(),
+            &[("child".to_string(), "child-plugin".to_string())]
+        );
     }
 
     #[test]

@@ -62,8 +62,8 @@ pub use plugin_configs::{
     ResolvedCredentialInjector, ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode, RouteRule, SanType,
     SchemaComplexityProfile, StrictJsonError, TemplateSegment, TemplateVarType, TinyUfoTtlCacheConfig, TransformConfig,
-    TransformType, UnauthAction, UpstreamFallback, UpstreamHeaderConfig, VerificationMode, WebhookKeyGetConfig,
-    WebhookVar, ABSOLUTE_INSTANCE_MAX_BYTES, CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN,
+    TransformType, UnauthAction, UpstreamFallback, UpstreamHeaderConfig, VerificationMode, WafConfig, WafMode,
+    WebhookKeyGetConfig, WebhookVar, ABSOLUTE_INSTANCE_MAX_BYTES, CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN,
     CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
     MAX_JSON_INSTANCE_NODES, MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES,
     MAX_JSON_POINTER_TOKENS, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS, MAX_TINY_UFO_CACHE_ENTRIES,
@@ -85,6 +85,10 @@ pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPT
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionPluginsSpec {
+    /// One native WAF instance spanning all supported transaction phases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waf: Option<WafConfig>,
+
     /// Request stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_plugins: Option<Vec<RequestFilterEntry>>,
@@ -131,6 +135,8 @@ pub struct EdgionPluginsSpec {
 #[serde(rename_all = "camelCase")]
 struct EdgionPluginsSpecShadow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    waf: Option<WafConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     request_plugins: Option<Vec<RequestFilterEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     upstream_response_filter_plugins: Option<Vec<UpstreamResponseFilterEntry>>,
@@ -145,6 +151,7 @@ struct EdgionPluginsSpecShadow {
 impl From<EdgionPluginsSpecShadow> for EdgionPluginsSpec {
     fn from(shadow: EdgionPluginsSpecShadow) -> Self {
         EdgionPluginsSpec {
+            waf: shadow.waf,
             request_plugins: shadow.request_plugins,
             upstream_response_filter_plugins: shadow.upstream_response_filter_plugins,
             upstream_response_body_filter_plugins: shadow.upstream_response_body_filter_plugins,
@@ -208,7 +215,8 @@ impl EdgionPlugins {
 
     /// Check if this plugin has any plugins defined
     pub fn has_plugins(&self) -> bool {
-        self.spec.request_plugins.as_ref().is_some_and(|p| !p.is_empty())
+        self.spec.waf.is_some()
+            || self.spec.request_plugins.as_ref().is_some_and(|p| !p.is_empty())
             || self
                 .spec
                 .upstream_response_filter_plugins
@@ -228,6 +236,7 @@ impl EdgionPlugins {
 
     /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
+        let waf_count = usize::from(self.spec.waf.is_some());
         let request_count = self.spec.request_plugins.as_ref().map_or(0, |p| p.len());
         let filter_count = self
             .spec
@@ -240,7 +249,12 @@ impl EdgionPlugins {
             .as_ref()
             .map_or(0, |p| p.len());
         let response_count = self.spec.upstream_response_plugins.as_ref().map_or(0, |p| p.len());
-        request_count + filter_count + body_filter_count + response_count
+        waf_count + request_count + filter_count + body_filter_count + response_count
+    }
+
+    /// Get the logical native WAF configuration.
+    pub fn waf(&self) -> Option<&WafConfig> {
+        self.spec.waf.as_ref()
     }
 
     /// Get request filter entries as a slice

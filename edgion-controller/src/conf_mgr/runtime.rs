@@ -80,10 +80,10 @@ pub struct ControllerRuntime {
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
     /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
     pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
-    /// Tracks which Gateways and HTTPRoutes reference each EdgionPlugins.
+    /// Tracks which Gateways, HTTPRoutes, and GRPCRoutes reference each EdgionPlugins.
     ///
-    /// Gateways use the `edgion.io/edgion-plugins` annotation; HTTPRoutes use
-    /// rule-level EdgionPlugins ExtensionRefs. Forward:
+    /// Gateways use the `edgion.io/edgion-plugins` annotation; Routes use
+    /// rule- and backend-level EdgionPlugins ExtensionRefs. Forward:
     /// `"ep_ns/ep_name" → Set<ResourceRef>`; reverse: owner → Set<key>.
     pub(crate) plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Tracks EdgionPlugins consumers of each LinkSys credential source.

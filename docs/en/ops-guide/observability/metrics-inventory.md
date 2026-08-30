@@ -32,6 +32,13 @@
 | edgion_config_reload_signals_total | Counter | gateway | none | self | Reload signals received by the Gateway from the Controller over conf_sync | - |
 | edgion_config_relist_total | Counter | gateway | none | self | Config relist operations performed by the Gateway's conf_sync client | - |
 | edgion_config_event_parse_errors_total | Counter | gateway | kind | self | Watch-event JSON parse failures per resource kind — the primary signal for Controller/Gateway schema drift | - |
+| edgion_gateway_waf_compile_total | Counter | gateway | result (ok/error) | self | Native WAF generation compilation attempts; rule or resource identity stays out of labels | alert on sustained `rate(...{result="error"}[5m]) > 0` |
+| edgion_gateway_waf_compile_microseconds_total | Counter | gateway | result (ok/error) | self | Cumulative native WAF compilation time in microseconds; divide its rate by `edgion_gateway_waf_compile_total` for mean build latency | - |
+| edgion_gateway_waf_generation_bytes | Gauge | gateway | none | self | Retained bytes charged to live compiled native WAF generations, including generations pinned by in-flight requests | alert near the configured process memory envelope |
+| edgion_gateway_waf_runtime_bytes_active | Gauge | gateway | none | self | Current request-owned native WAF transaction and matcher scratch bytes across active requests | alert on sustained growth disproportionate to active request count |
+| edgion_gateway_waf_body_bytes_inspected_total | Counter | gateway | direction (request/response) | self | Bytes inspected by native WAF streaming body paths; response is reserved until Phase 4 streaming lands | - |
+| edgion_gateway_waf_execution_total | Counter | gateway | phase (request_headers/request_body/response_headers/response_body/logging) | self | Native WAF transaction executions by fixed phase | - |
+| edgion_gateway_waf_execution_microseconds_total | Counter | gateway | phase (request_headers/request_body/response_headers/response_body/logging) | self | Cumulative native WAF execution time by fixed transaction phase; divide its rate by `edgion_gateway_waf_execution_total` for mean latency | - |
 | edgion_link_sys_es_bulk_channel_full_total | Counter | gateway | none | self | Elasticsearch producer→bulk-loop channel was full at submit time; raise `bulk.channelSize` | - |
 | edgion_link_sys_health | Gauge | gateway | link | self | LinkSys provider health: 1 = healthy, 0 = unhealthy, per provider | - |
 | edgion_link_sys_health_flips_total | Counter | gateway | link, direction (recovered/degraded) | self | LinkSys provider health flip counter — exposes sub-scrape flapping the level gauge cannot | - |
