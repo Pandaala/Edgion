@@ -41,10 +41,7 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
 
     let fingerprint = cert
         .digest(pingora_core::tls::hash::MessageDigest::sha256())
-        .map(|digest| {
-            let bytes = digest.as_ref();
-            bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":")
-        })
+        .map(|digest| encode_fingerprint(digest.as_ref()))
         .unwrap_or_else(|_| "unknown".to_string());
 
     Some(ClientCertInfo {
@@ -53,6 +50,19 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
         cn,
         fingerprint,
     })
+}
+
+fn encode_fingerprint(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(3).saturating_sub(1));
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if index != 0 {
+            encoded.push(':');
+        }
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 /// Extract Subject Alternative Names from certificate
@@ -108,9 +118,28 @@ pub fn extract_sans_from_ssl(ssl: &SslRef) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{encode_fingerprint, extract_sans};
+    use pingora_core::tls::x509::X509;
+
     #[test]
-    fn test_extract_sans_empty() {
-        // This is a placeholder test - actual testing requires SSL connection
-        // Real tests should be in integration tests with actual certificates
+    fn extracts_dns_and_ip_subject_alt_names() {
+        let key = rcgen::KeyPair::generate().expect("test key generation must succeed");
+        let params = rcgen::CertificateParams::new(vec!["client.example".to_string(), "127.0.0.1".to_string()])
+            .expect("test SAN values must be valid");
+        let pem = params
+            .self_signed(&key)
+            .expect("test certificate signing must succeed")
+            .pem();
+        let cert = X509::from_pem(pem.as_bytes()).expect("generated certificate must parse");
+
+        let sans = extract_sans(&cert);
+        assert!(sans.iter().any(|san| san == "client.example"));
+        assert!(sans.iter().any(|san| san == "IP:127.0.0.1"));
+    }
+
+    #[test]
+    fn fingerprint_encoding_preserves_colon_separated_lower_hex() {
+        assert_eq!(encode_fingerprint(&[]), "");
+        assert_eq!(encode_fingerprint(&[0x00, 0x0f, 0x10, 0xab, 0xff]), "00:0f:10:ab:ff");
     }
 }

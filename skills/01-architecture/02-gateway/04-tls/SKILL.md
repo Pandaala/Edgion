@@ -152,7 +152,7 @@ When select_cb has stored a snapshot but cert_cb is never invoked (typical case:
 
 `free_ssl_ctx` checks `ssl_ctx.meta.tls_id.is_none()` — meaning `finalize_ssl_ctx` did not run — and pushes `err_log = "early abort"` (without overriding a more specific err_log) + `log_ssl`. This closes the audit blind spot of "connections rejected by the min_tls_version policy leaving no record in ssl.log".
 
-Wrapped in `std::panic::catch_unwind` to prevent panics from crossing the FFI boundary (same pattern as `mtls_verify_callback`).
+Wrapped in `edgion_common::startup::catch_redacted_panic` so neither a panic nor a dynamic panic payload can cross or leak through the FFI boundary (same pattern as `mtls_verify_callback`).
 
 ### Overall priority
 

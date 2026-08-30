@@ -178,7 +178,7 @@ When a connection is terminated by BoringSSL after `select_certificate_callback`
 To complete the audit, `mod ssl_ctx_ex_data::free_ssl_ctx` (the memory-release callback registered with BoringSSL via `SSL_get_ex_new_index`) checks `tls_id.is_none()` on SSL object destruction — meaning `finalize_ssl_ctx` did not run — and pushes `"early abort"` into err_log (without overriding a more specific err_log) before calling `log_ssl`.
 
 Implementation notes:
-- The whole callback body is wrapped in `std::panic::catch_unwind` to prevent panics from crossing FFI (same pattern as `mtls_verify_callback.rs`).
+- The whole callback body is wrapped in `edgion_common::startup::catch_redacted_panic` so neither a panic nor a dynamic panic payload can cross or leak through FFI (same pattern as `mtls_verify_callback.rs`).
 - Sets `"early abort"` only when `meta.err_log.is_none()`, preserving more specific causes set by upstream stages such as select_cb (e.g., `"min ver: ..."`).
 - This path is available only on the boringssl backend (depends on the ex_data mechanism).
 

@@ -74,6 +74,7 @@ impl SslCtx {
 mod ssl_ctx_ex_data {
     use super::SslCtx;
     use crate::observe::logs::LogBuffer;
+    use edgion_common::startup::catch_redacted_panic;
     use pingora_core::protocols::tls::TlsRef;
     use pingora_core::tls::ssl::SslRef;
     use std::os::raw::{c_int, c_long, c_void};
@@ -117,8 +118,9 @@ mod ssl_ctx_ex_data {
         if ptr.is_null() {
             return;
         }
-        // catch_unwind: any panic from log_ssl crossing the FFI boundary is UB.
-        let _ = std::panic::catch_unwind(|| {
+        // Keep both the panic hook and a potentially panicking payload
+        // destructor inside the shared redacted FFI boundary.
+        let _ = catch_redacted_panic(|| unsafe {
             let ssl_ctx = Box::from_raw(ptr as *mut SslCtx);
             if ssl_ctx.meta.tls_id.is_none() {
                 let mut meta = ssl_ctx.meta.clone();
@@ -147,17 +149,8 @@ mod ssl_ctx_ex_data {
             let idx = SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire);
             let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
 
-            // Free any previously stored SslCtx in this slot. BoringSSL's
-            // SSL_set_ex_data does NOT invoke the registered free callback
-            // when overwriting — the free callback only fires on SSL
-            // destruction. Without this, calling store_ssl_ctx twice on the
-            // same SSL leaks the first Box<SslCtx>.
-            let prev = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
-            if !prev.is_null() {
-                let _ = Box::from_raw(prev as *mut SslCtx);
-            }
-
             let ptr = Box::into_raw(Box::new(ctx.clone())) as *mut c_void;
+            let prev = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
             if boring_sys::SSL_set_ex_data(ssl_ptr, idx, ptr) == 0 {
                 let _ = Box::from_raw(ptr as *mut SslCtx);
                 let mut log_meta = ctx.meta.clone();
@@ -167,6 +160,12 @@ mod ssl_ctx_ex_data {
                     .push("exdata store failed");
                 crate::observe::logs::ssl_log::log_ssl(&log_meta);
                 return false;
+            }
+            // BoringSSL overwrites without invoking the free callback. Release
+            // the displaced value only after the new pointer is installed, so
+            // a failed store leaves the old slot and allocation intact.
+            if !prev.is_null() {
+                let _ = Box::from_raw(prev as *mut SslCtx);
             }
             true
         }
@@ -203,8 +202,13 @@ mod ssl_ctx_ex_data {
             if ptr.is_null() {
                 return None;
             }
+            // Clear the slot before reconstructing ownership. If the setter
+            // ever fails, BoringSSL must retain the live allocation for its
+            // registered destructor instead of retaining a dangling pointer.
+            if boring_sys::SSL_set_ex_data(ssl_ptr as *mut boring_sys::SSL, idx, std::ptr::null_mut()) == 0 {
+                return None;
+            }
             let ctx = Box::from_raw(ptr as *mut SslCtx);
-            boring_sys::SSL_set_ex_data(ssl_ptr as *mut boring_sys::SSL, idx, std::ptr::null_mut());
             Some(*ctx)
         }
     }
