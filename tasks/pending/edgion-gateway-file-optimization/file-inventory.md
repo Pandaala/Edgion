@@ -142,7 +142,7 @@
 | `tls-runtime` | 6 | 0 | 0 | 0 | pending |
 | `tls-store` | 4 | 0 | 0 | 0 | pending |
 | `tls-validation` | 5 | 0 | 0 | 0 | pending |
-| `util` | 6 | 0 | 0 | 0 | pending |
+| `util` | 6 | 4 | 2 | 0 | complete |
 
 ## File ledger
 
@@ -671,10 +671,10 @@
 | `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | pending | — |
 | `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | pending | — |
 | `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | pending | — |
-| `edgion-gateway/src/util/client_ip.rs` | `util` | source | pending | — |
-| `edgion-gateway/src/util/mod.rs` | `util` | source | pending | — |
-| `edgion-gateway/src/util/net.rs` | `util` | source | pending | — |
-| `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | pending | — |
-| `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | pending | — |
-| `edgion-gateway/src/util/redacted.rs` | `util` | source | pending | — |
+| `edgion-gateway/src/util/client_ip.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/mod.rs` | `util` | source | reviewed-no-change | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/net.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/redacted.rs` | `util` | source | reviewed-no-change | UTIL-001 / `a909f16f` |
 | `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | pending | — |
