@@ -45,9 +45,15 @@ rules:
 
 | 值 | 含义 |
 |----|------|
-| `"0s"` | 禁用超时（无限制）——适用于长连接 streaming |
+| `"0s"` | 禁用路由所配置的 deadline——适用于长连接 streaming；传输完全无进展时仍受协议级存活下限保护 |
 | 省略 | `backendRequest` 回退到 `EdgionGatewayConfig` 的全局默认值（`defaultRequestTimeout`，默认 `60s`）；`request` **没有**全局默认——省略即不设端到端上限 |
 | 正值时长 | 显式限制 |
+
+对于发往 H2 upstream 的请求体，如果所有有效写 deadline 都被禁用，
+Pingora 传输层仍保留 10 秒的逐次 capacity-wait 安全下限。它只在 upstream
+完全不再授予请求体流控容量时触发；每次取得容量后都会重新计时，因此不是
+streaming 总时长限制。任何正值的有效 `backendRequest`、`request` 或 gRPC
+deadline 仍是权威写超时，无论它短于还是长于 10 秒。
 
 ### backendRequest 被 request 约束
 

@@ -10,9 +10,13 @@ use std::ops::Range;
 use std::os::unix::fs::FileExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use tempfile::NamedTempFile;
+use std::time::Duration;
+use tempfile::tempfile;
 use tokio::sync::{OnceCell, Semaphore};
+use tokio::task::JoinHandle;
+use tokio::time::{timeout_at, Instant};
 
+use super::config::DEFAULT_STORAGE_OPERATION_TIMEOUT;
 use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BytesScanner, LossyTextScanner,
     RawBodyScanner, ScanControl, TextOperationScanner, MAX_BODY_SEGMENTS,
@@ -21,10 +25,179 @@ use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, Re
 
 const SCAN_CHUNK_SIZE: usize = 64 * 1024;
 const DISK_SCAN_CONCURRENCY: usize = 32;
+const STORAGE_IO_CONCURRENCY: usize = 32;
 
 fn disk_scan_limiter() -> &'static Arc<Semaphore> {
     static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
     LIMITER.get_or_init(|| Arc::new(Semaphore::new(DISK_SCAN_CONCURRENCY)))
+}
+
+fn storage_io_limiter() -> &'static Arc<Semaphore> {
+    static LIMITER: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    LIMITER.get_or_init(|| Arc::new(Semaphore::new(STORAGE_IO_CONCURRENCY)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StorageIoOperation {
+    SpillCreate,
+    SpillWrite,
+    ReplayRead,
+    MaterializeRead,
+    SnapshotRead,
+}
+
+impl StorageIoOperation {
+    const fn as_metric_label(self) -> &'static str {
+        match self {
+            Self::SpillCreate => "spill_create",
+            Self::SpillWrite => "spill_write",
+            Self::ReplayRead => "replay_read",
+            Self::MaterializeRead => "materialize_read",
+            Self::SnapshotRead => "snapshot_read",
+        }
+    }
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static STORAGE_IO_TEST_HOOK: Arc<dyn Fn(StorageIoOperation) + Send + Sync>;
+}
+
+#[derive(Debug)]
+enum StorageIoError {
+    AdmissionTimeout,
+    AdmissionClosed,
+    ExecutionTimeout,
+    Join(tokio::task::JoinError),
+    Io(io::Error),
+}
+
+impl StorageIoError {
+    const fn metric_reason(&self) -> &'static str {
+        match self {
+            Self::AdmissionTimeout => "admission_timeout",
+            Self::AdmissionClosed => "admission_closed",
+            Self::ExecutionTimeout => "execution_timeout",
+            Self::Join(_) => "join_error",
+            Self::Io(_) => "io_error",
+        }
+    }
+}
+
+struct StorageIoInFlight;
+
+impl StorageIoInFlight {
+    fn new() -> Self {
+        crate::observe::metrics::adjust_request_body_storage_io_inflight(1.0);
+        Self
+    }
+}
+
+impl Drop for StorageIoInFlight {
+    fn drop(&mut self) {
+        crate::observe::metrics::adjust_request_body_storage_io_inflight(-1.0);
+    }
+}
+
+struct AbortBlockingTask<T> {
+    handle: Option<JoinHandle<T>>,
+}
+
+impl<T> AbortBlockingTask<T> {
+    fn new(handle: JoinHandle<T>) -> Self {
+        Self { handle: Some(handle) }
+    }
+
+    fn handle_mut(&mut self) -> &mut JoinHandle<T> {
+        self.handle.as_mut().expect("blocking task handle is present")
+    }
+
+    fn disarm(&mut self) {
+        self.handle.take();
+    }
+}
+
+impl<T> Drop for AbortBlockingTask<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+async fn run_storage_io<T, F>(timeout: Duration, operation: StorageIoOperation, work: F) -> Result<T, StorageIoError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    run_storage_io_with_limiter(Arc::clone(storage_io_limiter()), timeout, operation, work).await
+}
+
+async fn run_storage_io_with_limiter<T, F>(
+    limiter: Arc<Semaphore>,
+    timeout: Duration,
+    operation: StorageIoOperation,
+    work: F,
+) -> Result<T, StorageIoError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    let deadline = Instant::now() + timeout;
+    let permit = match timeout_at(deadline, limiter.acquire_owned()).await {
+        Err(_) => {
+            let error = StorageIoError::AdmissionTimeout;
+            record_storage_io_failure(operation, &error);
+            return Err(error);
+        }
+        Ok(Err(_)) => {
+            let error = StorageIoError::AdmissionClosed;
+            record_storage_io_failure(operation, &error);
+            return Err(error);
+        }
+        Ok(Ok(permit)) => permit,
+    };
+
+    #[cfg(test)]
+    let test_hook = STORAGE_IO_TEST_HOOK.try_with(Arc::clone).ok();
+    let inflight = StorageIoInFlight::new();
+    let mut task = AbortBlockingTask::new(tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _inflight = inflight;
+        #[cfg(test)]
+        if let Some(hook) = test_hook {
+            hook(operation);
+        }
+        work()
+    }));
+
+    let result = match timeout_at(deadline, task.handle_mut()).await {
+        Err(_) => Err(StorageIoError::ExecutionTimeout),
+        Ok(Err(error)) => Err(StorageIoError::Join(error)),
+        Ok(Ok(Err(error))) => Err(StorageIoError::Io(error)),
+        Ok(Ok(Ok(value))) => Ok(value),
+    };
+    if !matches!(&result, Err(StorageIoError::ExecutionTimeout)) {
+        task.disarm();
+    }
+    if let Err(error) = &result {
+        record_storage_io_failure(operation, error);
+    }
+    result
+}
+
+fn record_storage_io_failure(operation: StorageIoOperation, error: &StorageIoError) {
+    crate::observe::metrics::record_request_body_storage_io_failure(operation.as_metric_label(), error.metric_reason());
+}
+
+fn storage_io_pingora_error(context: &'static str, error: StorageIoError) -> Box<PingoraError> {
+    match error {
+        StorageIoError::Io(error) => PingoraError::because(ErrorType::InternalError, context, error),
+        StorageIoError::Join(error) => PingoraError::because(ErrorType::InternalError, context, error),
+        StorageIoError::AdmissionTimeout | StorageIoError::AdmissionClosed | StorageIoError::ExecutionTimeout => {
+            PingoraError::explain(ErrorType::InternalError, context)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -242,6 +415,7 @@ struct BodyStorageViewInner {
     materialized: OnceCell<Bytes>,
     mutation: RwLock<MutationState>,
     max_body_size_bytes: u64,
+    storage_operation_timeout: Duration,
 }
 
 /// Shared request-body handle captured by request-stage plugins.
@@ -295,12 +469,7 @@ impl BodyStorageView {
     pub async fn read_all(&self) -> BodyReadResult {
         let mutation = self.inner.mutation.read().snapshot.clone();
         if let Some(snapshot) = mutation {
-            let capacity = usize::try_from(snapshot.len).map_err(|_| BodyReadError::Incomplete)?;
-            return self
-                .scan_snapshot(snapshot, BytesScanner::with_capacity(capacity), u64::MAX)
-                .await
-                .map(|result| result.value)
-                .map_err(operation_to_body_error);
+            return self.materialize_snapshot(snapshot).await;
         }
 
         let initial = self.inner.initial.get().ok_or(BodyReadError::Incomplete)?;
@@ -310,11 +479,28 @@ impl BodyStorageView {
                 let body = self
                     .inner
                     .materialized
-                    .get_or_try_init(|| read_disk_body(Arc::clone(file), *len))
+                    .get_or_try_init(|| read_disk_body(Arc::clone(file), *len, self.inner.storage_operation_timeout))
                     .await?;
                 Ok(body.clone())
             }
         }
+    }
+
+    async fn materialize_snapshot(&self, snapshot: Arc<BodySnapshot>) -> BodyReadResult {
+        let capacity = usize::try_from(snapshot.len).map_err(|_| BodyReadError::StorageFailure)?;
+        if snapshot.contains_disk() {
+            return run_storage_io(
+                self.inner.storage_operation_timeout,
+                StorageIoOperation::MaterializeRead,
+                move || materialize_snapshot_owned(snapshot, capacity),
+            )
+            .await
+            .map_err(|_| BodyReadError::StorageFailure);
+        }
+        self.scan_snapshot(snapshot, BytesScanner::with_capacity(capacity), u64::MAX)
+            .await
+            .map(|result| result.value)
+            .map_err(operation_to_body_error)
     }
 
     pub fn len(&self) -> Result<u64, BodyReadError> {
@@ -327,7 +513,10 @@ impl BodyStorageView {
     /// mutations publish a different snapshot and cannot affect this reader.
     pub fn snapshot_reader(&self) -> Result<Box<dyn RequestBodySnapshotReader>, BodyReadError> {
         let (snapshot, _) = self.snapshot()?;
-        Ok(Box::new(BodySnapshotReader::new(snapshot)))
+        Ok(Box::new(BodySnapshotReader::new(
+            snapshot,
+            self.inner.storage_operation_timeout,
+        )))
     }
 
     pub fn is_modified(&self) -> bool {
@@ -592,12 +781,7 @@ impl BodyStorageView {
                 limit: self.inner.max_body_size_bytes,
             });
         }
-        let capacity = usize::try_from(next.len).map_err(|_| BodyReadError::Incomplete)?;
-        let result = self
-            .scan_snapshot(Arc::clone(&next), BytesScanner::with_capacity(capacity), u64::MAX)
-            .await
-            .map_err(operation_to_body_error)?
-            .value;
+        let result = self.materialize_snapshot(Arc::clone(&next)).await?;
         self.publish_arc(generation, next).map_err(operation_to_body_error)?;
         Ok(result)
     }
@@ -671,14 +855,16 @@ struct BodySnapshotReader {
     snapshot: Arc<BodySnapshot>,
     segment_index: usize,
     segment_offset: u64,
+    storage_operation_timeout: Duration,
 }
 
 impl BodySnapshotReader {
-    fn new(snapshot: Arc<BodySnapshot>) -> Self {
+    fn new(snapshot: Arc<BodySnapshot>, storage_operation_timeout: Duration) -> Self {
         Self {
             snapshot,
             segment_index: 0,
             segment_offset: 0,
+            storage_operation_timeout,
         }
     }
 }
@@ -705,19 +891,18 @@ impl RequestBodySnapshotReader for BodySnapshotReader {
                 .map_err(|_| BodyReadError::Incomplete)?;
             let chunk = match segment {
                 Segment::SourceRange { source, .. } if matches!(source.as_ref(), BodySource::Disk { .. }) => {
-                    let permit = Arc::clone(disk_scan_limiter())
-                        .acquire_owned()
-                        .await
-                        .map_err(|_| BodyReadError::Incomplete)?;
                     let segment = segment.clone();
                     let segment_offset = self.segment_offset;
-                    tokio::task::spawn_blocking(move || {
-                        let _permit = permit;
-                        read_segment_chunk(&segment, segment_offset, wanted)
-                    })
+                    run_storage_io(
+                        self.storage_operation_timeout,
+                        StorageIoOperation::SnapshotRead,
+                        move || {
+                            read_segment_chunk(&segment, segment_offset, wanted)
+                                .map_err(|error| io::Error::other(error.to_string()))
+                        },
+                    )
                     .await
-                    .map_err(|_| BodyReadError::Incomplete)?
-                    .map_err(operation_to_body_error)?
+                    .map_err(|_| BodyReadError::StorageFailure)?
                 }
                 _ => read_segment_chunk(segment, self.segment_offset, wanted).map_err(operation_to_body_error)?,
             };
@@ -935,9 +1120,9 @@ impl RawBodyScanner for LiteralMatchScanner {
 
 enum CaptureStorage {
     Memory(BytesMut),
-    Disk { temp_file: NamedTempFile, file: Arc<File> },
+    Disk { file: Arc<File> },
     FinishedMemory(Bytes),
-    FinishedDisk { temp_file: NamedTempFile, file: Arc<File> },
+    FinishedDisk { file: Arc<File> },
     Poisoned,
 }
 
@@ -951,24 +1136,49 @@ pub struct BodyStorage {
     replay_invalid: bool,
     replay_snapshot: Option<Arc<BodySnapshot>>,
     finished: bool,
+    storage_operation_timeout: Duration,
+    storage_failed: bool,
 }
 
 impl BodyStorage {
     pub fn new(memory_limit: usize, max_body_size_bytes: u64) -> (Self, Arc<BodyStorageView>) {
-        Self::with_limits(memory_limit, max_body_size_bytes)
+        Self::with_limits_and_timeout(memory_limit, max_body_size_bytes, DEFAULT_STORAGE_OPERATION_TIMEOUT)
+    }
+
+    pub fn with_storage_timeout(
+        memory_limit: usize,
+        max_body_size_bytes: u64,
+        storage_operation_timeout: Duration,
+    ) -> (Self, Arc<BodyStorageView>) {
+        let storage_operation_timeout = if storage_operation_timeout.is_zero() {
+            DEFAULT_STORAGE_OPERATION_TIMEOUT
+        } else {
+            storage_operation_timeout
+        };
+        Self::with_limits_and_timeout(memory_limit, max_body_size_bytes, storage_operation_timeout)
     }
 
     #[cfg(test)]
     fn with_memory_limit(memory_limit: usize) -> (Self, Arc<BodyStorageView>) {
-        Self::with_limits(memory_limit, u64::MAX)
+        Self::with_limits_and_timeout(memory_limit, u64::MAX, DEFAULT_STORAGE_OPERATION_TIMEOUT)
     }
 
+    #[cfg(test)]
     fn with_limits(memory_limit: usize, max_body_size_bytes: u64) -> (Self, Arc<BodyStorageView>) {
+        Self::with_limits_and_timeout(memory_limit, max_body_size_bytes, DEFAULT_STORAGE_OPERATION_TIMEOUT)
+    }
+
+    fn with_limits_and_timeout(
+        memory_limit: usize,
+        max_body_size_bytes: u64,
+        storage_operation_timeout: Duration,
+    ) -> (Self, Arc<BodyStorageView>) {
         let view = Arc::new(BodyStorageViewInner {
             initial: OnceLock::new(),
             materialized: OnceCell::new(),
             mutation: RwLock::new(MutationState::default()),
             max_body_size_bytes,
+            storage_operation_timeout,
         });
         (
             Self {
@@ -980,6 +1190,8 @@ impl BodyStorage {
                 replay_invalid: false,
                 replay_snapshot: None,
                 finished: false,
+                storage_operation_timeout,
+                storage_failed: false,
             },
             Arc::new(BodyStorageView::new(view)),
         )
@@ -1025,44 +1237,53 @@ impl RequestBodyBuffer for BodyStorage {
             ));
         }
 
-        match &mut self.storage {
-            CaptureStorage::Memory(buf) if next_len <= self.memory_limit as u64 => {
+        let storage = std::mem::replace(&mut self.storage, CaptureStorage::Poisoned);
+        match storage {
+            CaptureStorage::Memory(mut buf) if next_len <= self.memory_limit as u64 => {
                 buf.extend_from_slice(data);
+                self.storage = CaptureStorage::Memory(buf);
             }
-            CaptureStorage::Memory(_) => {
-                let previous = match std::mem::replace(&mut self.storage, CaptureStorage::Poisoned) {
-                    CaptureStorage::Memory(buf) => buf.freeze(),
-                    _ => {
-                        return Err(Self::replay_error(
-                            "request body storage changed while starting disk spill",
-                        ))
+            CaptureStorage::Memory(buf) => {
+                let previous = buf.freeze();
+                let incoming = data.clone();
+                let spill = match run_storage_io(
+                    self.storage_operation_timeout,
+                    StorageIoOperation::SpillCreate,
+                    move || create_spill_file(&previous, &incoming),
+                )
+                .await
+                {
+                    Ok(spill) => spill,
+                    Err(error) => {
+                        self.storage_failed = true;
+                        return Err(storage_io_pingora_error("request body spill creation failed", error));
                     }
                 };
-                let incoming = data.clone();
-                let spill = tokio::task::spawn_blocking(move || create_spill_file(&previous, &incoming))
-                    .await
-                    .map_err(|_| Self::replay_error("request body spill task failed"))?
-                    .map_err(|error| {
-                        PingoraError::because(ErrorType::InternalError, "create request body spill file", error)
-                    })?;
-                self.storage = CaptureStorage::Disk {
-                    temp_file: spill.0,
-                    file: spill.1,
-                };
+                self.storage = CaptureStorage::Disk { file: spill };
             }
-            CaptureStorage::Disk { file, .. } => {
-                let file = Arc::clone(file);
+            CaptureStorage::Disk { file } => {
+                let write_file = Arc::clone(&file);
                 let offset = self.captured_len;
                 let incoming = data.clone();
-                tokio::task::spawn_blocking(move || write_all_at(&file, &incoming, offset))
-                    .await
-                    .map_err(|_| Self::replay_error("request body spill write task failed"))?
-                    .map_err(|error| {
-                        PingoraError::because(ErrorType::InternalError, "write request body spill file", error)
-                    })?;
+                if let Err(error) = run_storage_io(
+                    self.storage_operation_timeout,
+                    StorageIoOperation::SpillWrite,
+                    move || write_all_at(&write_file, &incoming, offset),
+                )
+                .await
+                {
+                    self.storage_failed = true;
+                    return Err(storage_io_pingora_error("request body spill write failed", error));
+                }
+                self.storage = CaptureStorage::Disk { file };
             }
-            CaptureStorage::FinishedMemory(_) | CaptureStorage::FinishedDisk { .. } => {
-                return Err(Self::replay_error("request body capture continued after finalization"))
+            CaptureStorage::FinishedMemory(body) => {
+                self.storage = CaptureStorage::FinishedMemory(body);
+                return Err(Self::replay_error("request body capture continued after finalization"));
+            }
+            CaptureStorage::FinishedDisk { file } => {
+                self.storage = CaptureStorage::FinishedDisk { file };
+                return Err(Self::replay_error("request body capture continued after finalization"));
             }
             CaptureStorage::Poisoned => {
                 return Err(Self::replay_error(
@@ -1085,16 +1306,16 @@ impl RequestBodyBuffer for BodyStorage {
                 self.publish(BodySource::Memory(body.clone()))?;
                 self.storage = CaptureStorage::FinishedMemory(body);
             }
-            CaptureStorage::Disk { temp_file, file } => {
+            CaptureStorage::Disk { file } => {
                 self.publish(BodySource::Disk {
                     file: Arc::clone(&file),
                     len: self.captured_len,
                 })?;
-                self.storage = CaptureStorage::FinishedDisk { temp_file, file };
+                self.storage = CaptureStorage::FinishedDisk { file };
             }
             CaptureStorage::FinishedMemory(body) => self.storage = CaptureStorage::FinishedMemory(body),
-            CaptureStorage::FinishedDisk { temp_file, file } => {
-                self.storage = CaptureStorage::FinishedDisk { temp_file, file };
+            CaptureStorage::FinishedDisk { file } => {
+                self.storage = CaptureStorage::FinishedDisk { file };
             }
             CaptureStorage::Poisoned => {
                 return Err(Self::replay_error(
@@ -1107,6 +1328,11 @@ impl RequestBodyBuffer for BodyStorage {
     }
 
     async fn rewind(&mut self) -> PingoraResult<()> {
+        if self.storage_failed {
+            return Err(Self::replay_error(
+                "request body storage is unusable after a file operation failure",
+            ));
+        }
         if !self.finished {
             return Err(Self::replay_error(
                 "request body replay started before capture completed",
@@ -1137,10 +1363,16 @@ impl RequestBodyBuffer for BodyStorage {
         if max_bytes == 0 {
             return Err(Self::replay_error("request body replay requested a zero-sized chunk"));
         }
-        let snapshot = self
-            .replay_snapshot
-            .as_ref()
-            .ok_or_else(|| Self::replay_error("request body replay requires rewind"))?;
+        if self.storage_failed {
+            return Err(Self::replay_error(
+                "request body storage is unusable after a file operation failure",
+            ));
+        }
+        let snapshot = Arc::clone(
+            self.replay_snapshot
+                .as_ref()
+                .ok_or_else(|| Self::replay_error("request body replay requires rewind"))?,
+        );
         if self.replay_cursor == snapshot.len {
             return Ok(None);
         }
@@ -1149,7 +1381,7 @@ impl RequestBodyBuffer for BodyStorage {
         }
         let wanted = usize::try_from((snapshot.len - self.replay_cursor).min(max_bytes as u64))
             .map_err(|_| Self::replay_error("request body replay chunk length does not fit in usize"))?;
-        let segment = locate_segment(snapshot, self.replay_cursor)
+        let segment = locate_segment(&snapshot, self.replay_cursor)
             .map_err(|_| Self::replay_error("request body replay snapshot is inconsistent"))?;
         let wanted = wanted.min(
             usize::try_from(segment.remaining)
@@ -1167,13 +1399,21 @@ impl RequestBodyBuffer for BodyStorage {
                     let offset = offset
                         .checked_add(segment.local_offset)
                         .ok_or_else(|| Self::replay_error("request body replay offset overflow"))?;
-                    let bytes = tokio::task::spawn_blocking(move || read_at_most(&file, wanted, offset))
-                        .await
-                        .map_err(|_| Self::replay_error("request body replay read task failed"))?
-                        .map_err(|error| {
-                            PingoraError::because(ErrorType::InternalError, "read request body spill file", error)
-                        })?;
+                    let bytes = match run_storage_io(
+                        self.storage_operation_timeout,
+                        StorageIoOperation::ReplayRead,
+                        move || read_at_most(&file, wanted, offset),
+                    )
+                    .await
+                    {
+                        Ok(bytes) => bytes,
+                        Err(error) => {
+                            self.storage_failed = true;
+                            return Err(storage_io_pingora_error("request body replay read failed", error));
+                        }
+                    };
                     if bytes.len() != wanted {
+                        self.storage_failed = true;
                         return Err(Self::replay_error(format!(
                             "request body replay truncated: served {} of {} captured bytes",
                             self.replay_cursor, snapshot.len
@@ -1238,12 +1478,47 @@ fn locate_segment(snapshot: &BodySnapshot, logical_offset: u64) -> Result<Locate
     Err(BodyOperationError::Body(BodyReadError::Incomplete))
 }
 
-fn create_spill_file(previous: &Bytes, incoming: &Bytes) -> io::Result<(NamedTempFile, Arc<File>)> {
-    let temp_file = NamedTempFile::new()?;
-    let file = Arc::new(temp_file.as_file().try_clone()?);
+fn create_spill_file(previous: &Bytes, incoming: &Bytes) -> io::Result<Arc<File>> {
+    // `tempfile()` returns an anonymous/unlinked file. If a write syscall
+    // outlives its deadline, the blocking closure can retain the fd without
+    // leaving a named request-body file behind.
+    let file = Arc::new(tempfile()?);
     write_all_at(&file, previous, 0)?;
     write_all_at(&file, incoming, previous.len() as u64)?;
-    Ok((temp_file, file))
+    Ok(file)
+}
+
+fn materialize_snapshot_owned(snapshot: Arc<BodySnapshot>, capacity: usize) -> io::Result<Bytes> {
+    let mut body = BytesMut::with_capacity(capacity);
+    for segment in &snapshot.segments {
+        let segment_len = segment
+            .len()
+            .map_err(|_| io::Error::other("request body snapshot length is inconsistent"))?;
+        let mut local_offset = 0u64;
+        while local_offset < segment_len {
+            let wanted = usize::try_from((segment_len - local_offset).min(SCAN_CHUNK_SIZE as u64))
+                .map_err(|_| io::Error::other("request body snapshot chunk length overflow"))?;
+            let chunk = read_segment_chunk(segment, local_offset, wanted)
+                .map_err(|_| io::Error::other("request body snapshot read failed"))?;
+            if chunk.len() != wanted {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "request body snapshot ended before its captured length",
+                ));
+            }
+            body.extend_from_slice(&chunk);
+            local_offset = local_offset
+                .checked_add(wanted as u64)
+                .ok_or_else(|| io::Error::other("request body snapshot offset overflow"))?;
+        }
+    }
+    if body.len() != capacity {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "request body snapshot materialized to an unexpected length",
+        ));
+    }
+    Ok(body.freeze())
 }
 
 fn write_all_at(file: &File, mut data: &[u8], mut offset: u64) -> io::Result<()> {
@@ -1291,10 +1566,12 @@ fn read_at_most_with(
     Ok(buf)
 }
 
-async fn read_disk_body(file: Arc<File>, len: u64) -> BodyReadResult {
+async fn read_disk_body(file: Arc<File>, len: u64, storage_operation_timeout: Duration) -> BodyReadResult {
     let len = usize::try_from(len).map_err(|_| BodyReadError::StorageFailure)?;
-    finish_disk_read(
-        tokio::task::spawn_blocking(move || {
+    run_storage_io(
+        storage_operation_timeout,
+        StorageIoOperation::MaterializeRead,
+        move || {
             let mut body = vec![0; len];
             let mut filled = 0usize;
             while filled < body.len() {
@@ -1308,15 +1585,10 @@ async fn read_disk_body(file: Arc<File>, len: u64) -> BodyReadResult {
                 filled += read;
             }
             Ok::<_, io::Error>(Bytes::from(body))
-        })
-        .await,
+        },
     )
-}
-
-fn finish_disk_read(result: Result<io::Result<Bytes>, tokio::task::JoinError>) -> BodyReadResult {
-    result
-        .map_err(|_| BodyReadError::StorageFailure)?
-        .map_err(|_| BodyReadError::StorageFailure)
+    .await
+    .map_err(|_| BodyReadError::StorageFailure)
 }
 
 #[cfg(test)]
@@ -1327,14 +1599,19 @@ mod tests {
 
     #[tokio::test]
     async fn disk_read_and_join_failures_are_storage_failures() {
-        let empty = NamedTempFile::new().expect("temp file");
+        let empty = tempfile().expect("anonymous temp file");
         assert_eq!(
-            read_disk_body(Arc::new(empty.reopen().expect("reopen")), 1).await,
+            read_disk_body(Arc::new(empty), 1, DEFAULT_STORAGE_OPERATION_TIMEOUT,).await,
             Err(BodyReadError::StorageFailure)
         );
 
-        let join = tokio::task::spawn_blocking(|| -> io::Result<Bytes> { panic!("intentional join failure") }).await;
-        assert_eq!(finish_disk_read(join), Err(BodyReadError::StorageFailure));
+        let join = run_storage_io(
+            DEFAULT_STORAGE_OPERATION_TIMEOUT,
+            StorageIoOperation::MaterializeRead,
+            || -> io::Result<Bytes> { panic!("intentional join failure") },
+        )
+        .await;
+        assert!(matches!(join, Err(StorageIoError::Join(_))));
     }
 
     async fn capture(storage: &mut BodyStorage, chunks: &[&[u8]]) {
@@ -1539,9 +1816,9 @@ mod tests {
         (chunk_lengths, body.freeze())
     }
 
-    fn disk_file(storage: &BodyStorage) -> (&NamedTempFile, &Arc<File>) {
+    fn disk_file(storage: &BodyStorage) -> &Arc<File> {
         match &storage.storage {
-            CaptureStorage::FinishedDisk { temp_file, file } => (temp_file, file),
+            CaptureStorage::FinishedDisk { file } => file,
             _ => panic!("test requires a finished disk-backed body"),
         }
     }
@@ -1991,7 +2268,7 @@ mod tests {
     async fn truncated_spill_fails_for_scan_and_replay() {
         let (mut storage, view) = BodyStorage::with_memory_limit(1);
         capture(&mut storage, &[b"abcdefghij"]).await;
-        let (_, file) = disk_file(&storage);
+        let file = disk_file(&storage);
         file.set_len(4).unwrap();
         assert_eq!(
             view.sha256_scan(u64::MAX).await.unwrap_err(),
@@ -2018,15 +2295,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dropping_storage_unlinks_spill_while_snapshot_view_stays_readable() {
+    async fn dropping_storage_releases_its_anonymous_spill_while_snapshot_view_stays_readable() {
         let (mut storage, view) = BodyStorage::with_memory_limit(1);
         capture(&mut storage, &[b"persistent-body"]).await;
-        let path = disk_file(&storage).0.path().to_path_buf();
         drop(storage);
-        assert!(!path.exists());
         assert_eq!(
             view.read_range(0, 64, 64).await.unwrap().value,
             Bytes::from_static(b"persistent-body")
         );
     }
 }
+
+#[cfg(test)]
+#[path = "storage_io_tests.rs"]
+mod storage_io_tests;

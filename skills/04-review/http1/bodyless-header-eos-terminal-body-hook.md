@@ -23,6 +23,10 @@ because an H2 HEADERS frame may declare zero length while leaving the stream ope
 
 - H1, H2, and custom upstreams share the same synthetic terminal body-hook dispatch.
 - Informational headers do not finalize the response; 101 continues through the upgrade path.
+  A source that reports a completed Upgrade as `Header(101, true)` is normalized by the custom
+  pump into `Header(101, false)` + `Done`, so the terminal hook still fires exactly once and the
+  released bytes keep the upgraded body variant. See
+  [custom-terminal-101-normalized-before-dispatch.md](../../../../pingora/edgion-changes/review/http1/custom-terminal-101-normalized-before-dispatch.md).
 - The header's final `response_filter` runs before synthetic terminal dispatch. A local reply,
   denial, or header-filter error prevents the body hook and all of its side effects.
 - A filter-produced current chunk precedes chunks emitted through `ResponseBodySink`.

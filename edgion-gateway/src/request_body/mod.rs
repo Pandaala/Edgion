@@ -22,6 +22,8 @@ pub use operation::{
 };
 pub use state::RequestBodyState;
 pub use storage::{BodyStorage, BodyStorageView};
+#[cfg(test)]
+pub(crate) use storage::{StorageIoOperation, STORAGE_IO_TEST_HOOK};
 
 /// Whether a captured request body was being replayed to the upstream on this
 /// session. Error handling uses this to attribute a gateway-local replay

@@ -95,6 +95,15 @@ metrics:
 
 ⚠️ The `test_key` / `test_data` labels appear **only** under `--integration-testing-mode` with an explicit Gateway annotation opt-in. `test_data` varies per request, so it is unbounded in cardinality. **Never enable integration-testing mode in production.**
 
+### Request-body storage saturation
+
+`edgion_request_body_storage_io_inflight` reports how many fixed storage-I/O
+permits are held. A sustained value of `32` together with growth in
+`edgion_request_body_storage_io_failures_total{reason="admission_timeout"}`
+means disk-backed request-body work is saturated before submission to the
+blocking pool. `reason="execution_timeout"` instead means an admitted file
+operation exceeded `requestBody.storageOperationTimeout`.
+
 ### Optional GenAI token counter
 
 `edgion_gateway_genai_tokens_total` is disabled by default. Enable it in the Gateway

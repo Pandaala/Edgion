@@ -108,6 +108,7 @@ spec:
     # maxMemoryBufferSize: "1MiB"            # optional effective override
     defaultMaxBodySize: "32MiB"
     # maxBodySize: "64MiB"                   # optional effective override
+    storageOperationTimeout: "5s"            # admission + one file operation
 
   # ─── Global plugins ───
   globalPluginsRef:                         # Vec<PluginReference>, applied to all routes
@@ -226,12 +227,14 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `maxMemoryBufferSize` | `String?` | unset | Effective business override for the memory spill threshold. Falls back to `defaultMemoryBufferSize`. |
 | `defaultMaxBodySize` | `String` | `32MiB` | Default physical complete-body cap. |
 | `maxBodySize` | `String?` | unset | Effective business override for the physical body cap. Falls back to `defaultMaxBodySize`; per-plugin `body.maxBodySize` may tighten it further for that plugin only. |
+| `storageOperationTimeout` | `String` | `5s` | Non-zero GEP-2257 duration bounding storage-I/O admission plus one spill, replay, materialization, or snapshot file operation. |
 
 All sizes must be positive human-readable byte sizes. The effective memory
 threshold must not exceed the effective body cap. The Gateway resolves these
 values when publishing an `EdgionGatewayConfig` update. Each new request copies
-the resolved boolean and integer fields from an immutable snapshot; it never
-parses sizes or takes a blocking lock.
+the resolved boolean, integer, and duration fields from an immutable snapshot;
+it never parses sizes/durations or takes a blocking lock. Storage deadline
+expiry is a gateway-local storage failure, not a downstream read timeout.
 
 ### spec.preflightPolicy
 

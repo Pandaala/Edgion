@@ -25,6 +25,111 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::sanitize_field_value;
 use edgion_resources::EdgionErrorCode;
 
+fn disable_h1_reuse_after_capture_failure(downstream: &mut pingora_core::protocols::http::server::Session) {
+    // `set_keepalive` disables reuse for H1 and is deliberately a no-op for
+    // H2, where dropping the unfinished request resets only that stream.
+    downstream.set_keepalive(None);
+}
+
+fn reject_over_limit_request_body(
+    downstream: &mut pingora_core::protocols::http::server::Session,
+    limit: u64,
+) -> BodyReadError {
+    // HTTP/1.x cannot be reused with unread request bytes. For HTTP/2 this
+    // is intentionally a no-op: after the 413 response closes its send
+    // side, dropping the request session resets only the unfinished stream.
+    downstream.set_keepalive(None);
+    BodyReadError::BufferLimitExceeded { limit }
+}
+
+fn reject_capture_storage_failure(downstream: &mut pingora_core::protocols::http::server::Session) -> BodyReadError {
+    // Capture can fail before the downstream body reaches EOS. H1 must not
+    // parse those unread bytes as a new request; for H2 this only affects
+    // the current request stream and the connection remains multiplexable.
+    disable_h1_reuse_after_capture_failure(downstream);
+    BodyReadError::StorageFailure
+}
+
+async fn capture_request_body_core(
+    downstream: &mut pingora_core::protocols::http::server::Session,
+    ctx: &mut EdgionHttpContext,
+    max_bytes: Option<u64>,
+) -> Result<u64, BodyReadError> {
+    if let Some(len) = ctx.request_body.cached_len()? {
+        return Ok(len);
+    }
+    if !ctx.request_body_config.enabled {
+        return Err(BodyReadError::Unimplemented);
+    }
+
+    let cap = resolve_cap(max_bytes, ctx.request_body_config.max_body_size_bytes);
+    if downstream
+        .req_header()
+        .headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|declared| declared > cap)
+    {
+        return Err(reject_over_limit_request_body(downstream, cap));
+    }
+    let expect_continue = downstream.req_header().version == http::Version::HTTP_11
+        && downstream
+            .req_header()
+            .headers
+            .get(http::header::EXPECT)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
+    if expect_continue {
+        downstream
+            .write_continue_response()
+            .await
+            .map_err(|_| BodyReadError::Incomplete)?;
+        // This hop has accepted the expectation. Do not forward it and
+        // provoke a second 100 response from the upstream.
+        downstream.req_header_mut().remove_header(&http::header::EXPECT);
+    }
+
+    let (storage, view) = BodyStorage::with_storage_timeout(
+        ctx.request_body_config.memory_buffer_bytes,
+        ctx.request_body_config.max_body_size_bytes,
+        ctx.request_body_config.storage_operation_timeout,
+    );
+    downstream
+        .set_request_body_buffer(Box::new(storage))
+        .map_err(|_| body_buffer_install_error())?;
+
+    let mut captured = 0u64;
+    loop {
+        let chunk = match downstream.read_request_body().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(err) => {
+                return Err(match err.etype() {
+                    pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
+                    pingora_core::ErrorType::HTTPStatus(413) => reject_over_limit_request_body(downstream, cap),
+                    // Gateway-local capture failure (spill-file IO, capture
+                    // poisoned mid-chunk). Kept apart from the client-caused
+                    // `Incomplete` so the access log can alert on it.
+                    pingora_core::ErrorType::InternalError => reject_capture_storage_failure(downstream),
+                    _ => BodyReadError::Incomplete,
+                });
+            }
+        };
+        captured = match captured.checked_add(chunk.len() as u64) {
+            Some(total) => total,
+            None => return Err(reject_over_limit_request_body(downstream, cap)),
+        };
+        if captured > cap {
+            return Err(reject_over_limit_request_body(downstream, cap));
+        }
+    }
+
+    let len = view.len()?;
+    ctx.request_body.install(view);
+    Ok(len)
+}
+
 /// Resolve a `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`
 /// selector against route metadata.
 /// Selectors: `name`, `namespace`, `label.<key>`, `annotation.<key>`.
@@ -351,9 +456,10 @@ impl<'a> PingoraSessionAdapter<'a> {
             return Err(BodyReadError::Incomplete);
         }
 
-        let (mut storage, view) = BodyStorage::new(
+        let (mut storage, view) = BodyStorage::with_storage_timeout(
             self.ctx.request_body_config.memory_buffer_bytes,
             self.ctx.request_body_config.max_body_size_bytes,
+            self.ctx.request_body_config.storage_operation_timeout,
         );
         storage.finish().await.map_err(|_| BodyReadError::Incomplete)?;
         self.inner
@@ -363,89 +469,8 @@ impl<'a> PingoraSessionAdapter<'a> {
         Ok(())
     }
 
-    fn reject_over_limit_request_body(&mut self, limit: u64) -> BodyReadError {
-        // HTTP/1.x cannot be reused with unread request bytes. For HTTP/2 this
-        // is intentionally a no-op: after the 413 response closes its send
-        // side, dropping the request session resets only the unfinished stream.
-        self.inner.set_keepalive(None);
-        BodyReadError::BufferLimitExceeded { limit }
-    }
-
     async fn capture_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
-        if let Some(len) = self.ctx.request_body.cached_len()? {
-            return Ok(len);
-        }
-        if !self.ctx.request_body_config.enabled {
-            return Err(BodyReadError::Unimplemented);
-        }
-
-        let cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
-        if self
-            .inner
-            .req_header()
-            .headers
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .is_some_and(|declared| declared > cap)
-        {
-            return Err(self.reject_over_limit_request_body(cap));
-        }
-        let expect_continue = self.inner.req_header().version == http::Version::HTTP_11
-            && self
-                .inner
-                .req_header()
-                .headers
-                .get(http::header::EXPECT)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
-        if expect_continue {
-            self.inner
-                .write_continue_response()
-                .await
-                .map_err(|_| BodyReadError::Incomplete)?;
-            // This hop has accepted the expectation. Do not forward it and
-            // provoke a second 100 response from the upstream.
-            self.inner.req_header_mut().remove_header(&http::header::EXPECT);
-        }
-
-        let (storage, view) = BodyStorage::new(
-            self.ctx.request_body_config.memory_buffer_bytes,
-            self.ctx.request_body_config.max_body_size_bytes,
-        );
-        self.inner
-            .set_request_body_buffer(Box::new(storage))
-            .map_err(|_| body_buffer_install_error())?;
-
-        let mut captured = 0u64;
-        loop {
-            let chunk = match self.inner.read_request_body().await {
-                Ok(Some(chunk)) => chunk,
-                Ok(None) => break,
-                Err(err) => {
-                    return Err(match err.etype() {
-                        pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
-                        pingora_core::ErrorType::HTTPStatus(413) => self.reject_over_limit_request_body(cap),
-                        // Gateway-local capture failure (spill-file IO, capture
-                        // poisoned mid-chunk). Kept apart from the client-caused
-                        // `Incomplete` so the access log can alert on it.
-                        pingora_core::ErrorType::InternalError => BodyReadError::StorageFailure,
-                        _ => BodyReadError::Incomplete,
-                    });
-                }
-            };
-            captured = match captured.checked_add(chunk.len() as u64) {
-                Some(total) => total,
-                None => return Err(self.reject_over_limit_request_body(cap)),
-            };
-            if captured > cap {
-                return Err(self.reject_over_limit_request_body(cap));
-            }
-        }
-
-        let len = view.len()?;
-        self.ctx.request_body.install(view);
-        Ok(len)
+        capture_request_body_core(self.inner.as_mut(), self.ctx, max_bytes).await
     }
 
     /// Decide + stash a response-phase local reply. Returns `true` when a reply
@@ -669,6 +694,10 @@ impl<'a> PingoraSessionAdapter<'a> {
         crate::ctx::parse_path_params(pattern, actual_path)
     }
 }
+
+#[cfg(test)]
+#[path = "session_adapter/storage_io_tests.rs"]
+mod storage_io_tests;
 
 fn body_buffer_install_error() -> BodyReadError {
     BodyReadError::StorageFailure

@@ -77,6 +77,7 @@ spec:
     # maxMemoryBufferSize: "1MiB"
     defaultMaxBodySize: "32MiB"
     # maxBodySize: "64MiB"
+    storageOperationTimeout: "5s"
 
   globalPluginsRef:
     - name: "global-cors"
@@ -193,12 +194,18 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in any 
 | `maxMemoryBufferSize` | `String` | unset | Effective business override for the memory spill threshold; falls back to `defaultMemoryBufferSize` |
 | `defaultMaxBodySize` | `String` | `32MiB` | Default complete request-body cap |
 | `maxBodySize` | `String` | unset | Effective business override for the body cap; falls back to `defaultMaxBodySize` |
+| `storageOperationTimeout` | `String` | `5s` | Non-zero deadline for one disk-backed request-body operation, including waiting for storage-I/O admission and executing the file operation |
 
 All sizes must be positive human-readable byte sizes. The effective memory
 threshold must not exceed the effective body cap. Values are parsed when the
 configuration update is published. Each new request copies the resolved policy
 from an immutable snapshot without parsing sizes or taking a blocking lock. A
 plugin's `body.maxBodySize` may further tighten the limit for that plugin.
+`storageOperationTimeout` uses the shared GEP-2257 duration syntax (`500ms`,
+`5s`, `1m`) and must be greater than zero. A storage deadline is reported as a
+gateway-local storage failure, not as a downstream body-read timeout. Capture
+failure disables HTTP/1 connection reuse when unread body bytes may remain;
+HTTP/2 resets only the affected stream.
 
 ### spec.globalPluginsRef
 

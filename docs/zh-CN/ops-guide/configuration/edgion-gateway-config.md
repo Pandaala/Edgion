@@ -77,6 +77,7 @@ spec:
     # maxMemoryBufferSize: "1MiB"
     defaultMaxBodySize: "32MiB"
     # maxBodySize: "64MiB"
+    storageOperationTimeout: "5s"
 
   globalPluginsRef:
     - name: "global-cors"
@@ -186,8 +187,11 @@ spec:
 | `maxMemoryBufferSize` | `String` | 未设置 | 内存溢写阈值的业务覆盖值；未设置时使用 `defaultMemoryBufferSize` |
 | `defaultMaxBodySize` | `String` | `32MiB` | 完整请求体的默认上限 |
 | `maxBodySize` | `String` | 未设置 | 请求体物理上限的业务覆盖值；未设置时使用 `defaultMaxBodySize` |
+| `storageOperationTimeout` | `String` | `5s` | 单次落盘请求体操作的非零时限，同时覆盖等待存储 I/O 准入和执行文件操作 |
 
 所有大小都必须是正数可读字节值，有效内存阈值不能超过有效请求体上限。Gateway 在发布配置更新时解析这些值；每个新请求从不可变快照复制已解析策略，不会解析大小字符串或获取阻塞锁。插件的 `body.maxBodySize` 可以进一步收紧该插件的限制。
+
+`storageOperationTimeout` 使用共享的 GEP-2257 duration 格式（如 `500ms`、`5s`、`1m`），且必须大于零。超过该时限会报告为 Gateway 本地存储故障，而不是下游请求体读取超时。捕获失败且仍可能存在未读 body 时，HTTP/1 连接不可复用；HTTP/2 只重置受影响的 stream。
 
 ### spec.globalPluginsRef
 

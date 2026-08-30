@@ -226,6 +226,11 @@ spec:
                     maxBodySize:
                       type: string
                       description: "Optional business override for the complete request-body cap."
+                    storageOperationTimeout:
+                      type: string
+                      default: "5s"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                      description: "Non-zero wall-clock deadline shared by admission and execution of one request-body storage file operation."
 
                 # ============================================
                 # Global Plugins Reference

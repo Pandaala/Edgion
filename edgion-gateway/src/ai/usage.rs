@@ -245,21 +245,22 @@ const MAX_TOLERATED_MALFORMED_SSE_EVENTS: u64 = 1;
 /// Records `EdgionErrorCode::AiQuotaOverLimitTerminated` unconditionally so an
 /// operator can tell a gateway-initiated cutoff apart from an upstream
 /// hang-up, and additionally `AiQuotaErrorEventDropped` when the injection
-/// itself could not fit the sink's per-batch emit budget (an earlier
-/// processor already spent it) — the client then sees a bare truncation with
-/// no in-band diagnostic, which is otherwise invisible outside the body.
+/// itself could not fit either of the sink's independent per-batch byte or
+/// nonempty-chunk emit budgets (an earlier processor already spent one) — the
+/// client then sees a bare truncation with no in-band diagnostic, which is
+/// otherwise invisible outside the body.
 ///
 /// `AiQuotaErrorEventDropped` is currently unreachable in production: this
 /// function and its `terminate_quota_unenforceable` sibling (mutually
 /// exclusive within one chunk) are the only sink producers in the shipped
-/// response-processor chains, each pushes at most one ~130-byte event, and the chain stops
-/// immediately after (`terminate()` aborts remaining processors for the
-/// chunk per the design doc §3.4) — so the sink's 1 MiB per-batch budget can
-/// never actually be exhausted by the time this call runs. The branch stays
-/// as a fail-safe for the first future processor that shares the sink ahead
-/// of this one and spends enough of the budget to matter; its test below
-/// exercises the branch directly by pre-filling the budget, which is not
-/// evidence of a live path today.
+/// response-processor chains, each pushes at most one ~130-byte event, and the
+/// chain stops immediately after (`terminate()` aborts remaining processors
+/// for the chunk per the design doc §3.4) — so neither the sink's 1 MiB byte
+/// budget nor its 2048-nonempty-chunk budget can be exhausted by the time this
+/// call runs. The branch stays as a fail-safe for the first future processor
+/// that shares the sink ahead of this one and spends enough of either budget
+/// to matter; its test below exercises the branch directly by pre-filling the
+/// byte budget, which is not evidence of a live path today.
 pub(crate) fn terminate_over_quota(
     shared: &AiUsageShared,
     sink: &mut ResponseBodySink,

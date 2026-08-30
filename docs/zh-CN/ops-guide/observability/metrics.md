@@ -71,6 +71,8 @@ scrape_configs:
 | `edgion_link_sys_es_bulk_channel_full_total` | Counter | none | 提交时 Elasticsearch 生产者→批量循环通道已满；日志发送路径的持续反压信号 |
 | `edgion_outbound_template_fallback_total` | Counter | `field`（`timeout_ms`） | webhook / ForwardAuth 的 `timeoutMsTemplate` 渲染失败并回退到静态字段。详见[连接器 → Templates（模板）](../infrastructure/connectors.md#模板-templates) |
 | `edgion_outbound_success_predicate_fail_total` | Counter | 无 | webhook / ForwardAuth 响应的状态码已被接受，但 `success.body` 断言将其判定为失败（"200 OK 但 body 里有错误"的情形）。详见[连接器 → Success（成功判定）](../infrastructure/connectors.md#成功判定-success) |
+| `edgion_request_body_storage_io_failures_total` | Counter | `operation`, `reason` | 请求体存储 I/O 失败；`admission_timeout` 表示固定存储通道在提交阻塞任务前已饱和，`execution_timeout` 表示已准入文件操作超过配置时限 |
+| `edgion_request_body_storage_io_inflight` | Gauge | 无 | 当前持有进程级存储 I/O permit 的文件操作数，包括已进入 blocking pool 队列的任务；持续为 32 且 admission timeout 增长时应告警 |
 
 ### `edgion_backend_requests_total` 标签
 

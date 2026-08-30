@@ -1004,7 +1004,8 @@ fn fold_peer_timeouts(
 /// Resolve the effective `backendRequest` bound for one upstream attempt.
 /// Three-state per Gateway API spec:
 /// - Unset (or no route timeouts) → global default
-/// - Disabled (`"0s"`) → `None` (no I/O bound; only deadline sources clamp)
+/// - Disabled (`"0s"`) → `None` (no configured peer I/O bound; only deadline
+///   sources clamp, while protocol-local liveness floors may still apply)
 /// - Duration → the route value
 ///
 /// A zero duration is filtered out as disabled: route-level `"0s"` already
@@ -1080,7 +1081,9 @@ fn choose_typed_connect_deadline(
 /// `Some(global default backendRequest)` only when a captured request body will
 /// replay to the upstream AND the global default itself is enabled (non-zero).
 /// A disabled global default means the operator asked for no bounds anywhere —
-/// respected, the window stays unbounded. Rationale at the call site.
+/// respected, so the peer option stays unset. Protocol-local liveness floors,
+/// such as Pingora's H2 capacity-wait floor, may still apply. Rationale at the
+/// call site.
 #[inline]
 fn replay_write_floor(body_captured: bool, global_backend_request: std::time::Duration) -> Option<std::time::Duration> {
     (body_captured && !global_backend_request.is_zero()).then_some(global_backend_request)

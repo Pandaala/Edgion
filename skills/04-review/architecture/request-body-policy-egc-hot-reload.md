@@ -14,9 +14,9 @@ up the EGC named by the listener's GatewayClass, and copies the compact
 `ResolvedRequestBodyConfig` into its context.
 
 An EGC update therefore changes the body capture switch, memory spill
-threshold, and physical body cap for subsequent requests without restarting
-the process or rebinding the listener. Deletion and missing references use the
-built-in default policy.
+threshold, physical body cap, and storage-operation timeout for subsequent
+requests without restarting the process or rebinding the listener. Deletion
+and missing references use the built-in default policy.
 
 ## Core Rationale
 

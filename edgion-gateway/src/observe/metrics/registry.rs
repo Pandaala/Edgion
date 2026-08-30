@@ -26,6 +26,10 @@ pub mod names {
     // Gateway traffic byte counters
     pub const GATEWAY_REQUEST_BYTES: &str = "edgion_gateway_request_bytes_total";
     pub const GATEWAY_RESPONSE_BYTES: &str = "edgion_gateway_response_bytes_total";
+    // Request-body spill/materialization I/O. Both labels have fixed enum-like
+    // values; request, route, and resource identity deliberately stay out.
+    pub const REQUEST_BODY_STORAGE_IO_FAILURES_TOTAL: &str = "edgion_request_body_storage_io_failures_total";
+    pub const REQUEST_BODY_STORAGE_IO_INFLIGHT: &str = "edgion_request_body_storage_io_inflight";
     // Native WAF metrics. Every label is a closed enum-like set; resource
     // names and rule identifiers deliberately stay in diagnostics instead.
     pub const WAF_COMPILE_TOTAL: &str = "edgion_gateway_waf_compile_total";
@@ -174,6 +178,24 @@ static GLOBAL_METRICS: LazyLock<GatewayMetrics> = LazyLock::new(GatewayMetrics::
 /// Get the global metrics instance
 pub fn global_metrics() -> &'static GatewayMetrics {
     &GLOBAL_METRICS
+}
+
+pub fn record_request_body_storage_io_failure(operation: &'static str, reason: &'static str) {
+    counter!(
+        names::REQUEST_BODY_STORAGE_IO_FAILURES_TOTAL,
+        "operation" => operation,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
+pub fn adjust_request_body_storage_io_inflight(delta: f64) {
+    let metric = gauge!(names::REQUEST_BODY_STORAGE_IO_INFLIGHT);
+    if delta >= 0.0 {
+        metric.increment(delta);
+    } else {
+        metric.decrement(-delta);
+    }
 }
 
 /// Whether a provider reported token counts or Edgion estimated them from

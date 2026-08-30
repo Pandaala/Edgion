@@ -124,7 +124,8 @@ pub trait StreamingResponseProcessor: Send + Sync {
     /// to later processors in the chain. `sink.push()` **injects**
     /// self-generated content and is NOT visible to them -- a processor whose
     /// output must be seen by the next one has to mutate `chunk`.
-    /// The sink's byte budget counts only chunks passed to `sink.push()`; it
+    /// The sink independently bounds bytes and nonempty chunks passed to
+    /// `sink.push()` per pump batch; callers must handle a rejected push. It
     /// does not limit in-place growth of `chunk`. A processor that expands the
     /// current chunk must enforce its own output bound.
     ///

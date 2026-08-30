@@ -538,6 +538,7 @@ mod tests {
         initial.spec.request_body.enabled = false;
         initial.spec.request_body.max_memory_buffer_size = Some("256KiB".to_string());
         initial.spec.request_body.max_body_size = Some("1MiB".to_string());
+        initial.spec.request_body.storage_operation_timeout = "750ms".to_string();
         let mut add = HashMap::new();
         add.insert("body-policy".to_string(), Arc::new(initial));
         handler.partial_update(add, HashMap::new(), HashSet::new());
@@ -546,10 +547,15 @@ mod tests {
         assert!(!resolved.enabled);
         assert_eq!(resolved.memory_buffer_bytes, 256 * 1024);
         assert_eq!(resolved.max_body_size_bytes, 1024 * 1024);
+        assert_eq!(
+            resolved.storage_operation_timeout,
+            std::time::Duration::from_millis(750)
+        );
 
         let mut updated = make_config("body-policy");
         updated.spec.request_body.max_memory_buffer_size = Some("512KiB".to_string());
         updated.spec.request_body.max_body_size = Some("2MiB".to_string());
+        updated.spec.request_body.storage_operation_timeout = "2s".to_string();
         let mut update = HashMap::new();
         update.insert("body-policy".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), update, HashSet::new());
@@ -557,6 +563,7 @@ mod tests {
         let resolved = get_resolved_request_body_config(Some("body-policy"));
         assert_eq!(resolved.memory_buffer_bytes, 512 * 1024);
         assert_eq!(resolved.max_body_size_bytes, 2 * 1024 * 1024);
+        assert_eq!(resolved.storage_operation_timeout, std::time::Duration::from_secs(2));
 
         handler.partial_update(
             HashMap::new(),

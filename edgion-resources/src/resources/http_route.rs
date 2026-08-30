@@ -1243,7 +1243,8 @@ use std::time::Duration;
 
 /// Three-state timeout setting per Gateway API spec.
 /// - `Unset`: field not specified → fall back to global default
-/// - `Disabled`: explicitly set to `"0s"` → no timeout (infinite)
+/// - `Disabled`: explicitly set to `"0s"` → no route-configured timeout
+///   (transport-level liveness floors may still apply)
 /// - `Duration`: explicitly set to a positive value
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteTimeout {

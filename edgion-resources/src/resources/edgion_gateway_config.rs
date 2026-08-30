@@ -178,6 +178,12 @@ pub struct RequestBodyConfig {
     /// Optional business override for the complete request-body cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_body_size: Option<String>,
+
+    /// Wall-clock deadline shared by admission and execution of one
+    /// request-body storage file operation.
+    #[serde(default = "default_request_body_storage_operation_timeout")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub storage_operation_timeout: String,
 }
 
 impl RequestBodyConfig {
@@ -209,6 +215,15 @@ impl RequestBodyConfig {
                 );
             }
         }
+        match crate::duration::parse_duration(&self.storage_operation_timeout) {
+            Ok(timeout) if timeout.is_zero() => {
+                errors.push("requestBody.storageOperationTimeout must be greater than zero".to_string());
+            }
+            Ok(_) => {}
+            Err(error) => errors.push(format!(
+                "requestBody.storageOperationTimeout must be a valid duration: {error}"
+            )),
+        }
         errors
     }
 }
@@ -221,6 +236,7 @@ impl Default for RequestBodyConfig {
             max_memory_buffer_size: None,
             default_max_body_size: default_request_body_max_size(),
             max_body_size: None,
+            storage_operation_timeout: default_request_body_storage_operation_timeout(),
         }
     }
 }
@@ -235,6 +251,10 @@ fn default_memory_buffer_size() -> String {
 
 fn default_request_body_max_size() -> String {
     "32MiB".to_string()
+}
+
+fn default_request_body_storage_operation_timeout() -> String {
+    "5s".to_string()
 }
 
 fn validate_positive_byte_size(value: Option<&str>, field: &str, errors: &mut Vec<String>) -> Option<u64> {
@@ -1101,6 +1121,7 @@ mod tests {
         assert!(s.request_body.enabled);
         assert_eq!(s.request_body.default_memory_buffer_size, "128KiB");
         assert_eq!(s.request_body.default_max_body_size, "32MiB");
+        assert_eq!(s.request_body.storage_operation_timeout, "5s");
         assert!(s.validate_request_body().is_empty());
     }
 
@@ -1109,13 +1130,15 @@ mod tests {
         let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
             "requestBody": {
                 "maxMemoryBufferSize": "256KiB",
-                "maxBodySize": "8MiB"
+                "maxBodySize": "8MiB",
+                "storageOperationTimeout": "750ms"
             }
         }))
         .unwrap();
         let request_body = s.request_body;
         assert_eq!(request_body.max_memory_buffer_size.as_deref(), Some("256KiB"));
         assert_eq!(request_body.max_body_size.as_deref(), Some("8MiB"));
+        assert_eq!(request_body.storage_operation_timeout, "750ms");
         assert!(request_body.validate().is_empty());
     }
 
@@ -1150,6 +1173,14 @@ mod tests {
             inverted.validate_request_body(),
             vec!["effective requestBody memory buffer size must not exceed the effective requestBody max body size"]
         );
+
+        for timeout in ["0s", "invalid"] {
+            let invalid_timeout: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "requestBody": { "storageOperationTimeout": timeout }
+            }))
+            .unwrap();
+            assert_eq!(invalid_timeout.validate_request_body().len(), 1, "{timeout}");
+        }
     }
 
     #[test]

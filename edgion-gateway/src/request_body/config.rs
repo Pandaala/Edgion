@@ -1,8 +1,10 @@
 use edgion_resources::resources::common::parse_byte_size;
 use edgion_resources::resources::edgion_gateway_config::RequestBodyConfig;
+use std::time::Duration;
 
 pub const DEFAULT_MEMORY_BUFFER_BYTES: usize = 128 * 1024;
 pub const DEFAULT_MAX_BODY_SIZE_BYTES: u64 = 32 * 1024 * 1024;
+pub const DEFAULT_STORAGE_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Request-body policy resolved when an EdgionGatewayConfig snapshot is built.
 ///
@@ -14,6 +16,7 @@ pub struct ResolvedRequestBodyConfig {
     pub enabled: bool,
     pub memory_buffer_bytes: usize,
     pub max_body_size_bytes: u64,
+    pub storage_operation_timeout: Duration,
 }
 
 impl ResolvedRequestBodyConfig {
@@ -34,11 +37,16 @@ impl ResolvedRequestBodyConfig {
             .as_deref()
             .and_then(parse_positive)
             .unwrap_or(default_body);
+        let storage_operation_timeout = edgion_resources::duration::parse_duration(&config.storage_operation_timeout)
+            .ok()
+            .filter(|timeout| !timeout.is_zero())
+            .unwrap_or(DEFAULT_STORAGE_OPERATION_TIMEOUT);
 
         Self {
             enabled: config.enabled,
             memory_buffer_bytes: memory_buffer_bytes.min(usize::try_from(max_body_size_bytes).unwrap_or(usize::MAX)),
             max_body_size_bytes,
+            storage_operation_timeout,
         }
     }
 }
@@ -49,6 +57,7 @@ impl Default for ResolvedRequestBodyConfig {
             enabled: true,
             memory_buffer_bytes: DEFAULT_MEMORY_BUFFER_BYTES,
             max_body_size_bytes: DEFAULT_MAX_BODY_SIZE_BYTES,
+            storage_operation_timeout: DEFAULT_STORAGE_OPERATION_TIMEOUT,
         }
     }
 }
@@ -66,6 +75,7 @@ mod tests {
         let resolved = ResolvedRequestBodyConfig::resolve(&RequestBodyConfig::default());
         assert_eq!(resolved.memory_buffer_bytes, 128 * 1024);
         assert_eq!(resolved.max_body_size_bytes, 32 * 1024 * 1024);
+        assert_eq!(resolved.storage_operation_timeout, Duration::from_secs(5));
     }
 
     #[test]
@@ -98,5 +108,28 @@ mod tests {
         };
         let resolved = ResolvedRequestBodyConfig::resolve(&config);
         assert_eq!(resolved.memory_buffer_bytes, 1024 * 1024);
+    }
+
+    #[test]
+    fn storage_operation_timeout_resolves_and_invalid_values_fail_safe() {
+        let configured = RequestBodyConfig {
+            storage_operation_timeout: "750ms".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            ResolvedRequestBodyConfig::resolve(&configured).storage_operation_timeout,
+            Duration::from_millis(750)
+        );
+
+        for value in ["0s", "invalid"] {
+            let invalid = RequestBodyConfig {
+                storage_operation_timeout: value.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(
+                ResolvedRequestBodyConfig::resolve(&invalid).storage_operation_timeout,
+                DEFAULT_STORAGE_OPERATION_TIMEOUT
+            );
+        }
     }
 }
