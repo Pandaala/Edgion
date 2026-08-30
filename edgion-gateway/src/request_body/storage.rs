@@ -441,11 +441,11 @@ impl BodyStorageView {
         Ok((Arc::clone(&initial.snapshot), mutation.generation))
     }
 
-    fn publish(&self, expected_generation: u64, snapshot: BodySnapshot) -> Result<(), BodyOperationError> {
+    fn publish(&self, expected_generation: u64, snapshot: BodySnapshot) -> Result<u64, BodyOperationError> {
         self.publish_arc(expected_generation, Arc::new(snapshot))
     }
 
-    fn publish_arc(&self, expected_generation: u64, snapshot: Arc<BodySnapshot>) -> Result<(), BodyOperationError> {
+    fn publish_arc(&self, expected_generation: u64, snapshot: Arc<BodySnapshot>) -> Result<u64, BodyOperationError> {
         if snapshot.len > self.inner.max_body_size_bytes {
             return Err(BodyOperationError::Body(BodyReadError::BufferLimitExceeded {
                 limit: self.inner.max_body_size_bytes,
@@ -458,12 +458,13 @@ impl BodyStorageView {
             // snapshot must never be spliced into the newer one.
             return Err(BodyOperationError::Body(BodyReadError::GenerationConflict));
         }
-        mutation.generation = mutation
+        let committed_generation = mutation
             .generation
             .checked_add(1)
             .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+        mutation.generation = committed_generation;
         mutation.snapshot = Some(snapshot);
-        Ok(())
+        Ok(committed_generation)
     }
 
     pub async fn read_all(&self) -> BodyReadResult {
@@ -521,6 +522,17 @@ impl BodyStorageView {
 
     pub fn is_modified(&self) -> bool {
         self.inner.mutation.read().snapshot.is_some()
+    }
+
+    /// Final length of the published mutation, read atomically with its
+    /// presence under one mutation-state guard.
+    pub(crate) fn modified_len(&self) -> Option<u64> {
+        self.inner
+            .mutation
+            .read()
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.len)
     }
 
     #[cfg(test)]
@@ -657,7 +669,7 @@ impl BodyStorageView {
 
     pub fn clear(&self) -> Result<(), BodyOperationError> {
         let (_, generation) = self.snapshot().map_err(BodyOperationError::Body)?;
-        self.publish(generation, BodySnapshot::empty())
+        self.publish(generation, BodySnapshot::empty()).map(|_| ())
     }
 
     pub fn append(&self, bytes: Bytes) -> Result<(), BodyOperationError> {
@@ -668,6 +680,7 @@ impl BodyStorageView {
         let mut segments = snapshot.segments.clone();
         segments.push(Segment::Inline(bytes));
         self.publish(generation, BodySnapshot::from_segments(segments)?)
+            .map(|_| ())
     }
 
     pub fn prepend(&self, bytes: Bytes) -> Result<(), BodyOperationError> {
@@ -679,6 +692,7 @@ impl BodyStorageView {
         segments.push(Segment::Inline(bytes));
         segments.extend(snapshot.segments.iter().cloned());
         self.publish(generation, BodySnapshot::from_segments(segments)?)
+            .map(|_| ())
     }
 
     pub fn remove(&self, range: Range<u64>) -> Result<(), BodyOperationError> {
@@ -689,6 +703,7 @@ impl BodyStorageView {
         let mut segments = snapshot.slice(0..range.start)?;
         segments.extend(snapshot.slice(range.end..snapshot.len)?);
         self.publish(generation, BodySnapshot::from_segments(segments)?)
+            .map(|_| ())
     }
 
     pub async fn replace_literal(
@@ -833,14 +848,15 @@ impl BodyStorageView {
         segments.extend(snapshot.slice(cursor..snapshot.len)?);
 
         let next = Arc::new(BodySnapshot::from_segments(segments)?);
-        self.publish_arc(expected_generation, next)?;
-        Ok(self.generation())
+        self.publish_arc(expected_generation, next)
     }
 
     pub fn overwrite_body(&self, body: Bytes) -> Result<(), BodyReadError> {
         let (_, generation) = self.snapshot()?;
         let snapshot = BodySnapshot::from_inline(body).map_err(operation_to_body_error)?;
-        self.publish(generation, snapshot).map_err(operation_to_body_error)
+        self.publish(generation, snapshot)
+            .map(|_| ())
+            .map_err(operation_to_body_error)
     }
 
     pub async fn sha256(&self) -> Result<[u8; 32], BodyReadError> {
@@ -1663,6 +1679,19 @@ mod tests {
                 replay_all(&mut storage, 4096).await,
                 Bytes::from_static(br#"{"a":"1","b":"two","c":"333333"}"#)
             );
+        }
+
+        #[tokio::test]
+        async fn publication_returns_its_own_generation_after_a_later_commit() {
+            let (_storage, view) = view().await;
+            let (snapshot, before) = view.snapshot().unwrap();
+
+            let first = view.publish_arc(before, Arc::clone(&snapshot)).unwrap();
+            let second = view.publish_arc(first, snapshot).unwrap();
+
+            assert_eq!(first, before + 1);
+            assert_eq!(second, first + 1);
+            assert_eq!(view.generation(), second);
         }
 
         #[tokio::test]

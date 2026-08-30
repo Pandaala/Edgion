@@ -136,8 +136,6 @@ impl RequestBodyState {
         self.0.modified_len_for_framing()
     }
 
-    /// Release the read-only cache after the final response-header plugin
-    /// chain. Retained mutation framing remains available for retries.
     /// Current logical snapshot generation, when a view is installed.
     pub fn generation(&self) -> Option<u64> {
         self.0.generation()
@@ -152,6 +150,8 @@ impl RequestBodyState {
         self.0.replace_spans(expected_generation, edits)
     }
 
+    /// Release the plugin-readable cache after the final response-header
+    /// chain. Retained mutation framing remains available for retries.
     pub fn release_view(&mut self) {
         self.0.release_view();
     }
@@ -180,5 +180,82 @@ impl RequestBodySnapshotReader for EmptySnapshotReader {
 
     async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    async fn captured(body: &'static [u8]) -> RequestBodyState {
+        let (mut storage, view) = super::super::BodyStorage::new(64, 1024);
+        storage.write(&Bytes::from_static(body)).await.unwrap();
+        storage.finish().await.unwrap();
+        let mut state = RequestBodyState::default();
+        state.install(view);
+        state
+    }
+
+    async fn read_snapshot(mut reader: Box<dyn RequestBodySnapshotReader>) -> Bytes {
+        let mut body = Vec::new();
+        while let Some(chunk) = reader.next_chunk().await.unwrap() {
+            body.extend_from_slice(&chunk);
+        }
+        Bytes::from(body)
+    }
+
+    #[tokio::test]
+    async fn known_empty_remains_distinct_from_missing_capture() {
+        let mut state = RequestBodyState::default();
+        assert_eq!(state.available_len(false), Err(BodyReadError::NotBuffered));
+        assert!(state.snapshot_reader(false).is_err());
+        assert_eq!(state.read_all().await.unwrap(), None);
+        assert!(matches!(
+            state.sha256_scan(0).await,
+            Err(BodyOperationError::Body(BodyReadError::NotBuffered))
+        ));
+        assert_eq!(
+            state.replace_slice(0..0, Bytes::new()).await,
+            Err(BodyReadError::NotBuffered)
+        );
+        assert_eq!(state.overwrite(Bytes::new()), Err(BodyReadError::NotBuffered));
+
+        state.mark_known_empty();
+        assert_eq!(state.available_len(false), Ok(0));
+        let reader = state.snapshot_reader(false).unwrap();
+        assert_eq!(reader.len(), 0);
+        assert_eq!(read_snapshot(reader).await, Bytes::new());
+        assert!(!state.has_cached_body());
+        assert_eq!(state.cached_len(), Ok(None));
+        let digest = state.sha256_scan(0).await.unwrap();
+        assert_eq!(digest.value, super::super::EMPTY_SHA256);
+        assert_eq!(digest.bytes_scanned, 0);
+    }
+
+    #[tokio::test]
+    async fn snapshot_reader_is_independent_of_later_mutation() {
+        let state = captured(b"original").await;
+        let original = state.snapshot_reader(false).unwrap();
+        state.overwrite(Bytes::from_static(b"replacement")).unwrap();
+
+        assert_eq!(read_snapshot(original).await, Bytes::from_static(b"original"));
+        assert_eq!(
+            read_snapshot(state.snapshot_reader(false).unwrap()).await,
+            Bytes::from_static(b"replacement")
+        );
+    }
+
+    #[tokio::test]
+    async fn release_drops_plugin_access_but_retains_mutation_framing() {
+        let mut state = captured(b"original").await;
+        state.overwrite(Bytes::from_static(b"new")).unwrap();
+
+        state.release_view();
+        assert!(!state.has_cached_body());
+        assert_eq!(state.cached_len(), Ok(None));
+        assert_eq!(state.available_len(false), Err(BodyReadError::NotBuffered));
+        assert_eq!(state.generation(), None);
+        assert_eq!(state.modified_len_for_framing().unwrap(), Some(3));
     }
 }

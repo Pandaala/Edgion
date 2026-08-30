@@ -1659,8 +1659,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if let Some(hash) = self.ctx.request_body.sha256().await? {
             return Ok(hash);
         }
-        use sha2::Digest;
-        Ok(sha2::Sha256::digest([]).into())
+        Ok(crate::request_body::EMPTY_SHA256)
     }
 
     fn request_body_available_len(&mut self, known_bodyless: bool) -> Result<u64, BodyReadError> {
@@ -3355,12 +3354,15 @@ mod record_outcome_tests {
         ctx.request_info.body_declared = Some(false);
         ctx.request_info.in_request_body_stage = false;
 
-        let body = {
+        let (body, digest) = {
             let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-            adapter.read_request_body(None).await.expect("bodyless late read")
+            let body = adapter.read_request_body(None).await.expect("bodyless late read");
+            let digest = adapter.request_body_sha256().await.expect("bodyless digest");
+            (body, digest)
         };
 
         assert!(body.is_empty());
+        assert_eq!(digest, crate::request_body::EMPTY_SHA256);
         assert!(!ctx.request_body.has_cached_body());
         assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }

@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use sha2::Digest;
 use std::sync::Arc;
 
 use super::super::operation::{
@@ -57,7 +56,7 @@ impl Backend {
     pub(super) async fn replace_slice(&self, range: std::ops::Range<usize>, replacement: Bytes) -> BodyReadResult {
         self.view
             .as_ref()
-            .ok_or(BodyReadError::Incomplete)?
+            .ok_or(BodyReadError::NotBuffered)?
             .replace_slice(range, replacement)
             .await
     }
@@ -65,7 +64,7 @@ impl Backend {
     pub(super) fn overwrite(&self, body: Bytes) -> Result<(), BodyReadError> {
         self.view
             .as_ref()
-            .ok_or(BodyReadError::Incomplete)?
+            .ok_or(BodyReadError::NotBuffered)?
             .overwrite_body(body)
     }
 
@@ -130,7 +129,7 @@ impl Backend {
         match self.view.as_ref() {
             Some(view) => view.sha256_scan(max_scan_bytes).await,
             None if self.known_empty => Ok(BodyScanResult {
-                value: sha2::Sha256::digest([]).into(),
+                value: super::super::EMPTY_SHA256,
                 bytes_scanned: 0,
             }),
             None => Err(BodyOperationError::Body(BodyReadError::NotBuffered)),
@@ -180,12 +179,11 @@ impl Backend {
 
     pub(super) fn modified_len_for_framing(&mut self) -> Result<Option<u64>, BodyReadError> {
         if let Some(view) = self.view.as_ref() {
-            if !view.is_modified() {
-                return Ok(None);
+            if let Some(len) = view.modified_len() {
+                self.modified_len = Some(len);
+                return Ok(Some(len));
             }
-            let len = view.len()?;
-            self.modified_len = Some(len);
-            return Ok(Some(len));
+            return Ok(None);
         }
         Ok(self.modified_len)
     }
@@ -206,6 +204,9 @@ impl Backend {
     }
 
     pub(super) fn release_view(&mut self) {
+        if let Some(len) = self.view.as_ref().and_then(|view| view.modified_len()) {
+            self.modified_len = Some(len);
+        }
         self.view = None;
     }
 
