@@ -3,6 +3,7 @@ use crate::request_body::ResolvedRequestBodyConfig;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
+use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig;
 use kube::ResourceExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -12,10 +13,16 @@ struct EdgionGatewayConfigSnapshot {
     configs: HashMap<String, EdgionGatewayConfig>,
     request_body_configs: HashMap<String, ResolvedRequestBodyConfig>,
     remote_ip_headers: HashMap<String, http::HeaderName>,
+    dns_resolver_default: Option<DnsResolverConfig>,
 }
 
 impl EdgionGatewayConfigSnapshot {
     fn new(configs: HashMap<String, EdgionGatewayConfig>) -> Self {
+        let dns_resolver_default = configs
+            .iter()
+            .filter(|(_, config)| config.spec.dns_resolver.is_some())
+            .min_by(|a, b| a.0.cmp(b.0))
+            .and_then(|(_, config)| config.spec.dns_resolver.clone());
         let request_body_configs = configs
             .values()
             .map(|config| {
@@ -50,6 +57,7 @@ impl EdgionGatewayConfigSnapshot {
             configs,
             request_body_configs,
             remote_ip_headers,
+            dns_resolver_default,
         }
     }
 
@@ -134,14 +142,8 @@ pub fn get_remote_ip_header(config_name: Option<&str>) -> http::HeaderName {
 /// Cheap hot-path accessor: it clones only the winning `DnsResolverConfig`, not
 /// the whole store, and picks deterministically by name (lowest key wins) so the
 /// choice is stable across restarts when more than one EGC sets a default.
-pub fn get_egc_dns_resolver_default() -> Option<edgion_resources::resources::edgion_gateway_config::DnsResolverConfig> {
-    EDGION_GATEWAY_CONFIG_STORE
-        .load()
-        .configs
-        .iter()
-        .filter(|(_, egc)| egc.spec.dns_resolver.is_some())
-        .min_by(|a, b| a.0.cmp(b.0))
-        .and_then(|(_, egc)| egc.spec.dns_resolver.clone())
+pub fn get_egc_dns_resolver_default() -> Option<DnsResolverConfig> {
+    EDGION_GATEWAY_CONFIG_STORE.load().dns_resolver_default.clone()
 }
 
 /// ConfHandler implementation for EdgionGatewayConfig
@@ -593,6 +595,54 @@ mod tests {
             get_resolved_request_body_config(Some("invalid-body-policy")),
             ResolvedRequestBodyConfig::default()
         );
+    }
+
+    #[test]
+    fn dns_resolver_default_is_precomputed_with_stable_key_winner() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        let mut key_b = make_config("metadata-first");
+        key_b.spec.dns_resolver = Some(DnsResolverConfig {
+            link_sys_ref: None,
+            servers: Some(vec!["192.0.2.2:53".to_string()]),
+            cache_ttl: "20s".to_string(),
+        });
+        let mut key_a = make_config("metadata-second");
+        key_a.spec.dns_resolver = Some(DnsResolverConfig {
+            link_sys_ref: None,
+            servers: Some(vec!["192.0.2.1:53".to_string()]),
+            cache_ttl: "10s".to_string(),
+        });
+        handler.full_set(&HashMap::from([
+            ("b".to_string(), Arc::new(key_b)),
+            ("a".to_string(), Arc::new(key_a)),
+        ]));
+
+        let in_flight = get_egc_dns_resolver_default().expect("lowest store key must win");
+        assert_eq!(in_flight.cache_ttl, "10s");
+        assert_eq!(
+            in_flight.servers.as_deref(),
+            Some(["192.0.2.1:53".to_string()].as_slice())
+        );
+
+        let without_dns = make_config("metadata-second");
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("a".to_string(), Arc::new(without_dns))]),
+            HashSet::new(),
+        );
+        assert_eq!(
+            get_egc_dns_resolver_default()
+                .expect("remaining resolver must become the winner")
+                .cache_ttl,
+            "20s"
+        );
+        assert_eq!(in_flight.cache_ttl, "10s", "loaded snapshots remain independent");
+
+        handler.full_set(&HashMap::new());
+        assert!(get_egc_dns_resolver_default().is_none());
     }
 
     #[test]
