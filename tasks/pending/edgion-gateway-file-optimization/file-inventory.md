@@ -197,7 +197,7 @@
 | `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | pending | — |
-| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | optimized | BACKENDS-PANIC-THRESHOLD-001 / `cd048aa9`; atomic capture and metric lifecycle deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | optimized | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | reviewed-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |
