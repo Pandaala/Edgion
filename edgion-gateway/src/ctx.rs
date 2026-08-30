@@ -2251,7 +2251,7 @@ impl EdgionHttpContext {
             selected_grpc_backend: None,
             is_grpc_route_matched: false,
             backend_context: None,
-            stage_logs: Vec::with_capacity(3),
+            stage_logs: Vec::new(),
             pending_edgion_plugins_logs: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             current_plugin_entry: None,
@@ -3665,12 +3665,12 @@ mod ai_context_claim_tests {
 
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn ordinary_context_baseline_tracks_layout_and_constructor_allocation() {
+    fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
         assert_eq!(std::mem::size_of_val(&ctx), 2672);
-        assert_eq!(allocations.calls, 1);
-        assert_eq!(allocations.requested_bytes, 192);
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 }
 

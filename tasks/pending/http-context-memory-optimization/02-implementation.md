@@ -2,15 +2,17 @@
 
 ## Baseline measurements
 
-| Measurement | ARM64 baseline | Final |
-|-------------|---------------:|------:|
-| `size_of::<EdgionHttpContext>()` | 2,672 bytes | pending |
-| `Option<Box<WafRequestContext>>` | 8 bytes | pending |
-| Default Context allocation calls | 1 | pending |
-| Default Context requested allocation bytes | 192 | pending |
+| Measurement | ARM64 baseline | Current | Final |
+|-------------|---------------:|--------:|------:|
+| `size_of::<EdgionHttpContext>()` | 2,672 bytes | 2,672 bytes | pending |
+| `Option<Box<WafRequestContext>>` | 8 bytes | 8 bytes | pending |
+| Default Context allocation calls | 1 | 0 | pending |
+| Default Context requested allocation bytes | 192 | 0 | pending |
 
-The default allocation is the `Vec::with_capacity(3)` reservation for
-`stage_logs`. Allocator bookkeeping is not included in requested bytes.
+The baseline allocation was the `Vec::with_capacity(3)` reservation for
+`stage_logs`. Stage 1 removed the eager reservation, making the default Context
+constructor allocation-free. Allocator bookkeeping is not included in
+requested bytes.
 
 ## Per-stage verification
 

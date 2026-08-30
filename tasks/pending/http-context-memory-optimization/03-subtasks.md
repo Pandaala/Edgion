@@ -3,8 +3,8 @@
 | Stage | Status | Deliverable | Review | Commit |
 |------:|--------|-------------|--------|--------|
 | -1 | completed | Unified request-owned WAF state | completed; one selection-terminal regression fixed | `e55009ee` |
-| 0 | completed | Task plan and layout/allocation baseline | completed; nested measurement and lifecycle findings fixed | this commit |
-| 1 | pending | Allocation-free default Context and lazy stage logs | pending | pending |
+| 0 | completed | Task plan and layout/allocation baseline | completed; nested measurement and lifecycle findings fixed | `ae423041` |
+| 1 | completed | Allocation-free default Context and lazy stage logs | completed; no blocking findings | this commit |
 | 2 | pending | Shared GatewayInfo and compact HTTP/gRPC backend handles | pending | pending |
 | 3 | pending | Common/TLS/gRPC RequestInfo split | pending | pending |
 | 4 | pending | Optional boxed plugin request state | pending | pending |
