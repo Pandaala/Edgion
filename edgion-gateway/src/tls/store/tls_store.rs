@@ -30,6 +30,21 @@ fn edgion_tls_precedence(a: &Arc<EdgionTls>, b: &Arc<EdgionTls>) -> std::cmp::Or
         .then_with(|| a.metadata.name.cmp(&b.metadata.name))
 }
 
+/// Add one resource's hosts to a listener bucket using the same canonical
+/// ASCII case as SNI lookup. Duplicate case variants within one resource are
+/// collapsed so they cannot create a false self-collision.
+fn add_canonical_hosts(host_map: &mut HashMap<String, Vec<Arc<EdgionTls>>>, tls: &Arc<EdgionTls>) -> usize {
+    let mut added = 0;
+    for host in &tls.spec.hosts {
+        let tls_list = host_map.entry(host.to_ascii_lowercase()).or_default();
+        if tls_list.last().is_none_or(|existing| !Arc::ptr_eq(existing, tls)) {
+            tls_list.push(tls.clone());
+            added += 1;
+        }
+    }
+    added
+}
+
 /// Warn (config-sync path only — never the handshake path) when several EdgionTls
 /// resources serve the same host on one listener. `tls_list` must already be sorted
 /// by [`edgion_tls_precedence`], so `first()` is the selected certificate.
@@ -41,13 +56,12 @@ fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &
             t.metadata.name.as_deref().unwrap_or("")
         )
     };
-    let participants = tls_list.iter().map(fmt).collect::<Vec<_>>().join(", ");
     let selected = tls_list.first().map(fmt).unwrap_or_default();
     tracing::warn!(
         component = "tls_store",
         host = %host,
         listener_key = %listener_key,
-        participants = %participants,
+        candidate_count = tls_list.len(),
         selected = %selected,
         "Multiple EdgionTls resources serve the same hostname on one listener; \
          selecting the certificate deterministically by (creationTimestamp, namespace, name)"
@@ -115,30 +129,45 @@ impl TlsStore {
         }
     }
 
-    /// Insert `tls` under `key`, or RETAIN the existing valid entry when the new
-    /// cert fails validation (last-known-good / Envoy SDS NACK semantics).
-    fn insert_or_retain(&self, new_map: &mut HashMap<String, TlsEntry>, key: String, tls: EdgionTls) {
+    /// Insert `tls` under `key`, optionally retaining the existing valid entry
+    /// when the new cert fails validation (last-known-good / Envoy SDS NACK
+    /// semantics for updates, disabled for a new resource generation).
+    fn insert_validated(
+        &self,
+        new_map: &mut HashMap<String, TlsEntry>,
+        key: String,
+        tls: Arc<EdgionTls>,
+        retain_last_known_good: bool,
+    ) {
         warn_cert_advisories(&key, &tls);
         let validation = validate_cert(&tls);
         if !validation.is_valid {
-            if let Some(existing) = new_map.get(&key) {
-                if existing.validation.is_valid {
-                    if !existing.rejected_active {
-                        record_rejected(&key, &validation);
+            if retain_last_known_good {
+                if let Some(existing) = new_map.get(&key) {
+                    if existing.validation.is_valid {
+                        if !existing.rejected_active {
+                            record_rejected(&key, &validation);
+                        }
+                        let mut kept = existing.clone();
+                        kept.rejected_active = true;
+                        new_map.insert(key, kept);
+                        return;
                     }
-                    let mut kept = existing.clone();
-                    kept.rejected_active = true;
-                    new_map.insert(key, kept);
-                    return;
                 }
             }
-            tracing::warn!(component = "tls_store", key = %key, errors = ?validation.errors,
+            let reason = validation
+                .errors
+                .first()
+                .map(|error| error.status_reason())
+                .unwrap_or("Invalid");
+            tracing::warn!(component = "tls_store", key = %key, reason = %reason,
+                error_count = validation.errors.len(),
                 "Certificate validation failed");
         }
         new_map.insert(
             key,
             TlsEntry {
-                tls: Arc::new(tls),
+                tls,
                 validation,
                 rejected_active: false,
             },
@@ -147,13 +176,13 @@ impl TlsStore {
 
     /// Replace all TLS certificates with the provided data.
     ///
-    /// Last-known-good semantics (mirrors `insert_or_retain`, but "existing" is the
+    /// Last-known-good semantics (mirrors `insert_validated`, but "existing" is the
     /// current store snapshot rather than `new_map`, because a full snapshot has no
     /// in-flight predecessor for the same key):
     /// - Invalid incoming cert + current store has a VALID entry for that key
     ///   → carry the old valid entry forward, log the rejection, skip inserting bad data.
     /// - Keys absent from `data` are intentionally removed (never carried forward).
-    pub fn replace_all_tls(&self, data: HashMap<String, EdgionTls>) {
+    pub fn replace_all_tls(&self, data: HashMap<String, Arc<EdgionTls>>) {
         let cert_count = data.len();
         tracing::info!(
             component = "tls_store",
@@ -181,13 +210,19 @@ impl TlsStore {
                         continue;
                     }
                 }
-                tracing::warn!(component = "tls_store", key = %key, errors = ?validation.errors,
+                let reason = validation
+                    .errors
+                    .first()
+                    .map(|error| error.status_reason())
+                    .unwrap_or("Invalid");
+                tracing::warn!(component = "tls_store", key = %key, reason = %reason,
+                    error_count = validation.errors.len(),
                     "Certificate validation failed");
             }
             new_map.insert(
                 key,
                 TlsEntry {
-                    tls: Arc::new(tls),
+                    tls,
                     validation,
                     rejected_active: false,
                 },
@@ -201,8 +236,8 @@ impl TlsStore {
     /// Partially update TLS certificates
     pub fn apply_partial_update(
         &self,
-        add: HashMap<String, EdgionTls>,
-        update: HashMap<String, EdgionTls>,
+        add: HashMap<String, Arc<EdgionTls>>,
+        update: HashMap<String, Arc<EdgionTls>>,
         remove: &std::collections::HashSet<String>,
     ) {
         // Capture counts before moving
@@ -218,17 +253,22 @@ impl TlsStore {
             "Partial update of TLS certificates"
         );
 
+        // TODO(tls-store-true-incremental-atomic-publication): replace this
+        // whole-map clone and matcher rebuild with a genuine per-key update and
+        // publish data plus matcher as one immutable generation.
         let current = self.tls_data.load_full();
         let mut new_map = (*current).clone();
 
         // Add new certificates
         for (key, tls) in add {
-            self.insert_or_retain(&mut new_map, key, tls);
+            // A compressed add can represent delete→create for the same key.
+            // Never inherit the deleted generation's last-known-good entry.
+            self.insert_validated(&mut new_map, key, tls, false);
         }
 
         // Update existing certificates
         for (key, tls) in update {
-            self.insert_or_retain(&mut new_map, key, tls);
+            self.insert_validated(&mut new_map, key, tls, true);
         }
 
         // Remove certificates
@@ -270,10 +310,7 @@ impl TlsStore {
                 Some(listeners) if !listeners.is_empty() => {
                     for listener_key in listeners {
                         let host_map = listener_host_map.entry(listener_key.clone()).or_default();
-                        for host in &tls.spec.hosts {
-                            host_map.entry(host.clone()).or_default().push(tls.clone());
-                            total_hosts += 1;
-                        }
+                        total_hosts += add_canonical_hosts(host_map, tls);
                     }
                     valid_certs += 1;
                 }
@@ -282,8 +319,8 @@ impl TlsStore {
                     tracing::warn!(
                         component = "tls_store",
                         key = %key,
-                        hosts = ?tls.spec.hosts,
-                        parent_refs = ?tls.spec.parent_refs,
+                        host_count = tls.spec.hosts.len(),
+                        parent_ref_count = tls.spec.parent_refs.as_ref().map_or(0, Vec::len),
                         "Skipping EdgionTls from matcher because no listener keys were resolved"
                     );
                 }
@@ -428,7 +465,7 @@ mod tests {
 
     /// Build an EdgionTls whose secret contains a real self-signed cert+key so
     /// that `validate_cert` returns `is_valid = true`.
-    fn make_valid_tls(ns: &str, name: &str, hosts: &[&str]) -> EdgionTls {
+    fn make_valid_tls(ns: &str, name: &str, hosts: &[&str]) -> Arc<EdgionTls> {
         use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
         use k8s_openapi::api::core::v1::Secret;
         use k8s_openapi::ByteString;
@@ -454,7 +491,7 @@ mod tests {
         let addr: SocketAddr = "0.0.0.0:443".parse().unwrap();
         let listener_key = edgion_resources::ListenerKey::new(addr, "HTTPS");
 
-        EdgionTls {
+        Arc::new(EdgionTls {
             metadata: ObjectMeta {
                 namespace: Some(ns.to_string()),
                 name: Some(name.to_string()),
@@ -480,12 +517,12 @@ mod tests {
                 resolved_log_labels: None,
             },
             status: None,
-        }
+        })
     }
 
     /// Build an EdgionTls whose secret has non-PEM bytes so that
     /// `validate_cert` returns `is_valid = false`.
-    fn make_invalid_tls(ns: &str, name: &str, hosts: &[&str]) -> EdgionTls {
+    fn make_invalid_tls(ns: &str, name: &str, hosts: &[&str]) -> Arc<EdgionTls> {
         use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
         use k8s_openapi::api::core::v1::Secret;
         use k8s_openapi::ByteString;
@@ -500,7 +537,7 @@ mod tests {
         let addr: SocketAddr = "0.0.0.0:443".parse().unwrap();
         let listener_key = edgion_resources::ListenerKey::new(addr, "HTTPS");
 
-        EdgionTls {
+        Arc::new(EdgionTls {
             metadata: ObjectMeta {
                 namespace: Some(ns.to_string()),
                 name: Some(name.to_string()),
@@ -526,7 +563,7 @@ mod tests {
                 resolved_log_labels: None,
             },
             status: None,
-        }
+        })
     }
 
     #[test]
@@ -634,6 +671,59 @@ mod tests {
     }
 
     #[test]
+    fn canonical_host_collision_always_selects_precedence_winner() {
+        let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+        let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+        let mut incumbent = make_etls("team-z", "older", Some(older));
+        Arc::get_mut(&mut incumbent)
+            .expect("test Arc must be unique")
+            .spec
+            .hosts = vec!["Shared.Example.com".to_string(), "shared.example.com".to_string()];
+        let newcomer = make_etls("team-a", "newer", Some(newer));
+
+        for resources in [
+            [newcomer.clone(), incumbent.clone()],
+            [incumbent.clone(), newcomer.clone()],
+        ] {
+            let mut host_map = HashMap::new();
+            for tls in resources {
+                add_canonical_hosts(&mut host_map, &tls);
+            }
+            assert_eq!(host_map.len(), 1, "ASCII case variants must share one bucket");
+            let list = host_map.get_mut("shared.example.com").expect("canonical host bucket");
+            assert_eq!(list.len(), 2, "one resource must not collide with itself");
+            list.sort_by(edgion_tls_precedence);
+            assert_eq!(list[0].metadata.name.as_deref(), Some("older"));
+        }
+    }
+
+    #[test]
+    fn invalid_add_replaces_deleted_generation_instead_of_retaining_it() {
+        let store = TlsStore::new();
+        let old = make_valid_tls("ns", "recreated", &["old.example.com"]);
+        store.apply_partial_update(
+            HashMap::from([("ns/recreated".to_string(), old)]),
+            HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+
+        let recreated = make_invalid_tls("ns", "recreated", &["new.example.com"]);
+        store.apply_partial_update(
+            HashMap::from([("ns/recreated".to_string(), recreated.clone())]),
+            HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+
+        let snapshot = store.tls_data.load();
+        let entry = snapshot
+            .get("ns/recreated")
+            .expect("recreated entry must remain visible as invalid");
+        assert!(Arc::ptr_eq(&entry.tls, &recreated));
+        assert!(!entry.validation.is_valid);
+        assert_eq!(entry.tls.spec.hosts, ["new.example.com"]);
+    }
+
+    #[test]
     fn repeated_bad_update_marks_rejected_active_once() {
         let store = TlsStore::new();
         let good = make_valid_tls("ns", "q", &["q.example.com"]);
@@ -686,5 +776,30 @@ mod tests {
             "valid update must clear rejected_active"
         );
         assert!(store.get_validation_status("ns/r").unwrap().is_valid);
+    }
+
+    #[test]
+    fn conf_handler_preserves_shared_resource_allocation() {
+        use edgion_common::conf_sync::traits::ConfHandler;
+
+        let store = TlsStore::new();
+        let initial = make_valid_tls("ns", "shared", &["shared.example.com"]);
+        let full = HashMap::from([("ns/shared".to_string(), initial.clone())]);
+        ConfHandler::<EdgionTls>::full_set(&store, &full);
+
+        let snapshot = store.tls_data.load();
+        assert!(Arc::ptr_eq(&snapshot["ns/shared"].tls, &initial));
+        drop(snapshot);
+
+        let updated = make_valid_tls("ns", "shared", &["updated.example.com"]);
+        ConfHandler::<EdgionTls>::partial_update(
+            &store,
+            HashMap::new(),
+            HashMap::from([("ns/shared".to_string(), updated.clone())]),
+            std::collections::HashSet::new(),
+        );
+
+        let snapshot = store.tls_data.load();
+        assert!(Arc::ptr_eq(&snapshot["ns/shared"].tls, &updated));
     }
 }
