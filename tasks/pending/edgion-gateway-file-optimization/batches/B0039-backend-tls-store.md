@@ -53,4 +53,4 @@
 
 - Ledger/changelog updated: yes
 - Deferred finding: [`D0003`](../deferred/D0003-gateway-backend-tls-authoritative-replacement.md)
-- Commit: pending automatic commit
+- Commit: `abca60f3`

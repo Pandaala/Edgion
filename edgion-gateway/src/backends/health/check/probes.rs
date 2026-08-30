@@ -17,6 +17,23 @@ pub enum ProbeError {
     GrpcCallFailed(tonic::Status),
 }
 
+impl ProbeError {
+    /// Stable, bounded failure class suitable for health-check logs.
+    pub const fn class(&self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::ConnectionRefused(_) => "connection-refused",
+            Self::UnexpectedStatus(_) => "unexpected-status",
+            Self::RequestFailed(_) => "request-failed",
+            Self::InvalidPath => "invalid-path",
+            Self::InvalidUri => "invalid-uri",
+            Self::GrpcConnectionFailed(_) => "grpc-connection-failed",
+            Self::GrpcNotServing(_) => "grpc-not-serving",
+            Self::GrpcCallFailed(_) => "grpc-call-failed",
+        }
+    }
+}
+
 /// gRPC Health Check protocol structures (grpc.health.v1).
 /// Hand-written prost definitions — no proto file needed for this standard protocol.
 mod grpc_health_proto {
@@ -44,7 +61,7 @@ pub fn build_http_probe_client(timeout: Duration) -> Result<reqwest::Client, req
             connect_timeout: Some(timeout),
             total_timeout: Some(timeout),
             disable_proxy: true,
-            redirect: OutboundRedirect::Limit(10),
+            redirect: OutboundRedirect::Deny,
             ..Default::default()
         },
     )
@@ -235,6 +252,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_http_probe_does_not_follow_redirects() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind redirect listener");
+        let redirect_addr = redirect_listener.local_addr().expect("redirect listener addr");
+        let target_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind target listener");
+        let target_addr = target_listener.local_addr().expect("target listener addr");
+
+        let (target_contact_tx, mut target_contact_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = target_listener.accept().await {
+                let _ = target_contact_tx.send(());
+                let mut req_buf = [0_u8; 1024];
+                let _ = stream.read(&mut req_buf).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = redirect_listener.accept().await {
+                let mut req_buf = [0_u8; 1024];
+                let _ = stream.read(&mut req_buf).await;
+                let response = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{target_addr}/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let res = probe_http(redirect_addr, "/healthz", None, None, &[200], Duration::from_secs(1)).await;
+        assert!(matches!(res, Err(ProbeError::UnexpectedStatus(302))));
+        assert!(matches!(
+            target_contact_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
     async fn test_http_probe_ipv6_url_is_bracketed() {
         // Bind an IPv6 loopback listener; skip if the host has no IPv6 support.
         let Ok(listener) = TcpListener::bind("[::1]:0").await else {
@@ -337,5 +392,14 @@ mod tests {
             res,
             Err(ProbeError::GrpcConnectionFailed(_)) | Err(ProbeError::Timeout)
         ));
+    }
+
+    #[test]
+    fn test_grpc_call_error_class_does_not_expose_status_message() {
+        const SENTINEL: &str = "sentinel tonic status detail";
+        let err = ProbeError::GrpcCallFailed(tonic::Status::internal(SENTINEL));
+
+        assert_eq!(err.class(), "grpc-call-failed");
+        assert!(!err.class().contains(SENTINEL));
     }
 }

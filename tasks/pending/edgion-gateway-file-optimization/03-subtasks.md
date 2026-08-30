@@ -47,7 +47,7 @@
 | `backends-discovery-endpoints` | 4 | 1 | 1 | 2 | complete |
 | `backends-discovery-services` | 3 | 0 | 3 | 0 | complete |
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
-| `backends-health` | 6 | 0 | 0 | 0 | pending |
+| `backends-health` | 6 | 2 | 3 | 1 | complete |
 | `backends-outlier` | 4 | 0 | 0 | 0 | pending |
 | `backends-panic-threshold` | 1 | 1 | 0 | 0 | complete |
 | `backends-policy-root` | 1 | 0 | 1 | 0 | complete |
@@ -191,12 +191,12 @@
 | `edgion-gateway/src/backends/discovery/services/mod.rs` | `backends-discovery-services` | source | examined-no-change | `B0038`: minimal live façade retained |
 | `edgion-gateway/src/backends/discovery/services/service_store.rs` | `backends-discovery-services` | source | examined-no-change | `B0038`: atomic ArcSwap snapshots and cold-path incremental clone retained |
 | `edgion-gateway/src/backends/gateway_backend_tls_store.rs` | `backends-core` | source | deferred | `B0039`: D0003 authoritative Gateway identity replacement |
-| `edgion-gateway/src/backends/health/check/config_store.rs` | `backends-health` | source | pending | — |
-| `edgion-gateway/src/backends/health/check/manager.rs` | `backends-health` | source | pending | — |
-| `edgion-gateway/src/backends/health/check/mod.rs` | `backends-health` | source | pending | — |
-| `edgion-gateway/src/backends/health/check/probes.rs` | `backends-health` | source | pending | — |
-| `edgion-gateway/src/backends/health/check/status_store.rs` | `backends-health` | source | pending | — |
-| `edgion-gateway/src/backends/health/mod.rs` | `backends-health` | source | pending | — |
+| `edgion-gateway/src/backends/health/check/config_store.rs` | `backends-health` | source | examined-no-change | `B0040`: cold single-writer snapshot store retained |
+| `edgion-gateway/src/backends/health/check/manager.rs` | `backends-health` | source | changed | `B0040`: bounded probe-error classes; generation ownership deferred to D0004 |
+| `edgion-gateway/src/backends/health/check/mod.rs` | `backends-health` | source | examined-no-change | `B0040`: narrow health-check module boundary retained |
+| `edgion-gateway/src/backends/health/check/probes.rs` | `backends-health` | source | changed | `B0040`: HTTP redirects denied and fixed error classes added; TLS contract deferred to D0005 |
+| `edgion-gateway/src/backends/health/check/status_store.rs` | `backends-health` | source | deferred | `B0040`: D0004 cancellation-safe task/status generation ownership |
+| `edgion-gateway/src/backends/health/mod.rs` | `backends-health` | source | examined-no-change | `B0040`: minimal health façade retained |
 | `edgion-gateway/src/backends/mod.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/config.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | pending | — |

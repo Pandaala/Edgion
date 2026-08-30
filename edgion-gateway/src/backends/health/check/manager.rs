@@ -1,6 +1,6 @@
 use super::backend_hash;
 use super::config_store::{get_hc_config_store, HealthCheckConfigStore};
-use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp};
+use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp, ProbeError};
 use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
@@ -146,9 +146,10 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
         match build_http_probe_client(timeout) {
             Ok(client) => Some(client),
             Err(err) => {
+                let error_class = ProbeError::RequestFailed(err).class();
                 tracing::warn!(
                     service = %service_key,
-                    error = %err,
+                    error = error_class,
                     "Failed to build reusable HTTP health-check client, falling back to per-probe client"
                 );
                 None
@@ -255,7 +256,7 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 tracing::debug!(
                     service = %service_key,
                     backend = %addr,
-                    error = ?err,
+                    error = err.class(),
                     "Health check probe failed"
                 );
             }
@@ -282,7 +283,7 @@ async fn probe_backend(
     params: &ProbeParams,
     http_client: Option<&reqwest::Client>,
     addr: std::net::SocketAddr,
-) -> Result<(), super::probes::ProbeError> {
+) -> Result<(), ProbeError> {
     match params.kind {
         HealthCheckType::Http => match http_client {
             Some(client) => {
