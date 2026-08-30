@@ -141,7 +141,7 @@
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
 | `tls-runtime` | 6 | 2 | 4 | 0 | complete |
 | `tls-store` | 4 | 2 | 2 | 0 | complete |
-| `tls-validation` | 5 | 0 | 0 | 0 | pending |
+| `tls-validation` | 5 | 3 | 2 | 0 | complete |
 | `util` | 6 | 4 | 2 | 0 | complete |
 
 ## File ledger
@@ -666,11 +666,11 @@
 | `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | optimized | TLS-STORE-001 / `19d6e382` |
 | `edgion-gateway/src/tls/store/mod.rs` | `tls-store` | source | reviewed-no-change | TLS-STORE-001 / `19d6e382` |
 | `edgion-gateway/src/tls/store/tls_store.rs` | `tls-store` | source | optimized | TLS-STORE-001 / `19d6e382`; full-snapshot identity and true incremental publication deferred to dedicated todos |
-| `edgion-gateway/src/tls/validation/backend_san.rs` | `tls-validation` | source | pending | — |
-| `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | pending | — |
-| `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | pending | — |
-| `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | pending | — |
-| `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | pending | — |
+| `edgion-gateway/src/tls/validation/backend_san.rs` | `tls-validation` | source | optimized | TLS-VALIDATION-001 / `f65f66bc` |
+| `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | reviewed-no-change | TLS-VALIDATION-001: canonical shared validation re-export retained |
+| `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | reviewed-no-change | TLS-VALIDATION-001: narrow module exports retained |
+| `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | optimized | TLS-VALIDATION-001 / `f65f66bc`; typed SAN semantics deferred to dedicated TODO |
+| `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | optimized | TLS-VALIDATION-001 / `f65f66bc` |
 | `edgion-gateway/src/util/client_ip.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/mod.rs` | `util` | source | reviewed-no-change | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/net.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
