@@ -39,7 +39,7 @@ EdgionCenter repository.
 - `edgion-dsl` — EdgionDSL language core: nom parser, bytecode compiler, static validator, and the config-independent compile/validate entry points (`resolve_script`, `check_redis_link_names`). Leaf crate with no workspace-internal deps. VM execution and builtin runtime dispatch stay in `edgion-gateway`.
 - `edgion-resources` — shared resource/config schema. Depends only on the two runtime-independent language leaves: `edgion-dsl` (so `DslConfig` validation can run the real compiler) and `edgion-waf` (so native WAF generations receive the same strict validation in Controller and Gateway).
 - `edgion-common` — shared infra: config loader, observability/log bootstrap, secret store, link-system core (+ etcd provider), TLS validation, auth, conf_sync/fed_sync proto codegen. Depends on `edgion-resources`. Backend-agnostic and does not link Pingora. Exposes a `test-util` feature for cross-crate test helpers.
-- `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns `boringssl`/`rustls` + allocator features.
+- `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns the supported `boringssl` backend, the dormant future `rustls` backend feature, and allocator features.
 - `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends only on `edgion-common`/`edgion-resources` — **not** on `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer `EdgionPlugins::validate_plugins` (in `edgion-resources`), which reproduces the gateway `compile_plugins` preparse errors in full — DSL and native WAF sources are compiled and statically validated via the shared leaf crates; the only gateway-only residual is DSL VM init (`Vm::new`), which cannot be predicted statically. The former `controller → gateway` edge is gone, so the workspace dependency graph is a clean DAG (`{dsl, waf} → resources → common → {gateway, controller, cli}`, plus the direct `waf → gateway` runtime edge and `wasm → {gateway, cli}` edges).
 - `edgion-cli` — the `edgion-cli` binary + lib; depends on `edgion-common`/`edgion-resources` and the external-only `edgion-wasm` leaf.
 - `edgion-tests` — the end-to-end integration-test harness; a workspace member kept out of `default-members`. Owns the test/helper bins (`test_server`, `test_client`, `cache_residue`, …). There is **no** root `edgion` package — the workspace root is a virtual manifest.
@@ -56,8 +56,22 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
 `cargo build -p edgion-tests --bin <name>`.
 
 **Feature Flags** (mutually exclusive — pay attention at build time):
-- TLS backend: `boringssl` (default) | `rustls`
+- TLS backend: `boringssl` (default and only supported Gateway backend); the mutually exclusive
+  `rustls` feature is a dormant future-development seam, not a supported build target
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
+
+### Gateway rustls backend boundary — future TODO, not current product scope
+
+The Pingora Gateway's `rustls` Cargo feature is intentionally **unsupported** today. It does not
+carry a clean-build, CI, Docker, integration-test, downstream certificate automation/termination,
+or upstream `BackendTLSPolicy` parity contract. Known rustls-only compile failures, cfg warnings,
+missing HeaderCertAuth portability, missing TLS hooks, and missing test-harness or documentation
+parity are therefore not current defects. Do not open, re-report, or opportunistically fix them.
+Only resume this work when the user explicitly authorizes
+`tasks/todo/rustls-gateway-tls-support.md`; that task must design the complete product boundary
+rather than landing isolated parity patches. This restriction applies only to the Pingora Gateway
+TLS backend feature. It does not prohibit `rustls` libraries used by backend-independent outbound
+clients, control-plane links, or test utilities.
 
 **BoringSSL FIPS (opt-in image build)**: `fips` is a gateway cargo feature enabled explicitly
 through `cicd/build-image.sh` (requires `boringssl`; not a default, not enabled by the ordinary

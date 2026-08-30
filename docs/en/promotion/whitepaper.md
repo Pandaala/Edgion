@@ -504,7 +504,7 @@ Security is the primary responsibility of an API gateway. Edgion builds a multi-
 
 Edgion's TLS implementation covers the complete chain from certificate management to handshake control:
 
-**Multi-backend support.** Edgion supports three TLS backends through Cargo feature flags: `boringssl` (default, Google's maintained OpenSSL fork, widely used in production by Cloudflare and Google), and `openssl` (the traditional OpenSSL library). Both backends share a unified TLS Store abstraction layer (`store.rs`), so upper-layer code is unaware of the underlying implementation differences. In addition, the Pingora framework level also supports rustls as a pure-Rust TLS implementation, providing a deployment option with no C dependencies.
+**TLS backend.** Edgion Gateway uses BoringSSL as its supported TLS backend. The repository retains a rustls Cargo feature only as a future-development seam; it is not a supported build or deployment option.
 
 **Per-domain TLS control.** Through the `EdgionTls` CRD, operators can independently configure the TLS version range (TLS 1.2/1.3), cipher suite list, and ALPN protocols for each domain. Different domains can adopt different security policies — public-facing domains enforce TLS 1.3, while internal services allow TLS 1.2 for compatibility with legacy clients.
 

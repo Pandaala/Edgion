@@ -48,15 +48,11 @@ edgion-gateway --version
 # Default build (BoringSSL)
 cargo build --release
 
-# With OpenSSL
-cargo build --release --no-default-features --features "allocator-jemalloc,openssl"
-
-# With rustls
-cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
-
 # Binaries output to target/release/
 ls target/release/edgion-{controller,gateway,ctl}
 ```
+
+The Gateway rustls backend feature is not a supported source-build target.
 
 ## Directory Layout
 

@@ -15,8 +15,8 @@ individual binary crates, so feature-selecting commands must name a package with
 | `allocator-jemalloc` | Yes | Yes | Yes | Default; mutually exclusive with the other allocators |
 | `allocator-mimalloc` | Yes | Yes | Yes | Optional |
 | `allocator-system` | Yes | Yes | Yes | Optional |
-| `boringssl` | Yes | No | No | Default Gateway TLS backend; mutually exclusive with `rustls` |
-| `rustls` | Yes | No | No | Alternate Gateway Pingora TLS backend |
+| `boringssl` | Yes | No | No | Default and only supported Gateway TLS backend; mutually exclusive with `rustls` |
+| `rustls` | Dormant | No | No | Unsupported future-development seam; not a build, release, or runtime contract |
 | `fips` | Yes | No | No | Opt-in image build; implies `boringssl`, uses Boring 5's bundled FIPS module source by default |
 | `legacy_route_tests` | Yes | No | No | Non-default legacy test surface |
 
@@ -27,9 +27,13 @@ feature: the Gateway always builds against the Edgion fork family.
 
 ## Gateway TLS and FIPS
 
-Gateway custom TLS termination paths are BoringSSL-only. A `rustls` build is not
-feature-equivalent for HTTPS listeners, TLSRoute proxying, or all data-plane TLS hooks.
-Use `boringssl` for the normal Gateway build.
+Gateway TLS support is BoringSSL-only. The dormant `rustls` feature does not
+promise a clean Gateway build or any runtime capability, including plain paths,
+HTTPS listeners, TLSRoute proxying, HeaderCertAuth portability, or upstream
+`BackendTLSPolicy` parity. Do not select it for deployments, image builds, or CI.
+Future support is tracked as one product task in
+`tasks/todo/rustls-gateway-tls-support.md`; isolated compatibility fixes are not
+part of the current product scope.
 
 The `fips` feature is a build-time property, not a runtime toggle. The ordinary
 release workflow does not enable it. Use the dedicated Linux builder in
@@ -87,6 +91,7 @@ cargo build -p edgion-cli --bin edgion-cli \
   --no-default-features --features allocator-mimalloc
 ```
 
-Never enable two allocators or both TLS backends in one package build. For the FIPS
+Never enable two allocators or both TLS backend features in one package build. Use
+the supported `boringssl` backend for Gateway builds. For the FIPS
 image toolchain, follow `skills/09-misc/cicd/01-docker-build.md` rather than treating
 the feature as a normal local build switch.

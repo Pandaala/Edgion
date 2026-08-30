@@ -189,6 +189,53 @@ mod capability_tests {
     use edgion_tests::{dynamic, port_config::PortConfig};
     use std::collections::BTreeSet;
 
+    fn runner_suite_sweeps(runner: &str) -> Result<(&str, &str), &'static str> {
+        let branches = runner
+            .split_once("run_all_tests() {")
+            .ok_or("runner must define run_all_tests")?
+            .1
+            .split_once(r#"    if [ -n "$G_RESOURCE" ]; then"#)
+            .ok_or("run_all_tests must contain the resource selection branch")?
+            .1;
+        let (targeted, default_and_tail) = branches
+            .split_once("\n    else\n")
+            .ok_or("resource selection branch must contain a default sweep")?;
+        let default = default_and_tail
+            .split_once("\n    fi\n")
+            .ok_or("default sweep must end with the resource selection branch")?
+            .0;
+        Ok((targeted, default))
+    }
+
+    fn validate_single_runner_registration(runner: &str, suite: &str) -> Result<(), String> {
+        let (targeted, default) = runner_suite_sweeps(runner).map_err(str::to_string)?;
+        let needle = format!(r#"run_test "{suite}""#);
+        let targeted_count = targeted.matches(&needle).count();
+        let default_count = default.matches(&needle).count();
+        if (targeted_count, default_count) == (1, 1) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{suite} must be registered exactly once in both runner sweeps; found targeted={targeted_count}, default={default_count}"
+            ))
+        }
+    }
+
+    fn runner_fixture(targeted: &[&str], default: &[&str]) -> String {
+        let registrations = |suites: &[&str]| {
+            suites
+                .iter()
+                .map(|suite| format!(r#"        run_test "{suite}" command"#))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        format!(
+            "run_all_tests() {{\n    if [ -n \"$G_RESOURCE\" ]; then\n{}\n    else\n{}\n    fi\n}}",
+            registrations(targeted),
+            registrations(default)
+        )
+    }
+
     #[test]
     fn empty_registry_is_valid() {
         validate_capability_registry("# kind\tid\trequired-capability\n").unwrap();
@@ -443,17 +490,38 @@ mod capability_tests {
             "the shared starter must verify the Gateway capability snapshot"
         );
         for suite in ["DslBody", "BodyPlugins", "JsonSchemaValidation"] {
-            assert_eq!(
-                runner.matches(&format!("EdgionPlugins_{suite}")).count(),
-                2,
-                "{suite} must be invoked by both the EdgionPlugins resource sweep and the default sweep"
-            );
+            let registration = format!("EdgionPlugins_{suite}");
+            validate_single_runner_registration(runner, &registration).unwrap_or_else(|error| panic!("{error}"));
             assert_eq!(
                 runner.matches(&format!("EdgionPlugins/{suite}")).count(),
                 1,
                 "{suite} config must be included in the EdgionPlugins resource-wide load list"
             );
         }
+    }
+
+    #[test]
+    fn runner_registration_accepts_one_entry_in_each_sweep() {
+        let runner = runner_fixture(&["Suite"], &["Suite"]);
+        assert!(validate_single_runner_registration(&runner, "Suite").is_ok());
+    }
+
+    #[test]
+    fn runner_registration_rejects_duplicate_targeted_entries() {
+        let runner = runner_fixture(&["Suite", "Suite"], &["Suite"]);
+        assert!(validate_single_runner_registration(&runner, "Suite").is_err());
+    }
+
+    #[test]
+    fn runner_registration_rejects_missing_default_entry() {
+        let runner = runner_fixture(&["Suite"], &[]);
+        assert!(validate_single_runner_registration(&runner, "Suite").is_err());
+    }
+
+    #[test]
+    fn runner_registration_rejects_missing_targeted_entry_even_with_duplicate_defaults() {
+        let runner = runner_fixture(&[], &["Suite", "Suite"]);
+        assert!(validate_single_runner_registration(&runner, "Suite").is_err());
     }
 
     #[test]
@@ -860,23 +928,8 @@ mod capability_tests {
             "/integration/scripts/integration/run_integration.sh"
         ));
 
-        let case_start = runner
-            .find(r#"case "$G_RESOURCE" in"#)
-            .expect("run_integration.sh must contain the `case \"$G_RESOURCE\" in` dispatch block");
-        let rest = &runner[case_start..];
-        let case_len = rest
-            .lines()
-            .scan(0usize, |off, line| {
-                let here = *off;
-                *off += line.len() + 1;
-                Some((here, line))
-            })
-            .find(|(off, line)| *off > 0 && line.trim() == "esac")
-            .map(|(off, _)| off)
-            .expect("the `case \"$G_RESOURCE\"` block must be terminated by an `esac` line");
-
-        let targeted = &rest[..case_len];
-        let default_sweep = &rest[case_len..];
+        let (targeted, default_sweep) =
+            runner_suite_sweeps(runner).expect("run_integration.sh must define both suite sweeps");
 
         // Collect `run_test "<name>"` names from a region.
         let names = |region: &str| -> Vec<String> {

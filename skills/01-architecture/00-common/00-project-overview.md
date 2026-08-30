@@ -137,7 +137,7 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 | **HTTP API** | `axum`, `tower`, `hyper-util` | Admin API |
 | **K8s** | `kube`, `k8s-openapi`, `schemars` | K8s integration + CRD Schema |
 | **Serialization** | `serde`, `serde_json`, `serde_yaml` | Configuration parsing |
-| **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS termination (rustls or BoringSSL) |
+| **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | BoringSSL Gateway termination; rustls-based backend-independent clients and links |
 | **Observability** | `tracing`, `metrics` | Logging + metrics |
 | **Security** | `jsonwebtoken`, `base64`, `sha1`, `sha2` | Controller admin auth is token-only (SHA-256 token-hash compare, no password hashing); gateway plugins use `jsonwebtoken` (jwt_auth), `sha1`/`md5` (basic_auth htpasswd), `base64` (everywhere) |
 | **Performance** | `tikv-jemallocator`, `dashmap`, `arc-swap`, `smallvec` | Memory allocator, concurrent map, lock-free reads, stack buffers |

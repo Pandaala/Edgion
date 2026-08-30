@@ -52,5 +52,5 @@ independently generated processor belong behind `--full-test`.
   `edgion-tests/integration/conf/EdgionPlugins/ExtProc/COMPATIBILITY.md`
 - Fast/full integration suite:
   `edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs`
-- Deferred external/stress work:
-  `tasks/todo/ext-proc-external-interoperability-and-stress/README.md`
+- External interoperability and stress fixture:
+  `edgion-tests/integration/fixtures/ext_proc_external/README.md`

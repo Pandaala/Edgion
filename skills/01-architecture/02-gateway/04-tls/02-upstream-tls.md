@@ -85,7 +85,14 @@ The function is mainly used in downstream mTLS scenarios (the `handshake_complet
 
 `BackendTLSPolicy.validation.subjectAltNames` configures backend certificate SAN verification, supporting Hostname and URI (SPIFFE) types.
 
-### Verification flow
+### TLS backend boundary
+
+Additional `subjectAltNames` enforcement is implemented by the supported
+BoringSSL Gateway backend. The dormant rustls feature has no BackendTLSPolicy
+behavior contract; do not use it for Gateway deployments or interpret its
+current mechanics as supported enforcement.
+
+### BoringSSL verification flow
 
 1. When `create_tls_peer()` detects non-empty `subjectAltNames`, it sets Pingora's `upstream_tls_handshake_complete_hook`.
 2. After the TLS handshake, the hook extracts backend certificate SANs via `extract_sans_from_ssl()`.
@@ -95,7 +102,7 @@ The function is mainly used in downstream mTLS scenarios (the `handshake_complet
 
 ### Connection-pool isolation
 
-Peers with different `subjectAltNames` configurations use different `group_key`s (based on a hash of the SAN content) to prevent Pingora from reusing connections across different SAN policies.
+Under BoringSSL, peers with different `subjectAltNames` configurations use different `group_key`s (based on a hash of the SAN content) to prevent Pingora from reusing connections across different SAN policies. Any future rustls support must provide equivalent policy isolation through the umbrella design task.
 
 ### Match rules
 

@@ -507,7 +507,7 @@ Edgion 为每种协议 Listener 维护独立的日志通道和日志文件：
 
 Edgion 的 TLS 实现覆盖从证书管理到握手控制的完整链路：
 
-**多后端支持。** Edgion 通过 Cargo feature flag 支持三种 TLS 后端：`boringssl`（默认，Google 维护的 OpenSSL 分支，Cloudflare 和 Google 在生产中广泛使用）、`openssl`（传统 OpenSSL 库）。两种后端共享统一的 TLS Store 抽象层（`store.rs`），上层代码无需感知底层实现差异。此外，Pingora 框架层面还支持 rustls 作为纯 Rust TLS 实现，提供无 C 依赖的部署选项。
+**TLS 后端。** Edgion Gateway 使用 BoringSSL 作为受支持的 TLS 后端。仓库保留 rustls Cargo feature 仅作为未来开发入口，不属于受支持的构建或部署选项。
 
 **per-domain TLS 控制。** 通过 `EdgionTls` CRD，运维人员可以为每个域名独立配置 TLS 版本范围（TLS 1.2/1.3）、密码套件列表和 ALPN 协议。不同域名可以采用不同的安全策略——面向公网的域名强制 TLS 1.3，内部服务允许 TLS 1.2 以兼容老旧客户端。
 

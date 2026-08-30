@@ -337,19 +337,19 @@ impl TlsAccept for TlsCallback {
         //
         // Intentionally does NOT call log_ssl here — preserving the
         // "one ssl.log per connection" audit invariant (tls-F004):
-        // * BoringSSL builds: the only realistic paths into this branch are
-        //   store_ssl_ctx failures in select_cb / finalize_ssl_ctx, both of
-        //   which already emitted ssl.log with a more complete meta
-        //   (tls_id / sni / matched populated). Logging again here would
-        //   double-count the connection and the second entry would lack
-        //   tls_id / sni / matched, misleading audit consumers.
+        // * BoringSSL builds: successful select_cb has already created and
+        //   sized the ex_data stack. take_ssl_ctx clears the existing slot,
+        //   and pinned BoringSSL 5.2 replaces that same slot in finalize
+        //   without allocating, so normal completion recovers the context.
+        //   Index-init or first-store failures log and abort in select_cb
+        //   before this callback can run.
         // * Non-BoringSSL builds: store_ssl_ctx in select_cb always fails and
         //   returns SelectCertError::ERROR, so cert_cb / this callback are not
         //   reached on that path.
-        // The remaining theoretical case (BoringSSL state-machine glitch zeroing
-        // ex_data between callbacks) is unreachable-by-design; we accept losing
-        // a fallback log entry there in exchange for not double-counting the
-        // rare allocation-failure case.
+        // Reaching this fallback therefore signals an unknown state-machine or
+        // ex_data contract violation. It cannot determine whether an unknown
+        // path already emitted, so it returns minimal metadata without
+        // synthesizing a potentially duplicate audit entry.
         let meta = TlsConnMeta {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)

@@ -1,0 +1,16 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-backend-gw-cert-plaintext
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: test-backend-gw-cert-plaintext
+addressType: IPv4
+ports:
+  - port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

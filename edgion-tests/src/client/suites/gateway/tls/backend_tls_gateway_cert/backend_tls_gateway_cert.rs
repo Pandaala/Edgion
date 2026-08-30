@@ -42,6 +42,47 @@ impl BackendTlsGatewayCertTestSuite {
             },
         )
     }
+
+    fn test_gateway_cert_without_policy_stays_plaintext() -> TestCase {
+        TestCase::new(
+            "gateway_cert_without_policy_stays_plaintext",
+            "Gateway-level clientCertificateRef does not enable TLS without BackendTLSPolicy",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:{}/backend-gw-cert-plaintext/health",
+                        ctx.target_host, ctx.http_port
+                    );
+                    let mut request = ctx.http_client.get(&url);
+                    if let Some(ref host) = ctx.http_host {
+                        request = request.header("Host", host);
+                    }
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            let body = response.text().await.unwrap_or_default();
+                            if status.is_success() && body.contains("Server: 0.0.0.0:30001") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Identity-only backend stayed plaintext. Status: {}", status),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected plaintext 200 from port 30001, got status: {}, body: {}",
+                                        status, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -55,6 +96,9 @@ impl TestSuite for BackendTlsGatewayCertTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_gateway_cert_to_mtls_backend()]
+        vec![
+            Self::test_gateway_cert_to_mtls_backend(),
+            Self::test_gateway_cert_without_policy_stays_plaintext(),
+        ]
     }
 }

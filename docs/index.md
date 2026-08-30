@@ -26,5 +26,5 @@ features:
   - title: Rich Plugin System
     details: Built-in plugins covering auth, rate limiting, rewriting, observability, and more. Compose plugins at route or gateway level.
   - title: High Performance
-    details: Powered by Cloudflare Pingora. BoringSSL or Rustls backend, jemalloc allocator, async-first architecture.
+    details: Powered by Cloudflare Pingora with the supported BoringSSL backend, jemalloc allocator, and an async-first architecture.
 ---

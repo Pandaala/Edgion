@@ -31,8 +31,8 @@ cargo build
 # Release mode
 cargo build --release
 
-# Select features on an owning package
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
+# Select supported features on an owning package
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
 
 # Project quick pre-commit sequence
 cargo fmt --all
@@ -68,10 +68,12 @@ See [cicd/02-github-workflow.md](cicd/02-github-workflow.md) for the full job br
 |---------|-------------|---------|
 | `allocator-jemalloc` | Use the jemalloc memory allocator | ✅ |
 | `boringssl` | Use BoringSSL as the TLS backend | ✅ |
-| `rustls` | Use rustls as the TLS backend | |
+| `rustls` | Dormant future Gateway backend seam; unsupported | |
 | `allocator-mimalloc` | Use the mimalloc memory allocator | |
 | `allocator-system` | Use the system default allocator | |
 | `legacy_route_tests` | Enable legacy route tests | |
 | `fips` | Gateway opt-in FIPS BoringSSL image build and isolated verification | |
 
-> ⚠️ `boringssl` and `rustls` are mutually exclusive and cannot be enabled simultaneously.
+> ⚠️ `boringssl` and `rustls` are mutually exclusive. BoringSSL is the only
+> supported Gateway backend; do not select rustls outside the explicitly
+> authorized future task.

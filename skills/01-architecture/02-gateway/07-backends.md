@@ -197,7 +197,9 @@ ref-counted `lb/lb_policy/PolicyStore` (deleted).
 
 ## BackendTLSPolicy
 
-Manages upstream mTLS configuration, stored in `BackendTLSPolicyStore`:
+Manages upstream TLS policy configuration, stored in `BackendTLSPolicyStore`.
+BoringSSL supports custom CA trust and client-certificate authentication; rustls
+currently supports only the system CA store and standard hostname verification:
 
 ```
 policy/
@@ -219,7 +221,9 @@ policy/
 - HTTP and gRPC Service paths project the key from the compiled logical backend
   proof at the existing late lookup point. AI captures the TLS policy with the
   request-stable candidate plan.
-- Configure the HttpPeer's TLS connection parameters (CA certificate, client certificate / key).
+- Configure the HttpPeer's TLS connection parameters. Custom CA certificates and
+  client certificate/key identity are applied only by the BoringSSL build; they
+  are outside the current rustls support boundary.
 - BackendTLS hostname controls certificate verification and SNI; it does not
   rewrite the HTTP Host authority.
 - Secret key constants: `CA_CERT`, `CERT`, `KEY`.

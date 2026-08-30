@@ -12,7 +12,16 @@ Client → [TLS] → Gateway → [TLS] → Backend
 
 `BackendTLSPolicy` is a standard Gateway API resource (it is not an Edgion extension). Edgion processes it internally as `gateway.networking.k8s.io/v1`. Clusters that only serve the older `v1alpha3` API are accepted via a fallback and converted to the same internal model; if your cluster serves both, prefer `v1`.
 
+## TLS Backend Support
+
+BoringSSL is the only supported Gateway TLS backend. The retained rustls Cargo
+feature is a future-development seam and has no build, deployment, or
+`BackendTLSPolicy` behavior contract. Use the default BoringSSL Gateway for all
+configurations documented on this page.
+
 ## Configuring BackendTLSPolicy
+
+The following custom-CA example requires a BoringSSL Gateway.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -43,9 +52,9 @@ spec:
 | `targetRefs[].name` | String | **Required** | Service name |
 | `targetRefs[].sectionName` | String | none | Optional Service port name to scope the policy to a single port |
 | `validation.hostname` | String | **Required** | Hostname used for TLS SNI and certificate validation |
-| `validation.caCertificateRefs` | Array\<Object\> | none | CA references (Secret or ConfigMap). Mutually exclusive with `wellKnownCACertificates` |
+| `validation.caCertificateRefs` | Array\<Object\> | none | CA references (Secret or ConfigMap); supported by BoringSSL only. Mutually exclusive with `wellKnownCACertificates` |
 | `validation.wellKnownCACertificates` | Enum | none | Set to `System` to trust the system CA bundle. Mutually exclusive with `caCertificateRefs` |
-| `validation.subjectAltNames` | Array\<Object\> | none | SAN allowlist; if set, the backend certificate must match at least one entry |
+| `validation.subjectAltNames` | Array\<Object\> | none | Additional SAN allowlist; enforced by the BoringSSL build only. If set under BoringSSL, the backend certificate must match at least one entry |
 | `validation.subjectAltNames[].type` | Enum | **Required** | Allowed values: `Hostname` \| `URI` |
 | `validation.subjectAltNames[].hostname` | String | none | DNS name (when `type: Hostname`); supports wildcards (`*.example.com`) |
 | `validation.subjectAltNames[].uri` | String | none | Full URI (when `type: URI`), e.g. a SPIFFE ID |
@@ -61,7 +70,7 @@ spec:
 
 A CA reference that does not exist or is missing the `ca.crt` key sets the `ResolvedRefs` condition to `InvalidCACertificateRef`.
 
-## CA Certificate Secret
+## CA Certificate Secret (BoringSSL only)
 
 ```yaml
 apiVersion: v1
@@ -76,7 +85,12 @@ data:
 
 ## Subject Alternative Name Validation
 
-When `subjectAltNames` is configured, the Gateway validates the backend certificate's SAN during TLS handshake. The connection is rejected if no SAN matches.
+> **TLS backend capability**
+>
+> Additional `subjectAltNames` enforcement requires the supported BoringSSL
+> Gateway backend.
+
+Under BoringSSL, when `subjectAltNames` is configured, the Gateway validates the backend certificate's SAN during the TLS handshake. The connection is rejected if no SAN matches.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -108,9 +122,9 @@ Matching rules:
 - Any single match across all entries is sufficient
 - Omitting `subjectAltNames` preserves default behavior (hostname-only validation against the CA)
 
-## Mutual TLS to the backend
+## Mutual TLS to the backend (BoringSSL only)
 
-To present a client certificate to the backend (mTLS), reference a client-certificate Secret via the Edgion extension option `edgion.io/client-certificate-ref`. The Secret must live in the same namespace as the `BackendTLSPolicy`.
+To present a client certificate to the backend (mTLS), use a BoringSSL Gateway and reference a client-certificate Secret via the Edgion extension option `edgion.io/client-certificate-ref`. The Secret must live in the same namespace as the `BackendTLSPolicy`.
 
 > **🔌 Edgion extension**
 >
@@ -140,7 +154,7 @@ spec:
 
 ## Examples
 
-### Example 1: Internal Service TLS with a private CA
+### Example 1: Internal Service TLS with a private CA (BoringSSL only)
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

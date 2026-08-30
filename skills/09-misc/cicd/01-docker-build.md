@@ -128,15 +128,18 @@ docker build \
   -f cicd/docker/Dockerfile .
 ```
 
-### Switch features
+### Switch supported features
 
 ```bash
 docker build \
   --build-arg BINARY=edgion-gateway \
-  --build-arg FEATURES="allocator-jemalloc,rustls" \
-  -t edgion/edgion-gateway:rustls \
+  --build-arg FEATURES="allocator-mimalloc,boringssl" \
+  -t edgion/edgion-gateway:mimalloc \
   -f cicd/docker/Dockerfile .
 ```
+
+Do not build Gateway images with the dormant rustls backend feature; it is not
+a supported build or deployment target.
 
 ### Build and verify a FIPS Gateway
 

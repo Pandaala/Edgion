@@ -1,13 +1,14 @@
 ---
 name: gateway-tls-backends
-description: Gateway TLS build backends and capability boundaries — BoringSSL, rustls, and the opt-in FIPS image feature.
+description: Gateway TLS backend boundary — BoringSSL is supported, rustls is a dormant future-development seam, and FIPS is an opt-in BoringSSL image feature.
 ---
 
 # TLS build backends and capability boundaries
 
 ## Cargo features
 
-`edgion-gateway` has two mutually exclusive TLS backend features:
+`edgion-gateway` exposes two mutually exclusive TLS backend features, but only
+`boringssl` is a supported Gateway product/build target:
 
 ```toml
 default = ["allocator-jemalloc", "boringssl"]
@@ -19,20 +20,28 @@ fips = ["boringssl", "boring/fips"]
 There is no gateway `openssl` feature or `tls/openssl` implementation. Do not introduce an
 OpenSSL fallback branch when changing TLS code.
 
+The `rustls` feature is retained only as a future-development seam. It has no
+clean-build, CI, Docker, integration-test, or runtime capability contract.
+
 ## Capability boundary
 
-| Capability | BoringSSL build | rustls build |
+| Capability | BoringSSL build | rustls feature |
 |------------|-----------------|--------------|
-| Plain HTTP and non-terminating data-plane paths | Supported | Supported where Pingora exposes the path |
-| Custom HTTPS downstream termination callbacks | Supported | Not implemented; listener construction fails explicitly |
-| TLSRoute terminate-to-TCP | Supported | Not implemented because it uses the same custom callback runtime |
-| TLSRoute passthrough | Does not terminate TLS | Does not require the custom termination callback |
-| EdgionTls SNI selection, per-connection minimum version/ciphers, mTLS allowlists, SSL ex_data | Supported by the BoringSSL-gated runtime | Not implemented by the gateway callback runtime |
-| Image-only BoringSSL FIPS mode | `fips` feature | Not available |
+| Gateway build/release/CI contract | Supported | Unsupported; a clean build is not guaranteed |
+| Plain HTTP and non-terminating data-plane paths | Supported | No product contract |
+| Custom HTTPS downstream termination and dynamic certificates | Supported | Unsupported |
+| TLSRoute terminate-to-TCP | Supported | Unsupported |
+| TLSRoute passthrough | Does not terminate TLS | No product contract |
+| EdgionTls SNI selection, per-connection minimum version/ciphers, mTLS allowlists, SSL ex_data | Supported by the BoringSSL-gated runtime | Unsupported |
+| Upstream BackendTLSPolicy | Supported | No parity contract |
+| Image-only BoringSSL FIPS mode | `fips` feature | Unsupported |
 
-The custom runtime is gated in `tls/runtime/mod.rs` and `tls/mod.rs`. Treat build-backend support
-and feature-level support as separate questions: a crate may compile with rustls while a particular
-listener type still rejects startup.
+The custom runtime is gated in `tls/runtime/mod.rs` and `tls/mod.rs`. Use
+BoringSSL for every Gateway deployment. Do not treat rustls-only compile errors,
+warnings, missing plugin portability, incomplete TLS behavior, Docker/CI gaps,
+or test-harness gaps as current findings. Future work is consolidated in
+`tasks/todo/rustls-gateway-tls-support.md` and starts only with explicit user
+authorization. Backend-independent uses of the `rustls` library are unaffected.
 
 ## BoringSSL implementation
 

@@ -1,7 +1,9 @@
 use crate::backends::discovery::get_global_service_store;
+#[cfg(any(feature = "boringssl", test))]
 use crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::util::net::{classify_backend_addr, BlockedBackendReason};
 use crate::EdgionHttpContext;
+#[cfg(feature = "boringssl")]
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::resources::BackendTLSPolicy;
 use edgion_resources::EdgionErrorCode;
@@ -73,13 +75,29 @@ pub(crate) fn extract_tls_config(policy: &Option<Arc<BackendTLSPolicy>>) -> (boo
         .unwrap_or((false, String::new()))
 }
 
-#[cfg(feature = "boringssl")]
-fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey>>, EdgionErrorCode> {
-    let Some(secret) = &policy.spec.resolved_client_certificate else {
-        return Ok(None);
-    };
+#[cfg(any(feature = "boringssl", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientIdentitySource {
+    Policy,
+    Gateway,
+}
 
-    build_client_cert_key_from_secret(secret)
+#[cfg(any(feature = "boringssl", test))]
+#[inline]
+fn select_client_identity_source(
+    policy_present: bool,
+    policy_identity_present: bool,
+    gateway_identity_present: bool,
+) -> Option<ClientIdentitySource> {
+    if !policy_present {
+        None
+    } else if policy_identity_present {
+        Some(ClientIdentitySource::Policy)
+    } else if gateway_identity_present {
+        Some(ClientIdentitySource::Gateway)
+    } else {
+        None
+    }
 }
 
 #[cfg(feature = "boringssl")]
@@ -138,42 +156,45 @@ pub(crate) fn create_tls_peer(
     gateway_key: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     let Some(policy) = policy.as_ref() else {
-        if let Some(gw_key) = gateway_key {
-            if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
-                #[cfg(feature = "boringssl")]
-                if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
-                    let peer = HttpPeer::new_mtls(addr, String::new(), cert_key);
-                    return Ok(Box::new(peer));
-                }
-
-                #[cfg(not(feature = "boringssl"))]
-                let _ = gw_secret;
-            }
-        }
         return Ok(Box::new(HttpPeer::new(addr, false, String::new())));
     };
 
     let sni = policy.spec.validation.hostname.clone();
 
     #[cfg(feature = "boringssl")]
-    let mut peer = if let Some(cert_key) = build_client_cert_key(policy)? {
-        HttpPeer::new_mtls(addr, sni.clone(), cert_key)
-    } else if let Some(gw_key) = gateway_key {
-        if let Some(gw_secret) = get_global_gateway_backend_tls_store().get(gw_key) {
-            if let Some(cert_key) = build_client_cert_key_from_secret(&gw_secret)? {
-                HttpPeer::new_mtls(addr, sni.clone(), cert_key)
-            } else {
-                HttpPeer::new(addr, true, sni)
-            }
-        } else {
-            HttpPeer::new(addr, true, sni)
-        }
+    let policy_identity_present = policy.spec.resolved_client_certificate.is_some();
+
+    #[cfg(feature = "boringssl")]
+    let gateway_identity = if policy_identity_present {
+        None
     } else {
-        HttpPeer::new(addr, true, sni)
+        gateway_key.and_then(|key| get_global_gateway_backend_tls_store().get(key))
+    };
+
+    #[cfg(feature = "boringssl")]
+    let mut peer = match select_client_identity_source(true, policy_identity_present, gateway_identity.is_some()) {
+        Some(ClientIdentitySource::Policy) => {
+            let secret = policy
+                .spec
+                .resolved_client_certificate
+                .as_ref()
+                .ok_or(EdgionErrorCode::Unknown)?;
+            let cert_key = build_client_cert_key_from_secret(secret)?.ok_or(EdgionErrorCode::Unknown)?;
+            HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+        }
+        Some(ClientIdentitySource::Gateway) => {
+            let secret = gateway_identity.as_ref().ok_or(EdgionErrorCode::Unknown)?;
+            let cert_key = build_client_cert_key_from_secret(secret)?.ok_or(EdgionErrorCode::Unknown)?;
+            HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+        }
+        None => HttpPeer::new(addr, true, sni),
     };
 
     #[cfg(not(feature = "boringssl"))]
-    let mut peer = HttpPeer::new(addr, true, sni);
+    let peer = {
+        let _ = gateway_key;
+        HttpPeer::new(addr, true, sni)
+    };
 
     #[cfg(feature = "boringssl")]
     if !policy.spec.use_system_ca {
@@ -306,7 +327,9 @@ pub(crate) fn validate_endpoint_backend_addr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::api::core::v1::Secret;
     use std::net::IpAddr;
+    use std::sync::Arc;
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
@@ -345,5 +368,46 @@ mod tests {
     fn first_safe_inet_addr_empty_is_dns_failure() {
         let err = first_safe_inet_addr(&[], 80, false).unwrap_err();
         assert_eq!(err, EdgionErrorCode::BackendDnsResolutionFailed);
+    }
+
+    #[test]
+    fn client_identity_requires_policy_and_prefers_policy_identity() {
+        use ClientIdentitySource::{Gateway, Policy};
+
+        let cases = [
+            (false, false, false, None),
+            (false, false, true, None),
+            (false, true, false, None),
+            (false, true, true, None),
+            (true, false, false, None),
+            (true, false, true, Some(Gateway)),
+            (true, true, false, Some(Policy)),
+            (true, true, true, Some(Policy)),
+        ];
+
+        for (policy_present, policy_identity_present, gateway_identity_present, expected) in cases {
+            assert_eq!(
+                select_client_identity_source(policy_present, policy_identity_present, gateway_identity_present),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_identity_does_not_enable_tls_without_policy() {
+        let gateway_key = "test/gateway-identity-without-policy";
+        let store = get_global_gateway_backend_tls_store();
+        store.set(gateway_key.to_string(), Arc::new(Secret::default()));
+
+        let result = create_tls_peer(
+            SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+            &None,
+            Some(gateway_key),
+        );
+        store.remove(gateway_key);
+
+        let peer = result.expect("Gateway identity must not be parsed without a BackendTLSPolicy");
+        assert!(!peer.is_tls());
+        assert!(peer.client_cert_key.is_none());
     }
 }

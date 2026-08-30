@@ -1,8 +1,9 @@
 //! Global store for Gateway-level backend TLS client certificates
 //!
 //! Maps gateway_key ("{namespace}/{name}") → Arc<Secret> for the resolved
-//! `spec.tls.backend.clientCertificateRef` Secret. Used as a fallback when
-//! no per-backend BackendTLSPolicy specifies a client certificate.
+//! `spec.tls.backend.clientCertificateRef` Secret. Used as a client-identity
+//! fallback only after a BackendTLSPolicy has selected TLS and has not supplied
+//! its own client certificate.
 
 use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Secret;

@@ -10,7 +10,15 @@ description: Full BackendTLSPolicy schema: upstream backend TLS validation and m
 
 BackendTLSPolicy defines the TLS connection configuration from the gateway to the backend, including CA validation and client certificates (mTLS). In addition to core Service targets, Edgion accepts direct AI `edgion.io/EdgionBackend` targets.
 
+> **TLS backend capability:** BoringSSL is the only supported Gateway TLS
+> backend and supports custom CA trust through `caCertificateRefs`, client
+> certificate identity, and additional `subjectAltNames` Hostname/URI
+> constraints. The dormant rustls feature has no build or BackendTLSPolicy
+> behavior contract.
+
 ## Full Schema
+
+The following example demonstrates the supported BoringSSL capability set.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -36,8 +44,6 @@ spec:
         hostname: "backend.internal.svc"
       - type: URI
         uri: "spiffe://cluster.local/ns/default/sa/backend"
-    wellKnownCACertificates: System                # Use system CAs (optional)
-
   options:                                         # Edgion extension options
     edgion.io/client-certificate-ref: "client-cert"          # Client certificate (same namespace)
 ```
@@ -66,9 +72,9 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `hostname` | `String` | Yes | TLS SNI and certificate validation hostname |
-| `caCertificateRefs` | `Vec<CACertRef>?` | No | CA certificate reference list (supports Secret and ConfigMap; ConfigMap reads the `ca.crt` key) |
-| `subjectAltNames` | `Vec<SubjectAltName>?` | No | SAN allowlist |
-| `wellKnownCACertificates` | `String?` | No | `System`: use system CA certificates |
+| `caCertificateRefs` | `Vec<CACertRef>?` | No | BoringSSL only: CA certificate reference list (supports Secret and ConfigMap; ConfigMap reads the `ca.crt` key) |
+| `subjectAltNames` | `Vec<SubjectAltName>?` | No | Additional SAN allowlist; enforced by the BoringSSL build only |
+| `wellKnownCACertificates` | `String?` | No | `System`: use system CA certificates with the supported BoringSSL Gateway |
 
 **SubjectAltName**:
 
@@ -82,7 +88,7 @@ spec:
 
 | Key | Value Format | Description |
 |-----|--------------|-------------|
-| `edgion.io/client-certificate-ref` | `name` | Client certificate Secret (same namespace, used for gateway→backend mTLS) |
+| `edgion.io/client-certificate-ref` | `name` | BoringSSL only: client certificate Secret (same namespace, used for gateway→backend mTLS) |
 
 ## Status Schema
 

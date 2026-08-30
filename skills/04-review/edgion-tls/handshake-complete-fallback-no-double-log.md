@@ -1,6 +1,6 @@
 ---
 name: handshake-complete-fallback-no-double-log
-description: handshake_complete_callback's no-snapshot fallback intentionally does not call log_ssl; emission belongs to the upstream store_ssl_ctx failure path. Reject re-reports claiming the fallback "silently drops" the connection.
+description: handshake_complete_callback's no-snapshot fallback intentionally does not call log_ssl; the current callback lifecycle makes it unreachable after a successful BoringSSL flow, while first-store failures log and abort earlier. Reject re-reports claiming the fallback "silently drops" the connection.
 ---
 
 # tls-F004 — `handshake_complete_callback` fallback intentionally skips `log_ssl`
@@ -20,42 +20,46 @@ entry" or "no ssl.log when ex_data is unavailable" are **not accepted** —
 this is deliberate to preserve the "one ssl.log per connection" audit
 invariant.
 
-## What was wrong (before the fix)
+## Pinned BoringSSL 5.2 reachability
 
-When `SSL_set_ex_data` returned 0 inside `store_ssl_ctx` invoked from
-`finalize_ssl_ctx` (BoringSSL heap allocation failure), the sequence was:
+`store_ssl_ctx` has two materially different call sites:
 
-1. `store_ssl_ctx` emitted ssl.log with a full meta (tls_id / sni / matched
-   stamped) and `"exdata store failed"`. **First entry.**
-2. `finalize_ssl_ctx` returned without further emission; cert was already
-   applied to the SSL object so the handshake proceeded.
-3. `handshake_complete_callback` ran, `take_ssl_ctx` returned `None`
-   (ex_data slot was zeroed by the earlier `take_ssl_ctx` in cert_cb and
-   never re-stored), and the fallback emitted a second ssl.log with
-   `"no ssl ctx"` — missing tls_id / sni / matched. **Second entry.**
+- The select-callback store is the first write for that SSL object. BoringSSL
+  may need to create the ex-data stack and extend it through the registered
+  index. Either allocation can fail; `store_ssl_ctx` then emits ssl.log and
+  select_cb returns `SelectCertError::ERROR`, aborting before cert_cb or the
+  completion callback.
+- The finalize store reuses the same index after select_cb succeeded.
+  `take_ssl_ctx` clears that existing slot by storing null; it does not shrink
+  or destroy the stack. In BoringSSL 5.2, the later same-index store directly
+  replaces the slot without allocating and therefore cannot return zero via
+  the allocation-failure path.
 
-Two entries for one connection violated the audit invariant; the second
-entry's missing fields could mislead anomaly detection.
+The `finalize_ssl_ctx` failure branch remains defensive against a future
+dependency or contract change. It is not a reachable heap-allocation path in
+the pinned implementation and does not explain entry into the completion
+fallback. The allocation performed by Rust's `Box::new(ctx.clone())` is also
+not reported as an `SSL_set_ex_data` zero return.
 
 ## Why the fix is correct
 
-Removing the `log_ssl` call from the fallback is safe because every realistic
-path that lands here has already emitted ssl.log upstream with a more
-complete meta:
+Keeping the fallback non-logging preserves the established one-entry audit
+policy without claiming that finalize-stage allocation failure is reachable:
 
-- **BoringSSL builds.** The only ways `take_ssl_ctx` returns `None` after a
-  successful select_cb are (a) `store_ssl_ctx` failed inside `finalize_ssl_ctx`
-  (it emitted ssl.log with the stamped `tls_id`), or (b) `select_cb` failed
-  and was somehow still followed by a handshake (currently impossible — a
-  `SelectCertError::ERROR` return aborts the connection before cert_cb).
+- **BoringSSL builds.** A successful select_cb creates and sizes the ex-data
+  stack, and the non-allocating finalize store restores the context for the
+  completion callback. Reachable index-initialization or first-store failures
+  emit ssl.log and abort the handshake before this callback. Reaching the
+  fallback therefore requires a state-machine or ex-data contract violation,
+  not ordinary allocation failure.
 - **Non-BoringSSL builds.** `store_ssl_ctx` in `select_cb` always returns
   `false`, which short-circuits with `SelectCertError::ERROR`. Cert_cb and
   this callback are not reached on that path.
 
-The remaining theoretical case — BoringSSL state-machine glitch zeroing
-ex_data between callbacks — is unreachable-by-design. Losing an `ssl.log`
-entry there is the accepted trade-off for not double-counting the rare
-allocation-failure case.
+Because the fallback cannot determine whether an unknown future path already
+emitted, it does not synthesize a second, partial audit entry. Any new reachable
+path must carry an explicit emission state or otherwise preserve the one-entry
+invariant.
 
 The digest meta is still returned, so `TlsProxy` / HTTP proxy / access log
 consumers continue to receive a minimal `TlsConnMeta` (port + sni at best).
@@ -70,6 +74,8 @@ consumers continue to receive a minimal `TlsConnMeta` (port + sni at best).
   becomes a legitimate first-emission point and must log again.
 - The `take_ssl_ctx` semantics change so that successful finalize no longer
   guarantees recovery (e.g., split callbacks / async transitions).
+- The pinned BoringSSL implementation changes so clearing or replacing an
+  existing ex-data index can fail or discard the backing stack.
 
 ## Reference
 

@@ -71,15 +71,15 @@ Common combinations:
 # Default: jemalloc + boringssl
 cargo build
 
-# Gateway rustls build
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
-
 # mimalloc + boringssl
 cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl"
 
 # system allocator + boringssl
 cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
 ```
+
+The Gateway's rustls backend feature is an unsupported future-development seam
+and is not a local-build target. See `tasks/todo/rustls-gateway-tls-support.md`.
 
 For more detailed feature semantics:
 
@@ -125,7 +125,7 @@ sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 | BoringSSL build failure | Whether `cmake` is installed; whether `boringssl` is enabled in the current features |
 | OpenSSL / `pkg-config` / `ssl` link failure | Whether `pkg-config`, `libssl-dev`, or the platform-equivalent OpenSSL development package is installed |
 | ARM64 cross-compilation failure | Whether the `aarch64` cross compiler is installed and the target is set up correctly |
-| Build succeeds but a custom Gateway TLS callback/path is unavailable | Check the specific `#[cfg(feature = "boringssl")]` guard; BoringSSL is required for custom termination hooks, while rustls remains a supported alternate backend for the paths it implements |
+| Build succeeds but a custom Gateway TLS callback/path is unavailable | Check that the supported `boringssl` backend is enabled; the dormant rustls feature has no Gateway runtime contract |
 
 ## When you need a clean, reproducible build environment
 
