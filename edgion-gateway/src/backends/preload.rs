@@ -10,6 +10,7 @@
 use crate::backends::discovery::get_roundrobin_store;
 use crate::conf_sync::conf_client::ConfigClient;
 use crate::lb::compiled_selector;
+use crate::routes::common::is_core_service_backend_ref;
 use edgion_resources::HTTPBackendRefKind;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -35,6 +36,11 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
                         continue;
                     };
                     for br in backend_refs {
+                        if br.ref_denied.is_some()
+                            || !is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref())
+                        {
+                            continue;
+                        }
                         let ns = br.namespace.as_deref().unwrap_or(route_ns);
                         service_keys.insert(format!("{}/{}", ns, br.name));
                     }
@@ -60,7 +66,7 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
                 continue;
             };
             for br in backend_refs {
-                if br.backend_kind() != HTTPBackendRefKind::Service {
+                if br.ref_denied.is_some() || br.backend_kind() != HTTPBackendRefKind::Service {
                     continue;
                 }
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
@@ -79,7 +85,7 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
                 continue;
             };
             for br in backend_refs {
-                if br.is_route_delegation_ref() {
+                if br.ref_denied.is_some() || !is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()) {
                     continue;
                 }
                 let ns = br.namespace.as_deref().unwrap_or(route_ns);
@@ -136,8 +142,10 @@ fn warm_cell(service_key: &str) -> bool {
     // lock so the freshest data is used. Mirrors the data-plane path in
     // `selector::hydrate_cell_if_empty`.
     let cell = compiled_selector::get_or_create_cell(service_key);
-    cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key));
+    let hydrated = cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key));
 
-    tracing::trace!(component = "lb_preload", service_key, "Warmed ServiceSelectorCell");
-    true
+    if hydrated {
+        tracing::trace!(component = "lb_preload", service_key, "Warmed ServiceSelectorCell");
+    }
+    hydrated
 }
