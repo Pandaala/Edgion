@@ -155,3 +155,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: cache-client tests 40/40; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
 - Commit: `21b01524`
+
+### `CONF-SYNC-CLIENT-001` — Gateway conf-sync connection, rotation, and certificate watch
+
+- Outcome: mixed (1 optimized, 4 reviewed-no-change; two complex correctness defects separately tracked)
+- Files reviewed: all 5 files under `conf_sync/conf_client/`, covering certificate-file watching, typed cache aggregation/readiness, gRPC channel lifecycle, global reload generation, and endpoint rotation
+- Changes: replaced the complete Controller address list in the startup INFO event with a bounded address count while retaining the selected `initial_addr` and TLS state needed for operations. No connection, retry, readiness, or security behavior changed.
+- Generality and architecture review: independent review approved the log minimization and all per-file dispositions. Missing/invalid mTLS remains fail-close except for explicit `skip_tls`; certificate reload still validates before publication; cache clients and the meta handle are installed before generation cancellation. The audit confirmed two coupled defects that are too stateful for local patches: `(mtime, length)` certificate signatures can miss same-metadata content replacement in both Controller and Gateway watchers, and endpoint rotation can advance cursor/lap state before channel installation while a concurrent TLS reload can reinstall a stale pre-lock address. Their shared designs and acceptance tests are recorded in `tasks/todo/conf-sync-cert-watch-content-signature.md` and `tasks/todo/conf-sync-rotation-transactional-address-selection.md`; runtime code was intentionally left unchanged.
+- Verification: conf-sync conf-client tests 21/21; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged at `ae68dedd863020ddd6d035d7404570716429ecd1`
+- Commit: `9ca73353`

@@ -52,7 +52,7 @@
 | `cache` | 4 | 2 | 2 | 0 | complete |
 | `cli` | 3 | 0 | 0 | 0 | pending |
 | `conf-sync-cache-client` | 4 | 1 | 3 | 0 | complete |
-| `conf-sync-conf-client` | 5 | 0 | 0 | 0 | pending |
+| `conf-sync-conf-client` | 5 | 1 | 4 | 0 | complete |
 | `conf-sync-root` | 1 | 0 | 0 | 0 | pending |
 | `config-edgion-gateway` | 2 | 1 | 1 | 0 | complete |
 | `config-gateway-class` | 2 | 0 | 2 | 0 | complete |
@@ -226,11 +226,11 @@
 | `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524`; malformed-event recovery deferred to `tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md` |
 | `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | `conf-sync-cache-client` | source | optimized | CONF-SYNC-CACHE-001 / `21b01524` |
 | `edgion-gateway/src/conf_sync/cache_client/mod.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
-| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/conf_client/config_client.rs` | `conf-sync-conf-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` | `conf-sync-conf-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | pending | — |
-| `edgion-gateway/src/conf_sync/conf_client/rotation.rs` | `conf-sync-conf-client` | source | pending | — |
+| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; content-signature recovery deferred to `tasks/todo/conf-sync-cert-watch-content-signature.md` |
+| `edgion-gateway/src/conf_sync/conf_client/config_client.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
+| `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` | `conf-sync-conf-client` | source | optimized | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
+| `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
+| `edgion-gateway/src/conf_sync/conf_client/rotation.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
 | `edgion-gateway/src/conf_sync/mod.rs` | `conf-sync-root` | source | pending | — |
 | `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | optimized | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/edgion_gateway/mod.rs` | `config-edgion-gateway` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
