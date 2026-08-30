@@ -19,7 +19,7 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::http_route::SessionPersistence;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::uri_utils;
-use edgion_resources::{EdgionErrorCode, EdgionInfoCode, HTTPBackendRef, HTTPRouteMatch};
+use edgion_resources::{EdgionErrorCode, EdgionInfoCode, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
@@ -1071,19 +1071,19 @@ pub enum BackendSource {
 
 /// Backend context containing service info and upstream attempt history.
 ///
-/// `rsc` and `service_key` are `None` for the bypass paths (DirectEndpoint / ExternalJump),
-/// which don't correspond to a K8s-selected backend resource. `source` is `Some` only on
-/// those bypass paths; `None` on the default K8s resource path. `upstreams` is always
-/// populated as attempts happen.
+/// DirectEndpoint retains the validated Service identity but bypasses its load
+/// balancer; ExternalJump has no K8s resource identity. `source` distinguishes
+/// those paths from ordinary resource selection. `upstreams` is populated as
+/// attempts happen.
 #[derive(Debug, Serialize)]
 pub struct BackendContext {
     /// Bypass-path tag — `None` on the default K8s resource path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<BackendSource>,
-    /// Resource identifier (kind="Service") — `None` on bypass paths.
+    /// Resource identifier (kind="Service") — `None` for ExternalJump.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rsc: Option<Rsc>,
-    /// LB store index key `"namespace/name"` — `None` on bypass paths (no LB).
+    /// Service identity key `"namespace/name"` — `None` for ExternalJump.
     #[serde(skip)]
     pub service_key: Option<String>,
     /// Routing path (ClusterIP / Endpoint / EPS / ExternalName).
@@ -1222,20 +1222,15 @@ pub struct DirectEndpointPreset {
 
 /// Mutually-exclusive upstream-jump slot — exactly one variant lives per request.
 ///
-/// - `Direct`: bypass LB, peer built from a static IP. Carries `backend_ref`
-///   (boxed to keep the enum's stack footprint small — `HTTPBackendRef` is the
-///   heaviest variant by far) so the setter can co-write `selected_backend`
-///   (peer-construction reads service metadata from `selected_backend`; see
-///   `try_direct_endpoint_peer`).
+/// - `Direct`: bypass LB, peer built from a static IP. Its validated backend
+///   slot resolves through the request-pinned `HttpRouteRuleUnit` generation;
+///   no backend schema is copied into request state.
 /// - `Internal`: LB-input modifier. Dispatch falls through to `select_http_backend`,
 ///   which uses the carried preset to look up a named `BackendRef` before LB.
 /// - `External`: bypass LB, peer built from a domain (DNS-resolved at runtime).
 #[derive(Debug, Clone)]
 pub enum UpstreamJumpTarget {
-    Direct {
-        preset: DirectEndpointPreset,
-        backend_ref: Box<HTTPBackendRef>,
-    },
+    Direct(DirectEndpointPreset),
     Internal(InternalJumpPreset),
     External(ExternalJumpPreset),
 }
@@ -2799,25 +2794,10 @@ impl EdgionHttpContext {
 
     /// First-write-wins setter for the unified upstream-jump slot. Returns
     /// `Set` on the first successful write, `Rejected` on every subsequent
-    /// call. On `Direct` success, co-writes `selected_backend` so the
-    /// peer-construction path can derive service metadata; on `Rejected`,
-    /// `selected_backend` is NOT touched (see Risk #1 in the spec).
+    /// call. The target is stored without modifying backend selection state.
     pub fn try_set_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
         if self.jump.is_some() {
             return SetJumpOutcome::Rejected;
-        }
-        if let UpstreamJumpTarget::Direct { preset, backend_ref } = &target {
-            // Plugin-injected direct endpoint: no backend-level plugin chain
-            // (matches today, where the synthetic backend's runtime is empty).
-            let route_namespace = backend_ref.namespace.as_deref().unwrap_or_default();
-            self.selected_backend = Some(SelectedHttpBackend::Direct(Box::new(
-                crate::routes::http::match_unit::CompiledBackend::compile(
-                    backend_ref.as_ref().clone(),
-                    route_namespace,
-                    preset.backend_ref_idx,
-                    Arc::new(PluginRuntime::new()),
-                ),
-            )));
         }
         self.jump = Some(target);
         SetJumpOutcome::Set
@@ -3221,25 +3201,13 @@ mod jump_tests {
         }
     }
 
-    fn sample_direct() -> (DirectEndpointPreset, Box<HTTPBackendRef>) {
-        let preset = DirectEndpointPreset {
+    fn sample_direct() -> DirectEndpointPreset {
+        DirectEndpointPreset {
             addr: "10.0.0.1:8080".parse().unwrap(),
             use_tls: false,
             sni: String::new(),
             backend_ref_idx: 0,
-        };
-        let backend_ref = HTTPBackendRef {
-            name: "direct-svc".to_string(),
-            namespace: None,
-            port: Some(8080),
-            weight: Some(1),
-            group: None,
-            kind: None,
-            filters: None,
-            backend_tls_policy: None,
-            ref_denied: None,
-        };
-        (preset, Box::new(backend_ref))
+        }
     }
 
     #[test]
@@ -3267,20 +3235,17 @@ mod jump_tests {
     }
 
     #[test]
-    fn first_direct_write_co_writes_selected_backend() {
-        let mut ctx = fresh_ctx();
-        let (preset, backend_ref) = sample_direct();
-        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct {
-            preset,
-            backend_ref: backend_ref.clone(),
+    fn first_direct_write_keeps_backend_selection_empty() {
+        let ((ctx, outcome), allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let mut ctx = fresh_ctx();
+            let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct(sample_direct()));
+            (ctx, outcome)
         });
         assert_eq!(outcome, SetJumpOutcome::Set);
-        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Direct { .. })));
-        assert_eq!(
-            ctx.selected_backend.as_ref().map(|b| b.name.as_str()),
-            Some("direct-svc"),
-            "Direct success must co-write selected_backend"
-        );
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Direct(_))));
+        assert!(ctx.selected_backend.is_none());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 
     #[test]
@@ -3290,8 +3255,7 @@ mod jump_tests {
         assert_eq!(first, SetJumpOutcome::Set);
         let selected_before_name = ctx.selected_backend.as_ref().map(|b| b.name.clone());
 
-        let (preset, backend_ref) = sample_direct();
-        let second = ctx.try_set_jump(UpstreamJumpTarget::Direct { preset, backend_ref });
+        let second = ctx.try_set_jump(UpstreamJumpTarget::Direct(sample_direct()));
         assert_eq!(second, SetJumpOutcome::Rejected);
 
         assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
@@ -3308,8 +3272,7 @@ mod jump_tests {
         ctx.try_set_jump(UpstreamJumpTarget::Internal(sample_internal()));
         assert!(ctx.selected_backend.is_none());
 
-        let (preset, backend_ref) = sample_direct();
-        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct { preset, backend_ref });
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct(sample_direct()));
         assert_eq!(outcome, SetJumpOutcome::Rejected);
         assert!(
             ctx.selected_backend.is_none(),

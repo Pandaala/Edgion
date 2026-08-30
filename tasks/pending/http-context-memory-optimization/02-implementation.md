@@ -27,6 +27,14 @@ Stage 2c reduced the selected gRPC backend from 224 bytes to a 24-byte
 generation/index handle plus captured TLS policy. The handle also carries the
 exact original backend slot, removing the former duplicate-name linear lookup.
 
+Stage 2d removed the DirectEndpoint synthetic `CompiledBackend` and the copied
+`HTTPBackendRef` from request state. Direct jumps now retain only their bounded
+preset and resolve the validated slot through the request-pinned route
+generation. This removes the Direct-only schema clones, two Box allocations,
+identity reconstruction, and empty plugin runtime allocation. AI already stores
+only a generation/index handle in the base Context, so no additional AI copy
+was removed. The ordinary Context remains 1,832 bytes and allocation-free.
+
 ## Per-stage verification
 
 - Apply `cargo fmt --all`.

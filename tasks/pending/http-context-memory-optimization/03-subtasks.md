@@ -7,8 +7,8 @@
 | 1 | completed | Allocation-free default Context and lazy stage logs | completed; no blocking findings | `f9e377c9` |
 | 2a | completed | Shared request-stable GatewayInfo generation | completed; no blocking findings | `9db6d4a2` |
 | 2b | completed | Compact HTTP backend selection with generation/index handles | completed; Arc classification and TLS test findings fixed | `300035fd` |
-| 2c | completed | Compact gRPC backend selection with request-stable TLS policy | completed; no blocking findings | pending |
-| 2d | pending | Remove residual AI/direct-endpoint backend copies | pending | pending |
+| 2c | completed | Compact gRPC backend selection with request-stable TLS policy | completed; no blocking findings | `bc1af533` |
+| 2d | completed | Remove residual AI/direct-endpoint backend copies | completed; ReferenceGrant bypass finding fixed | pending |
 | 3 | pending | Common/TLS/gRPC RequestInfo split | pending | pending |
 | 4 | pending | Optional boxed plugin request state | pending | pending |
 | 5 | pending | Optional request-body-plugin and response-processing state | pending | pending |

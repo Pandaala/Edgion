@@ -155,10 +155,9 @@ pub(crate) async fn try_get_peer(
     } else {
         let http_br = match ctx.selected_backend.as_ref() {
             Some(SelectedHttpBackend::Invalid(logical)) => logical.compiled(),
-            Some(SelectedHttpBackend::Service(_))
-            | Some(SelectedHttpBackend::Ai(_))
-            | Some(SelectedHttpBackend::Direct(_))
-            | None => return Err(EdgionErrorCode::UpstreamNotBackendRefs),
+            Some(SelectedHttpBackend::Service(_)) | Some(SelectedHttpBackend::Ai(_)) | None => {
+                return Err(EdgionErrorCode::UpstreamNotBackendRefs);
+            }
         };
         let (service_key, service_type) = ctx
             .backend_context

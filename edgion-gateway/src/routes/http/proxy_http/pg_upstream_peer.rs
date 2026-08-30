@@ -645,15 +645,11 @@ pub async fn upstream_peer_http(
     }
 
     // 0/1. Upstream-jump slot (Direct/External bypass; Internal falls through to LB).
-    // INVARIANT: this check MUST come before the `selected_backend.is_none()` check below.
-    // `set_upstream_jump` (via ctx.try_set_jump) co-writes `selected_backend` on a
-    // successful Direct write so `init_backend_context_if_needed` inside the bypass
-    // path has a backend_ref. If the order were swapped, a non-None
-    // `selected_backend` would suppress `select_http_backend` and the request would
-    // reach `try_get_peer` with the direct-endpoint backend_ref — incorrect.
+    // INVARIANT: this check MUST come before backend selection. Direct and
+    // External jumps bypass ordinary LB; Internal remains an LB input modifier.
     if let Some(jump) = &ctx.jump {
         match jump {
-            UpstreamJumpTarget::Direct { .. } => return try_direct_endpoint_peer(edgion_http, ctx),
+            UpstreamJumpTarget::Direct(_) => return try_direct_endpoint_peer(edgion_http, ctx),
             UpstreamJumpTarget::External(_) => return try_external_jump_peer(edgion_http, ctx).await,
             UpstreamJumpTarget::Internal(_) => {
                 // fall through — Internal stays in ctx.jump, consumed by pick_backend_ref
@@ -1258,7 +1254,7 @@ fn selected_effective_policy(
 ) -> Option<&std::sync::Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>> {
     match ctx.selected_backend.as_ref()? {
         SelectedHttpBackend::Ai(_) => ctx.ai_state().and_then(|state| state.effective_policy.as_ref()),
-        SelectedHttpBackend::Service(_) | SelectedHttpBackend::Invalid(_) | SelectedHttpBackend::Direct(_) => None,
+        SelectedHttpBackend::Service(_) | SelectedHttpBackend::Invalid(_) => None,
     }
 }
 
@@ -1279,10 +1275,9 @@ fn choose_typed_retry_budget(
 /// Finish a peer that was constructed directly (i.e. without going through LB / try_get_peer):
 /// push the upstream attempt placeholder, then apply timeouts and metrics.
 ///
-/// Used by paths that bypass load-balancing (DirectEndpoint, ExternalJump) where the address is
-/// already known. Callers must seed `ctx.backend_context` beforehand (typically via
-/// [`EdgionHttpContext::init_bypass_backend_context`]); the [`init_backend_context_if_needed`]
-/// call inside is a defensive no-op for that case.
+/// Used by paths that bypass load-balancing (DirectEndpoint, ExternalJump) where
+/// the address is already known. DirectEndpoint resolves its validated Service
+/// slot here; ExternalJump arrives with a pre-seeded context.
 #[inline]
 fn finish_static_peer(
     edgion_http: &EdgionHttpProxy,
@@ -1388,16 +1383,15 @@ fn begin_ai_peer_attempt(ctx: &mut EdgionHttpContext) {
 /// `UpstreamJumpTarget::Direct` — this is the cold path, so it's not `#[inline]`
 /// and the variant check stays at the call site to keep the hot path branch-only.
 ///
-/// `selected_backend` was already populated by `set_upstream_jump` on the plugin
-/// side (paired with the matched backend_ref), so `finish_static_peer`'s call to
-/// `init_backend_context_if_needed` derives rsc / service_key / service_kind for
-/// free. We only need to retag `source` afterward to record the staging path.
+/// `finish_static_peer` resolves the validated backend slot through the
+/// request-pinned route generation, then this helper retags the source for
+/// access logs and metrics.
 fn try_direct_endpoint_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
     let direct = match ctx.jump.as_ref() {
-        Some(UpstreamJumpTarget::Direct { preset, .. }) => preset,
+        Some(UpstreamJumpTarget::Direct(preset)) => preset,
         // invariant: caller (line 146) only reaches this helper after matching Direct{..};
         //   other variants are dispatched to sibling helpers
         _ => unreachable!("caller must dispatch only on ctx.jump == Some(Direct)"),
@@ -1483,58 +1477,85 @@ pub fn backfill_upstream_addr(peer: &HttpPeer, ctx: &mut EdgionHttpContext) {
 }
 
 /// Initialize backend context for the resource-selected path (HTTP / gRPC backend ref).
-/// No-op when already initialized — bypass paths (DirectEndpoint / ExternalJump) seed
-/// it themselves via [`EdgionHttpContext::init_bypass_backend_context`] before reaching here.
-/// Errors only when neither selected_backend nor selected_grpc_backend is set, which
-/// indicates a routing bug, not a bypass path.
+/// No-op when already initialized. DirectEndpoint resolves its validated slot
+/// from the request-pinned route generation; ExternalJump seeds its context.
+/// Missing or invalid selection state is a routing bug.
 #[inline]
 fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
     if ctx.backend_context.is_some() {
         return Ok(());
     }
 
-    let (name, namespace, service_kind, backend_ref_idx) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
-        let route_ns = ctx
-            .grpc_route_unit
-            .as_ref()
-            .map(|unit| unit.matched_info.rsc.ns.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let ns = grpc_br.namespace.clone().unwrap_or(route_ns);
-        (
-            grpc_br.name.clone(),
-            ns,
-            ServiceBackendKind::from_kind(grpc_br.kind.as_ref()),
-            Some(grpc_br.slot()),
-        )
-    } else if let Some(http_br) = ctx.selected_backend.as_ref() {
-        let route_ns = ctx
-            .route_unit
-            .as_ref()
-            .map(|unit| unit.matched_info.rsc.ns.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let ns = http_br.namespace.clone().unwrap_or(route_ns);
-        let service_kind = match &http_br.target {
-            CompiledBackendTarget::Service { .. } => ServiceBackendKind::from_kind(http_br.kind.as_ref()),
-            CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => {
-                ServiceBackendKind::Unsupported(
-                    http_br
-                        .kind
-                        .clone()
-                        .unwrap_or_else(|| "unsupported backend reference".to_string()),
-                )
-            }
+    let (name, namespace, service_kind, backend_ref_idx) =
+        if let Some(UpstreamJumpTarget::Direct(preset)) = ctx.jump.as_ref() {
+            let (name, namespace, service_kind, slot) = ctx
+                .route_unit
+                .as_ref()
+                .and_then(|unit| direct_backend_metadata(&unit.backends, preset.backend_ref_idx))
+                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+            (name, namespace, service_kind, Some(slot))
+        } else if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
+            let route_ns = ctx
+                .grpc_route_unit
+                .as_ref()
+                .map(|unit| unit.matched_info.rsc.ns.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let ns = grpc_br.namespace.clone().unwrap_or(route_ns);
+            (
+                grpc_br.name.clone(),
+                ns,
+                ServiceBackendKind::from_kind(grpc_br.kind.as_ref()),
+                Some(grpc_br.slot()),
+            )
+        } else if let Some(http_br) = ctx.selected_backend.as_ref() {
+            let route_ns = ctx
+                .route_unit
+                .as_ref()
+                .map(|unit| unit.matched_info.rsc.ns.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let ns = http_br.namespace.clone().unwrap_or(route_ns);
+            let service_kind = match &http_br.target {
+                CompiledBackendTarget::Service { .. } => ServiceBackendKind::from_kind(http_br.kind.as_ref()),
+                CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => {
+                    ServiceBackendKind::Unsupported(
+                        http_br
+                            .kind
+                            .clone()
+                            .unwrap_or_else(|| "unsupported backend reference".to_string()),
+                    )
+                }
+            };
+            (http_br.name.clone(), ns, service_kind, Some(http_br.slot))
+        } else {
+            return Err(PingoraError::new(ErrorType::InternalError));
         };
-        (http_br.name.clone(), ns, service_kind, Some(http_br.slot))
-    } else {
-        return Err(PingoraError::new(ErrorType::InternalError));
-    };
 
     let service_key = format!("{}/{}", namespace, name);
     let rsc = crate::Rsc::new("Service", namespace, name);
     ctx.init_backend_context(rsc, service_key, service_kind, backend_ref_idx);
     Ok(())
+}
+
+fn direct_backend_metadata(
+    backends: &[crate::routes::http::match_unit::CompiledBackend],
+    slot: usize,
+) -> Option<(String, String, ServiceBackendKind, usize)> {
+    let compiled = backends.get(slot)?;
+    if compiled.ref_denied.is_some() {
+        return None;
+    }
+    let (namespace, name) = match &compiled.target {
+        CompiledBackendTarget::Service { namespace, name } => (namespace.clone(), name.clone()),
+        CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => return None,
+    };
+    Some((
+        name,
+        namespace,
+        ServiceBackendKind::from_kind(compiled.kind.as_ref()),
+        compiled.slot,
+    ))
 }
 
 fn validate_resolved_domain_addr(
@@ -1682,9 +1703,9 @@ mod tests {
     use super::{
         ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
         apply_upstream_read_timeout_override, backoff_action, choose_typed_retry_budget, decide_upstream_authority,
-        decide_want_raw, fold_peer_timeouts, init_backend_context_if_needed, replay_write_floor,
-        sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired,
-        AuthorityDecision, BackoffAction,
+        decide_want_raw, direct_backend_metadata, fold_peer_timeouts, init_backend_context_if_needed,
+        replay_write_floor, sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry,
+        stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
     };
     use crate::ai::dispatch::AiDispatchError;
     use crate::ai::{render_openai_error, AiProxyError};
@@ -1797,6 +1818,88 @@ mod tests {
             ctx.backend_context.as_ref().and_then(|context| context.service_kind.as_ref()),
             Some(ServiceBackendKind::Unsupported(kind)) if kind == "Service"
         ));
+    }
+
+    #[test]
+    fn direct_backend_metadata_uses_the_exact_service_slot() {
+        let compile = |name: &str, namespace: &str, slot| {
+            CompiledBackend::compile(
+                HTTPBackendRef {
+                    name: name.to_string(),
+                    namespace: Some(namespace.to_string()),
+                    port: Some(8080),
+                    weight: Some(1),
+                    group: None,
+                    kind: Some("Service".to_string()),
+                    filters: None,
+                    backend_tls_policy: None,
+                    ref_denied: None,
+                },
+                "route-ns",
+                slot,
+                Arc::new(PluginRuntime::new()),
+            )
+        };
+        let backends = vec![
+            compile("duplicate", "first-ns", 0),
+            compile("duplicate", "second-ns", 1),
+        ];
+
+        let (name, namespace, kind, slot) = direct_backend_metadata(&backends, 1).unwrap();
+
+        assert_eq!(name, "duplicate");
+        assert_eq!(namespace, "second-ns");
+        assert_eq!(kind, ServiceBackendKind::Service);
+        assert_eq!(slot, 1);
+        assert!(direct_backend_metadata(&backends, 2).is_none());
+    }
+
+    #[test]
+    fn direct_backend_metadata_rejects_non_service_slots() {
+        let backend = CompiledBackend::compile(
+            HTTPBackendRef {
+                name: "provider".to_string(),
+                namespace: Some("ai-ns".to_string()),
+                port: None,
+                weight: Some(1),
+                group: Some("edgion.io".to_string()),
+                kind: Some("EdgionBackend".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied: None,
+            },
+            "route-ns",
+            0,
+            Arc::new(PluginRuntime::new()),
+        );
+
+        assert!(direct_backend_metadata(&[backend], 0).is_none());
+    }
+
+    #[test]
+    fn direct_backend_metadata_rejects_referencegrant_denied_services() {
+        let backend = CompiledBackend::compile(
+            HTTPBackendRef {
+                name: "cross-namespace".to_string(),
+                namespace: Some("other-ns".to_string()),
+                port: Some(8080),
+                weight: Some(1),
+                group: None,
+                kind: Some("Service".to_string()),
+                filters: None,
+                backend_tls_policy: None,
+                ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                    target_namespace: "other-ns".to_string(),
+                    target_name: "cross-namespace".to_string(),
+                    reason: Some("NoMatchingReferenceGrant".to_string()),
+                }),
+            },
+            "route-ns",
+            0,
+            Arc::new(PluginRuntime::new()),
+        );
+
+        assert!(direct_backend_metadata(&[backend], 0).is_none());
     }
 
     #[test]

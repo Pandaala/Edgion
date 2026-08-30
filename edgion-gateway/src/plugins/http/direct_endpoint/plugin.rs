@@ -146,14 +146,7 @@ impl RequestFilter for DirectEndpoint {
             Ok(info) => {
                 let addr_str = format!("{}", info.addr);
                 log.push_fmt("endpoint {}", la![sensitive(&addr_str)]);
-                // Clone the matched backend_ref alongside the preset — the gateway's
-                // peer-construction path uses it via ctx.selected_backend to fill
-                // rsc / service_key / service_kind without re-deriving them.
-                let backend_ref = backend_refs[info.backend_ref_idx].clone();
-                match session.set_upstream_jump(UpstreamJumpTarget::Direct {
-                    preset: info,
-                    backend_ref: Box::new(backend_ref),
-                }) {
+                match session.set_upstream_jump(UpstreamJumpTarget::Direct(info)) {
                     SetJumpOutcome::Set => {
                         session.record_outcome(DyeOutcome::Success, &addr_str);
                     }

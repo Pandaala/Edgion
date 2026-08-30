@@ -209,7 +209,6 @@ pub enum SelectedHttpBackend {
     Service(SelectedServiceBackend),
     Ai(LogicalBackendHandle),
     Invalid(LogicalBackendHandle),
-    Direct(Box<CompiledBackend>),
 }
 
 impl fmt::Debug for SelectedHttpBackend {
@@ -223,12 +222,6 @@ impl fmt::Debug for SelectedHttpBackend {
                 .field("identity", &logical.identity())
                 .field("target", &logical.target())
                 .finish(),
-            Self::Direct(compiled) => f
-                .debug_struct("Direct")
-                .field("slot", &compiled.slot)
-                .field("identity", &compiled.identity)
-                .field("target", &compiled.target)
-                .finish(),
         }
     }
 }
@@ -239,7 +232,6 @@ impl SelectedHttpBackend {
         match self {
             Self::Service(selected) => selected.logical().compiled(),
             Self::Ai(logical) | Self::Invalid(logical) => logical.compiled(),
-            Self::Direct(compiled) => compiled,
         }
     }
 
@@ -248,7 +240,7 @@ impl SelectedHttpBackend {
         match self {
             Self::Service(selected) => Some(SelectedLogicalBackend::Service(selected.clone())),
             Self::Ai(logical) => Some(SelectedLogicalBackend::Ai(logical.clone())),
-            Self::Invalid(_) | Self::Direct(_) => None,
+            Self::Invalid(_) => None,
         }
     }
 
