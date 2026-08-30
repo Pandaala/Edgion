@@ -7,6 +7,7 @@ use crate::observe::logs::ssl_log::log_ssl;
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::tls::runtime::gateway::tls_pingora::peek_tls_conn_meta;
 use crate::tls::validation::mtls::{validate_cn_whitelist, validate_san_whitelist};
+use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
 use pingora_core::tls::ssl::SslRef;
 use std::os::raw::{c_int, c_void};
@@ -53,32 +54,34 @@ unsafe extern "C" fn free_verify_context(
     _argl: std::os::raw::c_long,
     _argp: *mut c_void,
 ) {
-    if !ptr.is_null() {
-        let _ = Box::from_raw(ptr as *mut VerifyContext);
+    if ptr.is_null() {
+        return;
     }
+    // A panic must never unwind across the BoringSSL callback boundary. The
+    // context currently contains only an Arc, but keep the boundary safe if a
+    // future field gains a fallible Drop implementation.
+    let _ = catch_redacted_panic(|| unsafe {
+        drop(Box::from_raw(ptr as *mut VerifyContext));
+    });
 }
 
 /// SSL_set_verify callback for SAN/CN whitelist validation. Returns 1 to
-/// accept, 0 to reject. Wraps the impl in `catch_unwind` because a Rust
-/// panic crossing the FFI boundary into BoringSSL is UB.
+/// accept, 0 to reject. Wraps the impl in the shared redacted panic boundary
+/// because a Rust panic crossing into BoringSSL is UB and its hook must not
+/// expose certificate-derived detail.
 unsafe extern "C" fn verify_callback(preverify_ok: c_int, x509_ctx: *mut boring_sys::X509_STORE_CTX) -> c_int {
-    let result = std::panic::catch_unwind(|| verify_callback_impl(preverify_ok, x509_ctx));
+    let result = catch_redacted_panic(|| unsafe { verify_callback_impl(preverify_ok, x509_ctx) });
 
-    result.unwrap_or_else(|e| {
-        // Panic occurred - best-effort log to ssl.log and reject connection.
-        // FFI calls here cannot panic in Rust sense; log_mtls_failure handles
-        // null ssl_ptr and missing meta gracefully (silently drops the entry).
-        let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = e.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "unknown panic".to_string()
-        };
-
-        let ssl_ptr = boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
-            as *mut boring_sys::SSL;
-        log_mtls_failure(ssl_ptr, &format!("verify callback panic: {}", panic_msg));
+    result.unwrap_or_else(|_| {
+        // Never expose a dynamic panic payload: it may contain certificate
+        // identity or dependency detail. Best-effort log a static diagnostic
+        // and reject the connection.
+        if !x509_ctx.is_null() {
+            let ssl_ptr =
+                boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
+                    as *mut boring_sys::SSL;
+            log_mtls_failure(ssl_ptr, "mTLS verify callback panic");
+        }
         0 // Reject on panic
     })
 }
@@ -113,12 +116,13 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
 
     let idx = VERIFY_EX_DATA_IDX.load(Ordering::Acquire);
     if idx < 0 {
-        return 1;
+        log_mtls_failure(ssl_ptr, "mTLS verify context index missing");
+        return 0;
     }
     let ctx_ptr = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
     if ctx_ptr.is_null() {
-        // No whitelist context attached → preverify-passed cert is allowed.
-        return 1;
+        log_mtls_failure(ssl_ptr, "mTLS verify context missing");
+        return 0;
     }
 
     let context = &*(ctx_ptr as *const VerifyContext);
@@ -215,19 +219,21 @@ pub fn set_verify_callback_with_whitelist(
         let idx = VERIFY_EX_DATA_IDX.load(Ordering::Acquire);
         let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
 
-        let prev = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
-        if !prev.is_null() {
-            let _ = Box::from_raw(prev as *mut VerifyContext);
-        }
-
         let context = Box::new(VerifyContext {
             edgion_tls: edgion_tls.clone(),
         });
         let ctx_ptr = Box::into_raw(context) as *mut c_void;
+        let prev = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
 
         if boring_sys::SSL_set_ex_data(ssl_ptr, idx, ctx_ptr) == 0 {
             let _ = Box::from_raw(ctx_ptr as *mut VerifyContext);
             return Err("Failed to set ex_data".to_string());
+        }
+        // BoringSSL replaces the pointer without invoking the registered free
+        // callback. Release the displaced value only after the new pointer is
+        // installed, so a failed store cannot leave a dangling old slot.
+        if !prev.is_null() {
+            let _ = Box::from_raw(prev as *mut VerifyContext);
         }
 
         boring_sys::SSL_set_verify(ssl_ptr, verify_mode.bits() as c_int, Some(verify_callback));
