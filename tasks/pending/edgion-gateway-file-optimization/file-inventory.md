@@ -49,7 +49,7 @@
 | `backends-policy-root` | 1 | 0 | 0 | 0 | pending |
 | `backends-policy-tls` | 3 | 0 | 0 | 0 | pending |
 | `backends-policy-traffic` | 5 | 0 | 0 | 0 | pending |
-| `cache` | 4 | 0 | 0 | 0 | pending |
+| `cache` | 4 | 2 | 2 | 0 | complete |
 | `cli` | 3 | 0 | 0 | 0 | pending |
 | `conf-sync-cache-client` | 4 | 0 | 0 | 0 | pending |
 | `conf-sync-conf-client` | 5 | 0 | 0 | 0 | pending |
@@ -114,7 +114,7 @@
 | `plugins-http-key-auth` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-ldap-auth` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-mock` | 2 | 0 | 0 | 0 | pending |
-| `plugins-http-openid-connect` | 16 | 0 | 0 | 0 | pending |
+| `plugins-http-openid-connect` | 16 | 1 | 0 | 0 | pending |
 | `plugins-http-proxy-rewrite` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-rate-limit` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-rate-limit-redis` | 2 | 0 | 0 | 0 | pending |
@@ -215,10 +215,10 @@
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | pending | — |
-| `edgion-gateway/src/cache/lru.rs` | `cache` | source | pending | — |
-| `edgion-gateway/src/cache/mod.rs` | `cache` | source | pending | — |
-| `edgion-gateway/src/cache/sharded.rs` | `cache` | source | pending | — |
-| `edgion-gateway/src/cache/tiny_ufo.rs` | `cache` | source | pending | — |
+| `edgion-gateway/src/cache/lru.rs` | `cache` | source | optimized | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/mod.rs` | `cache` | source | reviewed-no-change | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/sharded.rs` | `cache` | source | optimized | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/tiny_ufo.rs` | `cache` | source | reviewed-no-change | CACHE-001 / `40f7eb74` |
 | `edgion-gateway/src/cli/config.rs` | `cli` | source | pending | — |
 | `edgion-gateway/src/cli/mod.rs` | `cli` | source | pending | — |
 | `edgion-gateway/src/cli/pingora.rs` | `cli` | source | pending | — |
@@ -460,7 +460,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | pending | — |
-| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | pending | — |
+| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | optimized | CACHE-001 / `40f7eb74` (reviewed early with cache consumer) |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | pending | — |
