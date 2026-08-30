@@ -208,7 +208,7 @@
 | `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic window/generation redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic Service snapshot and reverse-index redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | reviewed-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/port_resolver.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | reviewed-no-change | BACKENDS-PORT-RESOLVER-001: precompiled typed fail-close redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | pending | — |
