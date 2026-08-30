@@ -1,6 +1,7 @@
 //! Typed immutable runtime store for `BackendTLSPolicy` resources.
 
 use arc_swap::ArcSwap;
+use edgion_resources::resources::backend_tls_policy::backend_tls_identity_validation_errors;
 use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
@@ -66,10 +67,11 @@ impl BackendTLSPolicySnapshot {
         let candidates = self.inner.reverse_index.get(target)?;
         if let Some(section) = section {
             if let Some(policy) = candidates.iter().find(|policy| {
-                policy.spec.target_refs.iter().any(|target_ref| {
-                    target_ref.canonical_key(&target.namespace).as_ref() == Ok(target)
-                        && target_ref.section_name.as_deref() == Some(section)
-                })
+                policy
+                    .spec
+                    .target_refs
+                    .first()
+                    .is_some_and(|target_ref| target_ref.section_name.as_deref() == Some(section))
             }) {
                 return Some(Arc::clone(policy));
             }
@@ -77,10 +79,11 @@ impl BackendTLSPolicySnapshot {
         candidates
             .iter()
             .find(|policy| {
-                policy.spec.target_refs.iter().any(|target_ref| {
-                    target_ref.canonical_key(&target.namespace).as_ref() == Ok(target)
-                        && target_ref.section_name.is_none()
-                })
+                policy
+                    .spec
+                    .target_refs
+                    .first()
+                    .is_some_and(|target_ref| target_ref.section_name.is_none())
             })
             .cloned()
     }
@@ -176,37 +179,26 @@ impl BackendTLSPolicyStore {
     }
 
     /// Controller eligibility marker plus a defensive target-kind check.
-    fn policy_target_keys(&self, policy: &BackendTLSPolicy) -> Vec<PolicyTargetKey> {
+    fn policy_target_key(policy: &BackendTLSPolicy) -> Option<PolicyTargetKey> {
         let Some(resolved_class) = policy.spec.resolved_target_class else {
-            return Vec::new();
+            return None;
         };
         if policy.spec.target_refs.len() != 1 {
-            return Vec::new();
+            return None;
+        }
+        if !backend_tls_identity_validation_errors(&policy.spec.validation).is_empty() {
+            return None;
         }
         let namespace = policy.namespace().unwrap_or("");
-        let keys: Vec<_> = policy
-            .spec
-            .target_refs
-            .iter()
-            .filter_map(|target| target.canonical_key(namespace).ok())
-            .collect();
-        let all_refs_valid = keys.len() == policy.spec.target_refs.len();
-        let class_matches = keys.iter().all(|key| {
-            matches!(
-                (resolved_class, key.target_kind),
-                (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
-                    | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
-            )
-        });
-        let section_supported = policy.spec.target_refs.iter().all(|target| {
-            target.section_name.is_none()
-                || keys
-                    .first()
-                    .is_some_and(|key| key.target_kind == PolicyTargetKind::Service)
-        });
-        (all_refs_valid && class_matches && section_supported)
-            .then_some(keys)
-            .unwrap_or_default()
+        let target_ref = policy.spec.target_refs.first()?;
+        let key = target_ref.canonical_key(namespace).ok()?;
+        let class_matches = matches!(
+            (resolved_class, key.target_kind),
+            (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
+                | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
+        );
+        let section_supported = target_ref.section_name.is_none() || key.target_kind == PolicyTargetKind::Service;
+        (class_matches && section_supported).then_some(key)
     }
 
     fn sort_policies_by_precedence(policies: &mut [Arc<BackendTLSPolicy>]) {
@@ -216,7 +208,7 @@ impl BackendTLSPolicyStore {
     fn build_reverse_index(&self, policies: &BackendTLSPolicyMap) -> ReverseIndexMap {
         let mut index: ReverseIndexMap = HashMap::new();
         for policy in policies.values() {
-            for target in self.policy_target_keys(policy) {
+            if let Some(target) = Self::policy_target_key(policy) {
                 index.entry(target).or_default().push(Arc::clone(policy));
             }
         }
@@ -422,6 +414,30 @@ mod tests {
     }
 
     #[test]
+    fn policy_lookup_does_not_rebuild_target_keys() {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([(
+            "tenant/service-https".to_string(),
+            policy(
+                "service-https",
+                PolicyTargetKind::Service,
+                "shared",
+                Some("https"),
+                Some(ResolvedPolicyTargetClass::Service),
+            ),
+        )]));
+        let snapshot = store.snapshot();
+        let target = target(PolicyTargetKind::Service);
+
+        let (selected, allocations) =
+            crate::test_allocation_counter::count_allocation_stats(|| snapshot.get_policy(&target, Some("https")));
+
+        assert_eq!(selected.unwrap().name(), "service-https");
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
     fn equivalent_update_retains_generation_arc_and_old_handle() {
         let store = BackendTLSPolicyStore::new();
         let input = policy(
@@ -480,6 +496,71 @@ mod tests {
             .snapshot()
             .get_policy(&target(PolicyTargetKind::Service), None)
             .is_none());
+    }
+
+    #[test]
+    fn multiple_target_refs_are_not_partially_indexed() {
+        let store = BackendTLSPolicyStore::new();
+        let mut multi = policy(
+            "multi",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut multi)
+            .spec
+            .target_refs
+            .push(BackendTLSPolicyTargetRef {
+                group: String::new(),
+                kind: "Service".to_string(),
+                name: "other".to_string(),
+                section_name: None,
+            });
+        store.replace_all(HashMap::from([("tenant/multi".to_string(), multi)]));
+
+        assert!(store
+            .snapshot()
+            .get_policy(&target(PolicyTargetKind::Service), None)
+            .is_none());
+    }
+
+    #[test]
+    fn malformed_identity_is_retained_but_cannot_shadow_valid_policy() {
+        let store = BackendTLSPolicyStore::new();
+        let mut invalid = policy(
+            "a-invalid",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut invalid).spec.validation.hostname = "*.example.com".to_string();
+        let valid = policy(
+            "z-valid",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        store.replace_all(HashMap::from([
+            ("tenant/a-invalid".to_string(), invalid),
+            ("tenant/z-valid".to_string(), valid),
+        ]));
+
+        let snapshot = store.snapshot();
+        assert_eq!(
+            store.count(),
+            2,
+            "invalid resources remain visible to store diagnostics"
+        );
+        assert_eq!(
+            snapshot
+                .get_policy(&target(PolicyTargetKind::Service), None)
+                .unwrap()
+                .name(),
+            "z-valid"
+        );
     }
 
     #[test]
