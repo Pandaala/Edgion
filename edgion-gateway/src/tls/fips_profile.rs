@@ -15,6 +15,8 @@
 use pingora_core::tls::ssl::SslRef;
 #[cfg(feature = "boringssl")]
 use pingora_core::{Error as PingoraError, ErrorType};
+#[cfg(feature = "boringssl")]
+use std::ffi::CStr;
 
 /// FIPS-approved TLS 1.2 cipher suites (Envoy FIPS default set), colon-joined
 /// for BoringSSL's `SSL_set_strict_cipher_list`. Excludes ChaCha20/CBC/3DES.
@@ -25,6 +27,12 @@ ECDHE-RSA-AES256-GCM-SHA384";
 
 /// FIPS-approved ECDH curves (NIST P-curves), for `SSL_set1_curves_list`.
 pub const FIPS_CURVES: &str = "P-256:P-384:P-521";
+
+#[cfg(feature = "boringssl")]
+const FIPS_TLS12_CIPHERS_C: &CStr =
+    c"ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384";
+#[cfg(feature = "boringssl")]
+const FIPS_CURVES_C: &CStr = c"P-256:P-384:P-521";
 
 /// Whether BoringSSL reports that this binary is running in FIPS mode.
 /// Compile-time, process-wide; `false` on any non-boringssl build. This signal
@@ -97,16 +105,11 @@ pub fn decide_cipher_action(has_operator_ciphers: bool, enforce_fips: bool) -> C
 /// BoringSSL and are intentionally left untouched.
 #[cfg(feature = "boringssl")]
 pub(crate) fn configure_fips_ciphers(ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
-    use std::ffi::CString;
-
-    let ciphers = CString::new(FIPS_TLS12_CIPHERS)
-        .map_err(|e| PingoraError::explain(ErrorType::InternalError, format!("fips cipher null byte: {e}")))?;
-
-    // SAFETY: SslRef -> SSL* for FFI; ssl valid for this call; CString outlives
-    // the FFI call.
+    // SAFETY: SslRef -> SSL* for FFI; ssl and the static C string are valid for
+    // this call.
     unsafe {
         let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
-        if boring_sys::SSL_set_strict_cipher_list(ssl_ptr, ciphers.as_ptr()) != 1 {
+        if boring_sys::SSL_set_strict_cipher_list(ssl_ptr, FIPS_TLS12_CIPHERS_C.as_ptr()) != 1 {
             return Err(PingoraError::explain(
                 ErrorType::InternalError,
                 "fips default cipher list rejected".to_string(),
@@ -123,16 +126,11 @@ pub(crate) fn configure_fips_ciphers(ssl: &mut SslRef) -> Result<(), Box<Pingora
 /// `configure_fips_ciphers`.
 #[cfg(feature = "boringssl")]
 pub(crate) fn configure_fips_curves(ssl: &mut SslRef) -> Result<(), Box<PingoraError>> {
-    use std::ffi::CString;
-
-    let curves = CString::new(FIPS_CURVES)
-        .map_err(|e| PingoraError::explain(ErrorType::InternalError, format!("fips curves null byte: {e}")))?;
-
-    // SAFETY: SslRef -> SSL* for FFI; ssl valid for this call; CString outlives
-    // the FFI call.
+    // SAFETY: SslRef -> SSL* for FFI; ssl and the static C string are valid for
+    // this call.
     unsafe {
         let ssl_ptr = ssl as *mut SslRef as *mut boring_sys::SSL;
-        if boring_sys::SSL_set1_curves_list(ssl_ptr, curves.as_ptr()) != 1 {
+        if boring_sys::SSL_set1_curves_list(ssl_ptr, FIPS_CURVES_C.as_ptr()) != 1 {
             return Err(PingoraError::explain(
                 ErrorType::InternalError,
                 "fips curves list rejected".to_string(),
@@ -247,6 +245,13 @@ mod tests {
         // set_cipher_list parses the TLS 1.2 cipher string; a typo yields Err.
         b.set_cipher_list(FIPS_TLS12_CIPHERS)
             .expect("approved TLS 1.2 cipher names must be valid BoringSSL strings");
+    }
+
+    #[cfg(feature = "boringssl")]
+    #[test]
+    fn ffi_profile_strings_match_the_public_profile() {
+        assert_eq!(FIPS_TLS12_CIPHERS_C.to_str().unwrap(), FIPS_TLS12_CIPHERS);
+        assert_eq!(FIPS_CURVES_C.to_str().unwrap(), FIPS_CURVES);
     }
 
     #[cfg(not(feature = "fips"))]
