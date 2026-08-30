@@ -8,7 +8,7 @@ use std::fmt;
 /// Result of backend SAN validation.
 pub struct BackendSanValidationResult {
     pub passed: bool,
-    pub reason: String,
+    pub reason: &'static str,
 }
 
 impl fmt::Display for BackendSanValidationResult {
@@ -32,7 +32,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
     if policy_sans.is_empty() {
         return BackendSanValidationResult {
             passed: true,
-            reason: "no SubjectAltName constraints specified".to_string(),
+            reason: "no SubjectAltName constraints specified",
         };
     }
 
@@ -49,10 +49,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
                         if super::matches_host_pattern(cert_san, hostname_pattern) {
                             return BackendSanValidationResult {
                                 passed: true,
-                                reason: format!(
-                                    "cert SAN '{}' matches policy hostname '{}'",
-                                    cert_san, hostname_pattern
-                                ),
+                                reason: "certificate hostname SAN matched policy",
                             };
                         }
                     }
@@ -65,7 +62,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
                             if cert_uri == uri {
                                 return BackendSanValidationResult {
                                     passed: true,
-                                    reason: format!("cert SAN URI '{}' matches policy URI '{}'", cert_uri, uri),
+                                    reason: "certificate URI SAN matched policy",
                                 };
                             }
                         }
@@ -77,10 +74,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
 
     BackendSanValidationResult {
         passed: false,
-        reason: format!(
-            "no cert SAN matched any of the {} policy SubjectAltName(s)",
-            policy_sans.len()
-        ),
+        reason: "no certificate SAN matched policy",
     }
 }
 
@@ -117,6 +111,7 @@ mod tests {
         let policy = vec![hostname_san("backend.example.com")];
         let result = validate_backend_sans(&cert_sans, &policy);
         assert!(result.passed);
+        assert_eq!(result.reason, "certificate hostname SAN matched policy");
     }
 
     #[test]
@@ -141,6 +136,7 @@ mod tests {
         let policy = vec![uri_san("spiffe://cluster.local/ns/default/sa/backend")];
         let result = validate_backend_sans(&cert_sans, &policy);
         assert!(result.passed);
+        assert_eq!(result.reason, "certificate URI SAN matched policy");
     }
 
     #[test]
@@ -149,6 +145,7 @@ mod tests {
         let policy = vec![uri_san("spiffe://cluster.local/ns/default/sa/backend")];
         let result = validate_backend_sans(&cert_sans, &policy);
         assert!(!result.passed);
+        assert_eq!(result.reason, "no certificate SAN matched policy");
     }
 
     #[test]

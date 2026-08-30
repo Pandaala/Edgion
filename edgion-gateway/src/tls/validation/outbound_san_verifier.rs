@@ -136,7 +136,42 @@ impl std::error::Error for SanMismatchError {}
 /// `Display` rendering, which is a temporary nothing can borrow from. This is a
 /// cold error path.
 pub fn outbound_san_mismatch_reason(err: &(dyn std::error::Error + 'static)) -> Option<String> {
-    walk_chain(err, probe_typed).or_else(|| walk_chain(err, probe_fallback))
+    match walk_typed_chain(err, MAX_CHAIN_DEPTH) {
+        Ok(Some(reason)) => Some(reason),
+        Ok(None) => walk_chain(err, probe_fallback),
+        Err(DepthLimitReached) => None,
+    }
+}
+
+struct DepthLimitReached;
+
+/// Typed walk that includes `io::Error::get_ref()` without resetting the
+/// caller's depth budget. `io::Error::source()` skips the wrapped error itself,
+/// so its inner chain replaces the ordinary source hop instead of adding a
+/// second traversal path.
+fn walk_typed_chain(
+    err: &(dyn std::error::Error + 'static),
+    remaining: usize,
+) -> Result<Option<String>, DepthLimitReached> {
+    if remaining == 0 {
+        return Err(DepthLimitReached);
+    }
+
+    if let Some(reason) = probe_typed(err) {
+        return Ok(Some(reason));
+    }
+
+    if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+        return match io_err.get_ref() {
+            Some(inner) => walk_typed_chain(inner, remaining - 1),
+            None => Ok(None),
+        };
+    }
+
+    match err.source() {
+        Some(source) => walk_typed_chain(source, remaining - 1),
+        None => Ok(None),
+    }
 }
 
 /// Depth-bounded `source()` walk, applying `probe` at each node until it matches.
@@ -174,18 +209,6 @@ fn probe_typed(node: &(dyn std::error::Error + 'static)) -> Option<String> {
     if let Some(RustlsError::InvalidCertificate(CertificateError::Other(other))) = node.downcast_ref::<RustlsError>() {
         if let Some(san) = other.0.downcast_ref::<SanMismatchError>() {
             return Some(san.reason.clone());
-        }
-    }
-
-    // 3. `std::io::Error::source()` is `Custom(c) => c.error.source()` -- it returns
-    //    the *inner* error's source and skips the inner error itself. tokio-rustls
-    //    wraps `rustls::Error` exactly this way, so without an explicit `get_ref()`
-    //    hop the walk steps straight over it. Do not remove.
-    if let Some(io_err) = node.downcast_ref::<std::io::Error>() {
-        if let Some(inner) = io_err.get_ref() {
-            if let Some(reason) = walk_chain(inner, probe_typed) {
-                return Some(reason);
-            }
         }
     }
 
@@ -259,7 +282,9 @@ impl ServerCertVerifier for OutboundSanVerifier {
         let result = validate_backend_sans(&cert_sans, &self.policy_sans);
         if !result.passed {
             return Err(RustlsError::InvalidCertificate(CertificateError::Other(OtherError(
-                Arc::new(SanMismatchError { reason: result.reason }),
+                Arc::new(SanMismatchError {
+                    reason: result.reason.to_string(),
+                }),
             ))));
         }
 
@@ -476,6 +501,16 @@ mod tests {
     fn detector_matches_through_io_error_wrapper() {
         let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, san_rustls_error("wrapped"));
         assert_eq!(outbound_san_mismatch_reason(&io_err).as_deref(), Some("wrapped"));
+    }
+
+    #[test]
+    fn detector_bounds_nested_io_error_wrappers() {
+        let mut err = std::io::Error::new(std::io::ErrorKind::InvalidData, san_rustls_error("too deep"));
+        for _ in 0..MAX_CHAIN_DEPTH {
+            err = std::io::Error::new(std::io::ErrorKind::InvalidData, err);
+        }
+
+        assert_eq!(outbound_san_mismatch_reason(&err), None);
     }
 
     #[test]

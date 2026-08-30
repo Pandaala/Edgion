@@ -33,13 +33,7 @@ pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &[String])
         return false;
     };
 
-    for allowed in allowed_cns {
-        if super::matches_host_pattern(cn, allowed) {
-            return true;
-        }
-    }
-
-    false
+    allowed_cns.iter().any(|allowed| cn == allowed)
 }
 
 #[cfg(test)]
@@ -112,5 +106,13 @@ mod tests {
         assert!(validate_cn_whitelist(&cert_info, &[])); // Empty whitelist
         assert!(validate_cn_whitelist(&cert_info, &["TestUser".to_string()]));
         assert!(!validate_cn_whitelist(&cert_info, &["OtherUser".to_string()]));
+        assert!(!validate_cn_whitelist(&cert_info, &["testuser".to_string()]));
+        assert!(!validate_cn_whitelist(
+            &ClientCertInfo {
+                cn: Some("client.example.com".to_string()),
+                ..cert_info
+            },
+            &["*.example.com".to_string()]
+        ));
     }
 }
