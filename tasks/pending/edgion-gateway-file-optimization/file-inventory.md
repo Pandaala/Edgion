@@ -79,7 +79,7 @@
 | `link-sys-runtime` | 5 | 0 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
 | `observe-access-log` | 5 | 2 | 3 | 0 | complete |
-| `observe-core` | 3 | 0 | 0 | 0 | pending |
+| `observe-core` | 3 | 1 | 2 | 0 | complete |
 | `observe-metrics` | 5 | 0 | 0 | 0 | pending |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
 | `plugins-common` | 3 | 0 | 0 | 0 | pending |
@@ -298,7 +298,7 @@
 | `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | optimized | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | pending | — |
+| `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | optimized | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
 | `edgion-gateway/src/observe/logs/logger_factory.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
 | `edgion-gateway/src/observe/logs/mod.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
@@ -311,8 +311,8 @@
 | `edgion-gateway/src/observe/metrics/registry.rs` | `observe-metrics` | source | pending | — |
 | `edgion-gateway/src/observe/metrics/route_handles.rs` | `observe-metrics` | source | pending | — |
 | `edgion-gateway/src/observe/metrics/test_metrics.rs` | `observe-metrics` | source | pending | — |
-| `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | pending | — |
-| `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | pending | — |
+| `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | reviewed-no-change | OBS-CORE-001 / `4b1d27d5` |
+| `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | reviewed-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | pending | — |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | pending | — |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | pending | — |

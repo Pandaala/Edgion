@@ -55,3 +55,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: access-log tests 44/44; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains its pre-existing missing external Pingora-link failures and found no task-local error.
 - Integration-test guard: baseline `edgion-tests` tree unchanged
 - Commit: `9d99d213`
+
+### `OBS-CORE-001` — request diagnostics and integration access-log store
+
+- Outcome: mixed (1 optimized, 2 reviewed-no-change)
+- Files reviewed: `observe/access_log_store.rs`, `observe/request_diagnostics.rs`, and `observe/mod.rs`
+- Changes: serialized only new-trace admission so concurrent distinct inserts cannot exceed the 10,000-entry test-store bound; kept existing-trace updates concurrent; made `total_stored` count successful writes; captured one cleanup timestamp per sweep; added concurrency, cleanup-cadence, TTL-read, and rejected-write regressions; synchronized the observability architecture note.
+- Generality and architecture review: main review caught and fixed a potential self-deadlock from invoking `DashMap::retain` while holding a same-shard write guard. Independent review then approved the lock ordering and strict-capacity linearization with no findings. Request diagnostics retain append order, repeats, inline-eight allocation behavior, hard 32-entry tail-drop, and `diagnostics_full` semantics; the binding lazy-cleanup/no-background-task decision remains intact.
+- Verification: access-log-store tests 12/12; request-diagnostics tests 2/2; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing missing external Pingora-link failures.
+- Integration-test guard: baseline `edgion-tests` tree unchanged
+- Commit: `4b1d27d5`
