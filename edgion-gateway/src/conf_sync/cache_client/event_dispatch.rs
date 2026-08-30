@@ -53,8 +53,11 @@ fn raw_backend_key(value: &serde_json::Value) -> Option<String> {
     (valid_dns_label(namespace) && valid_kube_name(name)).then(|| format!("{namespace}/{name}"))
 }
 
-fn backend_event_parts(event: &serde_json::Value) -> Result<(ResourceChange, &serde_json::Value), ()> {
-    let event_object = event.as_object().ok_or(())?;
+fn take_watch_event_parts(
+    mut event: serde_json::Value,
+    response_sv: u64,
+) -> Result<(ResourceChange, u64, serde_json::Value), ()> {
+    let event_object = event.as_object_mut().ok_or(())?;
     let event_type = event_object.get("type").and_then(serde_json::Value::as_str).ok_or(())?;
     let change = match event_type {
         "add" => ResourceChange::EventAdd,
@@ -62,8 +65,12 @@ fn backend_event_parts(event: &serde_json::Value) -> Result<(ResourceChange, &se
         "delete" => ResourceChange::EventDelete,
         _ => return Err(()),
     };
-    let event_data = event_object.get("data").ok_or(())?;
-    Ok((change, event_data))
+    let event_sv = event_object
+        .get("sync_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(response_sv);
+    let event_data = event_object.remove("data").ok_or(())?;
+    Ok((change, event_sv, event_data))
 }
 
 fn decode_list_payload<T: ResourceMeta>(data: &[u8]) -> Result<Vec<T>, String>
@@ -133,23 +140,18 @@ where
 {
     let mut cache = cache_data.write();
     for event in events {
-        let Ok((change, event_data)) = backend_event_parts(&event) else {
+        let Ok((change, event_sv, event_data)) = take_watch_event_parts(event, response_sv) else {
             cache.reset(Vec::new(), response_sv);
             cache.set_not_ready();
             return BackendWatchBatchOutcome::Unsafe;
         };
-        let Some(resource_key) = raw_backend_key(event_data) else {
+        let Some(resource_key) = raw_backend_key(&event_data) else {
             cache.reset(Vec::new(), response_sv);
             cache.set_not_ready();
             return BackendWatchBatchOutcome::Unsafe;
         };
-        let event_object = event.as_object().expect("validated backend event object");
-        let event_sv = event_object
-            .get("sync_version")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(response_sv);
 
-        match serde_json::from_value::<T>(event_data.clone()) {
+        match serde_json::from_value::<T>(event_data) {
             Ok(mut resource) => {
                 resource.pre_parse();
                 edgion_resources::resource::meta::set_sync_version(resource.meta_mut(), event_sv);
@@ -561,28 +563,12 @@ where
                                 // to coalesce O(N) lock acquisitions into one batch.
                                 let mut cache = cache_data.write();
                                 for event in events {
-                                    let Some(event_object) = event.as_object() else {
-                                        continue;
-                                    };
-                                    let Some(event_type) = event_object.get("type").and_then(|value| value.as_str())
+                                    let Ok((change, event_sv, event_data)) = take_watch_event_parts(event, response_sv)
                                     else {
                                         continue;
                                     };
-                                    let change = match event_type {
-                                        "add" => ResourceChange::EventAdd,
-                                        "update" => ResourceChange::EventUpdate,
-                                        "delete" => ResourceChange::EventDelete,
-                                        _ => continue,
-                                    };
-                                    let Some(event_data) = event_object.get("data") else {
-                                        continue;
-                                    };
-                                    let event_sv = event_object
-                                        .get("sync_version")
-                                        .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or(response_sv);
 
-                                    match serde_json::from_value::<T>(event_data.clone()) {
+                                    match serde_json::from_value::<T>(event_data) {
                                         Ok(mut resource) => {
                                             resource.pre_parse();
                                             edgion_resources::resource::meta::set_sync_version(
@@ -836,27 +822,27 @@ mod tests {
 
     #[test]
     fn backend_watch_rejects_non_object_event() {
-        assert!(backend_event_parts(&serde_json::json!("add")).is_err());
+        assert!(take_watch_event_parts(serde_json::json!("add"), 1).is_err());
     }
 
     #[test]
     fn backend_watch_rejects_missing_type() {
-        assert!(backend_event_parts(&serde_json::json!({"data": {}})).is_err());
+        assert!(take_watch_event_parts(serde_json::json!({"data": {}}), 1).is_err());
     }
 
     #[test]
     fn backend_watch_rejects_non_string_type() {
-        assert!(backend_event_parts(&serde_json::json!({"type": 1, "data": {}})).is_err());
+        assert!(take_watch_event_parts(serde_json::json!({"type": 1, "data": {}}), 1).is_err());
     }
 
     #[test]
     fn backend_watch_rejects_unknown_type() {
-        assert!(backend_event_parts(&serde_json::json!({"type": "replace", "data": {}})).is_err());
+        assert!(take_watch_event_parts(serde_json::json!({"type": "replace", "data": {}}), 1).is_err());
     }
 
     #[test]
     fn backend_watch_rejects_missing_data() {
-        assert!(backend_event_parts(&serde_json::json!({"type": "add"})).is_err());
+        assert!(take_watch_event_parts(serde_json::json!({"type": "add"}), 1).is_err());
     }
 
     #[test]
@@ -867,8 +853,33 @@ mod tests {
             ("delete", ResourceChange::EventDelete),
         ] {
             let event = serde_json::json!({"type": event_type, "data": {}});
-            assert_eq!(backend_event_parts(&event).unwrap().0, expected);
+            assert_eq!(take_watch_event_parts(event, 1).unwrap().0, expected);
         }
+    }
+
+    #[test]
+    fn watch_event_data_is_moved_without_deep_clone() {
+        let payload = "x".repeat(4096);
+        let event = serde_json::json!({
+            "type": "update",
+            "sync_version": 9,
+            "data": {"payload": payload}
+        });
+        let original_pointer = event["data"]["payload"]
+            .as_str()
+            .expect("test payload must be a string")
+            .as_ptr();
+
+        let (change, sync_version, data) = take_watch_event_parts(event, 3).unwrap();
+        assert_eq!(change, ResourceChange::EventUpdate);
+        assert_eq!(sync_version, 9);
+        assert_eq!(
+            data["payload"]
+                .as_str()
+                .expect("moved payload must remain a string")
+                .as_ptr(),
+            original_pointer
+        );
     }
 
     #[test]
@@ -978,8 +989,8 @@ mod tests {
             server_id: "server-a".to_string(),
         };
         let nested_events: Vec<serde_json::Value> = serde_json::from_str(&nested_watch.data).unwrap();
-        let (_, nested_data) = backend_event_parts(&nested_events[0]).unwrap();
-        assert!(serde_json::from_value::<EdgionBackend>(nested_data.clone()).is_ok());
+        let (_, _, nested_data) = take_watch_event_parts(nested_events.into_iter().next().unwrap(), 9).unwrap();
+        assert!(serde_json::from_value::<EdgionBackend>(nested_data).is_ok());
 
         let flat_watch = WatchResponse {
             data: serde_json::to_string(&vec![serde_json::json!({"type": "update", "data": flat})]).unwrap(),
@@ -988,9 +999,9 @@ mod tests {
             server_id: "server-a".to_string(),
         };
         let flat_events: Vec<serde_json::Value> = serde_json::from_str(&flat_watch.data).unwrap();
-        let (_, flat_data) = backend_event_parts(&flat_events[0]).unwrap();
-        assert!(raw_backend_key(flat_data).is_some());
-        assert!(serde_json::from_value::<EdgionBackend>(flat_data.clone()).is_err());
+        let (_, _, flat_data) = take_watch_event_parts(flat_events.into_iter().next().unwrap(), 10).unwrap();
+        assert!(raw_backend_key(&flat_data).is_some());
+        assert!(serde_json::from_value::<EdgionBackend>(flat_data).is_err());
     }
 
     #[test]
