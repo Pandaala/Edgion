@@ -26,29 +26,34 @@
 ## States
 
 - `pending`: not yet completely audited.
-- `reviewed-no-change`: complete audit found no worthwhile safe change.
-- `optimized`: changed, reviewed, verified, and committed.
-- `test-baseline`: audited as a regression specification and intentionally unchanged.
-- `excluded`: audited but prohibited or externally generated; requires a reason in Change ID / note.
+- `in-progress`: owned by the active frozen batch.
+- `examined-no-change`: complete audit found no worthwhile safe change.
+- `changed`: changed, reviewed, verified, and committed.
+- `deferred`: a real issue requires a wider independent task.
+- `excluded-with-reason`: generated, fixture, or explicitly out-of-scope content with stable evidence.
+- `removed`: absent from the current tree with commit evidence.
+- `renamed`: replaced by a destination row with commit evidence.
 
 ## Batch coverage
 
-| Batch | Expected | Optimized | No change | Other closed | Status |
+| Batch | Expected | Changed | No change | Other closed | Status |
 |-------|---------:|----------:|----------:|-------------:|--------|
 | `ai-anthropic` | 3 | 0 | 0 | 0 | pending |
 | `ai-core` | 16 | 0 | 0 | 0 | pending |
 | `ai-quota` | 2 | 0 | 0 | 0 | pending |
 | `api` | 2 | 0 | 0 | 0 | pending |
-| `backends-circuit-breaker` | 2 | 0 | 0 | 0 | pending |
-| `backends-core` | 10 | 0 | 0 | 0 | pending |
+| `backends-circuit-breaker` | 2 | 1 | 1 | 0 | complete |
+| `backends-core` | 8 | 3 | 2 | 0 | pending |
 | `backends-discovery-endpoints` | 4 | 0 | 0 | 0 | pending |
 | `backends-discovery-services` | 3 | 0 | 0 | 0 | pending |
 | `backends-discovery-shared` | 3 | 0 | 0 | 0 | pending |
 | `backends-health` | 6 | 0 | 0 | 0 | pending |
 | `backends-outlier` | 4 | 0 | 0 | 0 | pending |
-| `backends-policy-root` | 1 | 0 | 0 | 0 | pending |
+| `backends-panic-threshold` | 1 | 1 | 0 | 0 | complete |
+| `backends-policy-root` | 1 | 0 | 1 | 0 | complete |
 | `backends-policy-tls` | 3 | 1 | 2 | 0 | complete |
-| `backends-policy-traffic` | 5 | 0 | 0 | 0 | pending |
+| `backends-policy-traffic` | 5 | 0 | 5 | 0 | complete |
+| `backends-port-resolver` | 1 | 0 | 1 | 0 | complete |
 | `cache` | 4 | 2 | 2 | 0 | complete |
 | `cli` | 3 | 0 | 0 | 0 | pending |
 | `conf-sync-cache-client` | 4 | 1 | 3 | 0 | complete |
@@ -173,8 +178,8 @@
 | `edgion-gateway/src/ai/usage.rs` | `ai-core` | source | pending | — |
 | `edgion-gateway/src/api/admin_auth.rs` | `api` | source | pending | — |
 | `edgion-gateway/src/api/mod.rs` | `api` | source | pending | — |
-| `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | pending | — |
-| `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | pending | — |
+| `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | changed | `B0033`: concurrent winner permits now prove RAII release to zero without leaking handles |
+| `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | examined-no-change | `B0033`: minimal production RAII wrapper retained |
 | `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/dns_cache.rs` | `backends-discovery-shared` | source | pending | — |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs` | `backends-discovery-endpoints` | source | pending | — |
@@ -197,46 +202,46 @@
 | `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | pending | — |
 | `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | pending | — |
-| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | optimized | BACKENDS-PANIC-THRESHOLD-001 / `cd048aa9`; atomic capture and metric lifecycle deferred to dedicated TODOs |
+| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | changed | BACKENDS-PANIC-THRESHOLD-001 / `cd048aa9`; atomic capture and metric lifecycle deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | pending | — |
-| `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | optimized | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
-| `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | reviewed-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |
-| `edgion-gateway/src/backends/policy/backend_tls/mod.rs` | `backends-policy-tls` | source | reviewed-no-change | BACKENDS-POLICY-TLS-001: narrow module exports retained |
-| `edgion-gateway/src/backends/policy/backend_traffic/authority.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: fail-close authority composition retained; bounded rendering deferred to dedicated TODO |
-| `edgion-gateway/src/backends/policy/backend_traffic/conf_handler_impl.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: ownership-required full-set clone and metadata-only logs retained |
-| `edgion-gateway/src/backends/policy/backend_traffic/mod.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: narrow exports retained; isolated singleton refcount change rejected |
-| `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic window/generation redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | reviewed-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic Service snapshot and reverse-index redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | reviewed-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | reviewed-no-change | BACKENDS-PORT-RESOLVER-001: precompiled typed fail-close redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | optimized | BACKENDS-PRELOAD-001: routable-ref filtering and accurate hydration result; L4 runtime denial deferred to dedicated TODO |
-| `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | optimized | BACKENDS-RUNTIME-001: TLS-policy-safe selected-backend Debug boundary |
-| `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | optimized | BACKENDS-SELECTOR-001: borrowed hash keys and per-selection health/outlier handles; lifecycle/runtime snapshot work deferred to TODOs |
-| `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | reviewed-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
-| `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | reviewed-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |
+| `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | changed | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
+| `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | examined-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |
+| `edgion-gateway/src/backends/policy/backend_tls/mod.rs` | `backends-policy-tls` | source | examined-no-change | BACKENDS-POLICY-TLS-001: narrow module exports retained |
+| `edgion-gateway/src/backends/policy/backend_traffic/authority.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: fail-close authority composition retained; bounded rendering deferred to dedicated TODO |
+| `edgion-gateway/src/backends/policy/backend_traffic/conf_handler_impl.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: ownership-required full-set clone and metadata-only logs retained |
+| `edgion-gateway/src/backends/policy/backend_traffic/mod.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: narrow exports retained; isolated singleton refcount change rejected |
+| `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic window/generation redesign deferred to dedicated TODO |
+| `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic Service snapshot and reverse-index redesign deferred to dedicated TODO |
+| `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | examined-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
+| `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | examined-no-change | BACKENDS-PORT-RESOLVER-001: precompiled typed fail-close redesign deferred to dedicated TODO |
+| `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | changed | BACKENDS-PRELOAD-001: routable-ref filtering and accurate hydration result; L4 runtime denial deferred to dedicated TODO |
+| `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | changed | BACKENDS-RUNTIME-001: TLS-policy-safe selected-backend Debug boundary |
+| `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | changed | BACKENDS-SELECTOR-001: borrowed hash keys and per-selection health/outlier handles; lifecycle/runtime snapshot work deferred to TODOs |
+| `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | examined-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
+| `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | examined-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |
 | `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | pending | — |
-| `edgion-gateway/src/cache/lru.rs` | `cache` | source | optimized | CACHE-001 / `40f7eb74` |
-| `edgion-gateway/src/cache/mod.rs` | `cache` | source | reviewed-no-change | CACHE-001 / `40f7eb74` |
-| `edgion-gateway/src/cache/sharded.rs` | `cache` | source | optimized | CACHE-001 / `40f7eb74` |
-| `edgion-gateway/src/cache/tiny_ufo.rs` | `cache` | source | reviewed-no-change | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/lru.rs` | `cache` | source | changed | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/mod.rs` | `cache` | source | examined-no-change | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/sharded.rs` | `cache` | source | changed | CACHE-001 / `40f7eb74` |
+| `edgion-gateway/src/cache/tiny_ufo.rs` | `cache` | source | examined-no-change | CACHE-001 / `40f7eb74` |
 | `edgion-gateway/src/cli/config.rs` | `cli` | source | pending | — |
 | `edgion-gateway/src/cli/mod.rs` | `cli` | source | pending | — |
 | `edgion-gateway/src/cli/pingora.rs` | `cli` | source | pending | — |
-| `edgion-gateway/src/conf_sync/cache_client/cache.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
-| `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524`; malformed-event recovery deferred to `tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md` |
-| `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | `conf-sync-cache-client` | source | optimized | CONF-SYNC-CACHE-001 / `21b01524` |
-| `edgion-gateway/src/conf_sync/cache_client/mod.rs` | `conf-sync-cache-client` | source | reviewed-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
-| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; content-signature recovery deferred to `tasks/todo/conf-sync-cert-watch-content-signature.md` |
-| `edgion-gateway/src/conf_sync/conf_client/config_client.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
-| `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` | `conf-sync-conf-client` | source | optimized | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
-| `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
-| `edgion-gateway/src/conf_sync/conf_client/rotation.rs` | `conf-sync-conf-client` | source | reviewed-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
-| `edgion-gateway/src/conf_sync/mod.rs` | `conf-sync-root` | source | reviewed-no-change | CONF-SYNC-ROOT-001 |
-| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | optimized | CONFIG-001 / `4621d075` |
-| `edgion-gateway/src/config/edgion_gateway/mod.rs` | `config-edgion-gateway` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
-| `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
-| `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
-| `edgion-gateway/src/config/mod.rs` | `config-root` | source | reviewed-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/conf_sync/cache_client/cache.rs` | `conf-sync-cache-client` | source | examined-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
+| `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` | `conf-sync-cache-client` | source | examined-no-change | CONF-SYNC-CACHE-001 / `21b01524`; malformed-event recovery deferred to `tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md` |
+| `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | `conf-sync-cache-client` | source | changed | CONF-SYNC-CACHE-001 / `21b01524` |
+| `edgion-gateway/src/conf_sync/cache_client/mod.rs` | `conf-sync-cache-client` | source | examined-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
+| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; content-signature recovery deferred to `tasks/todo/conf-sync-cert-watch-content-signature.md` |
+| `edgion-gateway/src/conf_sync/conf_client/config_client.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
+| `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` | `conf-sync-conf-client` | source | changed | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
+| `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
+| `edgion-gateway/src/conf_sync/conf_client/rotation.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
+| `edgion-gateway/src/conf_sync/mod.rs` | `conf-sync-root` | source | examined-no-change | CONF-SYNC-ROOT-001 |
+| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | changed | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/edgion_gateway/mod.rs` | `config-edgion-gateway` | source | examined-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/mod.rs` | `config-root` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking; OBS-METRICS-001 baseline: arm64 Rust 1.96.1 reports 1120 bytes against the committed 1104-byte lock |
 | `edgion-gateway/src/geoip/config.rs` | `geoip` | source | pending | — |
 | `edgion-gateway/src/geoip/info.rs` | `geoip` | source | pending | — |
@@ -293,26 +298,26 @@
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | pending | — |
 | `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | pending | — |
-| `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | optimized | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log/entry.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | optimized | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | reviewed-no-change | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | optimized | OBS-CORE-001 / `4b1d27d5` |
-| `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/logs/logger_factory.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/logs/mod.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/logs/ssl_log.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/logs/tcp_log.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/logs/tls_log.rs` | `observe-protocol-logs` | source | reviewed-no-change | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/logs/udp_log.rs` | `observe-protocol-logs` | source | optimized | OBS-LOG-001 / `11d3e79c` |
-| `edgion-gateway/src/observe/metrics/api.rs` | `observe-metrics` | source | reviewed-no-change | OBS-METRICS-001 / `96f8ac6a` |
-| `edgion-gateway/src/observe/metrics/mod.rs` | `observe-metrics` | source | reviewed-no-change | OBS-METRICS-001 / `96f8ac6a` |
-| `edgion-gateway/src/observe/metrics/registry.rs` | `observe-metrics` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
-| `edgion-gateway/src/observe/metrics/route_handles.rs` | `observe-metrics` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
-| `edgion-gateway/src/observe/metrics/test_metrics.rs` | `observe-metrics` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
-| `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | reviewed-no-change | OBS-CORE-001 / `4b1d27d5` |
-| `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | reviewed-no-change | OBS-CORE-001 / `4b1d27d5` |
+| `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/entry.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | changed | OBS-CORE-001 / `4b1d27d5` |
+| `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | changed | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/logger_factory.rs` | `observe-protocol-logs` | source | changed | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/mod.rs` | `observe-protocol-logs` | source | examined-no-change | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/ssl_log.rs` | `observe-protocol-logs` | source | changed | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/tcp_log.rs` | `observe-protocol-logs` | source | examined-no-change | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/tls_log.rs` | `observe-protocol-logs` | source | examined-no-change | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/logs/udp_log.rs` | `observe-protocol-logs` | source | changed | OBS-LOG-001 / `11d3e79c` |
+| `edgion-gateway/src/observe/metrics/api.rs` | `observe-metrics` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/mod.rs` | `observe-metrics` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/registry.rs` | `observe-metrics` | source | changed | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/route_handles.rs` | `observe-metrics` | source | changed | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/metrics/test_metrics.rs` | `observe-metrics` | source | changed | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
+| `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | pending | — |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | pending | — |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | pending | — |
@@ -460,7 +465,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | pending | — |
-| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | optimized | CACHE-001 / `40f7eb74` (reviewed early with cache consumer) |
+| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | changed | CACHE-001 / `40f7eb74` (reviewed early with cache consumer) |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | pending | — |
@@ -555,15 +560,15 @@
 | `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |
-| `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | optimized | REQ-BODY-OPS-001 / `f36d7576`; REQ-BODY-BLOCKING-001 / `1eb48138` |
-| `edgion-gateway/src/request_body/config.rs` | `request-body` | source | reviewed-no-change | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/observer.rs` | `request-body` | source | optimized | REQ-BODY-OBSERVER-001 / `be461374` |
-| `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | optimized | REQ-BODY-OPS-001 / `f36d7576` |
-| `edgion-gateway/src/request_body/state.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
-| `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd`; REQ-BODY-BLOCKING-001 / `1eb48138` |
-| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46`; REQ-BODY-BLOCKING-001 / `1eb48138` |
-| `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | optimized | REQ-BODY-STORAGE-001 / `ae283e46` |
+| `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | changed | REQ-BODY-OPS-001 / `f36d7576`; REQ-BODY-BLOCKING-001 / `1eb48138` |
+| `edgion-gateway/src/request_body/config.rs` | `request-body` | source | examined-no-change | REQ-BODY-CORE-001 / `a408d7fd` |
+| `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd` |
+| `edgion-gateway/src/request_body/observer.rs` | `request-body` | source | changed | REQ-BODY-OBSERVER-001 / `be461374` |
+| `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | changed | REQ-BODY-OPS-001 / `f36d7576` |
+| `edgion-gateway/src/request_body/state.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd` |
+| `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd`; REQ-BODY-BLOCKING-001 / `1eb48138` |
+| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46`; REQ-BODY-BLOCKING-001 / `1eb48138` |
+| `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | changed | REQ-BODY-STORAGE-001 / `ae283e46` |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | `routes-shared` | source | pending | — |
@@ -589,8 +594,8 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | optimized | OBS-METRICS-001 / `96f8ac6a` |
-| `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | reviewed-no-change | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | changed | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a` |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | pending | — |
@@ -648,33 +653,33 @@
 | `edgion-gateway/src/services/acme/conf_handler_impl.rs` | `services` | source | pending | — |
 | `edgion-gateway/src/services/acme/mod.rs` | `services` | source | pending | — |
 | `edgion-gateway/src/services/mod.rs` | `services` | source | pending | — |
-| `edgion-gateway/src/sse/chain.rs` | `sse` | source | optimized | SSE-CHAIN-001 / `4327da2b` |
-| `edgion-gateway/src/sse/mod.rs` | `sse` | source | reviewed-no-change | SSE-CHAIN-001 decoder/framing audit; 62-test baseline preserved |
-| `edgion-gateway/src/sse/window.rs` | `sse` | source | reviewed-no-change | SSE-WINDOW-001: confirmed complex findings deferred to `tasks/todo/sse-window-strict-residency-and-continuity.md`; no window code landed |
-| `edgion-gateway/src/tls/boringssl/mod.rs` | `tls-boringssl` | source | reviewed-no-change | TLS-BORINGSSL-001 / `f33146ef` |
-| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | `tls-boringssl` | source | optimized | TLS-BORINGSSL-001 / `f33146ef` |
-| `edgion-gateway/src/tls/fips_host.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
-| `edgion-gateway/src/tls/fips_profile.rs` | `tls-core` | source | optimized | TLS-CORE-001 / `9ab98fd0` |
-| `edgion-gateway/src/tls/mod.rs` | `tls-core` | source | reviewed-no-change | TLS-CORE-001 / `9ab98fd0` |
-| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | `tls-runtime` | source | optimized | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/runtime/backend/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/runtime/gateway/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | optimized | TLS-RUNTIME-001 / `0090e5bf`; owned handoff and exactly-once fault audit deferred to `tasks/todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md` |
-| `edgion-gateway/src/tls/runtime/mod.rs` | `tls-runtime` | source | reviewed-no-change | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/store/cert_matcher.rs` | `tls-store` | source | reviewed-no-change | TLS-STORE-001 / `19d6e382` |
-| `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | optimized | TLS-STORE-001 / `19d6e382` |
-| `edgion-gateway/src/tls/store/mod.rs` | `tls-store` | source | reviewed-no-change | TLS-STORE-001 / `19d6e382` |
-| `edgion-gateway/src/tls/store/tls_store.rs` | `tls-store` | source | optimized | TLS-STORE-001 / `19d6e382`; full-snapshot identity and true incremental publication deferred to dedicated todos |
-| `edgion-gateway/src/tls/validation/backend_san.rs` | `tls-validation` | source | optimized | TLS-VALIDATION-001 / `f65f66bc` |
-| `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | reviewed-no-change | TLS-VALIDATION-001: canonical shared validation re-export retained |
-| `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | reviewed-no-change | TLS-VALIDATION-001: narrow module exports retained |
-| `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | optimized | TLS-VALIDATION-001 / `f65f66bc`; typed SAN semantics deferred to dedicated TODO |
-| `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | optimized | TLS-VALIDATION-001 / `f65f66bc` |
-| `edgion-gateway/src/util/client_ip.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
-| `edgion-gateway/src/util/mod.rs` | `util` | source | reviewed-no-change | UTIL-001 / `a909f16f` |
-| `edgion-gateway/src/util/net.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
-| `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
-| `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | optimized | UTIL-001 / `a909f16f` |
-| `edgion-gateway/src/util/redacted.rs` | `util` | source | reviewed-no-change | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/sse/chain.rs` | `sse` | source | changed | SSE-CHAIN-001 / `4327da2b` |
+| `edgion-gateway/src/sse/mod.rs` | `sse` | source | examined-no-change | SSE-CHAIN-001 decoder/framing audit; 62-test baseline preserved |
+| `edgion-gateway/src/sse/window.rs` | `sse` | source | examined-no-change | SSE-WINDOW-001: confirmed complex findings deferred to `tasks/todo/sse-window-strict-residency-and-continuity.md`; no window code landed |
+| `edgion-gateway/src/tls/boringssl/mod.rs` | `tls-boringssl` | source | examined-no-change | TLS-BORINGSSL-001 / `f33146ef` |
+| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | `tls-boringssl` | source | changed | TLS-BORINGSSL-001 / `f33146ef` |
+| `edgion-gateway/src/tls/fips_host.rs` | `tls-core` | source | examined-no-change | TLS-CORE-001 / `9ab98fd0` |
+| `edgion-gateway/src/tls/fips_profile.rs` | `tls-core` | source | changed | TLS-CORE-001 / `9ab98fd0` |
+| `edgion-gateway/src/tls/mod.rs` | `tls-core` | source | examined-no-change | TLS-CORE-001 / `9ab98fd0` |
+| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | `tls-runtime` | source | changed | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/backend/mod.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/gateway/mod.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | changed | TLS-RUNTIME-001 / `0090e5bf`; owned handoff and exactly-once fault audit deferred to `tasks/todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md` |
+| `edgion-gateway/src/tls/runtime/mod.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
+| `edgion-gateway/src/tls/store/cert_matcher.rs` | `tls-store` | source | examined-no-change | TLS-STORE-001 / `19d6e382` |
+| `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | changed | TLS-STORE-001 / `19d6e382` |
+| `edgion-gateway/src/tls/store/mod.rs` | `tls-store` | source | examined-no-change | TLS-STORE-001 / `19d6e382` |
+| `edgion-gateway/src/tls/store/tls_store.rs` | `tls-store` | source | changed | TLS-STORE-001 / `19d6e382`; full-snapshot identity and true incremental publication deferred to dedicated todos |
+| `edgion-gateway/src/tls/validation/backend_san.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc` |
+| `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: canonical shared validation re-export retained |
+| `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: narrow module exports retained |
+| `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc`; typed SAN semantics deferred to dedicated TODO |
+| `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc` |
+| `edgion-gateway/src/util/client_ip.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/mod.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/net.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/redacted.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
 | `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | pending | — |

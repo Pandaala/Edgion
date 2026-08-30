@@ -1,12 +1,12 @@
 # Gateway Optimization Changelog
 
-This is the single concise record of actual changes across the file-by-file audit. It intentionally records outcomes and evidence without reproducing implementation detail already visible in the commits.
+This is the single concise record of actual changes across the file-by-file audit. It intentionally records outcomes and evidence without reproducing implementation detail already visible in the commits. Historical entries retain the original terms `optimized` and `reviewed-no-change`; they map mechanically to the current ledger states `changed` and `examined-no-change`.
 
 ## Entry format
 
 ### `<batch-id>` — `<scope>`
 
-- Outcome: optimized / reviewed-no-change / mixed
+- Outcome: changed / examined-no-change / defer
 - Files reviewed: `<count and paths or cohesive directory>`
 - Changes: `<concise concrete list>`
 - Generality and architecture review: `<review agent verdict and resolved findings>`
@@ -15,6 +15,10 @@ This is the single concise record of actual changes across the file-by-file audi
 - Commit: `<local commit hash>`
 
 ## Entries
+
+| Batch | Date | Files | Outcome | Actual improvement | Verification | Commit | Follow-ups |
+|-------|------|-------|---------|--------------------|--------------|--------|------------|
+| [`B0033`](batches/B0033-backends-circuit-breaker.md) | 2026-08-31 | 2 | 1 changed, 1 examined-no-change | Removed the contention test's intentional permit leak and proved concurrent RAII release to zero; normalized the resumed campaign artifacts and froze existing integration-test contents | 4 focused tests; format, check, Clippy, SSA, metrics, Pingora source, no-tracing passed; 13 known external doc links remain missing | pending automatic commit | Existing [atomic Service snapshot task](../../todo/backend-traffic-policy-atomic-service-snapshot.md) retained |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

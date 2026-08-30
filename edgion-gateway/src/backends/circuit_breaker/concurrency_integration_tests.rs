@@ -25,26 +25,20 @@ fn exactly_max_permits_win_under_contention() {
     const MAX: u32 = 10;
     let b = backend();
     let barrier = Arc::new(Barrier::new(THREADS));
-    let wins = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::new();
     for _ in 0..THREADS {
         let b = b.clone();
         let barrier = barrier.clone();
-        let wins = wins.clone();
         handles.push(thread::spawn(move || {
             barrier.wait();
-            // Hold the permit (do not drop) so the cap is observed at peak.
-            if let Some(p) = CbPermit::try_acquire(b, MAX) {
-                wins.fetch_add(1, Ordering::SeqCst);
-                std::mem::forget(p); // keep the slot occupied for the assertion
-            }
+            CbPermit::try_acquire(b, MAX)
         }));
     }
-    for h in handles {
-        h.join().unwrap();
-    }
-    assert_eq!(wins.load(Ordering::SeqCst), MAX as usize);
+    let winners: Vec<_> = handles.into_iter().filter_map(|h| h.join().unwrap()).collect();
+    assert_eq!(winners.len(), MAX as usize);
     assert_eq!(b.cb_inflight(), MAX as u64);
+    drop(winners);
+    assert_eq!(b.cb_inflight(), 0);
 }
 
 /// The cap is per endpoint: saturating backend A must not affect backend B.

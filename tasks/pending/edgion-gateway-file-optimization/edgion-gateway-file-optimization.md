@@ -10,6 +10,9 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
+| Campaign status | in-progress |
+| Coverage | 530 tracked files: 45 changed, 53 examined-no-change, 432 pending |
+| Active batch | [`B0033-backends-circuit-breaker`](batches/B0033-backends-circuit-breaker.md) |
 
 ## AI guide summary
 
@@ -24,6 +27,7 @@ Audit `edgion-gateway` file by file in cohesive, dependency-aware batches. Make 
 - Do not use the interactive `fix-issue-cn` workflow.
 - Do not modify or delete existing integration-test files. New integration-test coverage may be added only when a behavior change genuinely requires it.
 - Record every completed batch in `07-changelog.md`, then create a local commit. Never push.
+- Treat `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, and `waf-architecture-and-multi-pattern-matching.md` as protected user-owned paths.
 
 ## Guardrails
 
@@ -36,32 +40,33 @@ Audit `edgion-gateway` file by file in cohesive, dependency-aware batches. Make 
 7. Existing tests are a coverage floor. Unit tests may be added or strengthened; existing integration tests are immutable.
 8. Before each code commit, scan the diff against every applicable red rule in `skills/00-design-rules.md`, run targeted tests, apply formatting, and run the project-required compile/lint/guard checks.
 9. A reviewer must reject changes that reduce generality, obscure ownership, widen scope, duplicate a canonical mechanism, or merely move code without measurable clarity.
-10. The primary agent owns final diff inspection, validation, inventory status, changelog updates, and the commit.
+10. The primary agent owns mechanical scope containment, validation command execution, inventory and changelog updates, exact staging, and the commit. Technical analysis, implementation, and review stay with separate agents.
 
 ## Workflow per batch
 
-1. Select the next pending cohesive batch from `file-inventory.md`.
-2. Load the smallest relevant Skills subtree and binding review precedents.
-3. Give the implementation subagent exact scope, invariants, forbidden changes, and verification expectations.
-4. Inspect the implementation locally and run targeted verification.
-5. Give a different review subagent the diff plus architecture and regression checklist.
-6. Resolve every review finding and re-run relevant verification.
-7. Update `file-inventory.md` and append a concise entry to `07-changelog.md`.
-8. Verify that `edgion-tests` has no modified or deleted existing file.
-9. Commit locally with an English message; do not push.
+1. Select the next pending cohesive batch from `03-subtasks.md`, mark it in progress, and freeze its exact path boundary.
+2. Run the integration freeze check, then delegate a fresh read-only analysis and value gate.
+3. For a justified change, use a different implementation agent and a fresh independent reviewer; complex work also receives a separate plan review before edits.
+4. Defer wider or design-heavy findings without expanding the batch.
+5. Run targeted verification plus every repository-required pre-commit guard.
+6. Update the batch record, ledger, changelog, and deferred index.
+7. Verify the frozen paths and exact staged file set, commit locally in English, and never push.
 
 ## Document index
 
 | Document | Status | Purpose |
 |----------|--------|---------|
 | `00-context.md` | done | Mandatory context and validation references |
-| `file-inventory.md` | in-progress | Complete per-file coverage ledger and batch assignment |
+| `03-subtasks.md` | in-progress | Complete per-file coverage ledger and batch assignment |
 | `07-changelog.md` | in-progress | Unified record of actual optimizations and verification |
+| `integration-freeze.tsv` | done | Content and mode fingerprints for the immutable integration-test floor |
+| `batches/` | in-progress | Decision, scope, review, and verification record for each new-format batch |
+| `deferred/INDEX.md` | in-progress | Backlinks to canonical wider-scope task records |
 
 ## Completion evidence
 
-- Every row in `file-inventory.md` is `reviewed-no-change`, `optimized`, or an explicitly justified `excluded` state.
-- Every optimized batch has an independent review result, verification evidence, and local commit in `07-changelog.md`.
+- Every row in `03-subtasks.md` has a terminal campaign status or a documented pending batch.
+- Every changed batch has an independent review result, verification evidence, and local commit in `07-changelog.md`.
 - No existing integration-test file was modified or deleted relative to the baseline.
 - The final repository-wide required checks pass.
 - A final requirement-by-requirement audit finds no pending or weakly evidenced item.
