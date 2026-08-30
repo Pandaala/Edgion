@@ -132,7 +132,7 @@
 | `plugins-root` | 1 | 0 | 0 | 0 | pending |
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
-| `request-body` | 9 | 0 | 0 | 0 | pending |
+| `request-body` | 9 | 3 | 1 | 0 | pending |
 | `routes-shared` | 65 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
@@ -318,7 +318,7 @@
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | pending | — |
-| `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | REQ-BODY-CORE-001 follow-up: replace the 32-bit-truncating physical-cap `as usize` cast during the full plugin audit |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | pending | — |
@@ -525,7 +525,7 @@
 | `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | REQ-BODY-CORE-001: canonical empty-body digest consumer / `a408d7fd`; full audit pending |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | pending | — |
@@ -556,13 +556,13 @@
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | pending | — |
-| `edgion-gateway/src/request_body/config.rs` | `request-body` | source | pending | — |
-| `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | pending | — |
+| `edgion-gateway/src/request_body/config.rs` | `request-body` | source | reviewed-no-change | REQ-BODY-CORE-001 / `a408d7fd` |
+| `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/observer.rs` | `request-body` | source | pending | — |
 | `edgion-gateway/src/request_body/operation.rs` | `request-body` | source | pending | — |
-| `edgion-gateway/src/request_body/state.rs` | `request-body` | source | pending | — |
-| `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | pending | — |
-| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | pending | — |
+| `edgion-gateway/src/request_body/state.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
+| `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | optimized | REQ-BODY-CORE-001 / `a408d7fd` |
+| `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | pending | REQ-BODY-CORE-001: committed-generation and atomic modified-length helpers / `a408d7fd`; full storage audit pending |
 | `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | pending | — |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | pending | — |

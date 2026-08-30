@@ -75,3 +75,13 @@ This is the single concise record of actual changes across the file-by-file audi
 - Verification: metrics tests 29/29; terminal-logging tests 19/19; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
 - Integration-test guard: baseline `edgion-tests` tree unchanged
 - Commit: `96f8ac6a`
+
+### `REQ-BODY-CORE-001` — request-body policy and state facade
+
+- Outcome: mixed (3 optimized, 1 reviewed-no-change; 2 narrowly reviewed cross-cutting touchpoints remain pending for their full batches)
+- Files reviewed: complete audit of `request_body/config.rs`, `mod.rs`, `state.rs`, and `state/enabled.rs`; targeted invariant review of `request_body/storage.rs` and `plugins/runtime/session_adapter.rs`
+- Changes: centralized the admitted-empty SHA-256 value without per-request hashing; returned each mutation publication's own committed generation while still under its write lock; atomically retained modified framing length before releasing plugin-readable body access; classified missing mutation storage as `NotBuffered`; corrected facade documentation; added state, snapshot, generation, framing, and digest regressions.
+- Generality and architecture review: independent review found the publication race, brittle release ordering, and false incomplete-stream classification, then approved the final diff with no remaining findings. Complete-body capture stays lazy and bounded; snapshots remain generation-stable; mutation failures publish nothing; physical caps and storage deadlines remain canonical; no response-body storage, eager spill materialization, context field, hot-path tracing, or new allocation was added. A nonblocking 32-bit `ai_guard` cap cast is routed to that plugin's pending full audit; the larger Backend/facade flattening was deliberately rejected to avoid an unproven context-layout refactor.
+- Verification: request-body tests 91/91; focused bodyless digest, request/retry framing, and response release tests; `cargo fmt --all`; workspace check; workspace clippy (exit 0, pre-existing warnings); SSA, metrics inventory, Pingora source, and gateway no-tracing guards. Agent-doc validation retains only its pre-existing 13 missing external Pingora review links.
+- Integration-test guard: baseline `edgion-tests` tree unchanged
+- Commit: `a408d7fd`
