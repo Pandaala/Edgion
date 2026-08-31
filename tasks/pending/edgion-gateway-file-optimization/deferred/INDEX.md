@@ -10,6 +10,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0004 — Make health task/status generations cancellation-safe | needs-discussion | [campaign finding](D0004-health-task-status-generation-ownership.md) |
 | D0005 — Define the active health-check TLS contract | needs-discussion | [campaign finding](D0005-active-health-check-tls-contract.md) |
 | D0006 — Bind outlier state and gauge updates to live generations | needs-discussion | [campaign finding](D0006-outlier-generation-gauge-lifecycle.md) |
+| D0007 — Define Elasticsearch bulk item-level retry semantics | needs-investigation | [campaign finding](D0007-elasticsearch-bulk-item-retry-semantics.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |

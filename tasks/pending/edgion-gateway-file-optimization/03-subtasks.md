@@ -73,7 +73,7 @@
 | `lb-leastconn` | 2 | 0 | 0 | 0 | pending |
 | `lb-runtime-state` | 1 | 0 | 0 | 0 | pending |
 | `lb-selection` | 4 | 0 | 0 | 0 | pending |
-| `link-sys-provider-elasticsearch` | 6 | 0 | 0 | 0 | pending |
+| `link-sys-provider-elasticsearch` | 6 | 1 | 5 | 0 | complete |
 | `link-sys-provider-kafka` | 3 | 0 | 0 | 0 | pending |
 | `link-sys-provider-local-file` | 3 | 0 | 0 | 0 | pending |
 | `link-sys-provider-otlp` | 2 | 0 | 0 | 0 | pending |
@@ -266,12 +266,12 @@
 | `edgion-gateway/src/lb/selection/round_robin.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lib.rs` | `crate-entry` | source | examined-no-change | `B0045`: compile guards, allocator test support, capability output, and root exports retained |
 | `edgion-gateway/src/link_sys/mod.rs` | `link-sys-root` | source | changed | `B0046`: corrected LinkSys provider and crate-ownership documentation |
-| `edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/elasticsearch/client.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/elasticsearch/config_mapping.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/elasticsearch/log_sender.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/elasticsearch/mod.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/elasticsearch/ops.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
+| `edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: bounded batching, retry, shutdown, and item-result behavior reviewed; D0007 tracks wider retry semantics |
+| `edgion-gateway/src/link_sys/providers/elasticsearch/client.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: canonical outbound client, lifecycle, and health behavior retained |
+| `edgion-gateway/src/link_sys/providers/elasticsearch/config_mapping.rs` | `link-sys-provider-elasticsearch` | source | changed | `B0047`: clamped explicit zero flush interval away from Tokio panic |
+| `edgion-gateway/src/link_sys/providers/elasticsearch/log_sender.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: non-blocking DataSender boundary retained |
+| `edgion-gateway/src/link_sys/providers/elasticsearch/mod.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: module exports retained |
+| `edgion-gateway/src/link_sys/providers/elasticsearch/ops.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: bounded request and response handling retained |
 | `edgion-gateway/src/link_sys/providers/kafka/client.rs` | `link-sys-provider-kafka` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/kafka/log_sender.rs` | `link-sys-provider-kafka` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/kafka/mod.rs` | `link-sys-provider-kafka` | source | pending | — |

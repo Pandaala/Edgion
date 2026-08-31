@@ -29,6 +29,7 @@ const DEFAULT_IDLE_TIMEOUT_MS: u64 = 90_000;
 // ============================================================================
 
 const MAX_BATCH_SIZE: usize = 5_000;
+const MIN_FLUSH_INTERVAL_MS: u64 = 1;
 const MAX_FLUSH_INTERVAL_MS: u64 = 60_000; // 1 minute
 const MAX_BULK_BODY_BYTES: usize = 50 * 1024 * 1024; // 50MB
 const MAX_BULK_RETRIES: u32 = 10;
@@ -192,7 +193,7 @@ impl EsBulkConfig {
                 .unwrap_or(DEFAULT_BATCH_SIZE),
             flush_interval: Duration::from_millis(
                 bulk.and_then(|b| b.flush_interval)
-                    .map(|ms| ms.min(MAX_FLUSH_INTERVAL_MS))
+                    .map(|ms| ms.clamp(MIN_FLUSH_INTERVAL_MS, MAX_FLUSH_INTERVAL_MS))
                     .unwrap_or(DEFAULT_FLUSH_INTERVAL_MS),
             ),
             max_retries: bulk
@@ -375,6 +376,7 @@ mod tests {
         let crd = ElasticsearchClientConfig::default();
         let config = EsBulkConfig::from_crd(&crd);
         assert_eq!(config.batch_size, DEFAULT_BATCH_SIZE);
+        assert_eq!(config.flush_interval, Duration::from_millis(DEFAULT_FLUSH_INTERVAL_MS));
         assert_eq!(config.max_retries, DEFAULT_BULK_RETRIES);
         assert_eq!(config.index_prefix, DEFAULT_INDEX_PREFIX);
         assert_eq!(config.date_pattern, DEFAULT_DATE_PATTERN);
@@ -385,7 +387,7 @@ mod tests {
         let crd = ElasticsearchClientConfig {
             bulk: Some(EsBulk {
                 batch_size: Some(100_000), // Over max
-                flush_interval: None,
+                flush_interval: Some(MAX_FLUSH_INTERVAL_MS + 1),
                 max_retries: Some(100), // Over max
                 backoff_ms: None,
                 max_body_bytes: None,
@@ -395,8 +397,26 @@ mod tests {
         };
         let config = EsBulkConfig::from_crd(&crd);
         assert_eq!(config.batch_size, MAX_BATCH_SIZE);
+        assert_eq!(config.flush_interval, Duration::from_millis(MAX_FLUSH_INTERVAL_MS));
         assert_eq!(config.max_retries, MAX_BULK_RETRIES);
         assert_eq!(config.channel_size, MAX_CHANNEL_SIZE);
+    }
+
+    #[test]
+    fn test_bulk_config_flush_interval_clamped_to_min() {
+        let crd = ElasticsearchClientConfig {
+            bulk: Some(EsBulk {
+                batch_size: None,
+                flush_interval: Some(0),
+                max_retries: None,
+                backoff_ms: None,
+                max_body_bytes: None,
+                channel_size: None,
+            }),
+            ..Default::default()
+        };
+        let config = EsBulkConfig::from_crd(&crd);
+        assert_eq!(config.flush_interval, Duration::from_millis(MIN_FLUSH_INTERVAL_MS));
     }
 
     /// Operator-supplied 0 must clamp up to `MIN_CHANNEL_SIZE`; tokio's
