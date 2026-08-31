@@ -52,4 +52,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; both target rows close as deferred to D0024
-- Commit: pending
+- Commit: `be501912`

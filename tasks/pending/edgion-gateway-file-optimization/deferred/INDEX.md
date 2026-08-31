@@ -28,6 +28,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0022 — Refresh the LinkSys documentation set | needs-implementation | [campaign finding](D0022-refresh-link-sys-documentation-set.md) |
 | D0023 — Define OTLP egress enforcement and safe endpoint identity | needs-investigation | [campaign finding](D0023-otlp-egress-safe-endpoint-identity.md) |
 | D0024 — Unify Gateway request-template runtime policies | needs-discussion | [campaign finding](D0024-unify-gateway-request-template-runtime.md) |
+| D0025 — Make GeoIP lookup failures follow failure policy | needs-discussion | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -47,3 +48,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | TLS `SslCtx` owned handoff and exactly-once audit | pending | [task](../../../todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md) |
 | TLS store true incremental and atomic publication | pending | [task](../../../todo/tls-store-true-incremental-atomic-publication.md) |
 | Unify Gateway request-template runtime policies | pending | [task](../../../todo/unify-gateway-request-template-runtime/unify-gateway-request-template-runtime.md) |
+| Make GeoIP lookup failures follow failure policy | pending | [task](../../../todo/make-geoip-lookup-failures-follow-failure-policy/make-geoip-lookup-failures-follow-failure-policy.md) |

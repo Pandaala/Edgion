@@ -80,12 +80,12 @@ trap above is one level higher, where no `deny_unknown_fields` exists to catch i
 |---|---|---|---|
 | `db_path` | path | none | Local MMDB path. May not exist at first start — see [Database file lifecycle](#database-file-lifecycle). There is no separate master switch: an unset `db_path` means no database, and geo lookups report `Unavailable`. |
 | `update_url` | string | none | Update source. Empty/absent means load the local file only and never spawn the updater. Redacted in every log line. |
-| `update_auth_header_env` | string | none | Name of an environment variable whose value is sent verbatim as the `Authorization` header. In Kubernetes, inject it from a Secret via `secretKeyRef`. |
+| `update_auth_header_env` | string | none | Name of an environment variable whose value is validated as the HTTP `Authorization` header. Invalid values are rejected without being echoed. In Kubernetes, inject it from a Secret via `secretKeyRef`. |
 | `update_interval_sec` | u64 | `86400` | Steady-state interval between update cycles (after the first successful load). Must be greater than zero when `update_url` is set. |
-| `retry_interval_sec` | u64 | `600` | Steady-state retry backoff after a failed cycle, **once a database has already loaded successfully once**. Not used for the very first fetch — see [cold-start backoff](#multi-replica-update-behavior-jitter-and-the-meta-validator). |
-| `connect_timeout_sec` | u64 | `10` | TCP connect timeout for the update request. |
-| `download_deadline_sec` | u64 | `600` | Whole-cycle deadline for one download attempt. Distinct from any client-level total timeout, which is deliberately left unset (see below). |
-| `stall_timeout_sec` | u64 | `60` | Abort a download that makes no progress for this long. |
+| `retry_interval_sec` | u64 | `600` | Steady-state retry backoff after a failed cycle, **once a database has already loaded successfully once**. Not used for the very first fetch — see [cold-start backoff](#multi-replica-update-behavior-jitter-and-the-meta-validator). Must be greater than zero when `update_url` is set. |
+| `connect_timeout_sec` | u64 | `10` | TCP connect timeout for the update request. Must be greater than zero when `update_url` is set. |
+| `download_deadline_sec` | u64 | `600` | Whole-cycle deadline for one download attempt. Distinct from any client-level total timeout, which is deliberately left unset (see below). Must be greater than zero when `update_url` is set. |
+| `stall_timeout_sec` | u64 | `60` | Abort a download that makes no progress for this long. Must be greater than zero when `update_url` is set. |
 | `max_db_bytes` | u64 | `268435456` (256 MiB) | Hard cap enforced *while streaming* the update. Must be greater than zero when `update_url` is set. |
 
 The updater's outbound HTTP client is built through the project's shared `build_outbound_client`
@@ -94,6 +94,11 @@ resolver) as every other gateway-initiated outbound call. The client's own total
 is deliberately left unset — a 60–80 MB database over a slow mirror link would otherwise abort
 every single cycle — and `download_deadline_sec` / `stall_timeout_sec` are what actually bound
 the request instead.
+
+The Authorization value is parsed once into a typed HTTP header and marked sensitive before it is
+stored. Clones retain that metadata, which provides cooperative structured-`Debug` masking and
+selects HTTP/2's never-indexed representation. This metadata is not encryption or memory
+zeroization, and it does not promise blanket redaction of serialized HTTP/1 wire logs.
 
 ### Database file lifecycle
 
@@ -533,12 +538,14 @@ mechanism that lets some ext-log fields opt out of masking does not apply here; 
 
 ## Multi-replica update behavior, jitter, and the `.meta` validator
 
-The updater's request cycle: a conditional `GET` (`If-None-Match` / `If-Modified-Since`); a
-`304` sleeps until the next interval without touching disk; a `200` with a non-`identity`
-`Content-Encoding` is rejected loudly (the updater does not decompress — point `update_url` at a
-plain MMDB, not a `.mmdb.gz`); a `200` with `identity` encoding streams to `<db_path>.tmp` under
-the `max_db_bytes`/`stall_timeout_sec`/`download_deadline_sec` bounds; on success, `rename` →
-re-mmap → swap → persist the validator to `<db_path>.meta`.
+The updater's request cycle sends a conditional `GET` (`If-None-Match` /
+`If-Modified-Since`) only when the local validator context is eligible. A valid `304` sleeps until
+the next interval without touching disk; an untrusted `304` is a `fetch` failure, clears the
+validators, uses cold backoff, and makes the next request unconditional. A `200` with a
+non-`identity` `Content-Encoding` is rejected loudly (the updater does not decompress — point
+`update_url` at a plain MMDB, not a `.mmdb.gz`); a `200` with `identity` encoding streams to
+`<db_path>.tmp` under the `max_db_bytes`/`stall_timeout_sec`/`download_deadline_sec` bounds; on
+success, `rename` → re-mmap → swap → persist the validator to `<db_path>.meta`.
 
 **Backoff has two regimes.** Before the *first* successful load, retries use a short escalating
 backoff (1s, doubling, capped at 30s) — `retry_interval_sec`'s default of 600s is tuned for
@@ -549,15 +556,19 @@ minutes. After the first success, ordinary failures use `retry_interval_sec` plu
 rolling restart issues 200 simultaneous unconditional GETs against the mirror. Jitter alone
 doesn't make those conditional, though — that's the job of the `.meta` file below.
 
-**`<db_path>.meta` persists the ETag/Last-Modified validator** used to make requests conditional
-in the first place. On an `emptyDir` volume, `.meta` is lost on every pod restart exactly like
-the database itself — but if `.meta` is missing while the database file *does* still exist (a
-plausible partial-persistence scenario, e.g. a PVC that only recently started being used, or a
-manual recovery), the updater seeds `If-Modified-Since` from the database file's mtime instead
-of skipping straight to an unconditional fetch. The practical consequence to plan for: losing
-`.meta` — whether from an `emptyDir` restart or any other cause — turns the *next* update cycle
-into a full, unconditional download rather than a cheap `304`, even if the remote content hasn't
-actually changed.
+**`<db_path>.meta` persists the ETag/Last-Modified validator** used to make requests conditional.
+A validator is eligible only while `db_path` is a regular file and the provider has an active
+database. If both are usable but `.meta` is absent or unreadable, the updater seeds
+`If-Modified-Since` from the database file's mtime. A valid empty sidecar deliberately suppresses
+that fallback and keeps the next request unconditional.
+
+If either the durable file or active provider is missing, the updater clears both its in-memory
+validator and the sidecar before constructing an unconditional request. A `304` is accepted only
+when that request actually carried a validator and both local conditions still hold when the
+response arrives. Any other `304` is a bounded `fetch` failure: validators are cleared, cold
+backoff is used, and the next request is unconditional. Thus losing `.meta` alone while a usable
+database remains produces an mtime-based conditional request; losing the usable local database
+state produces an unconditional request.
 
 ## Troubleshooting
 

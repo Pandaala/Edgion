@@ -558,19 +558,26 @@ There is no master-switch field: an unset `db_path` means no database (geo looku
 |-------|------|---------|-------------|
 | `db_path` | `PathBuf?` | none | Local MMDB path. May not exist at first start (no bundled image database) — normal, not a failure. |
 | `update_url` | `String?` | none | Update source; empty/absent never spawns the updater. Redacted in logs. |
-| `update_auth_header_env` | `String?` | none | Env var name whose value is sent verbatim as `Authorization`. |
+| `update_auth_header_env` | `String?` | none | Env var name whose value is validated as an HTTP `Authorization` header. Invalid values are rejected without being echoed. The typed value is marked sensitive before storage: clones retain cooperative `Debug` masking and HTTP/2 never-indexed metadata. This is not encryption, memory zeroization, or blanket HTTP/1 wire-log redaction. |
 | `update_interval_sec` | `u64` | `86400` | Steady-state cycle interval, after the first successful load. Must be greater than zero when `update_url` is set. |
-| `retry_interval_sec` | `u64` | `600` | Steady-state retry backoff; not used before the first success (short escalating backoff instead, capped at 30s). |
-| `connect_timeout_sec` | `u64` | `10` | Connect timeout. |
-| `download_deadline_sec` | `u64` | `600` | Whole-cycle deadline. `reqwest` client-level `total_timeout` stays unset on purpose. |
-| `stall_timeout_sec` | `u64` | `60` | No-progress abort. |
+| `retry_interval_sec` | `u64` | `600` | Steady-state retry backoff; not used before the first success (short escalating backoff instead, capped at 30s). Must be greater than zero when `update_url` is set. |
+| `connect_timeout_sec` | `u64` | `10` | Connect timeout. Must be greater than zero when `update_url` is set. |
+| `download_deadline_sec` | `u64` | `600` | Whole-cycle deadline. `reqwest` client-level `total_timeout` stays unset on purpose. Must be greater than zero when `update_url` is set. |
+| `stall_timeout_sec` | `u64` | `60` | No-progress abort. Must be greater than zero when `update_url` is set. |
 | `max_db_bytes` | `u64` | `268435456` | Hard cap enforced while streaming. Must be greater than zero when `update_url` is set. |
 
 **Never write `db_path` in place** (`kubectl cp`, initContainer overwrite, truncate+rewrite) —
 the gateway holds it memory-mapped, so an external in-place write causes SIGBUS (not a Rust
 panic, not caught by `catch_unwind`, kills the process mid-request). Only the built-in updater,
 or an external writer using temp-file-on-same-filesystem + `rename(2)`, are supported. Size the
-update volume for **3×** the database (old inode + new file + possible stale `.tmp`).
+update volume for `max_db_bytes + 2 × current database size`; when no database exists yet, the
+requirement is `max_db_bytes` alone.
+
+Persisted ETag/Last-Modified validators are eligible only while `db_path` is a regular file and
+the provider has an active database. If either half is unavailable, the updater clears both the
+in-memory validator and the sidecar before making an unconditional request. A 304 without both a
+sent request validator and that usable local state is a `fetch` failure: validators are cleared,
+the updater enters cold backoff, and the next request is unconditional.
 
 - **Env** (`EDGION_FIPS_POLICY`): accepts only `auto`/`on`/`off` (case-insensitive, trimmed).
   Unset or whitespace-only falls through to CLI/file. Any other token — including the old

@@ -65,7 +65,7 @@
 | `crate-entry` | 2 | 0 | 2 | 0 | complete |
 | `crate-root` | 2 | 0 | 0 | 0 | pending |
 | `external-tests` | 1 | 0 | 0 | 0 | pending |
-| `geoip` | 5 | 0 | 0 | 0 | pending |
+| `geoip` | 5 | 2 | 2 | 1 | complete |
 | `http-context` | 1 | 0 | 0 | 0 | pending |
 | `lb-backend-selector` | 3 | 0 | 0 | 0 | pending |
 | `lb-core` | 4 | 0 | 0 | 0 | pending |
@@ -244,11 +244,11 @@
 | `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/mod.rs` | `config-root` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking; OBS-METRICS-001 baseline: arm64 Rust 1.96.1 reports 1120 bytes against the committed 1104-byte lock |
-| `edgion-gateway/src/geoip/config.rs` | `geoip` | source | pending | — |
-| `edgion-gateway/src/geoip/info.rs` | `geoip` | source | pending | — |
-| `edgion-gateway/src/geoip/mod.rs` | `geoip` | source | pending | — |
-| `edgion-gateway/src/geoip/provider.rs` | `geoip` | source | pending | — |
-| `edgion-gateway/src/geoip/updater.rs` | `geoip` | source | pending | — |
+| `edgion-gateway/src/geoip/config.rs` | `geoip` | source | changed | `B0059`: rejected enabled zero updater durations and byte cap |
+| `edgion-gateway/src/geoip/info.rs` | `geoip` | source | examined-no-change | `B0059`: retained request-owned projection and IPv4-mapped normalization |
+| `edgion-gateway/src/geoip/mod.rs` | `geoip` | source | examined-no-change | `B0059`: retained startup initialization, same-directory guard, and atomic provider publication |
+| `edgion-gateway/src/geoip/provider.rs` | `geoip` | source | deferred | `B0059` / `D0025`: decode and panic failures require a cross-consumer failure-policy design |
+| `edgion-gateway/src/geoip/updater.rs` | `geoip` | source | changed | `B0059`: protected Authorization metadata and made validator/304 recovery depend on usable local state |
 | `edgion-gateway/src/lb/attempt.rs` | `lb-core` | source | pending | — |
 | `edgion-gateway/src/lb/backend_selector/mod.rs` | `lb-backend-selector` | source | pending | — |
 | `edgion-gateway/src/lb/backend_selector/selector.rs` | `lb-backend-selector` | source | pending | — |

@@ -76,18 +76,22 @@ camelCase）。该结构体带有 `#[serde(deny_unknown_fields)]`，因此 `geoi
 |---|---|---|---|
 | `db_path` | 路径 | 无 | 本地 MMDB 路径。首次启动时可能不存在，见[数据库文件生命周期](#数据库文件生命周期)。没有独立的总开关：`db_path` 未设置就意味着没有数据库，地理查询会报告 `Unavailable`。 |
 | `update_url` | string | 无 | 更新源。留空/不填表示只加载本地文件，永不启动更新任务。在所有日志行中都会被脱敏。 |
-| `update_auth_header_env` | string | 无 | 环境变量名，其值会原样作为 `Authorization` 头发送。在 Kubernetes 中通过 `secretKeyRef` 从 Secret 注入。 |
+| `update_auth_header_env` | string | 无 | 环境变量名，其值会先按 HTTP `Authorization` 头校验；非法值会被拒绝，错误不会回显原值。在 Kubernetes 中通过 `secretKeyRef` 从 Secret 注入。 |
 | `update_interval_sec` | u64 | `86400` | 首次成功加载**之后**，两次更新周期之间的稳态间隔。设置 `update_url` 时必须大于零。 |
-| `retry_interval_sec` | u64 | `600` | 数据库**已经成功加载过一次之后**，失败重试的稳态退避时间。首次拉取不使用该值，见[冷启动退避](#多副本更新行为抖动和-meta-校验器)。 |
-| `connect_timeout_sec` | u64 | `10` | 更新请求的 TCP 连接超时。 |
-| `download_deadline_sec` | u64 | `600` | 单次下载尝试的整体截止时间。与客户端级别的总超时不同——后者刻意留空，见下文。 |
-| `stall_timeout_sec` | u64 | `60` | 下载在此时长内无任何进展则中止。 |
+| `retry_interval_sec` | u64 | `600` | 数据库**已经成功加载过一次之后**，失败重试的稳态退避时间。首次拉取不使用该值，见[冷启动退避](#多副本更新行为抖动和-meta-校验器)。设置 `update_url` 时必须大于零。 |
+| `connect_timeout_sec` | u64 | `10` | 更新请求的 TCP 连接超时。设置 `update_url` 时必须大于零。 |
+| `download_deadline_sec` | u64 | `600` | 单次下载尝试的整体截止时间。与客户端级别的总超时不同——后者刻意留空，见下文。设置 `update_url` 时必须大于零。 |
+| `stall_timeout_sec` | u64 | `60` | 下载在此时长内无任何进展则中止。设置 `update_url` 时必须大于零。 |
 | `max_db_bytes` | u64 | `268435456`（256 MiB） | 流式下载**过程中**强制生效的硬上限。设置 `update_url` 时必须大于零。 |
 
 更新器的出站 HTTP 客户端通过项目共享的 `build_outbound_client` 辅助函数构建，因此走的是与其他所有
 Gateway 发起的出站调用相同的出口策略（代理处理、重定向拒绝、DNS 解析器）。客户端自身的总请求超时
 被刻意留空——否则在较慢的镜像链路上，60~80 MB 的数据库会导致每一个周期都超时中止——真正约束请求的
 是 `download_deadline_sec` / `stall_timeout_sec`。
+
+Authorization 值只解析一次，作为有类型的 HTTP header 存储，并在存储前标记为 sensitive。clone
+会保留该元数据；它用于协作式的结构化 `Debug` 遮蔽，并让 HTTP/2 选择 never-indexed 编码。该元数据
+不是加密或内存清零机制，也不承诺对序列化后的 HTTP/1 wire 日志做全面脱敏。
 
 ### 数据库文件生命周期
 
@@ -474,9 +478,11 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 
 ## 多副本更新行为、抖动与 `.meta` 校验器
 
-更新器的请求周期：一次条件 `GET`（`If-None-Match` / `If-Modified-Since`）；`304` 会休眠到下一个
-间隔，不触碰磁盘；`Content-Encoding` 不是 `identity` 的 `200` 响应会被直接拒绝（更新器不做解压——
-请让 `update_url` 指向一个纯 MMDB 文件，而不是 `.mmdb.gz`）；`identity` 编码的 `200` 响应在
+只有当本地校验器上下文满足条件时，更新器的请求周期才发送条件 `GET`（`If-None-Match` /
+`If-Modified-Since`）。有效的 `304` 会休眠到下一个间隔且不触碰磁盘；不可信的 `304` 按 `fetch`
+失败处理：清空校验器、使用冷启动退避，并让下一次请求保持无条件。`Content-Encoding` 不是
+`identity` 的 `200` 响应会被直接拒绝（更新器不做解压——请让 `update_url` 指向一个纯 MMDB 文件，
+而不是 `.mmdb.gz`）；`identity` 编码的 `200` 响应在
 `max_db_bytes`/`stall_timeout_sec`/`download_deadline_sec` 的约束下流式写入
 `<db_path>.tmp`；成功后 `rename` → 重新 mmap → 热替换 → 将校验器持久化到 `<db_path>.meta`。
 
@@ -488,12 +494,16 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 200 个无条件的 GET 请求。不过光有抖动并不能让这些请求变成条件请求——这是下面 `.meta` 文件的
 职责。
 
-**`<db_path>.meta` 持久化了用于首次让请求变为条件请求的 ETag/Last-Modified 校验器。** 在
-`emptyDir` 卷上，`.meta` 会在每次 Pod 重启时和数据库本身一样丢失——但如果 `.meta` 缺失、而
-数据库文件**仍然存在**（一种合理的部分持久化场景，例如某个 PVC 刚开始被使用，或是一次手动恢复），
-更新器会用数据库文件的 mtime 来填充 `If-Modified-Since`，而不是直接跳到无条件拉取。需要规划的
-实际后果是：丢失 `.meta`——无论是因为 `emptyDir` 重启还是其他任何原因——都会让**下一次**更新
-周期变成一次完整的无条件下载，而不是一次廉价的 `304`，即便远端内容其实并没有变化。
+**`<db_path>.meta` 持久化 ETag/Last-Modified 校验器，用于生成条件请求。** 只有当 `db_path`
+仍是普通文件且 provider 已加载活动数据库时，校验器才有资格使用。如果两者均可用，但 `.meta` 缺失
+或无法读取，更新器会用数据库文件的 mtime 填充 `If-Modified-Since`。一个语法有效的空 sidecar
+会刻意抑制这一兜底，让下一次请求保持无条件。
+
+如果持久文件或活动 provider 任意一项缺失，更新器会在构造请求前同时清空内存校验器和 sidecar，
+随后发出无条件请求。只有当本次请求确实携带校验器、且响应到达时上述两项本地条件仍成立，`304` 才会
+被接受。其他 `304` 都按有界的 `fetch` 失败处理：清空校验器、进入冷启动退避，下一次请求保持无条件。
+因此，仅丢失 `.meta`、但可用数据库仍存在时，会发出基于 mtime 的条件请求；丢失可用的本地数据库状态
+时，才会发出无条件请求。
 
 ## 故障排查
 

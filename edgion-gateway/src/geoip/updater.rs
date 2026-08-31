@@ -1,10 +1,12 @@
 //! Background GeoIP database updater.
 //!
-//! One detached task. Never spawned when `update_url` is empty. Each cycle does
-//! a conditional GET, streams a 200 to `<db_path>.tmp` under hard bounds,
-//! validates the temp file structurally, renames it atomically, and swaps the
-//! provider. A failed validation never renames: half a broken database is worse
-//! than none.
+//! One detached task. Never spawned when `update_url` is empty. A cycle sends a
+//! conditional GET only while its local validator context is eligible; a valid
+//! 304 sleeps normally, while an untrusted 304 is a fetch failure with cold
+//! backoff and an unconditional next request. A 200 streams to `<db_path>.tmp`
+//! under hard bounds, is validated structurally, renamed atomically, and swapped
+//! into the provider. A failed validation never renames: half a broken database
+//! is worse than none.
 //!
 //! Free-space precheck: implemented via `rustix::fs::statvfs`, which is already
 //! a workspace dependency (used by the `LocalFile` log sink's disk-usage probe).
@@ -20,6 +22,10 @@
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use reqwest::header::{
+    HeaderValue, AUTHORIZATION, CONTENT_ENCODING, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
+};
 
 /// `<db_path>.tmp` — deliberately a sibling, because `rename(2)` is only atomic
 /// within one filesystem. A cross-device rename degrades to a copy and loses the
@@ -45,6 +51,22 @@ pub(crate) fn meta_path(db_path: &Path) -> PathBuf {
 pub(crate) fn cold_start_backoff(attempt: u32) -> Duration {
     let secs = (1u64 << attempt.min(5)).min(30);
     Duration::from_secs(secs)
+}
+
+/// A persisted validator is meaningful only while both halves of the local
+/// fallback are usable: the durable database still exists as a regular file,
+/// and the process has an active mmap-backed provider.
+fn validator_context_ready(db_path: &Path, provider_active: bool) -> bool {
+    provider_active && std::fs::metadata(db_path).map(|meta| meta.is_file()).unwrap_or(false)
+}
+
+/// Parse one Secret-derived Authorization value and attach its provenance
+/// before it crosses a storage, clone, or transport boundary.
+fn sensitive_authorization_header(env_name: &str, raw: &str) -> Result<HeaderValue, String> {
+    let mut value = HeaderValue::from_str(raw)
+        .map_err(|_| format!("env var {env_name} does not contain a valid Authorization header value"))?;
+    value.set_sensitive(true);
+    Ok(value)
 }
 
 /// Structural validation only.
@@ -194,9 +216,10 @@ pub(crate) enum CycleOutcome {
     Swapped,
 }
 
-/// Failure classes. These map 1:1 onto the `reason` label of
+/// Failure classes. These map onto the bounded `reason` labels of
 /// `edgion_geoip_update_failed_total`; without the distinction an operator
-/// cannot tell a slow link from a rejected file.
+/// cannot tell a slow link from a rejected file. Internal recovery variants
+/// may deliberately share an existing public reason.
 #[derive(Debug)]
 pub(crate) enum UpdateError {
     Fetch(String),
@@ -209,6 +232,10 @@ pub(crate) enum UpdateError {
     /// `Fetch`: no request was ever issued, and the fix is "grow the volume",
     /// not "check the network".
     Disk(String),
+    /// A 304 cannot be used without both a request validator and a usable
+    /// local database/provider pair. It retains the existing `fetch` metric
+    /// reason while forcing cold recovery semantics.
+    InvalidNotModified(String),
 }
 
 impl UpdateError {
@@ -221,6 +248,7 @@ impl UpdateError {
             Self::Validation(_) => "validation",
             Self::Rename(_) => "rename",
             Self::Disk(_) => "disk",
+            Self::InvalidNotModified(_) => "fetch",
         }
     }
 
@@ -235,8 +263,13 @@ impl UpdateError {
             | Self::Stall(s)
             | Self::Validation(s)
             | Self::Rename(s)
-            | Self::Disk(s) => s,
+            | Self::Disk(s)
+            | Self::InvalidNotModified(s) => s,
         }
+    }
+
+    fn requires_cold_backoff(&self) -> bool {
+        matches!(self, Self::InvalidNotModified(_))
     }
 }
 
@@ -249,13 +282,17 @@ pub(crate) struct UpdateState {
 }
 
 impl UpdateState {
-    /// Load the persisted validator. When `meta_path` is absent but `db_path`
-    /// already holds a database, seed `last_modified` from the database file's
-    /// mtime — that is the `emptyDir` case where the validator file was lost
-    /// with the volume but the database survived (or was pre-seeded by an init
-    /// container), so this still lets the first cycle attempt a conditional GET
-    /// instead of an unconditional one.
-    pub(crate) fn load(meta_path: &Path, db_path: &Path) -> Self {
+    /// Load the persisted validator only when a regular durable database and
+    /// an active provider both exist. When
+    /// `meta_path` is absent in that usable state, seed `last_modified` from
+    /// the database file's mtime so the first cycle can still be conditional.
+    /// A valid empty sidecar deliberately suppresses this mtime fallback.
+    pub(crate) fn load(meta_path: &Path, db_path: &Path, provider_active: bool) -> Self {
+        if !validator_context_ready(db_path, provider_active) {
+            let state = Self::default();
+            state.persist(meta_path);
+            return state;
+        }
         if let Ok(bytes) = std::fs::read(meta_path) {
             if let Ok(state) = serde_json::from_slice::<UpdateState>(&bytes) {
                 return state;
@@ -278,6 +315,18 @@ impl UpdateState {
             let _ = std::fs::write(meta_path, bytes);
         }
     }
+
+    fn clear_and_persist(&mut self, meta_path: &Path) {
+        self.etag = None;
+        self.last_modified = None;
+        self.persist(meta_path);
+    }
+}
+
+fn prepare_validator_state(state: &mut UpdateState, meta_path: &Path, validators_eligible: bool) {
+    if !validators_eligible {
+        state.clear_and_persist(meta_path);
+    }
 }
 
 fn header_string(resp: &reqwest::Response, name: reqwest::header::HeaderName) -> Option<String> {
@@ -291,7 +340,7 @@ pub struct GeoIpUpdater {
     cfg: GeoIpConfig,
     db_path: PathBuf,
     url: String,
-    auth_header: Option<String>,
+    auth_header: Option<HeaderValue>,
     client: reqwest::Client,
     provider: &'static GeoIpProvider,
 }
@@ -311,7 +360,10 @@ impl GeoIpUpdater {
         classify_literal_destination(&url)?;
 
         let auth_header = match cfg.update_auth_header_env.as_deref() {
-            Some(var) => Some(std::env::var(var).map_err(|_| format!("env var {var} is not set"))?),
+            Some(var) => {
+                let raw = std::env::var(var).map_err(|_| format!("env var {var} is not set"))?;
+                Some(sensitive_authorization_header(var, &raw)?)
+            }
             None => None,
         };
 
@@ -358,7 +410,8 @@ impl GeoIpUpdater {
     }
 
     async fn run(self) {
-        let mut state = UpdateState::load(&meta_path(&self.db_path), &self.db_path);
+        let meta = meta_path(&self.db_path);
+        let mut state = UpdateState::load(&meta, &self.db_path, self.provider.is_loaded());
         let mut cold_attempt = 0u32;
 
         loop {
@@ -380,7 +433,8 @@ impl GeoIpUpdater {
                     // tracing-allow: background task, not a request path
                     tracing::error!(reason = e.reason(), detail = e.detail(), "geoip update failed");
                     crate::observe::metrics::record_geoip_update_failed(e.reason());
-                    self.sleep_after_failure(&mut cold_attempt).await;
+                    self.sleep_after_failure(&mut cold_attempt, e.requires_cold_backoff())
+                        .await;
                 }
                 Err(_) => {
                     // Distinct from `Stall` (`UpdateError::Stall`, no *chunk*
@@ -391,30 +445,92 @@ impl GeoIpUpdater {
                     // tracing-allow: background task, not a request path
                     tracing::error!("geoip update exceeded download_deadline_sec");
                     crate::observe::metrics::record_geoip_update_failed("deadline");
-                    self.sleep_after_failure(&mut cold_attempt).await;
+                    self.sleep_after_failure(&mut cold_attempt, false).await;
                 }
             }
         }
     }
 
-    async fn sleep_after_failure(&self, cold_attempt: &mut u32) {
-        if self.provider.is_loaded() {
-            sleep_with_jitter(Duration::from_secs(self.cfg.retry_interval_sec)).await;
-        } else {
-            let d = cold_start_backoff(*cold_attempt);
-            *cold_attempt = cold_attempt.saturating_add(1);
-            sleep_with_jitter(d).await;
-        }
+    async fn sleep_after_failure(&self, cold_attempt: &mut u32, force_cold: bool) {
+        let base = failure_sleep_base(
+            self.provider.is_loaded(),
+            force_cold,
+            Duration::from_secs(self.cfg.retry_interval_sec),
+            cold_attempt,
+        );
+        sleep_with_jitter(base).await;
     }
+}
+
+fn failure_sleep_base(
+    provider_active: bool,
+    force_cold: bool,
+    retry_interval: Duration,
+    cold_attempt: &mut u32,
+) -> Duration {
+    if provider_active && !force_cold {
+        retry_interval
+    } else {
+        let delay = cold_start_backoff(*cold_attempt);
+        *cold_attempt = cold_attempt.saturating_add(1);
+        delay
+    }
+}
+
+fn build_request(
+    client: &reqwest::Client,
+    url: &str,
+    auth_header: Option<&HeaderValue>,
+    state: &UpdateState,
+    validators_eligible: bool,
+) -> (reqwest::RequestBuilder, bool) {
+    let mut req = client.get(url);
+    if let Some(value) = auth_header {
+        req = req.header(AUTHORIZATION, value.clone());
+    }
+
+    if !validators_eligible {
+        return (req, false);
+    }
+    if let Some(etag) = &state.etag {
+        (req.header(IF_NONE_MATCH, etag), true)
+    } else if let Some(last_modified) = &state.last_modified {
+        (req.header(IF_MODIFIED_SINCE, last_modified), true)
+    } else {
+        (req, false)
+    }
+}
+
+fn handle_not_modified_response(
+    state: &mut UpdateState,
+    meta_path: &Path,
+    sent_validator: bool,
+    validator_context_ready: bool,
+) -> Result<CycleOutcome, UpdateError> {
+    if sent_validator && validator_context_ready {
+        return Ok(CycleOutcome::NotModified);
+    }
+
+    state.clear_and_persist(meta_path);
+    Err(UpdateError::InvalidNotModified(
+        "received 304 without eligible conditional request state".to_string(),
+    ))
 }
 
 impl GeoIpUpdater {
     pub(crate) async fn run_cycle(&self, state: &mut UpdateState) -> Result<CycleOutcome, UpdateError> {
         let tmp = tmp_path(&self.db_path);
+        let meta = meta_path(&self.db_path);
 
         // A partial .tmp from a crashed pod consumes the space every subsequent
         // cycle needs, wedging updates permanently. Clear it first, always.
         let _ = std::fs::remove_file(&tmp);
+
+        // Re-check on every cycle. Suppressing conditional headers is not
+        // enough: stale in-memory state could otherwise become eligible again
+        // after a failed fetch if the database/provider recovered.
+        let mut validators_eligible = validator_context_ready(&self.db_path, self.provider.is_loaded());
+        prepare_validator_state(state, &meta, validators_eligible);
 
         // Refuse to start a download the volume cannot hold a full swap of. Not
         // fatal to the process — the updater task keeps running and retries on
@@ -425,15 +541,18 @@ impl GeoIpUpdater {
             return Err(UpdateError::Disk(e));
         }
 
-        let mut req = self.client.get(&self.url);
-        if let Some(h) = &self.auth_header {
-            req = req.header(reqwest::header::AUTHORIZATION, h);
-        }
-        if let Some(etag) = &state.etag {
-            req = req.header(reqwest::header::IF_NONE_MATCH, etag);
-        } else if let Some(lm) = &state.last_modified {
-            req = req.header(reqwest::header::IF_MODIFIED_SINCE, lm);
-        }
+        // The free-space check above is synchronous but the local state may
+        // still have changed since the first eligibility read. Revalidate at
+        // the request-construction boundary and clear again if needed.
+        validators_eligible = validator_context_ready(&self.db_path, self.provider.is_loaded());
+        prepare_validator_state(state, &meta, validators_eligible);
+        let (req, sent_validator) = build_request(
+            &self.client,
+            &self.url,
+            self.auth_header.as_ref(),
+            state,
+            validators_eligible,
+        );
 
         // `reqwest::Error`'s `Display` appends " for url (...)", and `update_url`
         // may carry an operator-embedded credential (design spec §2) or a
@@ -446,7 +565,8 @@ impl GeoIpUpdater {
             .map_err(|e| UpdateError::Fetch(e.without_url().to_string()))?;
 
         if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
-            return Ok(CycleOutcome::NotModified);
+            let validator_context_ready = validator_context_ready(&self.db_path, self.provider.is_loaded());
+            return handle_not_modified_response(state, &meta, sent_validator, validator_context_ready);
         }
         if !resp.status().is_success() {
             return Err(UpdateError::Fetch(format!("status {}", resp.status())));
@@ -455,15 +575,15 @@ impl GeoIpUpdater {
         // Most mirrors serve .mmdb.gz or negotiate gzip. Streaming a compressed
         // body straight to .tmp yields a file that fails validation forever with
         // an opaque error, so reject it loudly instead of decompressing.
-        if let Some(enc) = resp.headers().get(reqwest::header::CONTENT_ENCODING) {
+        if let Some(enc) = resp.headers().get(CONTENT_ENCODING) {
             let enc = enc.to_str().unwrap_or("");
             if !enc.is_empty() && !enc.eq_ignore_ascii_case("identity") {
                 return Err(UpdateError::Encoding(format!("unsupported Content-Encoding: {enc}")));
             }
         }
 
-        let new_etag = header_string(&resp, reqwest::header::ETAG);
-        let new_last_modified = header_string(&resp, reqwest::header::LAST_MODIFIED);
+        let new_etag = header_string(&resp, ETAG);
+        let new_last_modified = header_string(&resp, LAST_MODIFIED);
 
         let mut file = tokio::fs::File::create(&tmp)
             .await
@@ -516,7 +636,7 @@ impl GeoIpUpdater {
 
         state.etag = new_etag;
         state.last_modified = new_last_modified;
-        state.persist(&meta_path(&self.db_path));
+        state.persist(&meta);
 
         crate::observe::metrics::set_geoip_db_loaded(true);
         if let Some(epoch) = self.provider.build_epoch() {
@@ -642,7 +762,46 @@ mod tests {
             download_deadline_sec: 30,
             ..Default::default()
         };
-        GeoIpUpdater::new(cfg, GeoIpProvider::global()).unwrap()
+        // Production owns one process-global provider. Tests need independent
+        // `'static` providers because updater cycles await network I/O and
+        // must not mutate the global singleton across parallel tests.
+        let provider = Box::leak(Box::new(GeoIpProvider::new()));
+        GeoIpUpdater::new(cfg, provider).unwrap()
+    }
+
+    #[test]
+    fn authorization_header_is_sensitive_before_storage_and_clone() {
+        let secret = "Bearer private-geoip-token";
+        let value = sensitive_authorization_header("GEOIP_AUTH", secret).unwrap();
+        assert!(value.is_sensitive());
+
+        let cloned = value.clone();
+        assert!(cloned.is_sensitive(), "HeaderValue clone must preserve sensitivity");
+        assert!(
+            !format!("{cloned:?}").contains(secret),
+            "structured HeaderValue Debug must not expose the credential"
+        );
+
+        let client = reqwest::Client::new();
+        let (request, sent_validator) = build_request(
+            &client,
+            "http://example.invalid/geo.mmdb",
+            Some(&cloned),
+            &UpdateState::default(),
+            true,
+        );
+        assert!(!sent_validator);
+        let request = request.build().unwrap();
+        assert!(request.headers().get(AUTHORIZATION).unwrap().is_sensitive());
+    }
+
+    #[test]
+    fn invalid_authorization_header_error_names_only_the_environment_variable() {
+        let raw = "Bearer private-geoip-token\ninvalid";
+        let err = sensitive_authorization_header("GEOIP_AUTH", raw).unwrap_err();
+        assert!(err.contains("GEOIP_AUTH"));
+        assert!(!err.contains("private-geoip-token"));
+        assert!(!err.contains(raw));
     }
 
     /// BLOCKER 5 regression: the precheck must require `max_db_bytes + 2x the
@@ -732,17 +891,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn not_modified_leaves_disk_untouched() {
+    async fn not_modified_with_usable_database_leaves_disk_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let url = serve_once(304, &[], Vec::new()).await;
         let u = updater_for(dir.path(), url, 1 << 20);
+        std::fs::copy(fixture_city_db(), &u.db_path).unwrap();
+        u.provider.load_from(&u.db_path).unwrap();
+        let before = std::fs::read(&u.db_path).unwrap();
         let mut state = UpdateState {
             etag: Some("\"abc\"".into()),
             last_modified: None,
         };
         assert!(matches!(u.run_cycle(&mut state).await, Ok(CycleOutcome::NotModified)));
-        assert!(!dir.path().join("db.mmdb").exists());
+        assert_eq!(std::fs::read(dir.path().join("db.mmdb")).unwrap(), before);
         assert!(!dir.path().join("db.mmdb.tmp").exists());
+        assert_eq!(state.etag.as_deref(), Some("\"abc\""));
+    }
+
+    #[test]
+    fn invalid_not_modified_clears_validators_and_next_request_is_unconditional() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.mmdb");
+        let meta = meta_path(&db);
+        let mut state = UpdateState {
+            etag: Some("\"stale\"".into()),
+            last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
+        };
+        state.persist(&meta);
+
+        let err = handle_not_modified_response(&mut state, &meta, true, false).unwrap_err();
+        assert_eq!(err.reason(), "fetch");
+        assert!(err.requires_cold_backoff());
+        assert!(state.etag.is_none());
+        assert!(state.last_modified.is_none());
+
+        // A valid empty sidecar is loadable and intentionally suppresses the
+        // database-mtime fallback after local eligibility returns.
+        std::fs::write(&db, b"regular database placeholder").unwrap();
+        let reloaded = UpdateState::load(&meta, &db, true);
+        assert!(reloaded.etag.is_none());
+        assert!(reloaded.last_modified.is_none());
+
+        let client = reqwest::Client::new();
+        let (request, sent_validator) =
+            build_request(&client, "http://example.invalid/geo.mmdb", None, &reloaded, true);
+        assert!(!sent_validator);
+        let request = request.build().unwrap();
+        assert!(request.headers().get(IF_NONE_MATCH).is_none());
+        assert!(request.headers().get(IF_MODIFIED_SINCE).is_none());
+    }
+
+    #[test]
+    fn not_modified_without_a_sent_validator_is_invalid_even_with_usable_local_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta_path(&dir.path().join("db.mmdb"));
+        let mut state = UpdateState::default();
+        let err = handle_not_modified_response(&mut state, &meta, false, true).unwrap_err();
+        assert_eq!(err.reason(), "fetch");
+        assert!(err.requires_cold_backoff());
+    }
+
+    #[test]
+    fn invalid_not_modified_forces_cold_backoff_even_with_an_active_provider() {
+        let mut cold_attempt = 0;
+        let delay = failure_sleep_base(
+            true,
+            UpdateError::InvalidNotModified("invalid 304".into()).requires_cold_backoff(),
+            Duration::from_secs(600),
+            &mut cold_attempt,
+        );
+        assert_eq!(delay, Duration::from_secs(1));
+        assert_eq!(cold_attempt, 1);
     }
 
     /// The cap is enforced WHILE streaming; exceeding it must fail the cycle and
@@ -789,18 +1008,6 @@ mod tests {
 
     #[tokio::test]
     async fn successful_cycle_renames_swaps_and_persists_meta() {
-        // The `GEO_TEST_LOCK` guard is a `parking_lot::Mutex` guard, which must
-        // never live across an `.await` (workspace lint `await_holding_lock`;
-        // see `config_sync_server.rs` for the same pattern). Each block below
-        // acquires it only for a synchronous global-provider touch. No other
-        // test in this crate currently exercises `GeoIpProvider::global()` from
-        // an async context, so the small unlocked window around `run_cycle`
-        // below carries no real interleaving risk today.
-        {
-            let _g = crate::geoip::GEO_TEST_LOCK.lock();
-            GeoIpProvider::global().clear();
-        }
-
         let dir = tempfile::tempdir().unwrap();
         let body = std::fs::read(fixture_city_db()).unwrap();
         let url = serve_once(200, &[("etag", "\"v1\"")], body).await;
@@ -811,12 +1018,7 @@ mod tests {
         assert!(!dir.path().join("db.mmdb.tmp").exists());
         assert!(dir.path().join("db.mmdb.meta").exists());
         assert_eq!(state.etag.as_deref(), Some("\"v1\""));
-
-        {
-            let _g = crate::geoip::GEO_TEST_LOCK.lock();
-            assert!(GeoIpProvider::global().is_loaded());
-            GeoIpProvider::global().clear();
-        }
+        assert!(u.provider.is_loaded());
     }
 
     /// A partial .tmp left by a crashed pod must not survive into the next cycle.
@@ -843,7 +1045,7 @@ mod tests {
         let db = dir.path().join("db.mmdb");
         std::fs::write(&db, b"placeholder").unwrap();
 
-        let state = UpdateState::load(&meta_path(&db), &db);
+        let state = UpdateState::load(&meta_path(&db), &db, true);
         assert!(state.etag.is_none());
         assert!(state.last_modified.is_some());
     }
@@ -854,7 +1056,7 @@ mod tests {
     fn load_is_empty_when_neither_meta_nor_db_exist() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("db.mmdb");
-        let state = UpdateState::load(&meta_path(&db), &db);
+        let state = UpdateState::load(&meta_path(&db), &db, false);
         assert!(state.etag.is_none());
         assert!(state.last_modified.is_none());
     }
@@ -864,6 +1066,7 @@ mod tests {
     fn persist_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("db.mmdb");
+        std::fs::write(&db, b"regular database placeholder").unwrap();
         let meta = meta_path(&db);
         let state = UpdateState {
             etag: Some("\"v2\"".into()),
@@ -871,9 +1074,94 @@ mod tests {
         };
         state.persist(&meta);
 
-        let reloaded = UpdateState::load(&meta, &db);
+        let reloaded = UpdateState::load(&meta, &db, true);
         assert_eq!(reloaded.etag, state.etag);
         assert_eq!(reloaded.last_modified, state.last_modified);
+    }
+
+    #[test]
+    fn persisted_validators_require_both_regular_database_and_active_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.mmdb");
+        let meta = meta_path(&db);
+        let state = UpdateState {
+            etag: Some("\"v3\"".into()),
+            last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
+        };
+        state.persist(&meta);
+
+        let missing_db = UpdateState::load(&meta, &db, true);
+        assert!(missing_db.etag.is_none());
+        assert!(missing_db.last_modified.is_none());
+
+        std::fs::write(&db, b"regular database placeholder").unwrap();
+        let restored_after_missing_db = UpdateState::load(&meta, &db, true);
+        assert!(restored_after_missing_db.etag.is_none());
+        assert!(restored_after_missing_db.last_modified.is_none());
+
+        state.persist(&meta);
+        let inactive_provider = UpdateState::load(&meta, &db, false);
+        assert!(inactive_provider.etag.is_none());
+        assert!(inactive_provider.last_modified.is_none());
+
+        let restored_after_inactive_provider = UpdateState::load(&meta, &db, true);
+        assert!(restored_after_inactive_provider.etag.is_none());
+        assert!(restored_after_inactive_provider.last_modified.is_none());
+    }
+
+    #[test]
+    fn validator_context_requires_a_regular_file_and_active_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.mmdb");
+        assert!(!validator_context_ready(&missing, true));
+
+        assert!(!validator_context_ready(dir.path(), true));
+
+        let db = dir.path().join("db.mmdb");
+        std::fs::write(&db, b"regular database placeholder").unwrap();
+        assert!(!validator_context_ready(&db, false));
+        assert!(validator_context_ready(&db, true));
+    }
+
+    #[test]
+    fn valid_empty_sidecar_suppresses_mtime_seed_when_context_is_usable() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.mmdb");
+        std::fs::copy(fixture_city_db(), &db).unwrap();
+        let provider = Box::leak(Box::new(GeoIpProvider::new()));
+        provider.load_from(&db).unwrap();
+
+        let meta = meta_path(&db);
+        UpdateState::default().persist(&meta);
+        let state = UpdateState::load(&meta, &db, provider.is_loaded());
+        assert!(state.etag.is_none());
+        assert!(state.last_modified.is_none());
+    }
+
+    #[test]
+    fn request_time_ineligibility_clears_memory_and_persists_empty_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.mmdb");
+        let meta = meta_path(&db);
+        let mut state = UpdateState {
+            etag: Some("\"stale\"".into()),
+            last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
+        };
+        state.persist(&meta);
+
+        prepare_validator_state(&mut state, &meta, false);
+        assert!(state.etag.is_none());
+        assert!(state.last_modified.is_none());
+
+        std::fs::write(&db, b"regular database placeholder").unwrap();
+        let restored = UpdateState::load(&meta, &db, true);
+        let client = reqwest::Client::new();
+        let (request, sent_validator) =
+            build_request(&client, "http://example.invalid/geo.mmdb", None, &restored, true);
+        assert!(!sent_validator);
+        let request = request.build().unwrap();
+        assert!(request.headers().get(IF_NONE_MATCH).is_none());
+        assert!(request.headers().get(IF_MODIFIED_SINCE).is_none());
     }
 
     /// A **hostname** `update_url` is exactly the case `classify_literal_destination`

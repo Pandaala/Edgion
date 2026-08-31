@@ -115,6 +115,18 @@ impl GeoIpConfig {
         if self.update_interval_sec == 0 {
             return Err("geoip.update_interval_sec must be greater than zero when update_url is set".to_string());
         }
+        if self.retry_interval_sec == 0 {
+            return Err("geoip.retry_interval_sec must be greater than zero when update_url is set".to_string());
+        }
+        if self.connect_timeout_sec == 0 {
+            return Err("geoip.connect_timeout_sec must be greater than zero when update_url is set".to_string());
+        }
+        if self.download_deadline_sec == 0 {
+            return Err("geoip.download_deadline_sec must be greater than zero when update_url is set".to_string());
+        }
+        if self.stall_timeout_sec == 0 {
+            return Err("geoip.stall_timeout_sec must be greater than zero when update_url is set".to_string());
+        }
         if self.max_db_bytes == 0 {
             return Err("geoip.max_db_bytes must be greater than zero when update_url is set".to_string());
         }
@@ -158,19 +170,26 @@ max_db_bytes: 1024
     }
 
     #[test]
-    fn configured_updater_rejects_zero_interval_and_size_cap() {
-        let mut cfg = GeoIpConfig {
+    fn configured_updater_rejects_zero_durations_intervals_and_size_cap() {
+        let base = GeoIpConfig {
             update_url: Some("https://mirror.internal/geo.mmdb".into()),
-            update_interval_sec: 0,
             ..Default::default()
         };
-        let err = cfg.validate_updater_settings().unwrap_err();
-        assert!(err.contains("update_interval_sec"), "got: {err}");
+        let cases: &[(&str, fn(&mut GeoIpConfig))] = &[
+            ("update_interval_sec", |cfg| cfg.update_interval_sec = 0),
+            ("retry_interval_sec", |cfg| cfg.retry_interval_sec = 0),
+            ("connect_timeout_sec", |cfg| cfg.connect_timeout_sec = 0),
+            ("download_deadline_sec", |cfg| cfg.download_deadline_sec = 0),
+            ("stall_timeout_sec", |cfg| cfg.stall_timeout_sec = 0),
+            ("max_db_bytes", |cfg| cfg.max_db_bytes = 0),
+        ];
 
-        cfg.update_interval_sec = default_update_interval_sec();
-        cfg.max_db_bytes = 0;
-        let err = cfg.validate_updater_settings().unwrap_err();
-        assert!(err.contains("max_db_bytes"), "got: {err}");
+        for (field, make_invalid) in cases {
+            let mut cfg = base.clone();
+            make_invalid(&mut cfg);
+            let err = cfg.validate_updater_settings().unwrap_err();
+            assert!(err.contains(field), "expected {field} in: {err}");
+        }
     }
 
     #[test]
@@ -178,6 +197,10 @@ max_db_bytes: 1024
         let cfg = GeoIpConfig {
             update_url: None,
             update_interval_sec: 0,
+            retry_interval_sec: 0,
+            connect_timeout_sec: 0,
+            download_deadline_sec: 0,
+            stall_timeout_sec: 0,
             max_db_bytes: 0,
             ..Default::default()
         };
@@ -186,6 +209,10 @@ max_db_bytes: 1024
         let cfg = GeoIpConfig {
             update_url: Some("".into()),
             update_interval_sec: 0,
+            retry_interval_sec: 0,
+            connect_timeout_sec: 0,
+            download_deadline_sec: 0,
+            stall_timeout_sec: 0,
             max_db_bytes: 0,
             ..Default::default()
         };
