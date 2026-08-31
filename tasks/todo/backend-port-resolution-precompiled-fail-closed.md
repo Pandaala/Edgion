@@ -24,7 +24,8 @@ Move Service-port to selected-endpoint-port resolution out of the Gateway reques
 - Validate all K8s `i32` port values with checked conversion and the valid non-zero `u16` range; do not use truncating `as u16` casts.
 - Coordinate Service port-name capture for BackendTLSPolicy with `tasks/todo/backend-tls-policy-defensive-validation-fail-closed.md` so an unresolved section mapping cannot become an absent TLS policy.
 - Preserve IPv4/IPv6 numeric address equality and the existing post-resolution unsafe-address check.
-- Apply identical resolution and failure semantics to HTTP, TCP, TLS passthrough/termination, UDP, request-mirror, and DirectEndpoint consumers.
+- Apply identical resolution and failure semantics to HTTP, TCP, TLS passthrough/termination, UDP, request-mirror, DirectEndpoint, and AllEndpointStatus consumers.
+- For AllEndpointStatus, replace the request-time `backendRef.port as u16` and default-port fallback with the same checked Service-port-to-EndpointSlice-serving-port proof before any probe is dialed.
 - Give DirectEndpoint a precompiled route-authorization proof that distinguishes an explicitly supplied endpoint port from a fallback `backendRef.port`: the former is an EndpointSlice serving port, while the latter is a Service port that must be mapped to the selected endpoint's serving port before membership is decided.
 - Constrain an explicit DirectEndpoint port to the serving port proved for the selected `backendRef`; the presence of that number on an unrelated port of the same multi-port EndpointSlice is not authorization.
 - Define and test whether DirectEndpoint membership requires a ready endpoint. Keep the decision consistent with the documented override contract rather than inheriting incidental EndpointSlice scanning behavior.
@@ -51,7 +52,7 @@ Move Service-port to selected-endpoint-port resolution out of the Gateway reques
 - A requested port with a missing Service snapshot, unknown Service port, absent endpoint port, invalid numeric range, or ambiguous heterogeneous origin produces a deterministic fail-close result before dialing.
 - Each endpoint in heterogeneous sibling slices resolves a shared named port to its own slice's numeric port.
 - Full and partial Service/EndpointSlice publications replace stale mappings atomically and captured selector generations remain internally coherent.
-- HTTP, TCP, TLS passthrough/termination, UDP, request-mirror, and DirectEndpoint tests prove that no unresolved path dials the load balancer's first port.
+- HTTP, TCP, TLS passthrough/termination, UDP, request-mirror, DirectEndpoint, and AllEndpointStatus tests prove that no unresolved path dials a first, default, or truncation-cast port.
 - DirectEndpoint accepts an authorized Service-port-to-targetPort mapping such as `443 -> 8443`, rejects unproved and sibling-service ports, preserves denied-reference filtering, and compares IPv4/IPv6 addresses numerically rather than by textual formatting.
 - DirectEndpoint ready/unready eligibility is documented and covered by tests, and endpoint-derived final dialing rejects Unix addresses while retaining the canonical loopback/link-local classification.
 - BackendTLSPolicy exact-section lookup receives either the canonical port name or an explicit failure, never an ambiguous `None`.
@@ -71,3 +72,4 @@ Move Service-port to selected-endpoint-port resolution out of the Gateway reques
 | 2026-08-31 | Defer implementation from the file audit. | A local `Result` return would improve signaling but retain blocking locks, full resource clones, endpoint scans, and missing per-backend identity; every protocol caller and selector publication must migrate together. |
 | 2026-08-31 | Preserve the heterogeneous-slice closed finding. | This task retains exact originating-slice resolution and numeric IPv6/IPv4 comparison; it replaces only the unproven unknown-origin fallback and hot-path lookup mechanism. |
 | 2026-08-31 | Fold DirectEndpoint membership into the same proof. | Its current fallback compares a Service port directly with an EndpointSlice serving port, while an explicit port can match an unrelated sibling port. Fixing only the cast or textual IP comparison would leave the authorization boundary unsound. |
+| 2026-09-01 | Name AllEndpointStatus as a required HTTP consumer. | Its on-demand probes currently cast the Service port and default to 80 instead of proving the selected EndpointSlice serving port; a local cast fix would duplicate the cross-consumer contract. |

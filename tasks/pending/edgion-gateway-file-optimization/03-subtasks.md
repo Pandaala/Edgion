@@ -329,8 +329,8 @@
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | pending | — |
-| `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | pending | — |
-| `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | pending | — |
+| `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
+| `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/mod.rs` | `plugins-http-bandwidth-limit` | source | pending | — |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs` | `plugins-http-bandwidth-limit` | source | pending | — |
 | `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | pending | — |

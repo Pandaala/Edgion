@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 71 changed, 87 examined-no-change, 9 deferred, 365 non-terminal |
-| Active batch | B0062 HTTP plugin snapshot and delta semantics; reviewed, fully verified, and awaiting local commit |
-| Analysis queue | none promoted while B0062 owns the serial mutation lane |
+| Coverage | 532 tracked files: 72 changed, 88 examined-no-change, 9 deferred, 363 non-terminal |
+| Active batch | B0063 AllEndpointStatus correctness and hot-path state; reviewed, fully verified, and awaiting local commit |
+| Analysis queue | AI proxy body ownership and BandwidthLimit stable-name candidates require revalidation after B0063 commits |
 
 ## AI guide summary
 

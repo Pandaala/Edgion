@@ -9,12 +9,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use parking_lot::RwLock;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
@@ -26,7 +25,7 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
 use edgion_resources::resources::edgion_plugins::AllEndpointStatusConfig;
-use edgion_resources::HTTPBackendRefKind;
+use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind};
 
 /// Global configuration for AllEndpointStatus plugin.
 /// Stored in YAML config, loaded at gateway startup, applies to all instances.
@@ -65,22 +64,26 @@ impl Default for AllEndpointStatusGlobalConfig {
     }
 }
 
-/// Global config store, initialized from YAML at startup.
-static ALL_ENDPOINT_STATUS_GLOBAL_CONFIG: LazyLock<RwLock<AllEndpointStatusGlobalConfig>> =
-    LazyLock::new(|| RwLock::new(AllEndpointStatusGlobalConfig::default()));
+/// Fallback used before the startup initializer publishes the process config.
+static DEFAULT_CONFIG: LazyLock<AllEndpointStatusGlobalConfig> = LazyLock::new(AllEndpointStatusGlobalConfig::default);
 
-pub fn get_all_endpoint_status_global_config() -> AllEndpointStatusGlobalConfig {
-    ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.read().clone()
+/// Immutable process config, published once during gateway startup.
+static ALL_ENDPOINT_STATUS_GLOBAL_CONFIG: OnceLock<AllEndpointStatusGlobalConfig> = OnceLock::new();
+
+pub fn get_all_endpoint_status_global_config() -> &'static AllEndpointStatusGlobalConfig {
+    ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.get().unwrap_or(&DEFAULT_CONFIG)
 }
 
 /// Initialize the global AllEndpointStatus configuration.
 /// Called once during gateway startup with the loaded YAML config.
 pub fn init_all_endpoint_status_global_config(config: &AllEndpointStatusGlobalConfig) {
-    let mut c = ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.write();
-    *c = config.clone();
+    // Startup owns publication. A duplicate call is ignored so the first
+    // immutable configuration remains authoritative.
+    let _ = ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.set(config.clone());
+    let published = get_all_endpoint_status_global_config();
     tracing::info!(
-        max_endpoints = config.max_endpoints,
-        min_interval_ms = config.min_interval_ms,
+        max_endpoints = published.max_endpoints,
+        min_interval_ms = published.min_interval_ms,
         "AllEndpointStatus global config initialized"
     );
 }
@@ -96,15 +99,59 @@ pub fn init_all_endpoint_status_global_config(config: &AllEndpointStatusGlobalCo
 static GLOBAL_CONCURRENCY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(MAX_GLOBAL_CONCURRENCY));
 
 /// Process-level rate limiter: tracks the timestamp (ms since process start)
-/// of the last successful plugin execution. New requests must wait at least
-/// `min_interval_ms` (from global YAML config) since this timestamp.
-/// Uses AtomicU64 + Instant for lock-free, monotonic timing.
+/// of the latest claim or successful plugin execution, encoded as elapsed
+/// milliseconds plus one so zero remains the unclaimed sentinel. New requests
+/// must wait at least `min_interval_ms` (from global YAML config) since this
+/// timestamp. Uses AtomicU64 + Instant for lock-free, monotonic timing.
 static LAST_EXECUTION_MS: AtomicU64 = AtomicU64::new(0);
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+const MAX_ELAPSED_MS: u64 = u64::MAX - 1;
 
 /// Get elapsed milliseconds since process start (monotonic).
 fn elapsed_ms() -> u64 {
-    Instant::now().saturating_duration_since(*PROCESS_START).as_millis() as u64
+    duration_millis(Instant::now().saturating_duration_since(*PROCESS_START))
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis())
+        .unwrap_or(MAX_ELAPSED_MS)
+        .min(MAX_ELAPSED_MS)
+}
+
+/// Encode a valid elapsed millisecond value while reserving zero for "never claimed".
+fn encode_elapsed_ms(now_ms: u64) -> u64 {
+    now_ms.min(MAX_ELAPSED_MS) + 1
+}
+
+/// Atomically claim the current execution tick.
+///
+/// Returns the exact remaining delay in milliseconds when the interval has not
+/// elapsed. Clock rollback is treated as zero elapsed time and therefore fails
+/// closed until the previous tick is reached again.
+fn claim_execution_at(state: &AtomicU64, now_ms: u64, min_interval_ms: u64) -> Result<(), u64> {
+    let now_ms = now_ms.min(MAX_ELAPSED_MS);
+    let encoded_now = encode_elapsed_ms(now_ms);
+
+    loop {
+        let observed = state.load(Ordering::Relaxed);
+        if let Some(last_ms) = observed.checked_sub(1) {
+            let since_last = now_ms.saturating_sub(last_ms);
+            if since_last < min_interval_ms {
+                return Err(min_interval_ms - since_last);
+            }
+        }
+
+        if state
+            .compare_exchange(observed, encoded_now, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+}
+
+fn record_execution_completed_at(state: &AtomicU64, now_ms: u64) {
+    state.fetch_max(encode_elapsed_ms(now_ms), Ordering::Relaxed);
 }
 
 // ============================================================
@@ -167,7 +214,7 @@ struct BackendResult {
     endpoints: Vec<EndpointResult>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 struct EndpointResult {
     /// IP:Port of the endpoint
     address: String,
@@ -184,6 +231,19 @@ struct EndpointResult {
     headers: Option<HashMap<String, String>>,
     /// Error message (null if successful)
     error: Option<String>,
+}
+
+struct CompletedEndpointResult {
+    ordinal: usize,
+    result: EndpointResult,
+    response_body_bytes: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct EndpointAggregate {
+    success_count: usize,
+    failure_count: usize,
+    total_response_bytes: usize,
 }
 
 // ============================================================
@@ -227,10 +287,25 @@ async fn read_body_limited(resp: reqwest::Response, max_size: usize) -> (Vec<u8>
 // ============================================================
 
 /// Information about a resolved endpoint for fan-out
+#[derive(Debug, Clone)]
 struct ResolvedEndpoint {
     address: String,      // "ip:port"
     backend_name: String, // service name (used for Host header)
     use_tls: bool,
+}
+
+struct EndpointCollection {
+    backends: Vec<BackendResult>,
+    selected_endpoints: Vec<ResolvedEndpoint>,
+    discovered_endpoint_count: usize,
+    unsafe_endpoint_count: usize,
+    denied_ref_count: usize,
+}
+
+impl EndpointCollection {
+    fn truncated(&self) -> bool {
+        self.discovered_endpoint_count > self.selected_endpoints.len()
+    }
 }
 
 fn resolved_endpoint_from_backend(
@@ -283,6 +358,60 @@ fn resolve_endpoints(
     }
 
     (vec![], 0) // No endpoints found
+}
+
+fn collect_route_endpoints_with<F>(
+    backend_refs: &[HTTPBackendRef],
+    route_namespace: &str,
+    effective_max: usize,
+    allow_loopback_upstream: bool,
+    mut resolver: F,
+) -> EndpointCollection
+where
+    F: FnMut(&str, &str, u16, bool, bool) -> (Vec<ResolvedEndpoint>, usize),
+{
+    let mut backends = Vec::new();
+    let mut selected_endpoints = Vec::with_capacity(effective_max);
+    let mut discovered_endpoint_count = 0usize;
+    let mut unsafe_endpoint_count = 0usize;
+    let mut denied_ref_count = 0usize;
+
+    for backend_ref in backend_refs {
+        if backend_ref.backend_kind() != HTTPBackendRefKind::Service {
+            continue;
+        }
+        if backend_ref.ref_denied.is_some() {
+            denied_ref_count = denied_ref_count.saturating_add(1);
+            continue;
+        }
+
+        let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
+        let port = backend_ref.port.map(|port| port as u16).unwrap_or(80);
+        let use_tls = backend_ref.backend_tls_policy.is_some();
+        let (resolved, unsafe_count) = resolver(&backend_ref.name, namespace, port, use_tls, allow_loopback_upstream);
+
+        let endpoint_count = resolved.len();
+        discovered_endpoint_count = discovered_endpoint_count.saturating_add(endpoint_count);
+        unsafe_endpoint_count = unsafe_endpoint_count.saturating_add(unsafe_count);
+
+        let remaining = effective_max.saturating_sub(selected_endpoints.len());
+        selected_endpoints.extend(resolved.into_iter().take(remaining));
+        backends.push(BackendResult {
+            name: backend_ref.name.clone(),
+            namespace: namespace.to_string(),
+            port,
+            endpoint_count,
+            endpoints: Vec::new(),
+        });
+    }
+
+    EndpointCollection {
+        backends,
+        selected_endpoints,
+        discovered_endpoint_count,
+        unsafe_endpoint_count,
+        denied_ref_count,
+    }
 }
 
 // ============================================================
@@ -350,10 +479,13 @@ impl AllEndpointStatus {
         original_path: &str,
         original_query: Option<&str>,
         original_headers: &[(String, String)],
-        _global_config: &AllEndpointStatusGlobalConfig,
-    ) -> (Vec<EndpointResult>, bool /* wall_timeout_hit */) {
+    ) -> (Vec<CompletedEndpointResult>, bool /* wall_timeout_hit */) {
+        let Some(permit_count) = fan_out_permit_count(self.config.concurrency_limit, endpoints.len()) else {
+            return (Vec::new(), false);
+        };
+
         let client = get_status_http_client();
-        let semaphore = std::sync::Arc::new(Semaphore::new(self.config.concurrency_limit));
+        let semaphore = std::sync::Arc::new(Semaphore::new(permit_count));
         let timeout = Duration::from_millis(self.config.effective_timeout_ms());
         let wall_timeout = Duration::from_millis(self.config.effective_wall_timeout_ms());
         let max_body = self.config.effective_max_body_size();
@@ -370,7 +502,8 @@ impl AllEndpointStatus {
 
         let futures: FuturesUnordered<_> = endpoints
             .iter()
-            .map(|ep| {
+            .enumerate()
+            .map(|(ordinal, ep)| {
                 let sem = semaphore.clone();
                 let addr = ep.address.clone();
                 let backend_name = ep.backend_name.clone();
@@ -427,16 +560,21 @@ impl AllEndpointStatus {
                             };
 
                             let (body_bytes, truncated) = read_body_limited(resp, max_body).await;
+                            let response_body_bytes = body_bytes.len();
                             let body = String::from_utf8_lossy(&body_bytes).to_string();
 
-                            EndpointResult {
-                                address: addr,
-                                status: Some(status),
-                                latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
-                                body: Some(body),
-                                body_truncated: truncated,
-                                headers: resp_headers,
-                                error: None,
+                            CompletedEndpointResult {
+                                ordinal,
+                                response_body_bytes,
+                                result: EndpointResult {
+                                    address: addr,
+                                    status: Some(status),
+                                    latency_ms: duration_millis(Instant::now().saturating_duration_since(start)),
+                                    body: Some(body),
+                                    body_truncated: truncated,
+                                    headers: resp_headers,
+                                    error: None,
+                                },
                             }
                         }
                         Err(e) => {
@@ -448,14 +586,18 @@ impl AllEndpointStatus {
                                 format!("request failed: {}", e)
                             };
 
-                            EndpointResult {
-                                address: addr,
-                                status: None,
-                                latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
-                                body: None,
-                                body_truncated: false,
-                                headers: None,
-                                error: Some(error_msg),
+                            CompletedEndpointResult {
+                                ordinal,
+                                response_body_bytes: 0,
+                                result: EndpointResult {
+                                    address: addr,
+                                    status: None,
+                                    latency_ms: duration_millis(Instant::now().saturating_duration_since(start)),
+                                    body: None,
+                                    body_truncated: false,
+                                    headers: None,
+                                    error: Some(error_msg),
+                                },
                             }
                         }
                     }
@@ -477,17 +619,26 @@ fn is_inbound_body_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("expect")
 }
 
+fn fan_out_permit_count(configured: usize, selected_endpoint_count: usize) -> Option<usize> {
+    if selected_endpoint_count == 0 {
+        return None;
+    }
+
+    Some(configured.min(selected_endpoint_count))
+}
+
 /// Fan-out with wall timeout that preserves partial results.
 async fn fan_out_with_wall_timeout(
-    mut unordered: FuturesUnordered<impl std::future::Future<Output = EndpointResult>>,
+    mut unordered: FuturesUnordered<impl std::future::Future<Output = CompletedEndpointResult>>,
     wall_timeout: Duration,
-) -> (Vec<EndpointResult>, bool) {
+) -> (Vec<CompletedEndpointResult>, bool) {
     let mut results = Vec::with_capacity(unordered.len());
     let deadline = tokio::time::sleep(wall_timeout);
     tokio::pin!(deadline);
 
     loop {
         tokio::select! {
+            biased;
             result = unordered.next() => {
                 match result {
                     Some(result) => results.push(result),
@@ -504,43 +655,332 @@ async fn fan_out_with_wall_timeout(
     (results, false)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn assemble_endpoint_results(
+    selected_endpoints: &[ResolvedEndpoint],
+    completed_results: Vec<CompletedEndpointResult>,
+    backends: &mut [BackendResult],
+) -> EndpointAggregate {
+    let mut completed_by_ordinal: Vec<Option<CompletedEndpointResult>> =
+        std::iter::repeat_with(|| None).take(selected_endpoints.len()).collect();
 
-    fn endpoint_result(address: String) -> EndpointResult {
-        EndpointResult {
-            address,
-            status: Some(200),
-            latency_ms: 0,
-            body: Some("OK".to_string()),
-            body_truncated: false,
-            headers: None,
-            error: None,
+    for completed in completed_results {
+        let ordinal = completed.ordinal;
+        debug_assert!(
+            ordinal < completed_by_ordinal.len(),
+            "completed endpoint ordinal is outside the selected prefix"
+        );
+        if let Some(slot) = completed_by_ordinal.get_mut(ordinal) {
+            debug_assert!(slot.is_none(), "one fan-out future owns each endpoint ordinal");
+            if slot.is_none() {
+                *slot = Some(completed);
+            }
         }
     }
 
-    #[tokio::test]
+    let mut aggregate = EndpointAggregate::default();
+    let mut endpoint_offset = 0usize;
+
+    for backend in backends {
+        let count = backend
+            .endpoint_count
+            .min(selected_endpoints.len().saturating_sub(endpoint_offset));
+        for index in endpoint_offset..endpoint_offset + count {
+            if let Some(completed) = completed_by_ordinal[index].take() {
+                if completed
+                    .result
+                    .status
+                    .is_some_and(|status| (200..400).contains(&status))
+                {
+                    aggregate.success_count = aggregate.success_count.saturating_add(1);
+                } else {
+                    aggregate.failure_count = aggregate.failure_count.saturating_add(1);
+                }
+                aggregate.total_response_bytes = aggregate
+                    .total_response_bytes
+                    .saturating_add(completed.response_body_bytes);
+                backend.endpoints.push(completed.result);
+            } else {
+                aggregate.failure_count = aggregate.failure_count.saturating_add(1);
+                backend.endpoints.push(EndpointResult {
+                    address: selected_endpoints[index].address.clone(),
+                    status: None,
+                    latency_ms: 0,
+                    body: None,
+                    body_truncated: false,
+                    headers: None,
+                    error: Some("wall timeout exceeded".to_string()),
+                });
+            }
+        }
+        endpoint_offset += count;
+    }
+
+    aggregate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edgion_resources::resources::common::RefDenied;
+    use std::sync::{Arc, Barrier};
+
+    fn resolved_endpoint(address: &str, backend_name: &str) -> ResolvedEndpoint {
+        ResolvedEndpoint {
+            address: address.to_string(),
+            backend_name: backend_name.to_string(),
+            use_tls: false,
+        }
+    }
+
+    fn completed_endpoint(ordinal: usize, address: &str, status: u16, body_bytes: &[u8]) -> CompletedEndpointResult {
+        CompletedEndpointResult {
+            ordinal,
+            response_body_bytes: body_bytes.len(),
+            result: EndpointResult {
+                address: address.to_string(),
+                status: Some(status),
+                latency_ms: 0,
+                body: Some(String::from_utf8_lossy(body_bytes).to_string()),
+                body_truncated: false,
+                headers: None,
+                error: None,
+            },
+        }
+    }
+
+    fn backend_ref(name: &str, namespace: Option<&str>, denied: bool) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: name.to_string(),
+            namespace: namespace.map(str::to_string),
+            port: Some(8080),
+            weight: None,
+            group: None,
+            kind: None,
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: denied.then(|| RefDenied {
+                target_namespace: namespace.unwrap_or("route-ns").to_string(),
+                target_name: name.to_string(),
+                reason: Some("NoMatchingReferenceGrant".to_string()),
+            }),
+        }
+    }
+
+    fn backend_result(name: &str, endpoint_count: usize) -> BackendResult {
+        BackendResult {
+            name: name.to_string(),
+            namespace: "route-ns".to_string(),
+            port: 8080,
+            endpoint_count,
+            endpoints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn encoded_rate_gate_handles_zero_boundary_and_remaining_delay() {
+        let state = AtomicU64::new(0);
+
+        assert_eq!(claim_execution_at(&state, 0, 1_000), Ok(()));
+        assert_eq!(state.load(Ordering::Relaxed), 1);
+        assert_eq!(claim_execution_at(&state, 0, 1_000), Err(1_000));
+        assert_eq!(claim_execution_at(&state, 999, 1_000), Err(1));
+        assert_eq!(claim_execution_at(&state, 1_000, 1_000), Ok(()));
+    }
+
+    #[test]
+    fn encoded_rate_gate_rejects_rollback_until_clock_catches_up() {
+        let state = AtomicU64::new(0);
+
+        assert_eq!(claim_execution_at(&state, 1_000, 100), Ok(()));
+        assert_eq!(claim_execution_at(&state, 1_100, 100), Ok(()));
+        assert_eq!(claim_execution_at(&state, 900, 100), Err(100));
+        assert_eq!(claim_execution_at(&state, 1_199, 100), Err(1));
+        assert_eq!(claim_execution_at(&state, 1_200, 100), Ok(()));
+    }
+
+    #[test]
+    fn encoded_rate_gate_has_one_concurrent_winner_at_epoch_zero() {
+        const THREADS: usize = 16;
+        let state = Arc::new(AtomicU64::new(0));
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let mut handles = Vec::with_capacity(THREADS);
+
+        for _ in 0..THREADS {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                claim_execution_at(&state, 0, 1_000).is_ok()
+            }));
+        }
+
+        let winners = handles
+            .into_iter()
+            .map(|handle| usize::from(handle.join().expect("rate-gate worker must not panic")))
+            .sum::<usize>();
+        assert_eq!(winners, 1);
+    }
+
+    #[test]
+    fn completion_record_cannot_replace_a_newer_claim() {
+        let state = AtomicU64::new(0);
+        assert_eq!(claim_execution_at(&state, 100, 100), Ok(()));
+        assert_eq!(claim_execution_at(&state, 200, 100), Ok(()));
+
+        record_execution_completed_at(&state, 150);
+        assert_eq!(state.load(Ordering::Relaxed), encode_elapsed_ms(200));
+
+        record_execution_completed_at(&state, 250);
+        assert_eq!(state.load(Ordering::Relaxed), encode_elapsed_ms(250));
+    }
+
+    #[test]
+    fn elapsed_tick_encoding_saturates_without_reusing_zero() {
+        assert_eq!(duration_millis(Duration::MAX), MAX_ELAPSED_MS);
+        assert_eq!(encode_elapsed_ms(u64::MAX), u64::MAX);
+        assert_eq!(encode_elapsed_ms(0), 1);
+
+        let state = AtomicU64::new(0);
+        assert_eq!(claim_execution_at(&state, MAX_ELAPSED_MS, 1_000), Ok(()));
+        assert_eq!(state.load(Ordering::Relaxed), u64::MAX);
+        assert_eq!(claim_execution_at(&state, u64::MAX, 1_000), Err(1_000));
+
+        record_execution_completed_at(&state, u64::MAX);
+        assert_eq!(state.load(Ordering::Relaxed), u64::MAX);
+        assert_ne!(state.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn denied_service_ref_is_filtered_before_resolution() {
+        let refs = vec![
+            backend_ref("denied", Some("other-ns"), true),
+            backend_ref("allowed", None, false),
+        ];
+        let mut calls = Vec::new();
+
+        let collection = collect_route_endpoints_with(
+            &refs,
+            "route-ns",
+            10,
+            false,
+            |name, namespace, _port, _use_tls, _allow_loopback| {
+                calls.push((name.to_string(), namespace.to_string()));
+                (vec![resolved_endpoint("10.0.0.1:8080", name)], 0)
+            },
+        );
+
+        assert_eq!(calls, [("allowed".to_string(), "route-ns".to_string())]);
+        assert_eq!(collection.denied_ref_count, 1);
+        assert_eq!(collection.backends.len(), 1);
+        assert_eq!(collection.backends[0].name, "allowed");
+        assert_eq!(collection.discovered_endpoint_count, 1);
+        assert_eq!(collection.selected_endpoints.len(), 1);
+    }
+
+    #[test]
+    fn endpoint_collection_distinguishes_no_discovery_from_cap_zero() {
+        let refs = vec![backend_ref("service", None, false)];
+        let no_discovery = collect_route_endpoints_with(
+            &refs,
+            "route-ns",
+            10,
+            false,
+            |_name, _namespace, _port, _use_tls, _allow_loopback| (Vec::new(), 0),
+        );
+
+        assert_eq!(no_discovery.backends[0].endpoint_count, 0);
+        assert_eq!(no_discovery.discovered_endpoint_count, 0);
+        assert!(no_discovery.selected_endpoints.is_empty());
+        assert!(!no_discovery.truncated());
+
+        let cap_zero = collect_route_endpoints_with(
+            &refs,
+            "route-ns",
+            0,
+            false,
+            |name, _namespace, _port, _use_tls, _allow_loopback| {
+                (
+                    vec![
+                        resolved_endpoint("10.0.0.1:8080", name),
+                        resolved_endpoint("10.0.0.2:8080", name),
+                    ],
+                    0,
+                )
+            },
+        );
+
+        assert_eq!(cap_zero.backends[0].endpoint_count, 2);
+        assert_eq!(cap_zero.discovered_endpoint_count, 2);
+        assert!(cap_zero.selected_endpoints.is_empty());
+        assert!(cap_zero.truncated());
+    }
+
+    #[test]
+    fn endpoint_collection_keeps_global_prefix_and_full_backend_counts() {
+        let refs = vec![backend_ref("first", None, false), backend_ref("second", None, false)];
+        let collection = collect_route_endpoints_with(
+            &refs,
+            "route-ns",
+            3,
+            false,
+            |name, _namespace, _port, _use_tls, _allow_loopback| {
+                (
+                    vec![
+                        resolved_endpoint(&format!("{name}-1"), name),
+                        resolved_endpoint(&format!("{name}-2"), name),
+                    ],
+                    0,
+                )
+            },
+        );
+
+        assert_eq!(
+            collection
+                .backends
+                .iter()
+                .map(|backend| backend.endpoint_count)
+                .collect::<Vec<_>>(),
+            [2, 2]
+        );
+        assert_eq!(collection.discovered_endpoint_count, 4);
+        assert_eq!(
+            collection
+                .selected_endpoints
+                .iter()
+                .map(|endpoint| endpoint.address.as_str())
+                .collect::<Vec<_>>(),
+            ["first-1", "first-2", "second-1"]
+        );
+        assert!(collection.truncated());
+    }
+
+    #[test]
+    fn fan_out_permits_are_bounded_by_selected_endpoints() {
+        assert_eq!(fan_out_permit_count(usize::MAX, 50), Some(50));
+        assert_eq!(fan_out_permit_count(10, 0), None);
+        let _semaphore = Semaphore::new(fan_out_permit_count(usize::MAX, 50).unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn fan_out_returns_when_all_requests_complete() {
         let futures = (0..2)
-            .map(|i| async move { endpoint_result(format!("127.0.0.1:{}", 30001 + i)) })
+            .map(|ordinal| async move { completed_endpoint(ordinal, "duplicate:8080", 200, b"OK") })
             .collect();
-        let start = Instant::now();
 
         let (results, wall_timeout_hit) = fan_out_with_wall_timeout(futures, Duration::from_secs(1)).await;
 
         assert_eq!(results.len(), 2);
         assert!(!wall_timeout_hit);
-        assert!(start.elapsed() < Duration::from_millis(100));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn fan_out_preserves_results_completed_before_wall_timeout() {
         let futures = [1_u64, 500]
             .into_iter()
-            .map(|delay_ms| async move {
+            .enumerate()
+            .map(|(ordinal, delay_ms)| async move {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                endpoint_result(format!("delay-{delay_ms}"))
+                completed_endpoint(ordinal, "duplicate:8080", 200, b"OK")
             })
             .collect();
 
@@ -548,7 +988,59 @@ mod tests {
 
         assert!(wall_timeout_hit);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].address, "delay-1");
+        assert_eq!(results[0].ordinal, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fan_out_prefers_a_result_ready_at_the_wall_deadline() {
+        let futures = [50_u64, 500]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, delay_ms)| async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                completed_endpoint(ordinal, "duplicate:8080", 200, b"OK")
+            })
+            .collect();
+
+        let (results, wall_timeout_hit) = fan_out_with_wall_timeout(futures, Duration::from_millis(50)).await;
+
+        assert!(wall_timeout_hit);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].ordinal, 0);
+    }
+
+    #[test]
+    fn ordinal_assembly_preserves_duplicates_statuses_and_raw_body_bytes() {
+        let selected = vec![
+            resolved_endpoint("10.0.0.1:8080", "first"),
+            resolved_endpoint("10.0.0.1:8080", "first"),
+            resolved_endpoint("10.0.0.1:8080", "second"),
+            resolved_endpoint("10.0.0.1:8080", "second"),
+        ];
+        let mut backends = vec![backend_result("first", 2), backend_result("second", 3)];
+        let completed = vec![
+            completed_endpoint(3, "10.0.0.1:8080", 503, &[0xff, 0xfe]),
+            completed_endpoint(2, "10.0.0.1:8080", 399, b"redirect"),
+            completed_endpoint(0, "10.0.0.1:8080", 204, b"ok"),
+        ];
+
+        let aggregate = assemble_endpoint_results(&selected, completed, &mut backends);
+
+        assert_eq!(
+            aggregate,
+            EndpointAggregate {
+                success_count: 2,
+                failure_count: 2,
+                total_response_bytes: 12,
+            }
+        );
+        assert_eq!(backends[0].endpoints.len(), 2);
+        assert_eq!(backends[0].endpoints[0].status, Some(204));
+        assert_eq!(backends[0].endpoints[1].error.as_deref(), Some("wall timeout exceeded"));
+        assert_eq!(backends[1].endpoints.len(), 2);
+        assert_eq!(backends[1].endpoints[0].status, Some(399));
+        assert_eq!(backends[1].endpoints[1].status, Some(503));
+        assert_ne!(backends[1].endpoints[1].body.as_deref().unwrap().len(), 2);
     }
 
     #[test]
@@ -584,32 +1076,18 @@ impl RequestFilter for AllEndpointStatus {
         // that all read the same `last` value bypass the min-interval gate together.
         let min_interval = global_config.min_interval_ms;
         if min_interval > 0 {
-            loop {
-                let last = LAST_EXECUTION_MS.load(Ordering::Relaxed);
-                let now = elapsed_ms();
-                let since_last = now.saturating_sub(last);
-
-                if since_last < min_interval {
-                    let retry_after_s = (min_interval - since_last).div_ceil(1000);
-                    log.push_err("rate limited");
-                    let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
-                    return self
-                        .send_json_response_with_headers(
-                            session,
-                            429,
-                            &body,
-                            &[("Retry-After", &retry_after_s.to_string())],
-                        )
-                        .await;
-                }
-
-                if LAST_EXECUTION_MS
-                    .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    break;
-                }
-                // Another request claimed the slot; re-load and re-check.
+            if let Err(remaining_ms) = claim_execution_at(&LAST_EXECUTION_MS, elapsed_ms(), min_interval) {
+                let retry_after_s = remaining_ms.div_ceil(1000);
+                log.push_err("rate limited");
+                let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
+                return self
+                    .send_json_response_with_headers(
+                        session,
+                        429,
+                        &body,
+                        &[("Retry-After", &retry_after_s.to_string())],
+                    )
+                    .await;
             }
         }
 
@@ -660,44 +1138,24 @@ impl RequestFilter for AllEndpointStatus {
 
         // 2. Resolve all endpoints from all backends
         let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);
-        let mut all_backend_results: Vec<BackendResult> = Vec::new();
-        let mut all_endpoints: Vec<ResolvedEndpoint> = Vec::new();
-        let mut total_truncated = false;
-        let mut unsafe_endpoint_count = 0usize;
+        let collection = collect_route_endpoints_with(
+            &backend_refs,
+            &route_namespace,
+            effective_max,
+            ctx.allow_loopback_upstream,
+            resolve_endpoints,
+        );
 
-        for backend_ref in &backend_refs {
-            if backend_ref.backend_kind() != HTTPBackendRefKind::Service {
-                continue;
-            }
-            let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_namespace);
-            let port = backend_ref.port.map(|p| p as u16).unwrap_or(80);
-            let use_tls = backend_ref.backend_tls_policy.is_some();
-
-            let (resolved, unsafe_count) =
-                resolve_endpoints(&backend_ref.name, namespace, port, use_tls, ctx.allow_loopback_upstream);
-            unsafe_endpoint_count += unsafe_count;
-
-            all_backend_results.push(BackendResult {
-                name: backend_ref.name.clone(),
-                namespace: namespace.to_string(),
-                port,
-                endpoint_count: resolved.len(),
-                endpoints: Vec::new(), // Will be filled after fan-out
-            });
-
-            all_endpoints.extend(resolved);
+        if collection.denied_ref_count > 0 {
+            log.push_err("backend ref denied");
         }
-
-        if unsafe_endpoint_count > 0 {
+        if collection.unsafe_endpoint_count > 0 {
             log.push_err("unsafe upstream");
         }
 
-        // Apply max_endpoints limit
-        if all_endpoints.len() > effective_max {
-            all_endpoints.truncate(effective_max);
-            total_truncated = true;
-        }
-
+        let total_truncated = collection.truncated();
+        let mut all_backend_results = collection.backends;
+        let all_endpoints = collection.selected_endpoints;
         let total_endpoints = all_endpoints.len();
 
         if total_endpoints == 0 {
@@ -708,10 +1166,10 @@ impl RequestFilter for AllEndpointStatus {
                     total_endpoints: 0,
                     success_count: 0,
                     failure_count: 0,
-                    truncated: false,
+                    truncated: total_truncated,
                     timeout_ms: self.config.effective_timeout_ms(),
                     wall_timeout_ms: self.config.effective_wall_timeout_ms(),
-                    total_latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
+                    total_latency_ms: duration_millis(Instant::now().saturating_duration_since(start)),
                     total_response_bytes: 0,
                     wall_timeout_hit: false,
                 },
@@ -729,75 +1187,28 @@ impl RequestFilter for AllEndpointStatus {
                 &original_path,
                 original_query.as_deref(),
                 &original_headers,
-                &global_config,
             )
             .await;
 
         // 4. Map results back to backends
-        // Build a map: address -> EndpointResult for completed endpoints
-        let mut result_map: HashMap<String, EndpointResult> = HashMap::new();
-        for r in &endpoint_results {
-            result_map.insert(r.address.clone(), r.clone());
-        }
+        let aggregate = assemble_endpoint_results(&all_endpoints, endpoint_results, &mut all_backend_results);
 
-        let mut success_count = 0usize;
-        let mut failure_count = 0usize;
-        let mut total_response_bytes = 0usize;
-        let mut ep_offset = 0usize;
+        record_execution_completed_at(&LAST_EXECUTION_MS, elapsed_ms());
 
-        for backend in &mut all_backend_results {
-            let count = backend
-                .endpoint_count
-                .min(all_endpoints.len().saturating_sub(ep_offset));
-            for i in 0..count {
-                let idx = ep_offset + i;
-                if idx >= all_endpoints.len() {
-                    break;
-                }
-                let addr = &all_endpoints[idx].address;
-                if let Some(result) = result_map.remove(addr) {
-                    if result.error.is_none() {
-                        success_count += 1;
-                        if let Some(ref body) = result.body {
-                            total_response_bytes += body.len();
-                        }
-                    } else {
-                        failure_count += 1;
-                    }
-                    backend.endpoints.push(result);
-                } else {
-                    // Endpoint was cancelled by wall timeout
-                    failure_count += 1;
-                    backend.endpoints.push(EndpointResult {
-                        address: addr.clone(),
-                        status: None,
-                        latency_ms: 0,
-                        body: None,
-                        body_truncated: false,
-                        headers: None,
-                        error: Some("wall timeout exceeded".to_string()),
-                    });
-                }
-            }
-            ep_offset += count;
-        }
-
-        LAST_EXECUTION_MS.store(elapsed_ms(), Ordering::Relaxed);
-
-        let total_latency = Instant::now().saturating_duration_since(start).as_millis() as u64;
+        let total_latency = duration_millis(Instant::now().saturating_duration_since(start));
 
         // 5. Build aggregated response
         let response = AggregatedResponse {
             summary: Summary {
                 total_backends: all_backend_results.len(),
                 total_endpoints,
-                success_count,
-                failure_count,
+                success_count: aggregate.success_count,
+                failure_count: aggregate.failure_count,
                 truncated: total_truncated,
                 timeout_ms: self.config.effective_timeout_ms(),
                 wall_timeout_ms: self.config.effective_wall_timeout_ms(),
                 total_latency_ms: total_latency,
-                total_response_bytes,
+                total_response_bytes: aggregate.total_response_bytes,
                 wall_timeout_hit,
             },
             backends: all_backend_results,
