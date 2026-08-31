@@ -46,6 +46,8 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0040 — Unify CORS validation and header precomputation | needs-implementation | [campaign finding](D0040-cors-validation-header-precomputation.md) |
 | D0041 — Adjudicate CSRF duration-string migration | needs-discussion | [campaign finding](D0041-csrf-duration-string-migration.md) |
 | D0042 — Add CSRF Secret-rotation integration coverage | needs-implementation | [campaign finding](D0042-csrf-secret-rotation-integration-coverage.md) |
+| D0043 — Enforce exactly one CtxSet transform operation | needs-implementation | [campaign finding](D0043-ctx-set-exact-transform-operation.md) |
+| D0044 — Design sensitive ctx provenance and unmasking | needs-discussion | [campaign finding](D0044-ctx-sensitive-provenance-unmasking.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -83,3 +85,5 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Unify CORS validation and header precomputation | pending | [task](../../../todo/unify-cors-validation-and-header-precomputation.md) |
 | Adjudicate CSRF duration-string migration | pending | [task](../../../todo/migrate-csrf-expires-to-duration-string.md) |
 | Add CSRF Secret-rotation integration coverage | pending | [task](../../../todo/add-csrf-secret-rotation-integration-coverage.md) |
+| Enforce exactly one CtxSet transform operation | pending | [task](../../../todo/enforce-one-ctx-set-transform-operation.md) |
+| Design sensitive ctx provenance and unmasking | pending | [task](../../../todo/design-ctx-sensitive-provenance-unmasking.md) |

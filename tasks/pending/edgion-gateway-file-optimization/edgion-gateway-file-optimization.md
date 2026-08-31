@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 81 changed, 95 examined-no-change, 9 deferred, 347 non-terminal |
-| Active batch | B0070 CSRF expiry and runtime ownership; independently reviewed and fully verified, pending local commit |
-| Analysis queue | Empty until B0070 completes its commit gate |
+| Coverage | 532 tracked files: 82 changed, 96 examined-no-change, 9 deferred, 345 non-terminal |
+| Active batch | B0071 CtxSet bounded transform execution; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0071 completes its commit gate |
 
 ## AI guide summary
 

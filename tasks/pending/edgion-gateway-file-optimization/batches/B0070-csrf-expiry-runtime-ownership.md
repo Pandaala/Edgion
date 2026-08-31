@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `71312d4e`
-- Pipeline state: independently reviewed and fully verified; pending local commit
+- Pipeline state: independently reviewed, fully verified, and committed as `65511d86`
 - Active anchor crate: `edgion-gateway`
 - Owned anchor files: `edgion-gateway/src/plugins/http/csrf/{mod.rs,plugin.rs,token.rs}`
 - Exact supporting allow-list: `edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs`; `docs/en/user-guide/http-route/filters/edgion-plugins/csrf.md`; `docs/zh-CN/user-guide/http-route/filters/edgion-plugins/csrf.md`
@@ -57,4 +57,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; three changed anchor files
-- Commit: pending
+- Commit: `65511d86`

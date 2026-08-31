@@ -21,7 +21,7 @@ use crate::link_sys::template::evaluate_template;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVarRule, TransformConfig, TransformType};
+use edgion_resources::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVarRule, TransformConfig};
 
 // ============================================================================
 // CtxSet Plugin
@@ -33,7 +33,6 @@ use edgion_resources::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVar
 /// typically used for passing extracted values (like tenant ID, user tier, etc.)
 /// between plugins.
 pub struct CtxSet {
-    name: String,
     config: CtxSetConfig,
 }
 
@@ -44,7 +43,6 @@ impl CtxSet {
         let _ = validated_config.validate();
 
         let plugin = CtxSet {
-            name: "CtxSet".to_string(),
             config: validated_config,
         };
 
@@ -68,7 +66,7 @@ impl CtxSet {
             evaluate_template(compiled, session)
         } else if let Some(ref from) = rule.from {
             // Get from KeyGet source
-            session.key_get(from).or(rule.default.clone())?
+            session.key_get(from).or_else(|| rule.default.clone())?
         } else {
             // No source specified (should be caught by validation)
             return rule.default.clone();
@@ -128,39 +126,55 @@ impl CtxSet {
         compiled_replace: Option<&Regex>,
         plugin_log: &mut PluginLog,
     ) -> Option<String> {
-        let transform_type = transform.get_transform_type()?;
-
-        match transform_type {
-            TransformType::Replace { with, .. } => match compiled_replace {
-                Some(re) => Some(re.replace_all(value, with.as_str()).to_string()),
+        if let Some(replace) = transform.replace.as_ref() {
+            return match compiled_replace {
+                Some(re) => Some(re.replace_all(value, replace.with.as_str()).to_string()),
                 None => {
                     // Invariant: validate() compiles every Replace pattern; reaching
                     // here means the config bypassed validation. Fail-open via default.
                     plugin_log.push_err("transform regex missing");
                     None
                 }
-            },
-            TransformType::Substring(start, end) => {
-                let chars: Vec<char> = value.chars().collect();
-                let start = start.min(chars.len());
-                let end = end.min(chars.len());
-                Some(chars[start..end].iter().collect())
-            }
-            TransformType::Case(case_type) => match case_type {
+            };
+        }
+
+        if let Some((start, end)) = transform.substring {
+            return Some(value.chars().skip(start).take(end.saturating_sub(start)).collect());
+        }
+
+        if let Some(case_type) = transform.case.as_ref() {
+            return match case_type {
                 CaseType::Upper => Some(value.to_uppercase()),
                 CaseType::Lower => Some(value.to_lowercase()),
-            },
-            TransformType::Prefix(prefix) => Some(format!("{}{}", prefix, value)),
-            TransformType::Suffix(suffix) => Some(format!("{}{}", value, suffix)),
-            TransformType::Trim => Some(value.trim().to_string()),
+            };
         }
+
+        if let Some(prefix) = transform.prefix.as_deref() {
+            let mut transformed = String::with_capacity(prefix.len() + value.len());
+            transformed.push_str(prefix);
+            transformed.push_str(value);
+            return Some(transformed);
+        }
+
+        if let Some(suffix) = transform.suffix.as_deref() {
+            let mut transformed = String::with_capacity(value.len() + suffix.len());
+            transformed.push_str(value);
+            transformed.push_str(suffix);
+            return Some(transformed);
+        }
+
+        if transform.trim == Some(true) {
+            return Some(value.trim().to_string());
+        }
+
+        None
     }
 }
 
 #[async_trait]
 impl RequestFilter for CtxSet {
     fn name(&self) -> &str {
-        &self.name
+        "CtxSet"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
@@ -191,6 +205,196 @@ impl RequestFilter for CtxSet {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+
+    fn parse_config(yaml: &str) -> CtxSetConfig {
+        serde_yaml::from_str(yaml).expect("config should deserialize")
+    }
+
+    fn parse_transform(yaml: &str) -> TransformConfig {
+        serde_yaml::from_str(yaml).expect("transform should deserialize")
+    }
+
+    #[test]
+    fn name_is_static_across_instances() {
+        let first = CtxSet::create(&parse_config(
+            r#"
+vars:
+  - name: first
+    value: one
+"#,
+        ));
+        let second = CtxSet::create(&parse_config(
+            r#"
+vars:
+  - name: second
+    value: two
+"#,
+        ));
+
+        assert_eq!(first.name(), "CtxSet");
+        assert_eq!(second.name(), "CtxSet");
+    }
+
+    #[test]
+    fn source_value_wins_and_missing_source_uses_default() {
+        let plugin = CtxSet {
+            config: parse_config(
+                r#"
+vars:
+  - name: result
+    from:
+      type: header
+      name: X-Source
+    default: fallback
+"#,
+            ),
+        };
+        let rule = &plugin.config.vars[0];
+
+        let mut source_session = MockPluginSession::new();
+        source_session.expect_key_get().return_const(Some("source".to_string()));
+        let mut source_log = PluginLog::new("CtxSet");
+        assert_eq!(
+            plugin.process_rule(rule, 0, &source_session, &mut source_log),
+            Some("source".to_string())
+        );
+
+        let mut missing_session = MockPluginSession::new();
+        missing_session.expect_key_get().return_const(None::<String>);
+        let mut missing_log = PluginLog::new("CtxSet");
+        assert_eq!(
+            plugin.process_rule(rule, 0, &missing_session, &mut missing_log),
+            Some("fallback".to_string())
+        );
+    }
+
+    #[test]
+    fn malformed_multi_operation_transform_keeps_priority() {
+        let plugin = CtxSet {
+            config: CtxSetConfig::default(),
+        };
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        let replace_first = parse_transform(
+            r#"
+replace:
+  pattern: a
+  with: x
+substring: [1, 2]
+case: upper
+prefix: pre-
+suffix: -post
+trim: true
+"#,
+        );
+        let replace_regex = Regex::new("a").unwrap();
+        assert_eq!(
+            plugin.apply_transform("abc", &replace_first, Some(&replace_regex), &mut plugin_log),
+            Some("xbc".to_string())
+        );
+
+        let substring_first = parse_transform(
+            r#"
+substring: [1, 3]
+case: upper
+prefix: pre-
+suffix: -post
+trim: true
+"#,
+        );
+        assert_eq!(
+            plugin.apply_transform("abcd", &substring_first, None, &mut plugin_log),
+            Some("bc".to_string())
+        );
+
+        let case_first = parse_transform(
+            r#"
+case: upper
+prefix: pre-
+suffix: -post
+trim: true
+"#,
+        );
+        assert_eq!(
+            plugin.apply_transform("ab", &case_first, None, &mut plugin_log),
+            Some("AB".to_string())
+        );
+
+        let prefix_first = parse_transform(
+            r#"
+prefix: pre-
+suffix: -post
+trim: true
+"#,
+        );
+        assert_eq!(
+            plugin.apply_transform("ab", &prefix_first, None, &mut plugin_log),
+            Some("pre-ab".to_string())
+        );
+
+        let suffix_first = parse_transform(
+            r#"
+suffix: -post
+trim: true
+"#,
+        );
+        assert_eq!(
+            plugin.apply_transform("ab", &suffix_first, None, &mut plugin_log),
+            Some("ab-post".to_string())
+        );
+    }
+
+    #[test]
+    fn substring_uses_unicode_scalar_indices_and_clamps_ranges() {
+        let plugin = CtxSet {
+            config: CtxSetConfig::default(),
+        };
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        for (range, expected) in [
+            ((1, 3), "é€"),
+            ((2, 99), "€z"),
+            ((99, 100), ""),
+            ((2, 2), ""),
+            ((3, 1), ""),
+        ] {
+            let transform = parse_transform(&format!("substring: [{}, {}]", range.0, range.1));
+            assert_eq!(
+                plugin.apply_transform("aé€z", &transform, None, &mut plugin_log),
+                Some(expected.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn missing_compiled_replace_logs_error_and_uses_rule_default() {
+        let plugin = CtxSet {
+            config: parse_config(
+                r#"
+vars:
+  - name: result
+    from:
+      type: header
+      name: X-Source
+    transform:
+      replace:
+        pattern: source
+        with: transformed
+    default: fallback
+"#,
+            ),
+        };
+        let rule = &plugin.config.vars[0];
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().return_const(Some("source".to_string()));
+        let mut plugin_log = PluginLog::new("CtxSet");
+
+        assert_eq!(
+            plugin.process_rule(rule, 0, &session, &mut plugin_log),
+            Some("fallback".to_string())
+        );
+        assert!(plugin_log.contains("err: transform regex missing"));
+    }
 
     #[tokio::test]
     async fn test_template_injection_prevention() {
