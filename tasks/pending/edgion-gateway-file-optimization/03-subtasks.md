@@ -43,7 +43,7 @@
 | `ai-quota` | 2 | 0 | 0 | 0 | pending |
 | `api` | 2 | 0 | 0 | 0 | pending |
 | `backends-circuit-breaker` | 2 | 1 | 1 | 0 | complete |
-| `backends-core` | 8 | 4 | 2 | 1 | pending |
+| `backends-core` | 8 | 5 | 2 | 1 | complete |
 | `backends-discovery-endpoints` | 4 | 1 | 1 | 2 | complete |
 | `backends-discovery-services` | 3 | 0 | 3 | 0 | complete |
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
@@ -203,7 +203,7 @@
 | `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | changed | `B0042`: deterministic test-only deadline expiry removes wall-clock recovery sleeps |
 | `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | changed | `B0042`: deterministic recovery/backoff tests; detached gauge lifecycle deferred to D0006 |
 | `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | changed | BACKENDS-PANIC-THRESHOLD-001 / `cd048aa9`; atomic capture and metric lifecycle deferred to dedicated TODOs |
-| `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | pending | — |
+| `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | changed | `B0043`: preserved complete upstream mTLS client chains and removed peer-construction allocations |
 | `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | changed | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | examined-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |
 | `edgion-gateway/src/backends/policy/backend_tls/mod.rs` | `backends-policy-tls` | source | examined-no-change | BACKENDS-POLICY-TLS-001: narrow module exports retained |

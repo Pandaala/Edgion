@@ -52,4 +52,4 @@
 
 - Ledger/changelog updated: yes
 - Deferred finding: [`D0006`](../deferred/D0006-outlier-generation-gauge-lifecycle.md)
-- Commit: pending automatic commit
+- Commit: `803d9342`

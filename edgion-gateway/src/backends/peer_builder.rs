@@ -25,6 +25,20 @@ pub(crate) enum BackendAppProtocol {
     WebSocket,
 }
 
+fn parse_backend_app_protocol(value: &str) -> Option<BackendAppProtocol> {
+    if value.eq_ignore_ascii_case("kubernetes.io/h2c") || value.eq_ignore_ascii_case("h2c") {
+        Some(BackendAppProtocol::H2c)
+    } else if value.eq_ignore_ascii_case("kubernetes.io/ws")
+        || value.eq_ignore_ascii_case("ws")
+        || value.eq_ignore_ascii_case("kubernetes.io/wss")
+        || value.eq_ignore_ascii_case("wss")
+    {
+        Some(BackendAppProtocol::WebSocket)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn detect_backend_app_protocol_key(
     service_key: &str,
     backend_port: Option<i32>,
@@ -34,13 +48,7 @@ pub(crate) fn detect_backend_app_protocol_key(
 
     let target_port = backend_port.or_else(|| ports.first().map(|p| p.port))?;
     let port = ports.iter().find(|p| p.port == target_port).or_else(|| ports.first())?;
-    let app_protocol = port.app_protocol.as_deref()?.to_ascii_lowercase();
-
-    match app_protocol.as_str() {
-        "kubernetes.io/h2c" | "h2c" => Some(BackendAppProtocol::H2c),
-        "kubernetes.io/ws" | "ws" | "kubernetes.io/wss" | "wss" => Some(BackendAppProtocol::WebSocket),
-        _ => None,
-    }
+    parse_backend_app_protocol(port.app_protocol.as_deref()?)
 }
 
 pub(crate) fn apply_backend_app_protocol(
@@ -103,15 +111,18 @@ fn select_client_identity_source(
 #[cfg(feature = "boringssl")]
 fn build_client_cert_key_from_secret(
     secret: &k8s_openapi::api::core::v1::Secret,
-) -> Result<Option<Arc<CertKey>>, EdgionErrorCode> {
+) -> Result<Arc<CertKey>, EdgionErrorCode> {
     let data = secret.data.as_ref().ok_or(EdgionErrorCode::Unknown)?;
     let cert_pem = data.get(CERT).ok_or(EdgionErrorCode::Unknown)?;
     let key_pem = data.get(KEY).ok_or(EdgionErrorCode::Unknown)?;
 
-    let cert = X509::from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
+    let certs = X509::stack_from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
+    if certs.is_empty() {
+        return Err(EdgionErrorCode::Unknown);
+    }
     let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
 
-    Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
+    Ok(Arc::new(CertKey::new(certs, key)))
 }
 
 #[cfg(feature = "boringssl")]
@@ -179,13 +190,13 @@ pub(crate) fn create_tls_peer(
                 .resolved_client_certificate
                 .as_ref()
                 .ok_or(EdgionErrorCode::Unknown)?;
-            let cert_key = build_client_cert_key_from_secret(secret)?.ok_or(EdgionErrorCode::Unknown)?;
-            HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+            let cert_key = build_client_cert_key_from_secret(secret)?;
+            HttpPeer::new_mtls(addr, sni, cert_key)
         }
         Some(ClientIdentitySource::Gateway) => {
             let secret = gateway_identity.as_ref().ok_or(EdgionErrorCode::Unknown)?;
-            let cert_key = build_client_cert_key_from_secret(secret)?.ok_or(EdgionErrorCode::Unknown)?;
-            HttpPeer::new_mtls(addr, sni.clone(), cert_key)
+            let cert_key = build_client_cert_key_from_secret(secret)?;
+            HttpPeer::new_mtls(addr, sni, cert_key)
         }
         None => HttpPeer::new(addr, true, sni),
     };
@@ -390,6 +401,97 @@ mod tests {
                 select_client_identity_source(policy_present, policy_identity_present, gateway_identity_present),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn backend_app_protocol_aliases_are_ascii_case_insensitive() {
+        let cases = [
+            ("KuBeRnEtEs.Io/H2C", Some(BackendAppProtocol::H2c)),
+            ("H2C", Some(BackendAppProtocol::H2c)),
+            ("KuBeRnEtEs.Io/Ws", Some(BackendAppProtocol::WebSocket)),
+            ("Ws", Some(BackendAppProtocol::WebSocket)),
+            ("KuBeRnEtEs.Io/WsS", Some(BackendAppProtocol::WebSocket)),
+            ("WsS", Some(BackendAppProtocol::WebSocket)),
+            ("KuBeRnEtEs.Io/Unknown", None),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(parse_backend_app_protocol(value), expected, "value={value}");
+        }
+    }
+
+    #[cfg(feature = "boringssl")]
+    fn client_identity_secret(cert: Option<&str>, key: Option<&str>) -> Secret {
+        let mut data = std::collections::BTreeMap::new();
+        if let Some(cert) = cert {
+            data.insert(CERT.to_string(), k8s_openapi::ByteString(cert.as_bytes().to_vec()));
+        }
+        if let Some(key) = key {
+            data.insert(KEY.to_string(), k8s_openapi::ByteString(key.as_bytes().to_vec()));
+        }
+        Secret {
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(feature = "boringssl")]
+    fn generated_cert_and_key(name: &str) -> (String, String) {
+        let key = rcgen::KeyPair::generate().expect("test key generation must succeed");
+        let params =
+            rcgen::CertificateParams::new(vec![name.to_string()]).expect("test certificate parameters must be valid");
+        let cert = params.self_signed(&key).expect("test certificate signing must succeed");
+        (cert.pem(), key.serialize_pem())
+    }
+
+    #[cfg(feature = "boringssl")]
+    #[test]
+    fn client_identity_preserves_single_and_multi_certificate_chains() {
+        let (leaf_pem, leaf_key) = generated_cert_and_key("leaf.example");
+        let (intermediate_pem, _) = generated_cert_and_key("intermediate.example");
+
+        let single = build_client_cert_key_from_secret(&client_identity_secret(Some(&leaf_pem), Some(&leaf_key)))
+            .expect("single certificate identity must parse");
+        assert!(single.intermediates().is_empty());
+
+        let bundle = format!("{leaf_pem}{intermediate_pem}");
+        let chain = build_client_cert_key_from_secret(&client_identity_secret(Some(&bundle), Some(&leaf_key)))
+            .expect("certificate chain identity must parse");
+        assert_eq!(chain.intermediates().len(), 1);
+
+        let expected_leaf = X509::from_pem(leaf_pem.as_bytes()).expect("leaf certificate must parse");
+        let expected_intermediate =
+            X509::from_pem(intermediate_pem.as_bytes()).expect("intermediate certificate must parse");
+        assert_eq!(
+            chain.leaf().to_der().expect("leaf DER"),
+            expected_leaf.to_der().expect("expected leaf DER")
+        );
+        assert_eq!(
+            chain.intermediates()[0].to_der().expect("intermediate DER"),
+            expected_intermediate.to_der().expect("expected intermediate DER")
+        );
+    }
+
+    #[cfg(feature = "boringssl")]
+    #[test]
+    fn client_identity_rejects_missing_empty_and_malformed_material() {
+        let (cert_pem, key_pem) = generated_cert_and_key("client.example");
+        let cases = [
+            Secret::default(),
+            client_identity_secret(None, Some(&key_pem)),
+            client_identity_secret(Some(&cert_pem), None),
+            client_identity_secret(Some(""), Some(&key_pem)),
+            client_identity_secret(Some("not a certificate"), Some(&key_pem)),
+            client_identity_secret(Some(&cert_pem), Some("")),
+            client_identity_secret(Some(&cert_pem), Some("not a private key")),
+        ];
+
+        for secret in cases {
+            assert!(matches!(
+                build_client_cert_key_from_secret(&secret),
+                Err(EdgionErrorCode::Unknown)
+            ));
         }
     }
 
