@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `65511d86`
-- Pipeline state: implementation independently approved and fully verified; pending local commit
+- Pipeline state: implementation independently approved, fully verified, and committed as `4ad0cf32`
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/ctx_set/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/ctx_set/plugin.rs`
@@ -58,4 +58,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change row, all verification complete
-- Commit: pending
+- Commit: `4ad0cf32`

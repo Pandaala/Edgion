@@ -99,7 +99,7 @@
 | `plugins-http-credential-injector` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-csrf` | 3 | 3 | 0 | 0 | complete |
 | `plugins-http-ctx-set` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-direct-endpoint` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-direct-endpoint` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-dsl` | 33 | 0 | 0 | 0 | pending |
 | `plugins-http-dynamic-external-upstream` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-dynamic-internal-upstream` | 2 | 0 | 0 | 0 | pending |
@@ -361,8 +361,8 @@
 | `edgion-gateway/src/plugins/http/csrf/token.rs` | `plugins-http-csrf` | source | changed | B0070 |
 | `edgion-gateway/src/plugins/http/ctx_set/mod.rs` | `plugins-http-ctx-set` | source | examined-no-change | B0071 |
 | `edgion-gateway/src/plugins/http/ctx_set/plugin.rs` | `plugins-http-ctx-set` | source | changed | B0071 |
-| `edgion-gateway/src/plugins/http/direct_endpoint/mod.rs` | `plugins-http-direct-endpoint` | source | pending | — |
-| `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs` | `plugins-http-direct-endpoint` | source | pending | — |
+| `edgion-gateway/src/plugins/http/direct_endpoint/mod.rs` | `plugins-http-direct-endpoint` | source | examined-no-change | B0072 |
+| `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs` | `plugins-http-direct-endpoint` | source | changed | B0072 |
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | pending | — |

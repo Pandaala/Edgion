@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use crate::backends::{validate_endpoint_backend_addr, validate_endpoint_in_route};
 use crate::plugins::runtime::log::{la, sensitive};
@@ -9,8 +9,11 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{DirectEndpointConfig, UpstreamFallback};
 use edgion_resources::HTTPBackendRef;
 
+const MISSING_TARGET_ENDPOINT_BODY: &str = "Missing target endpoint";
+const INVALID_TARGET_ENDPOINT_BODY: &str = "Invalid target endpoint";
+const TARGET_ENDPOINT_NOT_ALLOWED_BODY: &str = "Target endpoint not allowed";
+
 pub struct DirectEndpoint {
-    name: String,
     config: DirectEndpointConfig,
 }
 
@@ -18,10 +21,7 @@ impl DirectEndpoint {
     pub fn new(config: &DirectEndpointConfig) -> Self {
         let mut validated = config.clone();
         validated.validate();
-        Self {
-            name: "DirectEndpoint".to_string(),
-            config: validated,
-        }
+        Self { config: validated }
     }
 
     /// Pure function to resolve endpoint info from raw value + context
@@ -37,7 +37,7 @@ impl DirectEndpoint {
             if let Some(ref regex) = self.config.compiled_regex {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
                     Some(m) => m.as_str().to_string(),
-                    None => return Err(ResolutionError::Missing("Regex miss".to_string())),
+                    None => return Err(ResolutionError::Missing),
                 }
             } else {
                 raw_value
@@ -47,17 +47,12 @@ impl DirectEndpoint {
         };
 
         // 2. Parse IP (support "ip" or "ip:port" format)
-        let (target_ip, extracted_port) =
-            parse_endpoint(&endpoint_str).map_err(|e| ResolutionError::Invalid(format!("ParseErr {}", e)))?;
+        let (target_ip, extracted_port) = parse_endpoint(&endpoint_str).map_err(|_| ResolutionError::Invalid)?;
 
         // 3. Security: validate against route's backend_ref endpoints
         let (backend_idx, effective_port) =
-            match validate_endpoint_in_route(&target_ip, extracted_port.or(self.config.port), backend_refs, route_ns) {
-                Ok(result) => result,
-                Err(reason) => {
-                    return Err(ResolutionError::Invalid(reason)); // Becomes Deny
-                }
-            };
+            validate_endpoint_in_route(&target_ip, extracted_port.or(self.config.port), backend_refs, route_ns)
+                .map_err(|_| ResolutionError::NotAllowed)?;
 
         // 4. Determine TLS config
         let (use_tls, sni) = if self.config.inherit_tls {
@@ -73,9 +68,7 @@ impl DirectEndpoint {
         )
         .is_err()
         {
-            return Err(ResolutionError::Invalid(
-                "loopback/link-local/metadata endpoint address rejected".to_string(),
-            ));
+            return Err(ResolutionError::NotAllowed);
         }
 
         Ok(DirectEndpointPreset {
@@ -87,15 +80,20 @@ impl DirectEndpoint {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolutionError {
-    Missing(String),
-    Invalid(String),
+    Missing,
+    Invalid,
+    NotAllowed,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InvalidEndpoint;
 
 #[async_trait]
 impl RequestFilter for DirectEndpoint {
     fn name(&self) -> &str {
-        &self.name
+        "DirectEndpoint"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -119,7 +117,7 @@ impl RequestFilter for DirectEndpoint {
                     log.push("no value 400");
                     return PluginRunningResult::ErrResponse {
                         status: 400,
-                        body: Some("Missing target endpoint".to_string()),
+                        body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
                     };
                 }
             },
@@ -144,10 +142,11 @@ impl RequestFilter for DirectEndpoint {
         // 3. Resolve endpoint info
         match self.resolve(raw_value, backend_refs, route_ns, session.ctx().allow_loopback_upstream) {
             Ok(info) => {
-                let addr_str = format!("{}", info.addr);
-                log.push_fmt("endpoint {}", la![sensitive(&addr_str)]);
+                let addr = info.addr;
                 match session.set_upstream_jump(UpstreamJumpTarget::Direct(info)) {
                     SetJumpOutcome::Set => {
+                        let addr_str = addr.to_string();
+                        log.push_fmt("endpoint {}", la![sensitive(&addr_str)]);
                         session.record_outcome(DyeOutcome::Success, &addr_str);
                     }
                     SetJumpOutcome::Rejected => {
@@ -158,7 +157,7 @@ impl RequestFilter for DirectEndpoint {
 
                 PluginRunningResult::GoodNext
             }
-            Err(ResolutionError::Missing(msg)) => {
+            Err(ResolutionError::Missing) => {
                 log.push("endpoint miss");
                 match self.config.on_missing {
                     UpstreamFallback::Fallback => {
@@ -169,12 +168,12 @@ impl RequestFilter for DirectEndpoint {
                         session.record_outcome(DyeOutcome::Reject, "on-missing");
                         PluginRunningResult::ErrResponse {
                             status: 400,
-                            body: Some(format!("DirectEndpoint missing: {}", msg)),
+                            body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
                         }
                     }
                 }
             }
-            Err(ResolutionError::Invalid(msg)) => {
+            Err(error @ (ResolutionError::Invalid | ResolutionError::NotAllowed)) => {
                 log.push("endpoint invalid");
                 match self.config.on_invalid {
                     UpstreamFallback::Fallback => {
@@ -183,11 +182,14 @@ impl RequestFilter for DirectEndpoint {
                     }
                     UpstreamFallback::Reject => {
                         session.record_outcome(DyeOutcome::Reject, "on-invalid");
-                        // 400 for parse errors ("ParseErr" in msg), 403 for validation denials.
-                        let status = if msg.contains("ParseErr") { 400 } else { 403 };
+                        let (status, body) = match error {
+                            ResolutionError::Invalid => (400, INVALID_TARGET_ENDPOINT_BODY),
+                            ResolutionError::NotAllowed => (403, TARGET_ENDPOINT_NOT_ALLOWED_BODY),
+                            ResolutionError::Missing => unreachable!("handled by the preceding match arm"),
+                        };
                         PluginRunningResult::ErrResponse {
                             status,
-                            body: Some(format!("DirectEndpoint invalid: {}", msg)),
+                            body: Some(body.to_string()),
                         }
                     }
                 }
@@ -205,26 +207,31 @@ fn extract_tls_from_backend_ref(br: &HTTPBackendRef) -> (bool, String) {
 }
 
 /// Parse endpoint string into (IpAddr, optional port)
-fn parse_endpoint(s: &str) -> Result<(IpAddr, Option<u16>), String> {
-    if let Ok(addr) = s.parse::<std::net::SocketAddr>() {
-        return Ok((addr.ip(), Some(addr.port())));
+fn parse_endpoint(s: &str) -> Result<(IpAddr, Option<u16>), InvalidEndpoint> {
+    if let Some(bracketed) = s.strip_prefix('[') {
+        let (ip, suffix) = bracketed.split_once(']').ok_or(InvalidEndpoint)?;
+        let ip = ip.parse::<Ipv6Addr>().map_err(|_| InvalidEndpoint)?;
+        let port = match suffix {
+            "" => None,
+            _ => {
+                let port = suffix
+                    .strip_prefix(':')
+                    .filter(|port| !port.is_empty())
+                    .ok_or(InvalidEndpoint)?;
+                Some(port.parse::<u16>().map_err(|_| InvalidEndpoint)?)
+            }
+        };
+        return Ok((IpAddr::V6(ip), port));
     }
+
     if let Ok(ip) = s.parse::<IpAddr>() {
         return Ok((ip, None));
     }
-    if s.starts_with('[') {
-        if let Some(bracket_end) = s.find(']') {
-            let ip_str = &s[1..bracket_end];
-            let ip: IpAddr = ip_str.parse().map_err(|e| format!("{}", e))?;
-            let port = if bracket_end + 1 < s.len() && s.as_bytes()[bracket_end + 1] == b':' {
-                Some(s[bracket_end + 2..].parse::<u16>().map_err(|e| format!("{}", e))?)
-            } else {
-                None
-            };
-            return Ok((ip, port));
-        }
+    if let Ok(addr) = s.parse::<std::net::SocketAddr>() {
+        return Ok((addr.ip(), Some(addr.port())));
     }
-    Err(format!("cannot parse '{}' as endpoint", s))
+
+    Err(InvalidEndpoint)
 }
 
 #[cfg(test)]
@@ -236,6 +243,7 @@ mod tests {
     use crate::{EdgionHttpContext, MatchInfo, Rsc};
     use edgion_resources::common::KeyGet;
     use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+    use edgion_resources::resources::edgion_plugins::EndpointExtract;
     use edgion_resources::{HTTPRouteMatch, HTTPRouteRule};
     use k8s_openapi::api::discovery::v1::{Endpoint, EndpointPort, EndpointSlice};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -363,6 +371,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn direct_endpoint_name_is_static_across_instances() {
+        let first = DirectEndpoint::new(&base_config());
+        let second = DirectEndpoint::new(&DirectEndpointConfig {
+            port: Some(8080),
+            ..base_config()
+        });
+
+        assert_eq!(first.name(), "DirectEndpoint");
+        assert_eq!(second.name(), "DirectEndpoint");
+    }
+
     /// A successful selection (resolved endpoint validated against a real
     /// EndpointSlice, `SetJumpOutcome::Set`) must record `Success` with the
     /// resolved `"ip:port"` address — the value the deleted `apply_dye_headers`
@@ -372,17 +392,27 @@ mod tests {
     async fn direct_endpoint_records_success_outcome_with_addr() {
         insert_test_endpoint_slice("unit-test-ns", "app-v1", "de-success-slice", "10.0.9.9", 9191);
 
-        let plugin = DirectEndpoint {
-            name: "DirectEndpoint".to_string(),
-            config: base_config(),
-        };
+        let plugin = DirectEndpoint::new(&base_config());
 
         let mut session = MockPluginSession::new();
         session
             .expect_ctx()
             .return_const(ctx_with_backend_refs("unit-test-ns", vec![test_backend_ref("app-v1")]));
         session.expect_key_get().return_const(Some("10.0.9.9:9191".to_string()));
-        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| {
+                matches!(
+                    target,
+                    UpstreamJumpTarget::Direct(info)
+                        if info.addr == "10.0.9.9:9191".parse().unwrap()
+                            && !info.use_tls
+                            && info.sni.is_empty()
+                            && info.backend_ref_idx == 0
+                )
+            })
+            .times(1)
+            .return_const(SetJumpOutcome::Set);
         session
             .expect_record_outcome()
             .withf(|o, v| *o == DyeOutcome::Success && v == "10.0.9.9:9191")
@@ -392,6 +422,48 @@ mod tests {
         let mut log = PluginLog::new("DirectEndpoint");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(log.contains("endpoint "));
+        assert!(!log.contains("jump locked, rejected"));
+    }
+
+    #[tokio::test]
+    async fn rejected_jump_records_only_locked_log_and_no_dye() {
+        insert_test_endpoint_slice(
+            "unit-test-rejected-ns",
+            "app-rejected",
+            "de-rejected-slice",
+            "10.0.9.10",
+            9192,
+        );
+
+        let plugin = DirectEndpoint::new(&base_config());
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx_with_backend_refs(
+            "unit-test-rejected-ns",
+            vec![test_backend_ref("app-rejected")],
+        ));
+        session
+            .expect_key_get()
+            .return_const(Some("10.0.9.10:9192".to_string()));
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| {
+                matches!(
+                    target,
+                    UpstreamJumpTarget::Direct(info) if info.addr == "10.0.9.10:9192".parse().unwrap()
+                )
+            })
+            .times(1)
+            .return_const(SetJumpOutcome::Rejected);
+        // No record_outcome expectation: any dye publication fails the mock.
+
+        let mut log = PluginLog::new("DirectEndpoint");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(
+            serde_json::to_value(&log).unwrap()["log"],
+            serde_json::json!(["jump locked, rejected"])
+        );
     }
 
     /// Missing endpoint value with `on_missing: Reject` must record `Reject`
@@ -402,10 +474,7 @@ mod tests {
             on_missing: UpstreamFallback::Reject,
             ..base_config()
         };
-        let plugin = DirectEndpoint {
-            name: "DirectEndpoint".to_string(),
-            config,
-        };
+        let plugin = DirectEndpoint::new(&config);
 
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
@@ -422,7 +491,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some("Missing target endpoint".to_string()),
+                body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
             }
         );
     }
@@ -436,10 +505,7 @@ mod tests {
             on_invalid: UpstreamFallback::Fallback,
             ..base_config()
         };
-        let plugin = DirectEndpoint {
-            name: "DirectEndpoint".to_string(),
-            config,
-        };
+        let plugin = DirectEndpoint::new(&config);
 
         let mut session = MockPluginSession::new();
         // No EndpointSlice registered for this ip:port under "app-v1" — the
@@ -461,18 +527,180 @@ mod tests {
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
+    #[tokio::test]
+    async fn regex_miss_uses_missing_policy_and_fixed_body() {
+        for (on_missing, expected) in [
+            (
+                UpstreamFallback::Reject,
+                PluginRunningResult::ErrResponse {
+                    status: 400,
+                    body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
+                },
+            ),
+            (UpstreamFallback::Fallback, PluginRunningResult::GoodNext),
+        ] {
+            let config = DirectEndpointConfig {
+                extract: Some(EndpointExtract {
+                    regex: r"^target=(.+)$".to_string(),
+                    group: 1,
+                }),
+                on_missing,
+                ..base_config()
+            };
+            let plugin = DirectEndpoint::new(&config);
+            let mut session = MockPluginSession::new();
+            session.expect_ctx().return_const(ctx_with_backend_refs(
+                "unit-test-regex-miss-ns",
+                vec![test_backend_ref("regex-miss-service")],
+            ));
+            session.expect_key_get().return_const(Some("no-match".to_string()));
+            let expected_outcome = if on_missing == UpstreamFallback::Reject {
+                DyeOutcome::Reject
+            } else {
+                DyeOutcome::Fallback
+            };
+            session
+                .expect_record_outcome()
+                .withf(move |outcome, value| *outcome == expected_outcome && value == "on-missing")
+                .times(1)
+                .return_const(());
+
+            let mut log = PluginLog::new("DirectEndpoint");
+            assert_eq!(plugin.run_request(&mut session, &mut log).await, expected);
+            assert!(log.contains("endpoint miss"));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_endpoint_rejects_with_fixed_invalid_body() {
+        let plugin = DirectEndpoint::new(&base_config());
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx_with_backend_refs(
+            "unit-test-malformed-ns",
+            vec![test_backend_ref("malformed-service")],
+        ));
+        session
+            .expect_key_get()
+            .return_const(Some("[2001:db8::1]tail".to_string()));
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DirectEndpoint");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 400,
+                body: Some(INVALID_TARGET_ENDPOINT_BODY.to_string()),
+            }
+        );
+        assert!(log.contains("endpoint invalid"));
+        assert!(!format!("{log:?}").contains("2001:db8"));
+    }
+
+    #[tokio::test]
+    async fn endpoint_outside_route_rejects_with_fixed_not_allowed_body() {
+        let plugin = DirectEndpoint::new(&base_config());
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx_with_backend_refs(
+            "unit-test-not-allowed-ns",
+            vec![test_backend_ref("not-allowed-service")],
+        ));
+        session
+            .expect_key_get()
+            .return_const(Some("192.0.2.56:7778".to_string()));
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DirectEndpoint");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(TARGET_ENDPOINT_NOT_ALLOWED_BODY.to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn unsafe_endpoint_in_route_rejects_with_fixed_not_allowed_body() {
+        insert_test_endpoint_slice(
+            "unit-test-unsafe-ns",
+            "unsafe-service",
+            "de-unsafe-slice",
+            "169.254.169.254",
+            9193,
+        );
+
+        let plugin = DirectEndpoint::new(&base_config());
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx_with_backend_refs(
+            "unit-test-unsafe-ns",
+            vec![test_backend_ref("unsafe-service")],
+        ));
+        session
+            .expect_key_get()
+            .return_const(Some("169.254.169.254:9193".to_string()));
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DirectEndpoint");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(TARGET_ENDPOINT_NOT_ALLOWED_BODY.to_string()),
+            }
+        );
+    }
+
     #[test]
-    fn test_parse_endpoint() {
-        assert_eq!(parse_endpoint("1.2.3.4").unwrap(), ("1.2.3.4".parse().unwrap(), None));
-        assert_eq!(
-            parse_endpoint("1.2.3.4:80").unwrap(),
-            ("1.2.3.4".parse().unwrap(), Some(80))
-        );
-        assert_eq!(parse_endpoint("[::1]").unwrap(), ("::1".parse().unwrap(), None));
-        assert_eq!(
-            parse_endpoint("[::1]:8080").unwrap(),
-            ("::1".parse().unwrap(), Some(8080))
-        );
-        assert!(parse_endpoint("invalid").is_err());
+    fn parse_endpoint_accepts_supported_address_forms() {
+        for (value, expected_ip, expected_port) in [
+            ("1.2.3.4", "1.2.3.4", None),
+            ("1.2.3.4:80", "1.2.3.4", Some(80)),
+            ("1.2.3.4:0", "1.2.3.4", Some(0)),
+            ("::1", "::1", None),
+            ("2001:db8::1", "2001:db8::1", None),
+            ("[::1]", "::1", None),
+            ("[2001:db8::1]:8080", "2001:db8::1", Some(8080)),
+            ("[2001:db8::1]:65535", "2001:db8::1", Some(65535)),
+        ] {
+            assert_eq!(
+                parse_endpoint(value).unwrap(),
+                (expected_ip.parse().unwrap(), expected_port)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_invalid_bracket_suffixes() {
+        for value in [
+            "invalid",
+            "[::1",
+            "[::1]tail",
+            "[::1]80",
+            "[::1]:",
+            "[::1]:65536",
+            "[::1]:80tail",
+            "[::1]:80:90",
+            "[::1]]",
+            "[192.0.2.1]",
+            "[192.0.2.1]:80",
+        ] {
+            assert_eq!(
+                parse_endpoint(value),
+                Err(InvalidEndpoint),
+                "unexpectedly accepted {value}"
+            );
+        }
     }
 }
