@@ -92,7 +92,7 @@
 | `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-all-endpoint-status` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-bandwidth-limit` | 2 | 0 | 0 | 0 | pending |
-| `plugins-http-basic-auth` | 3 | 0 | 0 | 0 | pending |
+| `plugins-http-basic-auth` | 3 | 1 | 2 | 0 | complete |
 | `plugins-http-canary` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-common` | 13 | 0 | 0 | 0 | pending |
 | `plugins-http-cors` | 2 | 0 | 0 | 0 | pending |
@@ -333,9 +333,9 @@
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/mod.rs` | `plugins-http-bandwidth-limit` | source | examined-no-change | B0065 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs` | `plugins-http-bandwidth-limit` | source | changed | B0065 |
-| `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | pending | — |
-| `edgion-gateway/src/plugins/http/basic_auth/mod.rs` | `plugins-http-basic-auth` | source | pending | — |
-| `edgion-gateway/src/plugins/http/basic_auth/plugin.rs` | `plugins-http-basic-auth` | source | pending | — |
+| `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | examined-no-change | B0067 |
+| `edgion-gateway/src/plugins/http/basic_auth/mod.rs` | `plugins-http-basic-auth` | source | examined-no-change | B0067 |
+| `edgion-gateway/src/plugins/http/basic_auth/plugin.rs` | `plugins-http-basic-auth` | source | changed | B0067 |
 | `edgion-gateway/src/plugins/http/canary/mod.rs` | `plugins-http-canary` | source | examined-no-change | B0066 |
 | `edgion-gateway/src/plugins/http/canary/plugin.rs` | `plugins-http-canary` | source | changed | B0066 |
 | `edgion-gateway/src/plugins/http/common/auth_common.rs` | `plugins-http-common` | source | pending | — |

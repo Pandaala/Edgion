@@ -38,6 +38,11 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0032 — Add BackendTLSPolicy-aware AllEndpointStatus probes | needs-discussion | [campaign finding](D0032-all-endpoint-status-backend-tls-policy.md) |
 | D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | D0034 — Fail closed on denied L7 named jumps | needs-implementation | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
+| D0035 — Add borrowed Authorization header access | needs-discussion | [campaign finding](D0035-auth-borrowed-authorization-header.md) |
+| D0036 — Audit auth credential-copy lifetimes | needs-discussion | [campaign finding](D0036-auth-credential-copy-lifetime-audit.md) |
+| D0037 — Unify auth identity-header sanitization | needs-discussion | [campaign finding](D0037-auth-identity-header-sanitization.md) |
+| D0038 — Add auth identity-header spoofing integration coverage | blocked | [campaign finding](D0038-auth-identity-header-integration-coverage.md) |
+| D0039 — Harden auth challenge realm quoted strings | needs-implementation | [campaign finding](D0039-auth-challenge-realm-quoted-string.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -67,3 +72,8 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Add BackendTLSPolicy-aware AllEndpointStatus probes | pending | [task](../../../todo/add-all-endpoint-status-backend-tls-policy-support/add-all-endpoint-status-backend-tls-policy-support.md) |
 | Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
 | Fail closed on denied L7 named jumps | pending | [task](../../../todo/fail-closed-on-denied-l7-named-jumps.md) |
+| Add borrowed Authorization header access | pending | [task](../../../todo/add-borrowed-authorization-header-access.md) |
+| Audit auth credential-copy lifetimes | pending | [task](../../../todo/audit-auth-credential-copy-lifetimes.md) |
+| Unify auth identity-header sanitization | pending | [task](../../../todo/unify-auth-identity-header-sanitization/unify-auth-identity-header-sanitization.md) |
+| Add auth identity-header spoofing integration coverage | blocked | [task](../../../todo/add-auth-identity-header-spoofing-integration-coverage.md) |
+| Harden auth challenge realm quoted strings | pending | [task](../../../todo/harden-auth-challenge-realm-quoted-strings.md) |

@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 75 changed, 91 examined-no-change, 9 deferred, 357 non-terminal |
-| Active batch | B0066 Canary denied-reference selection; reviewed, fully verified, and awaiting local commit |
-| Analysis queue | BasicAuth ownership/bcrypt and CORS allocation/config-validation candidates require revalidation after B0066 commits |
+| Coverage | 532 tracked files: 76 changed, 93 examined-no-change, 9 deferred, 354 non-terminal |
+| Active batch | B0067 BasicAuth credential ownership and unsupported hashes; independently reviewed and fully verified, pending local commit |
+| Analysis queue | CORS allocation/config-validation candidate requires revalidation after B0067 commits |
 
 ## AI guide summary
 
