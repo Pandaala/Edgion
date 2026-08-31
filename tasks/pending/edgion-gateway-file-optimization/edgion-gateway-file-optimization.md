@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 65 changed, 77 examined-no-change, 6 deferred, 384 non-terminal |
-| Active batch | [`B0056-link-sys-health-flip-clock`](batches/B0056-link-sys-health-flip-clock.md), pending full verification and commit |
-| Analysis queue | B0057 template runtime unification is analysis-ready as a deferred candidate; revalidate only after B0056 commits |
+| Coverage | 532 tracked files: 65 changed, 79 examined-no-change, 6 deferred, 382 non-terminal |
+| Active batch | B0057 residual LinkSys runtime facade audit; verified and awaiting local commit |
+| Analysis queue | B0058 template runtime unification is analysis-ready as a deferred candidate; revalidate only after B0057 commits |
 
 ## AI guide summary
 

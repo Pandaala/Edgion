@@ -81,7 +81,7 @@
 | `link-sys-provider-webhook` | 5 | 3 | 1 | 1 | complete |
 | `link-sys-providers-root` | 1 | 0 | 1 | 0 | complete |
 | `link-sys-root` | 2 | 2 | 0 | 0 | complete |
-| `link-sys-runtime` | 5 | 3 | 0 | 0 | pending |
+| `link-sys-runtime` | 5 | 3 | 2 | 0 | complete |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
 | `observe-access-log` | 5 | 3 | 2 | 0 | complete |
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
@@ -292,10 +292,10 @@
 | `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | examined-no-change | `B0053`: retained canonical service resolution and namespace behavior |
 | `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | deferred | `B0053` / `D0019`: window rotation and time-source semantics require a wider limiter contract |
 | `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | changed | `B0054`: replaced fictional TODO/configuration claims with the current typed provider, output, fallback, and backfill boundaries |
-| `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | pending | — |
+| `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the nonblocking ordered conf-sync adapter |
 | `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | changed | `B0055`: made method/path metadata a call-scoped borrowed view |
 | `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | changed | `B0056`: became the sole owner of rollback-safe five-second health transition log gating |
-| `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | pending | — |
+| `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the live minimal module facade and visibility boundaries |
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | changed | `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
 | `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | pending | — |
 | `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | pending | — |

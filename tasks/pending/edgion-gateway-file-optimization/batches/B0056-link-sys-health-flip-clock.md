@@ -57,4 +57,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; both owned rows close as changed
-- Commit: pending final staging and automatic commit
+- Commit: `97e438d1`
