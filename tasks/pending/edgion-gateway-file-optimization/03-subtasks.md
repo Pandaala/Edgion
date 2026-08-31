@@ -80,7 +80,7 @@
 | `link-sys-provider-redis` | 4 | 0 | 0 | 0 | pending |
 | `link-sys-provider-webhook` | 5 | 0 | 0 | 0 | pending |
 | `link-sys-providers-root` | 1 | 0 | 0 | 0 | pending |
-| `link-sys-root` | 2 | 0 | 0 | 0 | pending |
+| `link-sys-root` | 2 | 1 | 0 | 0 | pending |
 | `link-sys-runtime` | 5 | 0 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
 | `observe-access-log` | 5 | 2 | 3 | 0 | complete |
@@ -265,7 +265,7 @@
 | `edgion-gateway/src/lb/selection/p2c.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/round_robin.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lib.rs` | `crate-entry` | source | examined-no-change | `B0045`: compile guards, allocator test support, capability output, and root exports retained |
-| `edgion-gateway/src/link_sys/mod.rs` | `link-sys-root` | source | pending | — |
+| `edgion-gateway/src/link_sys/mod.rs` | `link-sys-root` | source | changed | `B0046`: corrected LinkSys provider and crate-ownership documentation |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/client.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/config_mapping.rs` | `link-sys-provider-elasticsearch` | source | pending | — |

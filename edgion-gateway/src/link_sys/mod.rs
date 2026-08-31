@@ -1,11 +1,13 @@
-//! Link external systems (ES/Kafka/ClickHouse/Redis/Etcd/Webhook/etc.)
+//! Gateway-side LinkSys runtime providers and logging sinks.
 //!
-//! This module manages connections to external systems defined by LinkSys CRD resources.
-//! Each system type has its own sub-module for runtime management:
-//! - `redis/` — Redis client (standalone/sentinel/cluster) via fred
-//! - `etcd/` — Etcd client (v3 API) via etcd-client
-//! - `webhook/` — HTTP webhook service for the WebhookKeyGet plugin
-//! - `local_file/` — File-based log writer with rotation
+//! Gateway-owned runtime providers handle Redis, Elasticsearch, Kafka, and Webhook
+//! LinkSys resources. The Etcd provider and its runtime live in the shared
+//! `edgion_common::link_sys_core` and are re-exported through this module.
+//!
+//! `HttpDns` and `CredentialSource` are valid `SystemConfig` variants, but neither
+//! creates a generic Gateway runtime client: HttpDns is consumed by the DNS resolver
+//! path, while CredentialSource is Controller-managed acquisition metadata.
+//! LocalFile and OTLP are logging sinks, not LinkSys CRD provider variants.
 //!
 //! The `LinkSysStore` provides a unified store with `ConfHandler<LinkSys>` integration,
 //! automatically dispatching resource changes to the appropriate sub-module managers.

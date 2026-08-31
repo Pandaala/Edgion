@@ -51,4 +51,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes
-- Commit: pending automatic commit
+- Commit: `3d788d49`
