@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 77 changed, 94 examined-no-change, 9 deferred, 352 non-terminal |
-| Active batch | B0068 CORS bounded header assembly; independently reviewed and fully verified, pending local commit |
-| Analysis queue | Empty until B0068 completes its commit gate |
+| Coverage | 532 tracked files: 78 changed, 95 examined-no-change, 9 deferred, 350 non-terminal |
+| Active batch | B0069 CredentialInjector sensitive buffer transfer; independently reviewed and fully verified, pending local commit |
+| Analysis queue | Empty until B0069 completes its commit gate |
 
 ## AI guide summary
 

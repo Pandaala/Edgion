@@ -50,4 +50,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; one changed and one examined-no-change
-- Commit: pending
+- Commit: `c3c05d16`

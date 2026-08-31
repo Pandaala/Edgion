@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
+use bytes::BytesMut;
 use http::{HeaderName, HeaderValue};
 
 use crate::plugins::http::common::{connection_listed_hop_by_hop, is_hop_by_hop};
@@ -23,6 +24,12 @@ pub struct CredentialInjector {
     target: HeaderName,
     value: Arc<HeaderValue>,
     valid_until: Option<Instant>,
+}
+
+fn sensitive_header_value(raw_value: BytesMut) -> Result<HeaderValue, http::header::InvalidHeaderValue> {
+    let mut value = HeaderValue::from_maybe_shared(raw_value.freeze())?;
+    value.set_sensitive(true);
+    Ok(value)
 }
 
 impl CredentialInjector {
@@ -54,12 +61,10 @@ impl CredentialInjector {
         if final_len > CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN {
             return None;
         }
-        let mut raw_value = String::with_capacity(final_len);
-        raw_value.push_str(prefix);
-        raw_value.push_str(&resolved.value);
-        let mut value = HeaderValue::from_str(&raw_value).ok()?;
-        value.set_sensitive(true);
-        let value = Arc::new(value);
+        let mut raw_value = BytesMut::with_capacity(final_len);
+        raw_value.extend_from_slice(prefix.as_bytes());
+        raw_value.extend_from_slice(resolved.value.as_bytes());
+        let value = Arc::new(sensitive_header_value(raw_value).ok()?);
 
         Some(Box::new(Self {
             name: "CredentialInjector",
@@ -149,6 +154,20 @@ mod tests {
 
         let exact = "x".repeat(CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN - "Bearer ".len());
         assert!(CredentialInjector::create(&config(CredentialInjectionTarget::Bearer, Some(&exact))).is_some());
+    }
+
+    #[test]
+    fn sensitive_header_value_reuses_the_input_buffer() {
+        let mut raw_value = BytesMut::with_capacity(32);
+        raw_value.extend_from_slice(b"Bearer private-token");
+        let input_ptr = raw_value.as_ptr();
+
+        let value = sensitive_header_value(raw_value).unwrap();
+
+        assert_eq!(value.as_bytes().as_ptr(), input_ptr);
+        assert_eq!(value.as_bytes(), b"Bearer private-token");
+        assert!(value.is_sensitive());
+        assert_eq!(format!("{value:?}"), "Sensitive");
     }
 
     #[test]

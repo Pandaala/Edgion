@@ -96,7 +96,7 @@
 | `plugins-http-canary` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-common` | 13 | 0 | 0 | 0 | pending |
 | `plugins-http-cors` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-credential-injector` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-credential-injector` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-csrf` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-ctx-set` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-direct-endpoint` | 2 | 0 | 0 | 0 | pending |
@@ -354,8 +354,8 @@
 | `edgion-gateway/src/plugins/http/conf_handler_impl.rs` | `plugins-http-framework` | source | changed | B0062 |
 | `edgion-gateway/src/plugins/http/cors/mod.rs` | `plugins-http-cors` | source | examined-no-change | B0068 |
 | `edgion-gateway/src/plugins/http/cors/plugin.rs` | `plugins-http-cors` | source | changed | B0068 |
-| `edgion-gateway/src/plugins/http/credential_injector/mod.rs` | `plugins-http-credential-injector` | source | pending | — |
-| `edgion-gateway/src/plugins/http/credential_injector/plugin.rs` | `plugins-http-credential-injector` | source | pending | — |
+| `edgion-gateway/src/plugins/http/credential_injector/mod.rs` | `plugins-http-credential-injector` | source | examined-no-change | B0069 |
+| `edgion-gateway/src/plugins/http/credential_injector/plugin.rs` | `plugins-http-credential-injector` | source | changed | B0069 |
 | `edgion-gateway/src/plugins/http/csrf/mod.rs` | `plugins-http-csrf` | source | pending | — |
 | `edgion-gateway/src/plugins/http/csrf/plugin.rs` | `plugins-http-csrf` | source | pending | — |
 | `edgion-gateway/src/plugins/http/csrf/token.rs` | `plugins-http-csrf` | source | pending | — |
