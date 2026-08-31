@@ -101,7 +101,7 @@
 | `plugins-http-ctx-set` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-direct-endpoint` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-dsl` | 33 | 0 | 0 | 0 | pending |
-| `plugins-http-dynamic-external-upstream` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-dynamic-external-upstream` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-dynamic-internal-upstream` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-ext-proc` | 8 | 0 | 0 | 0 | pending |
 | `plugins-http-fault-injection` | 2 | 0 | 0 | 0 | pending |
@@ -396,8 +396,8 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/terminate_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/utility_functions.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/vm_defensive_tests.rs` | `plugins-http-dsl` | test | pending | — |
-| `edgion-gateway/src/plugins/http/dynamic_external_upstream/mod.rs` | `plugins-http-dynamic-external-upstream` | source | pending | — |
-| `edgion-gateway/src/plugins/http/dynamic_external_upstream/plugin.rs` | `plugins-http-dynamic-external-upstream` | source | pending | — |
+| `edgion-gateway/src/plugins/http/dynamic_external_upstream/mod.rs` | `plugins-http-dynamic-external-upstream` | source | examined-no-change | B0073 |
+| `edgion-gateway/src/plugins/http/dynamic_external_upstream/plugin.rs` | `plugins-http-dynamic-external-upstream` | source | changed | B0073 |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/mod.rs` | `plugins-http-dynamic-internal-upstream` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/plugin.rs` | `plugins-http-dynamic-internal-upstream` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | pending | — |
