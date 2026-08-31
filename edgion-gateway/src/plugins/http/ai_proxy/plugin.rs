@@ -286,7 +286,7 @@ impl AiProxy {
             }
         }
 
-        let mut canonical = match canonical_openai_request(&body, self.config.inject_usage_tracking) {
+        let mut canonical = match canonical_openai_request(body, self.config.inject_usage_tracking) {
             Ok(canonical) => canonical,
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
@@ -762,9 +762,8 @@ fn reject_quota_exhausted(
     AiProxy::reject(session, log, "quota-exhausted", AiProxyError::QuotaExceeded)
 }
 
-fn canonical_openai_request(body: &[u8], inject_usage_tracking: bool) -> Result<CanonicalOpenAiRequest, AiProxyError> {
-    std::str::from_utf8(body).map_err(|_| AiProxyError::MalformedBody)?;
-    let mut value: Value = serde_json::from_slice(body).map_err(|_| AiProxyError::MalformedBody)?;
+fn canonical_openai_request(body: Bytes, inject_usage_tracking: bool) -> Result<CanonicalOpenAiRequest, AiProxyError> {
+    let mut value: Value = serde_json::from_slice(&body).map_err(|_| AiProxyError::MalformedBody)?;
     let object = value.as_object_mut().ok_or(AiProxyError::MalformedBody)?;
     let logical_model = match object.get("model") {
         None => return Err(AiProxyError::ModelNotFound),
@@ -784,7 +783,7 @@ fn canonical_openai_request(body: &[u8], inject_usage_tracking: bool) -> Result<
         stream_options.insert("include_usage".to_string(), Value::Bool(true));
         Bytes::from(serde_json::to_vec(&value).map_err(|_| AiProxyError::BackendUnavailable)?)
     } else {
-        Bytes::copy_from_slice(body)
+        body
     };
     let input_chars = checked_utf8_chars(&body)?;
     Ok(CanonicalOpenAiRequest {
@@ -1022,11 +1021,11 @@ mod tests {
 
     #[test]
     fn canonical_request_preserves_logical_model_and_injects_usage_once() {
-        let request = canonical_openai_request(
+        let input = Bytes::from_static(
             br#"{"model":"fast","stream":true,"stream_options":{"custom":7,"include_usage":false}}"#,
-            true,
-        )
-        .unwrap();
+        );
+        let witness = input.clone();
+        let request = canonical_openai_request(input, true).unwrap();
         assert_eq!(request.logical_model, "fast");
         assert!(request.requested_streaming);
         let body: Value = serde_json::from_slice(&request.body).unwrap();
@@ -1037,25 +1036,49 @@ mod tests {
             request.input_chars,
             u64::try_from(std::str::from_utf8(&request.body).unwrap().chars().count()).unwrap()
         );
+        assert_ne!(request.body.as_ptr(), witness.as_ptr());
+    }
+
+    #[test]
+    fn canonical_request_reuses_nonempty_sliced_bytes_when_wire_body_is_unchanged() {
+        let padded = Bytes::from_static(br#"xx{"model":"fast","stream":false}yy"#);
+        let input = padded.slice(2..padded.len() - 2);
+        let witness = input.clone();
+        let expected_ptr = witness.as_ptr();
+        let expected_len = witness.len();
+
+        let request = canonical_openai_request(input, true).unwrap();
+
+        assert_eq!(request.body, witness);
+        assert_eq!(request.body.len(), expected_len);
+        assert_eq!(request.body.as_ptr(), expected_ptr);
     }
 
     #[test]
     fn canonical_request_rejects_malformed_or_unbounded_model() {
         assert!(matches!(
-            canonical_openai_request(br#"{"model":7}"#, true),
+            canonical_openai_request(Bytes::from_static(br#"{"model":7}"#), true),
             Err(AiProxyError::MalformedBody)
         ));
         let body = format!(r#"{{"model":"{}"}}"#, "x".repeat(AI_MODEL_NAME_MAX_BYTES + 1));
         assert!(matches!(
-            canonical_openai_request(body.as_bytes(), true),
+            canonical_openai_request(Bytes::from(body.into_bytes()), true),
             Err(AiProxyError::ModelNotFound)
+        ));
+    }
+
+    #[test]
+    fn canonical_request_invalid_utf8_remains_malformed_body() {
+        assert!(matches!(
+            canonical_openai_request(Bytes::from_static(b"{\"model\":\"fast\",\"content\":\"\xff\"}"), true),
+            Err(AiProxyError::MalformedBody)
         ));
     }
 
     #[test]
     fn canonical_request_replaces_only_the_logical_model_for_downgrade() {
         let mut request = canonical_openai_request(
-            br#"{"model":"premium","stream":true,"messages":[{"role":"user","content":"hello"}]}"#,
+            Bytes::from_static(br#"{"model":"premium","stream":true,"messages":[{"role":"user","content":"hello"}]}"#),
             true,
         )
         .unwrap();
@@ -1081,9 +1104,10 @@ mod tests {
 
     #[test]
     fn canonical_input_chars_tracks_usage_injection_and_unicode_characters() {
-        let original = r#"{"model":"fast","stream":true,"messages":[{"content":"é€"}]}"#;
-        let without_injection = canonical_openai_request(original.as_bytes(), false).unwrap();
-        let with_injection = canonical_openai_request(original.as_bytes(), true).unwrap();
+        let original =
+            Bytes::copy_from_slice(r#"{"model":"fast","stream":true,"messages":[{"content":"é€"}]}"#.as_bytes());
+        let without_injection = canonical_openai_request(original.clone(), false).unwrap();
+        let with_injection = canonical_openai_request(original, true).unwrap();
 
         assert_eq!(
             without_injection.input_chars,

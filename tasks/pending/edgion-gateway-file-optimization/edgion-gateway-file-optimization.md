@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 72 changed, 88 examined-no-change, 9 deferred, 363 non-terminal |
-| Active batch | B0063 AllEndpointStatus correctness and hot-path state; reviewed, fully verified, and awaiting local commit |
-| Analysis queue | AI proxy body ownership and BandwidthLimit stable-name candidates require revalidation after B0063 commits |
+| Coverage | 532 tracked files: 73 changed, 89 examined-no-change, 9 deferred, 361 non-terminal |
+| Active batch | B0064 AI proxy canonical-body ownership; reviewed, fully verified, and awaiting local commit |
+| Analysis queue | BandwidthLimit stable-name candidate requires revalidation after B0064 commits |
 
 ## AI guide summary
 
