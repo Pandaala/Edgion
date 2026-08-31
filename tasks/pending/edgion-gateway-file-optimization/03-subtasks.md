@@ -336,8 +336,8 @@
 | `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/basic_auth/mod.rs` | `plugins-http-basic-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/basic_auth/plugin.rs` | `plugins-http-basic-auth` | source | pending | — |
-| `edgion-gateway/src/plugins/http/canary/mod.rs` | `plugins-http-canary` | source | pending | — |
-| `edgion-gateway/src/plugins/http/canary/plugin.rs` | `plugins-http-canary` | source | pending | — |
+| `edgion-gateway/src/plugins/http/canary/mod.rs` | `plugins-http-canary` | source | examined-no-change | B0066 |
+| `edgion-gateway/src/plugins/http/canary/plugin.rs` | `plugins-http-canary` | source | changed | B0066 |
 | `edgion-gateway/src/plugins/http/common/auth_common.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/capped_writer.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/http_client.rs` | `plugins-http-common` | source | pending | — |

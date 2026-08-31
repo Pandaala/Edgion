@@ -12,11 +12,11 @@ use async_trait::async_trait;
 
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::routes::http::routes_mgr::RouteRules;
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
-use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, UpstreamFallback};
-use edgion_resources::HTTPBackendRefKind;
+use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
 
 /// Resolve the "namespace/name" Selector store key for a (possibly denied)
 /// `activeProfileRef`. Returns `None` when no ref is configured OR the ref
@@ -60,7 +60,7 @@ impl Canary {
         })
     }
 
-    /// Resolve the active profile name via the Selector store, with
+    /// Resolve the canonical active profile entry via the Selector store, with
     /// fail-to-base to `config.active_profile` on any error/absence.
     ///
     /// Each fail-to-base branch emits a distinct `selector miss: <reason>` log
@@ -68,9 +68,15 @@ impl Canary {
     /// the access log for the exact failure mode (per project convention:
     /// data-plane observability signals live in PluginLog / access log, not
     /// in Prometheus counters — see skills/03-coding/observability/01-metrics.md).
-    fn resolve_active_profile_name(&self, plugin_log: &mut PluginLog) -> String {
+    fn resolve_active_profile<'a>(&'a self, plugin_log: &mut PluginLog) -> Option<(&'a str, &'a DynUpstreamTarget)> {
+        let base_profile = || {
+            self.config
+                .profiles
+                .get_key_value(&self.config.active_profile)
+                .map(|(name, target)| (name.as_str(), target))
+        };
         let Some(ref key) = self.active_profile_ref_key else {
-            return self.config.active_profile.clone();
+            return base_profile();
         };
         let store = get_global_edgion_config_data_store();
         let raw_ed = store.get_raw_by_key(key);
@@ -78,25 +84,27 @@ impl Canary {
         // Envelope kill-switch: spec.enable=false => ignore the selector, use base.
         if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
             plugin_log.push("selector miss: disabled");
-            return self.config.active_profile.clone();
+            return base_profile();
         }
         match raw_ed.as_deref().map(|ed| &ed.spec.data) {
             None => {
                 plugin_log.push("selector miss: absent");
-                self.config.active_profile.clone()
+                base_profile()
             }
             Some(ConfigEntry::Selector(sel)) => match sel.active.as_deref() {
                 // Deliberate no-op (use base) — not a miss.
-                None => self.config.active_profile.clone(),
-                Some(name) if self.config.profiles.contains_key(name) => name.to_string(),
-                Some(_) => {
-                    plugin_log.push("selector miss: unknown_profile");
-                    self.config.active_profile.clone()
-                }
+                None => base_profile(),
+                Some(name) => match self.config.profiles.get_key_value(name) {
+                    Some((name, target)) => Some((name.as_str(), target)),
+                    None => {
+                        plugin_log.push("selector miss: unknown_profile");
+                        base_profile()
+                    }
+                },
             },
             Some(_) => {
                 plugin_log.push("selector miss: type_mismatch");
-                self.config.active_profile.clone()
+                base_profile()
             }
         }
     }
@@ -115,18 +123,15 @@ impl RequestFilter for Canary {
             return PluginRunningResult::GoodNext;
         }
 
-        let profile_name = self.resolve_active_profile_name(log);
-        let Some(target) = self.config.profiles.get(&profile_name) else {
-            // Unreachable post-validation: resolve_active_profile_name only
-            // ever returns a name present in `profiles` (checked inline
-            // above) or the parse-time-validated `active_profile`. Fail
-            // open if this Canary invariant ever breaks.
+        let Some((profile_name, target)) = self.resolve_active_profile(log) else {
+            // Unreachable post-validation: active_profile is required to name
+            // an entry in profiles. Fail open if this invariant ever breaks.
             log.push_err("profile missing: fail-open");
             return PluginRunningResult::GoodNext;
         };
 
-        // Pre-validate that the resolved target exists in the route's backend_refs
-        // (same check DynamicInternalUpstream::run_request performs).
+        // Pre-validate the resolved target against the route's canonical
+        // compiled backend view before publishing the jump.
         let ctx = session.ctx();
         let route_unit = match ctx.route_unit.as_ref() {
             Some(unit) => unit,
@@ -136,28 +141,15 @@ impl RequestFilter for Canary {
             }
         };
         let route_ns = &route_unit.matched_info.rsc.ns;
-        let backend_refs = match route_unit.rule.backend_refs.as_ref() {
-            Some(refs) if !refs.is_empty() => refs,
+        match route_unit.rule.backend_refs.as_ref() {
+            Some(refs) if !refs.is_empty() => {}
             _ => {
                 log.push("no backend refs");
                 return PluginRunningResult::GoodNext;
             }
         };
 
-        let found = backend_refs.iter().any(|br| {
-            if br.backend_kind() != HTTPBackendRefKind::Service {
-                return false;
-            }
-            if br.name != target.name {
-                return false;
-            }
-            match target.namespace.as_deref() {
-                Some(ns) => br.namespace.as_deref().unwrap_or(route_ns) == ns,
-                None => true,
-            }
-        });
-
-        if !found {
+        if RouteRules::find_backend_by_name(route_unit, &target.name, target.namespace.as_deref(), route_ns).is_err() {
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
                 UpstreamFallback::Reject => {
@@ -180,7 +172,7 @@ impl RequestFilter for Canary {
         };
         match session.set_upstream_jump(UpstreamJumpTarget::Internal(info)) {
             SetJumpOutcome::Set => {
-                session.record_outcome(DyeOutcome::Success, &profile_name);
+                session.record_outcome(DyeOutcome::Success, profile_name);
                 log.push("upstream selected");
             }
             SetJumpOutcome::Rejected => {
@@ -199,6 +191,7 @@ mod tests {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
     use crate::{EdgionHttpContext, MatchInfo, Rsc};
+    use edgion_resources::resources::common::RefDenied;
     use edgion_resources::resources::edgion_config_data::{
         ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, Selector,
     };
@@ -230,12 +223,28 @@ mod tests {
         }
     }
 
-    /// Minimal `HttpRouteRuleUnit` fixture carrying only what the selection
-    /// plugins under test read: `rule.backend_refs` and `matched_info.rsc.ns`.
-    /// The compiled-runtime fields (`plugin_runtime`, `backends`,
-    /// `backend_finder`, `metric_handles`) are never touched by these plugins'
-    /// `run_request`, so empty/stub values are sufficient here.
+    /// Minimal `HttpRouteRuleUnit` fixture with schema and compiled backend
+    /// views kept in sync, as they are in the production route compiler.
     fn test_route_unit(backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
+        let rule = Arc::new(HTTPRouteRule {
+            name: None,
+            resolved_terminal_route_uid: None,
+            resolved_terminal_rule_identity: None,
+            matches: None,
+            filters: None,
+            backend_refs: Some(backend_refs),
+            timeouts: None,
+            retry: None,
+            session_persistence: None,
+            parsed_timeouts: None,
+            parsed_retry: None,
+            parsed_forward_raw_path: None,
+            parsed_allow_non_idempotent_retry: None,
+            parsed_mirror_tuning: None,
+        });
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "test-ns");
+        let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
+
         HttpRouteRuleUnit {
             resource_key: "test-ns/test-route".to_string(),
             matched_info: MatchInfo {
@@ -252,22 +261,7 @@ mod tests {
                 labels_meta: None,
                 annotations_meta: None,
             },
-            rule: Arc::new(HTTPRouteRule {
-                name: None,
-                resolved_terminal_route_uid: None,
-                resolved_terminal_rule_identity: None,
-                matches: None,
-                filters: None,
-                backend_refs: Some(backend_refs),
-                timeouts: None,
-                retry: None,
-                session_persistence: None,
-                parsed_timeouts: None,
-                parsed_retry: None,
-                parsed_forward_raw_path: None,
-                parsed_allow_non_idempotent_retry: None,
-                parsed_mirror_tuning: None,
-            }),
+            rule,
             route: None,
             path_regex: None,
             parent_refs: None,
@@ -284,9 +278,9 @@ mod tests {
                 match_index: 0,
             },
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
-            plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
-            backends: Arc::new(vec![]),
-            backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+            plugin_runtime: runtime.plugin_runtime,
+            backends: runtime.backends,
+            backend_finder,
         }
     }
 
@@ -324,14 +318,20 @@ mod tests {
     fn no_selector_uses_active_profile() {
         let plugin = canary_with_key(base_config(), None);
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "stable");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("stable")
+        );
     }
 
     #[test]
     fn selector_missing_falls_back_to_base() {
         let plugin = canary_with_key(base_config(), Some("unit-test-ns/canary-selector-absent"));
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "stable");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("stable")
+        );
         assert!(
             log.contains("selector miss: absent"),
             "absent-store-entry branch must emit the distinct `absent` log tag for access-log grep"
@@ -359,7 +359,10 @@ mod tests {
 
         let plugin = canary_with_key(base_config(), Some(test_key));
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "canary");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("canary")
+        );
     }
 
     #[test]
@@ -383,7 +386,10 @@ mod tests {
 
         let plugin = canary_with_key(base_config(), Some(test_key));
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "stable");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("stable")
+        );
         assert!(
             log.contains("selector miss: disabled"),
             "envelope-kill-switch branch must emit the distinct `disabled` log tag for access-log grep"
@@ -411,7 +417,10 @@ mod tests {
 
         let plugin = canary_with_key(base_config(), Some(test_key));
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "stable");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("stable")
+        );
         assert!(
             log.contains("selector miss: unknown_profile"),
             "unknown-active-name branch must emit the distinct `unknown_profile` log tag for access-log grep"
@@ -439,7 +448,10 @@ mod tests {
 
         let plugin = canary_with_key(base_config(), Some(test_key));
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "stable");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("stable")
+        );
         assert!(
             !log.contains("selector miss"),
             "`active: None` is a deliberate no-op and must NOT emit any selector-miss tag"
@@ -474,7 +486,10 @@ mod tests {
 
         let plugin = canary_with_key(base_config(), Some(test_key));
         let mut log = PluginLog::new("Canary");
-        assert_eq!(plugin.resolve_active_profile_name(&mut log), "stable");
+        assert_eq!(
+            plugin.resolve_active_profile(&mut log).map(|(name, _)| name),
+            Some("stable")
+        );
         assert!(
             log.contains("selector miss: type_mismatch"),
             "wrong-ConfigEntry-variant branch must emit the distinct `type_mismatch` log tag for access-log grep"
@@ -586,6 +601,39 @@ mod tests {
                 body: Some("Target backend not allowed".to_string()),
             }
         );
+    }
+
+    /// A matching backend ref denied by the controller must take the same
+    /// onInvalid path as any other unusable target, before a jump is published.
+    #[tokio::test]
+    async fn canary_rejects_denied_backend_before_setting_jump() {
+        let plugin = canary_with_key(base_config(), None);
+        let mut denied = test_backend_ref("app-v1");
+        denied.ref_denied = Some(RefDenied {
+            target_namespace: "test-ns".to_string(),
+            target_name: "app-v1".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx_with_backend_refs(vec![denied]));
+        session.expect_set_upstream_jump().times(0);
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Reject && v == "on-invalid")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("Canary");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some("Target backend not allowed".to_string()),
+            }
+        );
+        assert!(log.contains("backend ref not found"));
     }
 
     /// `on_invalid: Fallback` on an unresolvable backend ref must record

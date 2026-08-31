@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 74 changed, 90 examined-no-change, 9 deferred, 359 non-terminal |
-| Active batch | B0065 BandwidthLimit stable plugin name; reviewed, fully verified, and awaiting local commit |
-| Analysis queue | no promoted candidate while B0065 owns the serial mutation lane |
+| Coverage | 532 tracked files: 75 changed, 91 examined-no-change, 9 deferred, 357 non-terminal |
+| Active batch | B0066 Canary denied-reference selection; reviewed, fully verified, and awaiting local commit |
+| Analysis queue | BasicAuth ownership/bcrypt and CORS allocation/config-validation candidates require revalidation after B0066 commits |
 
 ## AI guide summary
 
