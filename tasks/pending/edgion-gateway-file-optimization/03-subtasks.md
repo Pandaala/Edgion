@@ -62,7 +62,7 @@
 | `config-edgion-gateway` | 2 | 1 | 1 | 0 | complete |
 | `config-gateway-class` | 2 | 0 | 2 | 0 | complete |
 | `config-root` | 1 | 0 | 1 | 0 | complete |
-| `crate-entry` | 2 | 0 | 1 | 0 | pending |
+| `crate-entry` | 2 | 0 | 2 | 0 | complete |
 | `crate-root` | 2 | 0 | 0 | 0 | pending |
 | `external-tests` | 1 | 0 | 0 | 0 | pending |
 | `geoip` | 5 | 0 | 0 | 0 | pending |
@@ -264,7 +264,7 @@
 | `edgion-gateway/src/lb/selection/mod.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/p2c.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/round_robin.rs` | `lb-selection` | source | pending | — |
-| `edgion-gateway/src/lib.rs` | `crate-entry` | source | pending | — |
+| `edgion-gateway/src/lib.rs` | `crate-entry` | source | examined-no-change | `B0045`: compile guards, allocator test support, capability output, and root exports retained |
 | `edgion-gateway/src/link_sys/mod.rs` | `link-sys-root` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/client.rs` | `link-sys-provider-elasticsearch` | source | pending | — |
