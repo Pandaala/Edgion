@@ -11,8 +11,8 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 56 changed, 72 examined-no-change, 5 deferred, 397 pending |
-| Active batch | [`B0048-link-sys-kafka`](batches/B0048-link-sys-kafka.md) |
+| Coverage | 530 tracked files: 58 changed, 73 examined-no-change, 5 deferred, 394 pending |
+| Active batch | [`B0049-link-sys-local-file`](batches/B0049-link-sys-local-file.md) |
 | Analysis queue | none |
 
 ## AI guide summary

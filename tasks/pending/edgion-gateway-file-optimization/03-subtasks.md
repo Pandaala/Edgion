@@ -75,7 +75,7 @@
 | `lb-selection` | 4 | 0 | 0 | 0 | pending |
 | `link-sys-provider-elasticsearch` | 6 | 1 | 5 | 0 | complete |
 | `link-sys-provider-kafka` | 3 | 1 | 2 | 0 | complete |
-| `link-sys-provider-local-file` | 3 | 0 | 0 | 0 | pending |
+| `link-sys-provider-local-file` | 3 | 2 | 1 | 0 | complete |
 | `link-sys-provider-otlp` | 2 | 0 | 0 | 0 | pending |
 | `link-sys-provider-redis` | 4 | 0 | 0 | 0 | pending |
 | `link-sys-provider-webhook` | 5 | 0 | 0 | 0 | pending |
@@ -275,9 +275,9 @@
 | `edgion-gateway/src/link_sys/providers/kafka/client.rs` | `link-sys-provider-kafka` | source | changed | `B0048`: rejected zero queue capacity and linger values that cannot beat the produce deadline |
 | `edgion-gateway/src/link_sys/providers/kafka/log_sender.rs` | `link-sys-provider-kafka` | source | examined-no-change | `B0048`: non-blocking Kafka DataSender boundary retained |
 | `edgion-gateway/src/link_sys/providers/kafka/mod.rs` | `link-sys-provider-kafka` | source | examined-no-change | `B0048`: module exports retained |
-| `edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs` | `link-sys-provider-local-file` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/local_file/mod.rs` | `link-sys-provider-local-file` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/local_file/rotation.rs` | `link-sys-provider-local-file` | source | pending | — |
+| `edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: preserved the canonical base path across rotation, gated replacement on flush success, prevented archive overwrite, tracked attachment health, and debounced size-rotation failure logs |
+| `edgion-gateway/src/link_sys/providers/local_file/mod.rs` | `link-sys-provider-local-file` | source | examined-no-change | `B0049`: retained the narrow provider facade and exports |
+| `edgion-gateway/src/link_sys/providers/local_file/rotation.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: made size-index parsing safe when base-name prefix and suffix overlap |
 | `edgion-gateway/src/link_sys/providers/mod.rs` | `link-sys-providers-root` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | `link-sys-provider-otlp` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/otlp/mod.rs` | `link-sys-provider-otlp` | source | pending | — |

@@ -72,30 +72,6 @@ fn disk_ok(path: &Path, threshold_percent: Option<u8>) -> bool {
     }
 }
 
-/// If `base_path` no longer exists — it was renamed/removed out from under the
-/// writer, e.g. by the access-log backfill (which renames the active fallback
-/// file to `*.backfilled-<ts>`), or by `logrotate` in `create` mode — open a
-/// fresh file at `base_path` and return it so the caller can swap its writer.
-///
-/// Without this, the writer keeps appending through its still-open fd into the
-/// renamed inode. For a backfilled fallback file that is fatal: the renamed file
-/// is excluded from all future backfills, so post-rename entries are silently
-/// lost (permanently under `Never`/`Size` rotation, which only reopens on a size
-/// threshold). Returns `None` in the common case where the active file is intact.
-fn reopen_if_renamed(base_path: &Path) -> Option<std::fs::File> {
-    if base_path.exists() {
-        return None;
-    }
-    match open_log_file(base_path) {
-        Ok(f) => Some(f),
-        Err(e) => {
-            tracing::error!(error = %e, path = %base_path.display(),
-                "Failed to reopen active log file after it was renamed away");
-            None
-        }
-    }
-}
-
 /// Per-thread sink state for the LocalFile writer.
 ///
 /// Owns the buffered writer and drives the shared `healthy` flag from REAL
@@ -109,7 +85,8 @@ struct BatchSink<W: Write> {
     log_type: LogType,
     /// Tracked on-disk size; advanced only on a successful flush.
     current_size: u64,
-    /// Bytes buffered in the current batch; promoted on flush Ok, discarded on Err.
+    /// Bytes buffered in the current batch; promoted on flush Ok and cleared
+    /// from accounting on Err even though `BufWriter` may retain unwritten data.
     pending_bytes: u64,
     /// Lines buffered in the current batch; counted as dropped on flush Err.
     pending_lines: u64,
@@ -121,6 +98,10 @@ struct BatchSink<W: Write> {
     buffer_error_logged: bool,
     /// Latest disk-probe result.
     disk_ok: bool,
+    /// Whether the writer is still attached to the canonical active path.
+    /// A failed reopen plus failed rollback clears this until a later external-
+    /// rename recovery successfully reclaims the base path.
+    path_ok: bool,
     /// Shared flag read by `healthy()` on the hot path.
     healthy: Arc<AtomicBool>,
     /// Last published value, so transitions log exactly once.
@@ -138,6 +119,7 @@ impl<W: Write> BatchSink<W> {
             consecutive_flush_errors: 0,
             buffer_error_logged: false,
             disk_ok: true,
+            path_ok: true,
             healthy,
             // init() optimistically published `true`; match it so the first
             // real degrade is logged as a transition.
@@ -167,10 +149,10 @@ impl<W: Write> BatchSink<W> {
         }
     }
 
-    /// Flush the batch — where disk-full surfaces. Promote or discard the
-    /// pending counts, update the flush-error counter, republish health.
-    fn flush(&mut self) {
-        match self.file.flush() {
+    /// Flush the batch — where disk-full surfaces. Promote pending bytes only
+    /// on success, update the flush-error counter, and republish health.
+    fn flush(&mut self) -> bool {
+        let flushed = match self.file.flush() {
             Ok(()) => {
                 self.current_size += self.pending_bytes;
                 self.buffer_error_logged = false;
@@ -181,6 +163,7 @@ impl<W: Write> BatchSink<W> {
                     );
                     self.consecutive_flush_errors = 0;
                 }
+                true
             }
             Err(e) => {
                 if self.consecutive_flush_errors == 0 {
@@ -196,16 +179,23 @@ impl<W: Write> BatchSink<W> {
                 for _ in 0..self.pending_lines {
                     record_drop(self.log_type);
                 }
+                false
             }
-        }
+        };
         self.pending_bytes = 0;
         self.pending_lines = 0;
         self.publish_health();
+        flushed
     }
 
     /// Update the disk-probe signal and republish health.
     fn set_disk_ok(&mut self, ok: bool) {
         self.disk_ok = ok;
+        self.publish_health();
+    }
+
+    fn set_path_ok(&mut self, ok: bool) {
+        self.path_ok = ok;
         self.publish_health();
     }
 
@@ -236,7 +226,7 @@ impl<W: Write> BatchSink<W> {
 
     /// Publish the combined health flag, logging once on a transition (I4).
     fn publish_health(&mut self) {
-        let now = compute_healthy(self.consecutive_flush_errors, self.disk_ok);
+        let now = compute_healthy(self.consecutive_flush_errors, self.disk_ok) && self.path_ok;
         if now != self.last_published_healthy {
             if now {
                 tracing::warn!("LocalFile log sink recovered to healthy");
@@ -244,6 +234,7 @@ impl<W: Write> BatchSink<W> {
                 tracing::warn!(
                     consecutive_flush_errors = self.consecutive_flush_errors,
                     disk_ok = self.disk_ok,
+                    path_ok = self.path_ok,
                     "LocalFile log sink degraded to unhealthy"
                 );
             }
@@ -251,6 +242,187 @@ impl<W: Write> BatchSink<W> {
             self.last_published_healthy = now;
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RotationOutcome {
+    Rotated,
+    ArchiveExists,
+    Failed,
+}
+
+/// Create an archive without replacing an existing path, then unlink the base
+/// name. Both names are in the same directory, so the hard link is atomic and
+/// closes the exists-then-rename overwrite race.
+fn archive_base_no_replace(base_path: &Path, archive_path: &Path) -> std::io::Result<()> {
+    fs::hard_link(base_path, archive_path)?;
+    if let Err(e) = fs::remove_file(base_path) {
+        let _ = fs::remove_file(archive_path);
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn restore_archived_base(archive_path: &Path, base_path: &Path) -> std::io::Result<()> {
+    fs::hard_link(archive_path, base_path)?;
+    if let Err(e) = fs::remove_file(archive_path) {
+        tracing::warn!(
+            error = %e,
+            path = %archive_path.display(),
+            "Active log path was restored but the rotation archive could not be removed"
+        );
+    }
+    Ok(())
+}
+
+/// Replace an externally renamed writer only after every retained byte has
+/// flushed successfully. `wrap` keeps the gate testable with a failing writer.
+fn reopen_sink_if_renamed<W, F>(sink: &mut BatchSink<W>, base_path: &Path, wrap: F) -> bool
+where
+    W: Write,
+    F: FnOnce(fs::File) -> W,
+{
+    reopen_sink_if_renamed_with(sink, base_path, open_log_file, wrap)
+}
+
+fn reopen_sink_if_renamed_with<W, F, O>(sink: &mut BatchSink<W>, base_path: &Path, open: O, wrap: F) -> bool
+where
+    W: Write,
+    F: FnOnce(fs::File) -> W,
+    O: FnOnce(&Path) -> std::io::Result<fs::File>,
+{
+    // `path_ok=false` means the current writer is known to target a renamed
+    // inode. An externally recreated base path does not repair that attachment;
+    // it must still be opened and installed below.
+    if sink.path_ok && base_path.exists() {
+        return false;
+    }
+
+    if !sink.flush() {
+        sink.set_path_ok(false);
+        return false;
+    }
+
+    let file = match open(base_path) {
+        Ok(file) => file,
+        Err(e) => {
+            sink.set_path_ok(false);
+            tracing::error!(
+                error = %e,
+                path = %base_path.display(),
+                "Failed to reopen canonical active log file"
+            );
+            return false;
+        }
+    };
+    let current_size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    sink.file = BufWriter::new(wrap(file));
+    sink.current_size = current_size;
+    sink.set_path_ok(true);
+    true
+}
+
+/// Archive the active base file without overwrite and reopen the base path.
+/// The old writer is replaced only after its retained buffer is confirmed on
+/// disk. A reopen failure restores the original base link; if that restoration
+/// also fails, the still-open archive writer is marked unhealthy until the base
+/// path can be reclaimed.
+fn rotate_active_file<W, F>(
+    sink: &mut BatchSink<W>,
+    base_path: &Path,
+    archive_path: &Path,
+    max_files: usize,
+    log_archive_failure: bool,
+    wrap: F,
+) -> RotationOutcome
+where
+    W: Write,
+    F: FnOnce(fs::File) -> W,
+{
+    if !sink.flush() {
+        return RotationOutcome::Failed;
+    }
+
+    match archive_base_no_replace(base_path, archive_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return RotationOutcome::ArchiveExists;
+        }
+        Err(e) => {
+            if log_archive_failure {
+                tracing::warn!(
+                    error = %e,
+                    from = %base_path.display(),
+                    to = %archive_path.display(),
+                    "Failed to archive log for rotation, continuing with base path"
+                );
+            }
+            return RotationOutcome::Failed;
+        }
+    }
+
+    let file = match open_log_file(base_path) {
+        Ok(file) => file,
+        Err(e) => {
+            if let Err(rollback_error) = restore_archived_base(archive_path, base_path) {
+                sink.set_path_ok(false);
+                tracing::error!(
+                    error = %e,
+                    rollback_error = %rollback_error,
+                    archived = %archive_path.display(),
+                    active = %base_path.display(),
+                    "Failed to reopen active log file after rotation and restore its path"
+                );
+            } else {
+                tracing::error!(
+                    error = %e,
+                    path = %base_path.display(),
+                    "Failed to reopen active log file after rotation; archive was restored"
+                );
+            }
+            return RotationOutcome::Failed;
+        }
+    };
+
+    sink.file = BufWriter::new(wrap(file));
+    sink.current_size = 0;
+    sink.set_path_ok(true);
+    cleanup_old_files(base_path, max_files);
+    RotationOutcome::Rotated
+}
+
+fn rotate_for_size<W, F>(
+    sink: &mut BatchSink<W>,
+    base_path: &Path,
+    max_files: usize,
+    log_failure: bool,
+    wrap: F,
+) -> bool
+where
+    W: Write,
+    F: Fn(fs::File) -> W,
+{
+    for _ in 0..3 {
+        let size_index = find_next_size_index(base_path);
+        let archive_path = get_size_rotated_path(base_path, size_index);
+        match rotate_active_file(sink, base_path, &archive_path, max_files, log_failure, &wrap) {
+            RotationOutcome::Rotated => {
+                tracing::info!(
+                    path = %base_path.display(),
+                    archived = %archive_path.display(),
+                    index = size_index,
+                    "Log file rotated (size)"
+                );
+                return true;
+            }
+            RotationOutcome::ArchiveExists => continue,
+            RotationOutcome::Failed => return false,
+        }
+    }
+    if log_failure {
+        tracing::warn!(path = %base_path.display(), "Size rotation archive index raced repeatedly");
+    }
+    false
 }
 
 #[async_trait]
@@ -295,11 +467,12 @@ impl DataSender<String> for LocalFileWriter {
 
             // For time-based rotation
             let mut current_key = get_rotation_key(&strategy);
+            let mut size_rotation_failure_logged = false;
             let rotation_check_interval = Duration::from_secs(rotation.check_interval_secs);
             let mut last_rotation_check = Instant::now();
 
             // Active file always uses the base path (nginx-style).
-            let mut current_path = base_path.clone();
+            let current_path = base_path.clone();
             let mut initial_size: u64 = 0;
             if let RotationStrategy::Size(_) = &strategy {
                 if base_path.exists() {
@@ -342,10 +515,7 @@ impl DataSender<String> for LocalFileWriter {
                         // No traffic this interval: drive recovery without it, and
                         // reclaim the active file if it was renamed away (e.g. by a
                         // backfill) so a future degrade writes to a fresh file.
-                        if let Some(f) = reopen_if_renamed(&base_path) {
-                            sink.file = BufWriter::new(f);
-                            sink.current_size = 0;
-                            current_path = base_path.clone();
+                        if reopen_sink_if_renamed(&mut sink, &base_path, |file| file) {
                             tracing::info!(path = %base_path.display(), "Active log file reopened after external rename");
                         }
                         sink.set_disk_ok(disk_ok(&base_path, disk_threshold));
@@ -359,11 +529,7 @@ impl DataSender<String> for LocalFileWriter {
                 // renamed out from under us (backfill / logrotate `create`). The
                 // previous batch was already flushed, so the buffer is empty and
                 // nothing is lost; the first post-rename entry lands in a fresh file.
-                if let Some(f) = reopen_if_renamed(&base_path) {
-                    let _ = sink.file.flush();
-                    sink.file = BufWriter::new(f);
-                    sink.current_size = 0;
-                    current_path = base_path.clone();
+                if reopen_sink_if_renamed(&mut sink, &base_path, |file| file) {
                     tracing::info!(path = %base_path.display(), "Active log file reopened after external rename");
                 }
                 // Periodic rotation/disk check (most batches skip this block); the
@@ -382,36 +548,31 @@ impl DataSender<String> for LocalFileWriter {
                         RotationStrategy::Daily | RotationStrategy::Hourly => {
                             let new_key = get_rotation_key(&strategy);
                             if new_key != current_key {
-                                let _ = sink.file.flush();
-                                // Rename current file to date-suffixed archive
                                 let archive_path = get_rotated_path(&base_path, &strategy);
-                                if current_path.exists() && !archive_path.exists() {
-                                    if let Err(e) = fs::rename(&current_path, &archive_path) {
-                                        tracing::warn!(
-                                            error = %e,
-                                            from = %current_path.display(),
-                                            to = %archive_path.display(),
-                                            "Failed to rename log for rotation, continuing with base path"
-                                        );
-                                    } else {
+                                match rotate_active_file(
+                                    &mut sink,
+                                    &base_path,
+                                    &archive_path,
+                                    max_files,
+                                    true,
+                                    |file| file,
+                                ) {
+                                    RotationOutcome::Rotated => {
                                         tracing::info!(
                                             archived = %archive_path.display(),
                                             "Log file archived on rotation"
                                         );
+                                        tracing::info!(path = %base_path.display(), "New log file opened after rotation");
+                                        current_key = new_key;
                                     }
-                                }
-                                current_key = new_key;
-                                current_path = base_path.clone();
-
-                                match open_log_file(&current_path) {
-                                    Ok(f) => {
-                                        sink.file = BufWriter::new(f);
-                                        tracing::info!(path = %current_path.display(), "New log file opened after rotation");
-                                        cleanup_old_files(&base_path, max_files);
+                                    RotationOutcome::ArchiveExists => {
+                                        // A prior process already archived this
+                                        // period. Keep the current base active
+                                        // and avoid retry/log churn until the
+                                        // next wall-clock key.
+                                        current_key = new_key;
                                     }
-                                    Err(e) => {
-                                        tracing::error!(error = %e, path = %current_path.display(), "Failed to open new log file after rotation");
-                                    }
+                                    RotationOutcome::Failed => {}
                                 }
                             }
                         }
@@ -429,26 +590,20 @@ impl DataSender<String> for LocalFileWriter {
 
                 // Flush once after batch write (drives health from the real
                 // flush outcome).
-                sink.flush();
+                let flushed = sink.flush();
 
                 // Size rotation runs per-batch so the active file overshoots
                 // max_size by at most one batch.
                 if let RotationStrategy::Size(max_size) = &strategy {
-                    if sink.current_size >= *max_size {
-                        let _ = sink.file.flush();
-                        let size_index = find_next_size_index(&base_path);
-                        current_path = get_size_rotated_path(&base_path, size_index);
-                        match open_log_file(&current_path) {
-                            Ok(f) => {
-                                sink.file = BufWriter::new(f);
-                                sink.current_size = 0;
-                                tracing::info!(path = %current_path.display(), index = size_index, "Log file rotated (size)");
-                                cleanup_old_files(&base_path, max_files);
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, path = %current_path.display(), "Failed to rotate log file");
-                            }
-                        }
+                    if flushed && sink.current_size >= *max_size {
+                        let rotated = rotate_for_size(
+                            &mut sink,
+                            &base_path,
+                            max_files,
+                            !size_rotation_failure_logged,
+                            |file| file,
+                        );
+                        size_rotation_failure_logged = !rotated;
                     }
                 }
             }
@@ -524,32 +679,37 @@ mod tests {
     }
 
     #[test]
-    fn reopen_if_renamed_recreates_after_external_rename() {
+    fn reopen_sink_if_renamed_recreates_after_external_rename() {
         // Models the backfill scenario: the active fallback file is renamed to
         // `*.backfilled-<ts>` out from under the writer. The writer must reclaim
         // a fresh active file so the next ES degrade does not write into the
         // already-backfilled (and forever-skipped) file.
-        let dir = std::env::temp_dir().join("edgion_reopen_renamed_test");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let base = dir.join("es_fallback.log");
-        fs::File::create(&base).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("es_fallback.log");
+        let file = open_log_file(&base).unwrap();
+        let mut sink = BatchSink::new(
+            BufWriter::new(file),
+            LogType::Access,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        );
 
         // Intact active file: no reopen needed.
-        assert!(reopen_if_renamed(&base).is_none(), "intact file must not be reopened");
+        assert!(
+            !reopen_sink_if_renamed(&mut sink, &base, |file| file),
+            "intact file must not be reopened"
+        );
 
         // Backfill renames the active file away.
-        fs::rename(&base, dir.join("es_fallback.log.backfilled-1")).unwrap();
+        fs::rename(&base, dir.path().join("es_fallback.log.backfilled-1")).unwrap();
         assert!(!base.exists());
 
         // The writer reclaims a fresh active file at base_path.
         assert!(
-            reopen_if_renamed(&base).is_some(),
+            reopen_sink_if_renamed(&mut sink, &base, |file| file),
             "a renamed-away active file must be reopened"
         );
         assert!(base.exists(), "base path is recreated as a fresh active file");
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -659,6 +819,7 @@ mod tests {
     /// idle-recovery path (fail while degrading, then succeed on the retry).
     struct ToggleFailWriter {
         fail: Arc<AtomicBool>,
+        file: fs::File,
     }
 
     impl Write for ToggleFailWriter {
@@ -666,14 +827,14 @@ mod tests {
             if self.fail.load(Ordering::Relaxed) {
                 Err(std::io::Error::other("write failed"))
             } else {
-                Ok(buf.len())
+                self.file.write(buf)
             }
         }
         fn flush(&mut self) -> std::io::Result<()> {
             if self.fail.load(Ordering::Relaxed) {
                 Err(std::io::Error::other("flush failed"))
             } else {
-                Ok(())
+                self.file.flush()
             }
         }
     }
@@ -682,9 +843,12 @@ mod tests {
     fn batch_sink_idle_retry_recovers_after_failures_clear() {
         let healthy = Arc::new(AtomicBool::new(true));
         let fail = Arc::new(AtomicBool::new(true));
+        let file = tempfile::tempfile().unwrap();
+        let inspect_file = file.try_clone().unwrap();
         let mut sink = BatchSink::new(
             BufWriter::new(ToggleFailWriter {
                 fail: Arc::clone(&fail),
+                file,
             }),
             LogType::Access,
             0,
@@ -697,6 +861,8 @@ mod tests {
             sink.flush();
         }
         assert!(!healthy.load(Ordering::Relaxed), "3 flush failures -> unhealthy");
+        assert_eq!(sink.pending_bytes, 0, "failed batch accounting is cleared");
+        assert_eq!(inspect_file.metadata().unwrap().len(), 0);
 
         // Disk clears; an idle retry (no new write_line, i.e. no traffic)
         // re-attempts the retained bytes and recovers the shed sink.
@@ -707,6 +873,36 @@ mod tests {
             "idle flush retry recovers a sink that receives no traffic"
         );
         assert_eq!(sink.consecutive_flush_errors, 0);
+        assert_eq!(inspect_file.metadata().unwrap().len(), 15);
+    }
+
+    #[test]
+    fn size_rotation_keeps_base_path_active_when_archive_is_backfilled() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("es_fallback.log");
+        let healthy = Arc::new(AtomicBool::new(true));
+        let file = open_log_file(&base).unwrap();
+        let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, healthy);
+
+        sink.write_line("before rotation");
+        assert!(sink.flush());
+        assert!(rotate_for_size(&mut sink, &base, 0, true, |file| file));
+
+        let archive = get_size_rotated_path(&base, 1);
+        assert!(base.exists(), "size rotation must reopen the base path as active");
+        assert!(archive.exists(), "the prior base file becomes the indexed archive");
+
+        let backfilled = dir.path().join("es_fallback.1.log.backfilled-1");
+        fs::rename(&archive, &backfilled).unwrap();
+        assert!(
+            !reopen_sink_if_renamed(&mut sink, &base, |file| file),
+            "renaming an archive must not look like an active-file rename"
+        );
+
+        sink.write_line("after rotation");
+        assert!(sink.flush());
+        assert_eq!(fs::read_to_string(&base).unwrap(), "after rotation\n");
+        assert_eq!(fs::read_to_string(&backfilled).unwrap(), "before rotation\n");
     }
 
     #[test]
@@ -722,6 +918,159 @@ mod tests {
         sink.retry_flush_for_recovery();
         assert!(healthy.load(Ordering::Relaxed));
         assert_eq!(sink.consecutive_flush_errors, 0);
+    }
+
+    #[test]
+    fn external_rename_waits_for_failed_buffer_to_flush_before_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("fallback.log");
+        let renamed = dir.path().join("fallback.log.backfilled-1");
+        let fail = Arc::new(AtomicBool::new(true));
+        let file = open_log_file(&base).unwrap();
+        let mut sink = BatchSink::new(
+            BufWriter::new(ToggleFailWriter {
+                fail: Arc::clone(&fail),
+                file,
+            }),
+            LogType::Access,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        );
+
+        sink.write_line("retained");
+        assert!(!sink.flush());
+        fs::rename(&base, &renamed).unwrap();
+        assert!(!reopen_sink_if_renamed(&mut sink, &base, |file| {
+            ToggleFailWriter {
+                fail: Arc::clone(&fail),
+                file,
+            }
+        }));
+        assert!(!base.exists(), "a failed old flush must block writer replacement");
+        assert_eq!(sink.pending_bytes, 0, "failed batch accounting is cleared");
+
+        fail.store(false, Ordering::Relaxed);
+        assert!(reopen_sink_if_renamed(&mut sink, &base, |file| {
+            ToggleFailWriter {
+                fail: Arc::clone(&fail),
+                file,
+            }
+        }));
+        assert_eq!(sink.pending_bytes, 0);
+        assert_eq!(sink.current_size, 0, "the fresh base starts with empty accounting");
+        assert_eq!(fs::read_to_string(&renamed).unwrap(), "retained\n");
+        assert_eq!(fs::read_to_string(&base).unwrap(), "");
+    }
+
+    #[test]
+    fn missing_base_reopen_failure_marks_attachment_unhealthy() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("fallback.log");
+        let renamed = dir.path().join("fallback.log.backfilled-1");
+        let healthy = Arc::new(AtomicBool::new(true));
+        let file = open_log_file(&base).unwrap();
+        let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy));
+
+        sink.write_line("retained");
+        fs::rename(&base, &renamed).unwrap();
+        assert!(!reopen_sink_if_renamed_with(
+            &mut sink,
+            &base,
+            |_| Err(std::io::Error::other("reopen failed")),
+            |file| file,
+        ));
+
+        assert_eq!(sink.pending_bytes, 0, "the old writer was flushed first");
+        assert!(!sink.path_ok, "canonical attachment is no longer confirmed");
+        assert!(!healthy.load(Ordering::Relaxed));
+        assert_eq!(fs::read_to_string(&renamed).unwrap(), "retained\n");
+        assert!(!base.exists());
+    }
+
+    #[test]
+    fn unhealthy_attachment_reopens_externally_recreated_base_and_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("fallback.log");
+        let renamed = dir.path().join("fallback.log.backfilled-1");
+        let healthy = Arc::new(AtomicBool::new(true));
+        let file = open_log_file(&base).unwrap();
+        let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy));
+
+        fs::rename(&base, &renamed).unwrap();
+        fs::File::create(&base).unwrap();
+        sink.set_path_ok(false);
+        sink.write_line("old inode");
+
+        assert!(reopen_sink_if_renamed(&mut sink, &base, |file| file));
+        assert!(sink.path_ok);
+        assert!(healthy.load(Ordering::Relaxed));
+        assert_eq!(fs::read_to_string(&renamed).unwrap(), "old inode\n");
+
+        sink.write_line("canonical");
+        assert!(sink.flush());
+        assert_eq!(fs::read_to_string(&base).unwrap(), "canonical\n");
+    }
+
+    #[test]
+    fn time_rotation_waits_for_failed_buffer_to_flush_before_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("access.log");
+        let archive = dir.path().join("access.2026-01-01.log");
+        let fail = Arc::new(AtomicBool::new(true));
+        let file = open_log_file(&base).unwrap();
+        let mut sink = BatchSink::new(
+            BufWriter::new(ToggleFailWriter {
+                fail: Arc::clone(&fail),
+                file,
+            }),
+            LogType::Access,
+            0,
+            Arc::new(AtomicBool::new(true)),
+        );
+
+        sink.write_line("retained");
+        assert!(!sink.flush());
+        assert_eq!(
+            rotate_active_file(&mut sink, &base, &archive, 0, true, |file| {
+                ToggleFailWriter {
+                    fail: Arc::clone(&fail),
+                    file,
+                }
+            }),
+            RotationOutcome::Failed
+        );
+        assert!(base.exists());
+        assert!(!archive.exists());
+        assert_eq!(sink.pending_bytes, 0, "failed batch accounting is cleared");
+
+        fail.store(false, Ordering::Relaxed);
+        assert_eq!(
+            rotate_active_file(&mut sink, &base, &archive, 0, true, |file| {
+                ToggleFailWriter {
+                    fail: Arc::clone(&fail),
+                    file,
+                }
+            }),
+            RotationOutcome::Rotated
+        );
+        assert_eq!(sink.pending_bytes, 0);
+        assert_eq!(sink.current_size, 0);
+        assert_eq!(fs::read_to_string(&archive).unwrap(), "retained\n");
+        assert_eq!(fs::read_to_string(&base).unwrap(), "");
+    }
+
+    #[test]
+    fn archive_creation_never_overwrites_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("access.log");
+        let archive = dir.path().join("access.1.log");
+        fs::write(&base, "active\n").unwrap();
+        fs::write(&archive, "existing\n").unwrap();
+
+        let error = archive_base_no_replace(&base, &archive).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&base).unwrap(), "active\n");
+        assert_eq!(fs::read_to_string(&archive).unwrap(), "existing\n");
     }
 
     #[tokio::test]

@@ -54,8 +54,10 @@ pub fn find_next_size_index(base_path: &Path) -> u32 {
                 let prefix = format!("{}.", stem);
                 let suffix = format!(".{}", ext);
 
-                if filename.starts_with(&prefix) && filename.ends_with(&suffix) {
-                    let middle = &filename[prefix.len()..filename.len() - suffix.len()];
+                if let Some(middle) = filename
+                    .strip_prefix(&prefix)
+                    .and_then(|rest| rest.strip_suffix(&suffix))
+                {
                     if let Ok(index) = middle.parse::<u32>() {
                         max_index = max_index.max(index);
                     }
@@ -65,6 +67,21 @@ pub fn find_next_size_index(base_path: &Path) -> u32 {
     }
 
     max_index + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_next_size_index_ignores_overlapping_base_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("a.a");
+        fs::write(&base, "active").unwrap();
+        fs::write(dir.path().join("a.2.a"), "archive").unwrap();
+
+        assert_eq!(find_next_size_index(&base), 3);
+    }
 }
 
 /// Append suffix before file extension
