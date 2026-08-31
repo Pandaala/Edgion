@@ -44,8 +44,6 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::BandwidthLimitC
 ///
 /// Controls downstream response bandwidth by introducing delays between body chunks.
 pub struct BandwidthLimit {
-    /// Plugin instance name (for logging)
-    name: String,
     /// Rate limit in bytes per second
     rate_bps: u64,
 }
@@ -66,16 +64,13 @@ impl BandwidthLimit {
     pub fn create(config: &BandwidthLimitConfig) -> Box<dyn UpstreamResponseBodyFilter> {
         let rate_bps = config.parse_rate().unwrap_or(0);
 
-        Box::new(Self {
-            name: format!("BandwidthLimit({})", &config.rate),
-            rate_bps,
-        })
+        Box::new(Self { rate_bps })
     }
 }
 
 impl UpstreamResponseBodyFilter for BandwidthLimit {
     fn name(&self) -> &str {
-        &self.name
+        "BandwidthLimit"
     }
 
     fn run_upstream_response_body_filter(
@@ -111,6 +106,17 @@ mod tests {
             rate_bytes_per_second: None,
         };
         BandwidthLimit::create(&config)
+    }
+
+    #[test]
+    fn test_valid_rates_share_static_name_without_rate_text() {
+        let megabyte = create_test_plugin("1mb");
+        let gigabyte = create_test_plugin("1gb");
+
+        assert_eq!(megabyte.name(), "BandwidthLimit");
+        assert_eq!(gigabyte.name(), "BandwidthLimit");
+        assert!(!megabyte.name().contains("1mb"));
+        assert!(!gigabyte.name().contains("1gb"));
     }
 
     #[test]
