@@ -34,8 +34,8 @@ const KAFKA_REBUILD_THRESHOLD: u32 = 3;
 /// dead/old-IP broker makes `produce().await` hang forever; this timeout forces
 /// the task to exit (closing its channel) so the self-heal + rebuild can respawn
 /// it on the current client. Generous relative to `linger_ms`.
-/// Assumes `linger_ms << 30_000`; a pathological linger near/above this ceiling would
-/// make every produce exceed the timeout and force a respawn loop.
+/// `from_config` rejects linger durations at or above this ceiling so every
+/// accepted configuration leaves time for the produce operation itself.
 const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fold a single produce result into the shared `healthy` flag.
@@ -138,12 +138,24 @@ impl KafkaLinkClient {
         if config.brokers.is_empty() {
             anyhow::bail!("Kafka brokers list is empty for '{}'", name);
         }
+        let channel_size = config.channel_size.unwrap_or(DEFAULT_CHANNEL_SIZE);
+        let linger_ms = config.linger_ms.unwrap_or(DEFAULT_LINGER_MS);
+        if channel_size == 0 {
+            anyhow::bail!("Kafka channel size must be greater than zero for '{}'", name);
+        }
+        if Duration::from_millis(linger_ms) >= PRODUCE_TIMEOUT {
+            anyhow::bail!(
+                "Kafka linger duration must be shorter than the {} second produce timeout for '{}'",
+                PRODUCE_TIMEOUT.as_secs(),
+                name
+            );
+        }
         Ok(Self {
             name: name.to_string(),
             config: config.clone(),
             auth: auth.clone(),
-            channel_size: config.channel_size.unwrap_or(DEFAULT_CHANNEL_SIZE),
-            linger_ms: config.linger_ms.unwrap_or(DEFAULT_LINGER_MS),
+            channel_size,
+            linger_ms,
             inner_client: Arc::new(ArcSwapOption::empty()),
             topics: DashMap::new(),
             healthy: Arc::new(AtomicBool::new(false)),
@@ -452,6 +464,36 @@ mod tests {
         assert!(!client.healthy()); // not initialized yet
         assert_eq!(client.channel_size, 4096);
         assert_eq!(client.linger_ms, 5);
+    }
+
+    #[test]
+    fn test_kafka_link_client_from_config_rejects_zero_channel_size() {
+        let config = KafkaClientConfig {
+            brokers: vec!["broker1:9092".to_string()],
+            sasl: None,
+            tls: None,
+            channel_size: Some(0),
+            linger_ms: None,
+        };
+        let result = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired);
+
+        let error = result.err().expect("zero channel size must be rejected");
+        assert!(error.to_string().contains("channel size"));
+    }
+
+    #[test]
+    fn test_kafka_link_client_from_config_rejects_linger_at_produce_timeout() {
+        let config = KafkaClientConfig {
+            brokers: vec!["broker1:9092".to_string()],
+            sasl: None,
+            tls: None,
+            channel_size: None,
+            linger_ms: Some(PRODUCE_TIMEOUT.as_millis() as u64),
+        };
+        let result = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired);
+
+        let error = result.err().expect("linger at the produce timeout must be rejected");
+        assert!(error.to_string().contains("produce timeout"));
     }
 
     #[test]

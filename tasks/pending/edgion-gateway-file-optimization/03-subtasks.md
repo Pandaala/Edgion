@@ -74,7 +74,7 @@
 | `lb-runtime-state` | 1 | 0 | 0 | 0 | pending |
 | `lb-selection` | 4 | 0 | 0 | 0 | pending |
 | `link-sys-provider-elasticsearch` | 6 | 1 | 5 | 0 | complete |
-| `link-sys-provider-kafka` | 3 | 0 | 0 | 0 | pending |
+| `link-sys-provider-kafka` | 3 | 1 | 2 | 0 | complete |
 | `link-sys-provider-local-file` | 3 | 0 | 0 | 0 | pending |
 | `link-sys-provider-otlp` | 2 | 0 | 0 | 0 | pending |
 | `link-sys-provider-redis` | 4 | 0 | 0 | 0 | pending |
@@ -272,9 +272,9 @@
 | `edgion-gateway/src/link_sys/providers/elasticsearch/log_sender.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: non-blocking DataSender boundary retained |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/mod.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: module exports retained |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/ops.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: bounded request and response handling retained |
-| `edgion-gateway/src/link_sys/providers/kafka/client.rs` | `link-sys-provider-kafka` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/kafka/log_sender.rs` | `link-sys-provider-kafka` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/kafka/mod.rs` | `link-sys-provider-kafka` | source | pending | — |
+| `edgion-gateway/src/link_sys/providers/kafka/client.rs` | `link-sys-provider-kafka` | source | changed | `B0048`: rejected zero queue capacity and linger values that cannot beat the produce deadline |
+| `edgion-gateway/src/link_sys/providers/kafka/log_sender.rs` | `link-sys-provider-kafka` | source | examined-no-change | `B0048`: non-blocking Kafka DataSender boundary retained |
+| `edgion-gateway/src/link_sys/providers/kafka/mod.rs` | `link-sys-provider-kafka` | source | examined-no-change | `B0048`: module exports retained |
 | `edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs` | `link-sys-provider-local-file` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/local_file/mod.rs` | `link-sys-provider-local-file` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/local_file/rotation.rs` | `link-sys-provider-local-file` | source | pending | — |
