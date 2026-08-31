@@ -25,6 +25,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0019 — Make Webhook sliding windows time-coherent | needs-discussion | [campaign finding](D0019-webhook-sliding-window-time-coherence.md) |
 | D0020 — Refresh the shared LinkSys lifecycle documentation | needs-implementation | [campaign finding](D0020-link-sys-lifecycle-webhook-doc.md) |
 | D0021 — Make partial LinkSys provider replacement authoritative | needs-discussion | [campaign finding](D0021-link-sys-cross-provider-partial-replacement.md) |
+| D0022 — Refresh the LinkSys documentation set | needs-implementation | [campaign finding](D0022-refresh-link-sys-documentation-set.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |

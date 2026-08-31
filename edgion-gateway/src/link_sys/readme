@@ -1,64 +1,72 @@
-TODO List - Link External Systems
-==================================
+# LinkSys Runtime Status
 
-## Implemented
-- [x] DataSender trait
-- [x] LocalFileWriter (file-based log writer with rotation)
+This file summarizes the runtime boundary. The canonical resource contract is
+the [typed `SystemConfig` definition](../../../edgion-resources/src/resources/link_sys/mod.rs)
+and the [current LinkSys feature schema](../../../skills/02-features/03-resources/18-link-sys.md).
 
-## Planned Senders
+## Ownership boundary
 
-### ES (Elasticsearch) Sender
-- [ ] Direct log shipping to Elasticsearch
-- [ ] Bulk API support for batch writes
-- [ ] Auto retry with exponential backoff
-- [ ] FailedCache integration:
-  - When ES is unavailable, cache failed logs to:
-    - LocalFileWriter (file system)
-    - Redis
-    - Other cache backends
-  - Auto replay cached logs when ES recovers
+`edgion-common/src/link_sys_core/` owns backend-independent credential, TLS,
+health, HTTP-client, and lifecycle primitives. It also owns the Etcd provider
+because the Controller and Gateway both need it. `edgion-gateway/src/link_sys/`
+owns the data-plane runtime store, Gateway-only providers, and logging sinks.
 
-### Kafka Sender
-- [ ] Async log shipping to Kafka
-- [ ] Partition key support (e.g., by trace_id)
+`LinkSysStore` keeps the authoritative resource snapshot and dispatches full and
+partial configuration updates to the provider-specific runtime state.
 
-### ClickHouse Sender
-- [ ] Direct insertion to ClickHouse
-- [ ] Batch insert optimization
+| `SystemConfig` variant | Runtime owner | Runtime access or consumer path |
+|---|---|---|
+| `Redis` | Gateway `providers/redis` plus the typed runtime store | `get_redis_client("namespace/name")` |
+| `Etcd` | Shared `edgion-common/src/link_sys_core/providers/etcd` client, published by the Gateway runtime store | `get_etcd_client("namespace/name")` |
+| `Elasticsearch` | Gateway `providers/elasticsearch` plus the typed runtime store | `get_es_client("namespace/name")` |
+| `Kafka` | Gateway `providers/kafka` plus the typed runtime store | `get_kafka_client("namespace/name")` |
+| `Webhook` | Gateway `providers/webhook` with its specialized manager and runtime store | `get_webhook_call_handle` and `resolve_webhook_key` |
+| `HttpDns` | Shared `edgion-common/src/dns` resolver core | Gateway backend resolution reads the config from `LinkSysStore`; there is no generic typed LinkSys client |
+| `CredentialSource` | Controller credential manager | No Gateway LinkSys client; resolved credentials arrive through the consuming plugin runtime |
 
-## CRD Design (EdgionLinkConfig)
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionLinkConfig
-metadata:
-  name: access-log-es
-spec:
-  type: elasticsearch
-  endpoint: https://es.example.com:9200
-  auth:
-    type: basic  # basic / apikey / none
-    secretRef:
-      name: es-credentials
-  tls:
-    enabled: true
-    validation:
-      caCertificateRefs:
-      - name: es-ca-cert
-  failedCache:
-    type: file  # file / redis
-    config:
-      path: /var/log/edgion/failed-cache
-      # or for redis:
-      # endpoint: redis://localhost:6379
-```
+### Webhook publication
 
-## Architecture
-```
-AccessLogger
-    └── senders: Vec<Box<dyn DataSender>>
-            ├── LocalFileWriter (current)
-            ├── EsSender (planned)
-            │       └── failedCache: Option<Box<dyn DataSender>>
-            ├── KafkaSender (planned)
-            └── ClickHouseSender (planned)
-```
+Webhook does not use the generic replace-and-shutdown lifecycle. `LinkSysStore`
+reserves a monotonically increasing dispatch sequence synchronously with source
+snapshot publication. `WebhookManager` rejects stale sequences and holds one
+mutation guard across preparation and commit. A full-set commit replaces the
+manager map atomically and retires displaced registrations before the matching
+Webhook runtime map is published. This ordered, specialized path prevents a
+delayed full or partial dispatch from restoring older endpoints, credentials,
+templates, or clients after newer configuration has been accepted.
+
+## Log outputs
+
+Log output configuration is `StringOutput`, not a `SystemConfig` variant.
+
+| Output | LinkSys-backed | Runtime behavior |
+|---|---|---|
+| `LocalFile` | No | Gateway-owned background writer with bounded queue, rotation, retention, and disk-health checks |
+| Elasticsearch (`Es`) | Yes | References an Elasticsearch LinkSys resource; `EsLogSender` resolves the current typed client |
+| `Kafka` | Yes | References a Kafka LinkSys resource and topic; `KafkaLogSender` resolves the current typed client |
+| `Otlp` | No | Self-contained `OtlpOutputConfig`; the Gateway owns the exporter directly |
+
+Only the Elasticsearch and Kafka log outputs use LinkSys runtime clients.
+LocalFile and OTLP are logging sinks, not LinkSys CRD providers.
+
+### Delivery and degradation
+
+An async logger has one primary output and, optionally, one fallback. Senders
+are checked in registration order and each entry is sent to the first sender
+whose live `healthy()` signal is true.
+
+- An error from the selected sender does not fall through to the next sender.
+  The entry is dropped and `edgion_access_log_dropped_total` is incremented.
+- If every configured sender is unhealthy, the entry is dropped and the same
+  metric is incremented.
+- A zero-sender logger represents logging disabled by the operator and does not
+  increment the dropped metric.
+
+For access logs, an Elasticsearch primary with a bounded LocalFile fallback
+additionally supports operator-triggered, at-least-once backfill from LocalFile
+to Elasticsearch through `POST /api/v1/access-log/backfill`. This manual replay
+is access-log-only and is not automatic durable replay.
+
+There is currently no `failedCache` LinkSys field, Redis spill target, generic
+spill-on-send-error mechanism, or automatic replay after a provider recovers.
+Configuration that assumes any of those behaviors is invalid.

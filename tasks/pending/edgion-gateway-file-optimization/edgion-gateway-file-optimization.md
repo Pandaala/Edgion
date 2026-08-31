@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 60 changed, 78 examined-no-change, 6 deferred, 388 non-terminal |
-| Active batch | [`B0053-link-sys-webhook`](batches/B0053-link-sys-webhook.md), pending full verification and commit |
-| Analysis queue | [`B0054-link-sys-readme`](batches/B0054-link-sys-readme.md) analysis-ready; revalidate only after B0053 commits |
+| Coverage | 532 tracked files: 61 changed, 78 examined-no-change, 6 deferred, 387 non-terminal |
+| Active batch | [`B0054-link-sys-readme`](batches/B0054-link-sys-readme.md), pending full verification and commit |
+| Analysis queue | empty; no next candidate may enter implementation before B0054 commits |
 
 ## AI guide summary
 
