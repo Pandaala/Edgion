@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 69 changed, 86 examined-no-change, 9 deferred, 368 non-terminal |
-| Active batch | B0061 Redis token-bucket deny balance; reviewed, fully verified, and awaiting local commit |
-| Analysis queue | B0062 HTTP plugin framework is a read-only queued candidate; revalidate after B0061 commits |
+| Coverage | 532 tracked files: 71 changed, 87 examined-no-change, 9 deferred, 365 non-terminal |
+| Active batch | B0062 HTTP plugin snapshot and delta semantics; reviewed, fully verified, and awaiting local commit |
+| Analysis queue | none promoted while B0062 owns the serial mutation lane |
 
 ## AI guide summary
 

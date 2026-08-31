@@ -43,10 +43,10 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         );
 
         let changed_keys: HashSet<_> = add.keys().chain(update.keys()).chain(remove.iter()).cloned().collect();
-        let mut add_or_update = compile_map(add);
-        add_or_update.extend(compile_map(update));
+        let compiled_add = compile_map(add);
+        let compiled_update = compile_map(update);
 
-        self.update(add_or_update, &remove);
+        self.apply_delta(compiled_add, compiled_update, &remove);
         if std::ptr::eq(self, super::global_plugin_store()) {
             crate::ai::reconcile_adaptive_plugin_keys(&changed_keys);
         }
@@ -230,6 +230,40 @@ mod tests {
             .get_plugin_runtime("default/plugin1")
             .expect("last-known-good runtime should be retained");
         assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
+    }
+
+    #[test]
+    fn invalid_same_key_add_replaces_last_known_good_and_fails_closed() {
+        let store = PluginStore::new();
+        store.partial_update(
+            HashMap::from([(
+                "default/plugin1".to_string(),
+                Arc::new(create_test_plugin("default", "plugin1")),
+            )]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let previous_runtime = store
+            .get_plugin_runtime("default/plugin1")
+            .expect("valid plugin runtime should be stored");
+
+        store.partial_update(
+            HashMap::from([(
+                "default/plugin1".to_string(),
+                Arc::new(create_invalid_dsl_test_plugin("default", "plugin1")),
+            )]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+
+        assert_eq!(
+            store.with_plugin("default/plugin1", |compiled| compiled.is_activatable),
+            Some(false)
+        );
+        let replacement_runtime = store
+            .get_plugin_runtime("default/plugin1")
+            .expect("invalid add should publish a fail-closed runtime");
+        assert!(!Arc::ptr_eq(&previous_runtime, &replacement_runtime));
     }
 
     #[test]

@@ -48,4 +48,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes
-- Commit: pending
+- Commit: `695f0ba9`

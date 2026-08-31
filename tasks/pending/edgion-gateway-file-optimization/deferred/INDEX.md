@@ -33,6 +33,8 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0027 — Add ACME gatewayRef isolation integration coverage | blocked | [campaign finding](D0027-acme-gatewayref-integration-coverage.md) |
 | D0028 — Define the Redis rate-limiter numeric domain | needs-discussion | [campaign finding](D0028-redis-rate-limiter-numeric-domain.md) |
 | D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
+| D0030 — Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
+| D0031 — Add EdgionPlugins LKG identity integration coverage | blocked | [campaign finding](D0031-edgionplugins-lkg-identity-integration-coverage.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -57,3 +59,5 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Add ACME gatewayRef isolation integration coverage | blocked | [task](../../../todo/add-acme-gatewayref-isolation-integration-coverage.md) |
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
 | Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
+| Retain EdgionPlugins last-known-good only for the same resource identity | pending | [task](../../../todo/retain-edgionplugins-last-known-good-resource-identity/retain-edgionplugins-last-known-good-resource-identity.md) |
+| Add EdgionPlugins LKG identity integration coverage | blocked | [task](../../../todo/add-edgionplugins-lkg-identity-integration-coverage.md) |

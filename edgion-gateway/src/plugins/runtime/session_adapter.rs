@@ -303,7 +303,7 @@ mod backend_ext_ref_pin_tests {
         let generation_a = compile_plugins(&EdgionPlugins::new("credential-provider-a", Default::default()));
         let mut initial = HashMap::new();
         initial.insert(key.to_string(), Arc::clone(&generation_a));
-        store.update(initial, &HashSet::new());
+        store.apply_delta(HashMap::new(), initial, &HashSet::new());
 
         let mut ctx = EdgionHttpContext::new();
         let pinned_a = ctx
@@ -315,7 +315,7 @@ mod backend_ext_ref_pin_tests {
         assert!(!Arc::ptr_eq(&generation_a.plugin_runtime, &generation_b.plugin_runtime));
         let mut update = HashMap::new();
         update.insert(key.to_string(), Arc::clone(&generation_b));
-        store.update(update, &HashSet::new());
+        store.apply_delta(HashMap::new(), update, &HashSet::new());
         assert!(Arc::ptr_eq(
             &store.get_plugin_runtime(key).unwrap(),
             &generation_b.plugin_runtime

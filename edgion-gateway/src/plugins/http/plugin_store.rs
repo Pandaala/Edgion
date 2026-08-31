@@ -10,7 +10,6 @@
 
 use arc_swap::ArcSwap;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -360,16 +359,28 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
 /// Type alias for the compiled-plugin map (key: namespace/name)
 type PluginMap = HashMap<String, Arc<CompiledPlugins>>;
 
+/// One immutable plugin-store generation.
+///
+/// The access-log hint is derived from `plugins`, so both values must be
+/// published together. A reader that loads this snapshot once can never
+/// observe the hint from one generation and the map from another.
+struct PluginStoreSnapshot {
+    plugins: PluginMap,
+    has_access_log_extern: bool,
+}
+
+impl PluginStoreSnapshot {
+    fn new(plugins: PluginMap) -> Self {
+        let has_access_log_extern = any_declares_access_log_extern(&plugins);
+        Self {
+            plugins,
+            has_access_log_extern,
+        }
+    }
+}
+
 pub struct PluginStore {
-    plugins: ArcSwap<PluginMap>,
-    /// Precomputed hint: true when at least one stored `CompiledPlugins`
-    /// declares a non-empty `accessLogExtern`. Recomputed on every store
-    /// mutation (`replace_all` / `update`), never on the per-request read path.
-    ///
-    /// `Relaxed` is sufficient: this is a monotonic hint, not a synchronization
-    /// edge — the `ArcSwap` above already provides the happens-before for the
-    /// map contents a reader may subsequently look up.
-    has_access_log_extern: AtomicBool,
+    snapshot: ArcSwap<PluginStoreSnapshot>,
 }
 
 impl Default for PluginStore {
@@ -386,8 +397,7 @@ fn any_declares_access_log_extern(map: &PluginMap) -> bool {
 impl PluginStore {
     pub fn new() -> Self {
         Self {
-            plugins: ArcSwap::from_pointee(HashMap::new()),
-            has_access_log_extern: AtomicBool::new(false),
+            snapshot: ArcSwap::from_pointee(PluginStoreSnapshot::new(HashMap::new())),
         }
     }
 
@@ -395,13 +405,13 @@ impl PluginStore {
     /// `EdgionPlugins` declares a non-empty `accessLogExtern`. When false, the
     /// caller can skip the plugin-store lookups entirely for this request.
     pub fn has_access_log_extern(&self) -> bool {
-        self.has_access_log_extern.load(Ordering::Relaxed)
+        self.snapshot.load().has_access_log_extern
     }
 
     /// Check if a plugin exists
     pub fn contains(&self, key: &str) -> bool {
-        let map = self.plugins.load();
-        map.contains_key(key)
+        let snapshot = self.snapshot.load();
+        snapshot.plugins.contains_key(key)
     }
 
     /// Execute a function with the compiled plugins reference
@@ -409,8 +419,8 @@ impl PluginStore {
     where
         F: FnOnce(&CompiledPlugins) -> R,
     {
-        let map = self.plugins.load();
-        map.get(key).map(|c| f(c))
+        let snapshot = self.snapshot.load();
+        snapshot.plugins.get(key).map(|c| f(c))
     }
 
     /// Get the plugin runtime Arc for a given key
@@ -420,32 +430,49 @@ impl PluginStore {
 
     /// Replace all compiled plugins atomically, retaining a last-known-good
     /// runtime when a reconnect snapshot contains an invalid update for the
-    /// same key. Keys absent from the new snapshot are still removed.
+    /// same key. Keys absent from the new snapshot are still removed. Like
+    /// [`Self::apply_delta`], this load-decide-store sequence relies on the
+    /// serialized EdgionPlugins conf-sync writer.
     pub fn replace_all(&self, mut plugins: HashMap<String, Arc<CompiledPlugins>>) {
-        let current = self.plugins.load();
-        for (key, previous) in current.iter() {
-            let Some(incoming) = plugins.get(key) else {
-                continue;
-            };
-            if incoming.retain_previous_on_invalid_update && previous.is_activatable {
-                plugins.insert(key.clone(), Arc::clone(previous));
+        {
+            let current = self.snapshot.load();
+            for (key, previous) in current.plugins.iter() {
+                let Some(incoming) = plugins.get(key) else {
+                    continue;
+                };
+                if incoming.retain_previous_on_invalid_update && previous.is_activatable {
+                    plugins.insert(key.clone(), Arc::clone(previous));
+                }
             }
         }
-        self.has_access_log_extern
-            .store(any_declares_access_log_extern(&plugins), Ordering::Relaxed);
-        self.plugins.store(Arc::new(plugins));
+        self.publish(plugins);
     }
 
-    /// Update compiled plugins atomically (clone map + modify + swap)
-    pub fn update(&self, add_or_update: HashMap<String, Arc<CompiledPlugins>>, remove: &HashSet<String>) {
-        let current = self.plugins.load();
-        let current_map: &PluginMap = &current;
-        let mut new_map: PluginMap = current_map.clone();
+    /// Apply one serialized conf-sync delta and publish exactly one generation.
+    ///
+    /// `CacheData` invokes the EdgionPlugins handler while holding its
+    /// per-resource-type write lock, so this load-clone-store sequence has one
+    /// production writer. Adds replace unconditionally because a compressed
+    /// add may represent delete-to-create for the same key. Last-known-good
+    /// retention is therefore update-only.
+    pub(crate) fn apply_delta(
+        &self,
+        add: HashMap<String, Arc<CompiledPlugins>>,
+        update: HashMap<String, Arc<CompiledPlugins>>,
+        remove: &HashSet<String>,
+    ) {
+        let mut new_map = {
+            let current = self.snapshot.load();
+            current.plugins.clone()
+        };
 
         for key in remove {
             new_map.remove(key);
         }
-        for (key, plugin) in add_or_update {
+        for (key, plugin) in add {
+            new_map.insert(key, plugin);
+        }
+        for (key, plugin) in update {
             if plugin.retain_previous_on_invalid_update
                 && new_map.get(&key).is_some_and(|previous| previous.is_activatable)
             {
@@ -454,15 +481,17 @@ impl PluginStore {
             new_map.insert(key, plugin);
         }
 
-        self.has_access_log_extern
-            .store(any_declares_access_log_extern(&new_map), Ordering::Relaxed);
-        self.plugins.store(Arc::new(new_map));
+        self.publish(new_map);
+    }
+
+    fn publish(&self, plugins: PluginMap) {
+        self.snapshot.store(Arc::new(PluginStoreSnapshot::new(plugins)));
     }
 
     /// Get total count of compiled plugins
     pub fn count(&self) -> usize {
-        let map = self.plugins.load();
-        map.len()
+        let snapshot = self.snapshot.load();
+        snapshot.plugins.len()
     }
 
     /// Per-kind plugin entry count across all stored EdgionPlugins resources.
@@ -473,8 +502,8 @@ impl PluginStore {
     /// upstreamResponsePlugins. All stages are counted.
     pub fn count_by_kind(&self) -> BTreeMap<String, usize> {
         let mut out = BTreeMap::new();
-        let map = self.plugins.load();
-        for compiled in map.values() {
+        let snapshot = self.snapshot.load();
+        for compiled in snapshot.plugins.values() {
             let ep = &compiled.spec;
             for entry in ep.request_filter_entries() {
                 *out.entry(entry.plugin.type_name().to_string()).or_insert(0) += 1;
@@ -496,8 +525,8 @@ impl PluginStore {
     #[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15); allow until then.
     pub fn keys_by_kind(&self, kind: &str) -> Vec<String> {
         let mut out = Vec::new();
-        let map = self.plugins.load();
-        for (key, compiled) in map.iter() {
+        let snapshot = self.snapshot.load();
+        for (key, compiled) in snapshot.plugins.iter() {
             let ep = &compiled.spec;
             let has_kind = ep.request_filter_entries().iter().any(|e| e.plugin.type_name() == kind)
                 || ep
@@ -542,6 +571,8 @@ mod access_log_extern_flag_tests {
     };
     use edgion_resources::resources::edgion_plugins::EdgionPluginsSpec;
     use edgion_resources::resources::EdgionPlugins;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Barrier;
 
     fn ep_without_access_log_extern() -> EdgionPlugins {
         EdgionPlugins {
@@ -566,6 +597,14 @@ mod access_log_extern_flag_tests {
         }
     }
 
+    fn assert_snapshot_coherent(store: &PluginStore) {
+        let snapshot = store.snapshot.load();
+        assert_eq!(
+            snapshot.has_access_log_extern,
+            any_declares_access_log_extern(&snapshot.plugins)
+        );
+    }
+
     /// The flag must reflect what is currently *stored*, not merely what
     /// entered the store historically: no plugins, plugins without
     /// `accessLogExtern`, then adding one, then removing it.
@@ -573,6 +612,7 @@ mod access_log_extern_flag_tests {
     fn flag_flips_as_the_store_gains_and_loses_an_access_log_extern_declaration() {
         let store = PluginStore::new();
         assert!(!store.has_access_log_extern(), "empty store must report false");
+        assert_snapshot_coherent(&store);
 
         let mut plugins = HashMap::new();
         plugins.insert(
@@ -584,24 +624,27 @@ mod access_log_extern_flag_tests {
             !store.has_access_log_extern(),
             "a store with plugins but no accessLogExtern must report false"
         );
+        assert_snapshot_coherent(&store);
 
-        // Add one resource declaring accessLogExtern via `update`.
+        // Deterministic false-to-true transition.
         let mut add = HashMap::new();
         add.insert("ns/with-ext".to_string(), compile_plugins(&ep_with_access_log_extern()));
-        store.update(add, &HashSet::new());
+        store.apply_delta(add, HashMap::new(), &HashSet::new());
         assert!(
             store.has_access_log_extern(),
             "adding a resource with accessLogExtern must flip the flag to true"
         );
+        assert_snapshot_coherent(&store);
 
-        // Remove it again: the flag must flip back to false.
+        // Deterministic true-to-false transition.
         let mut remove = HashSet::new();
         remove.insert("ns/with-ext".to_string());
-        store.update(HashMap::new(), &remove);
+        store.apply_delta(HashMap::new(), HashMap::new(), &remove);
         assert!(
             !store.has_access_log_extern(),
             "removing the only resource with accessLogExtern must flip the flag back to false"
         );
+        assert_snapshot_coherent(&store);
     }
 
     /// `replace_all` is the conf_sync full-sync path: it must SET the flag, not
@@ -625,6 +668,59 @@ mod access_log_extern_flag_tests {
         assert!(
             !store.has_access_log_extern(),
             "replace_all with an empty set must clear the flag"
+        );
+    }
+
+    #[test]
+    fn concurrent_publication_never_exposes_a_mixed_snapshot() {
+        const READERS: usize = 4;
+        const WRITES: usize = 2_000;
+        const READS: usize = 10_000;
+
+        let with_ext = compile_plugins(&ep_with_access_log_extern());
+        let without_ext = compile_plugins(&ep_without_access_log_extern());
+        let store = Arc::new(PluginStore::new());
+        let start = Arc::new(Barrier::new(READERS + 1));
+        let failed = Arc::new(AtomicBool::new(false));
+
+        std::thread::scope(|scope| {
+            {
+                let store = Arc::clone(&store);
+                let start = Arc::clone(&start);
+                let with_ext = Arc::clone(&with_ext);
+                let without_ext = Arc::clone(&without_ext);
+                scope.spawn(move || {
+                    start.wait();
+                    for iteration in 0..WRITES {
+                        let generation = if iteration % 2 == 0 {
+                            HashMap::from([("ns/with-ext".to_string(), Arc::clone(&with_ext))])
+                        } else {
+                            HashMap::from([("ns/without-ext".to_string(), Arc::clone(&without_ext))])
+                        };
+                        store.replace_all(generation);
+                    }
+                });
+            }
+
+            for _ in 0..READERS {
+                let store = Arc::clone(&store);
+                let start = Arc::clone(&start);
+                let failed = Arc::clone(&failed);
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..READS {
+                        let snapshot = store.snapshot.load();
+                        if snapshot.has_access_log_extern != any_declares_access_log_extern(&snapshot.plugins) {
+                            failed.store(true, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+        });
+
+        assert!(
+            !failed.load(Ordering::Relaxed),
+            "each reader must observe a coherent plugin-store generation"
         );
     }
 }
@@ -696,19 +792,51 @@ mod compile_plugins_tests {
         assert!(invalid.preparse_errors.iter().any(|error| error.starts_with("waf: ")));
 
         let store = PluginStore::new();
-        store.update(
+        store.apply_delta(
             HashMap::from([("default/native-waf".to_string(), Arc::clone(&valid))]),
+            HashMap::new(),
             &HashSet::new(),
         );
-        store.update(
-            HashMap::from([("default/native-waf".to_string(), invalid)]),
+        store.apply_delta(
+            HashMap::new(),
+            HashMap::from([("default/native-waf".to_string(), Arc::clone(&invalid))]),
             &HashSet::new(),
         );
 
-        let retained = store
-            .get_plugin_runtime("default/native-waf")
+        let snapshot = store.snapshot.load();
+        let retained = snapshot
+            .plugins
+            .get("default/native-waf")
             .expect("valid WAF generation remains published");
-        assert!(Arc::ptr_eq(&retained, &valid.plugin_runtime));
+        assert!(Arc::ptr_eq(retained, &valid));
+        assert!(!Arc::ptr_eq(retained, &invalid));
+    }
+
+    #[test]
+    fn invalid_waf_same_key_add_replaces_last_known_good_and_fails_closed() {
+        let key = "default/native-waf".to_string();
+        let valid = compile_plugins(&waf_resource(
+            "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n",
+        ));
+        let invalid = compile_plugins(&waf_resource("SecRule invalid-("));
+        let store = PluginStore::new();
+
+        store.apply_delta(
+            HashMap::from([(key.clone(), Arc::clone(&valid))]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        store.apply_delta(
+            HashMap::from([(key.clone(), Arc::clone(&invalid))]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+
+        let snapshot = store.snapshot.load();
+        let replacement = snapshot.plugins.get(&key).expect("invalid add remains stored");
+        assert!(Arc::ptr_eq(replacement, &invalid));
+        assert!(!Arc::ptr_eq(replacement, &valid));
+        assert!(!replacement.is_activatable);
     }
 
     #[test]
@@ -729,7 +857,11 @@ mod compile_plugins_tests {
         store.replace_all(HashMap::from([(key.clone(), Arc::clone(&first))]));
         let in_flight_first = store.get_plugin_runtime(&key).expect("first generation is published");
 
-        store.update(HashMap::from([(key.clone(), Arc::clone(&second))]), &HashSet::new());
+        store.apply_delta(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::clone(&second))]),
+            &HashSet::new(),
+        );
         let in_flight_second = store.get_plugin_runtime(&key).expect("second generation is published");
         assert!(Arc::ptr_eq(&in_flight_first, &first.plugin_runtime));
         assert!(Arc::ptr_eq(&in_flight_second, &second.plugin_runtime));
@@ -741,13 +873,17 @@ mod compile_plugins_tests {
             .expect("invalid full snapshot retains the second generation");
         assert!(Arc::ptr_eq(&retained, &in_flight_second));
 
-        store.update(HashMap::from([(key.clone(), Arc::clone(&recovered))]), &HashSet::new());
+        store.apply_delta(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::clone(&recovered))]),
+            &HashSet::new(),
+        );
         let active_recovered = store
             .get_plugin_runtime(&key)
             .expect("recovered generation is published");
         assert!(Arc::ptr_eq(&active_recovered, &recovered.plugin_runtime));
 
-        store.update(HashMap::new(), &HashSet::from([key.clone()]));
+        store.apply_delta(HashMap::new(), HashMap::new(), &HashSet::from([key.clone()]));
         assert!(store.get_plugin_runtime(&key).is_none());
         assert_eq!(in_flight_first.request_plugins_count(), 1);
         assert_eq!(in_flight_second.request_plugins_count(), 1);
@@ -798,7 +934,11 @@ mod compile_plugins_tests {
                         1 => Arc::clone(&invalid),
                         _ => Arc::clone(&second),
                     };
-                    store.update(HashMap::from([(key.clone(), generation)]), &HashSet::new());
+                    store.apply_delta(
+                        HashMap::new(),
+                        HashMap::from([(key.clone(), generation)]),
+                        &HashSet::new(),
+                    );
                 }
             });
         });

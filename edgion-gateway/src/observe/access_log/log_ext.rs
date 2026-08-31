@@ -148,13 +148,13 @@ pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHtt
 
     // Borrow the store rather than cloning its `Arc` (an atomic RMW pair) — every
     // request reaches this point, and the common case is the fast path just below,
-    // which must cost a single relaxed atomic load and nothing more.
+    // which must cost a single lock-free snapshot load and nothing more.
     let store = crate::plugins::http::global_plugin_store();
 
     // Fast path: no stored EdgionPlugins declares a non-empty `accessLogExtern`
     // anywhere in the fleet. This is the common case — a deployment using
     // rate-limit / CORS / auth plugins but no AccessLogExtern still reaches this
-    // point on every request, so the check must be a single relaxed atomic load,
+    // point on every request, so the check must be a single lock-free snapshot load,
     // not a per-ref plugin-store lookup.
     if !store.has_access_log_extern() {
         return ext;
