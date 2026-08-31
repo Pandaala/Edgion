@@ -81,9 +81,9 @@
 | `link-sys-provider-webhook` | 5 | 3 | 1 | 1 | complete |
 | `link-sys-providers-root` | 1 | 0 | 1 | 0 | complete |
 | `link-sys-root` | 2 | 2 | 0 | 0 | complete |
-| `link-sys-runtime` | 5 | 1 | 0 | 0 | pending |
+| `link-sys-runtime` | 5 | 2 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
-| `observe-access-log` | 5 | 2 | 3 | 0 | complete |
+| `observe-access-log` | 5 | 3 | 2 | 0 | complete |
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
 | `observe-metrics` | 5 | 3 | 2 | 0 | complete |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
@@ -139,7 +139,7 @@
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
-| `routes-shared` | 66 | 0 | 1 | 0 | pending |
+| `routes-shared` | 66 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
 | `services` | 4 | 0 | 0 | 0 | pending |
 | `sse` | 3 | 1 | 2 | 0 | complete |
@@ -280,7 +280,7 @@
 | `edgion-gateway/src/link_sys/providers/local_file/mod.rs` | `link-sys-provider-local-file` | source | examined-no-change | `B0049`: retained the narrow provider facade and exports |
 | `edgion-gateway/src/link_sys/providers/local_file/rotation.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: made size-index parsing safe when base-name prefix and suffix overlap |
 | `edgion-gateway/src/link_sys/providers/mod.rs` | `link-sys-providers-root` | source | examined-no-change | `B0050`: retained the accurate provider facade, shared Etcd ownership, and live canonical exports |
-| `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | `link-sys-provider-otlp` | source | changed | `B0051`: applied the canonical sensitive-data policy to the parallel OTLP `url.path` attribute |
+| `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | `link-sys-provider-otlp` | source | changed | `B0055`: materialized method/path only at OTLP attribute construction while retaining B0051 sensitive-path masking |
 | `edgion-gateway/src/link_sys/providers/otlp/mod.rs` | `link-sys-provider-otlp` | source | examined-no-change | `B0051`: retained the narrow OTLP sender facade and re-export |
 | `edgion-gateway/src/link_sys/providers/redis/client.rs` | `link-sys-provider-redis` | source | examined-no-change | `B0052`: retained canonical client ownership, hot-reload publication, and lifecycle behavior |
 | `edgion-gateway/src/link_sys/providers/redis/config_mapping.rs` | `link-sys-provider-redis` | source | changed | `B0052`: made `rediss://` transport TLS effective and rejected ambiguous mixed active transports |
@@ -293,7 +293,7 @@
 | `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | deferred | `B0053` / `D0019`: window rotation and time-source semantics require a wider limiter contract |
 | `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | changed | `B0054`: replaced fictional TODO/configuration claims with the current typed provider, output, fallback, and backfill boundaries |
 | `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | pending | — |
-| `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | pending | — |
+| `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | changed | `B0055`: made method/path metadata a call-scoped borrowed view |
 | `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | changed | `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
@@ -302,7 +302,7 @@
 | `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log/entry.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |
-| `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
+| `edgion-gateway/src/observe/access_log/logger.rs` | `observe-access-log` | source | changed | `B0055`: preserved first-healthy delivery across object-safe borrowed metadata dispatch |
 | `edgion-gateway/src/observe/access_log/mod.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log_store.rs` | `observe-core` | source | changed | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/observe/logs/buffer.rs` | `observe-protocol-logs` | source | changed | OBS-LOG-001 / `11d3e79c` |
@@ -596,7 +596,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | pending | Reopened after `f31d0169` moved terminal semantic/trailer finalization into the awaited response-processor driver; OBS-METRICS-001 history retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | changed | `B0055`: borrowed live method and canonical normalized path without per-request String allocation; response-processor finalization retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a` |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | pending | — |

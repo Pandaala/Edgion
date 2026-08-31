@@ -17,10 +17,11 @@ use async_trait::async_trait;
 /// OTLP (and future) senders can set structured LogRecord fields without
 /// re-parsing the JSON string.
 ///
-/// `method` and `path` are owned `String` because `DataSender` requires
-/// `Send + 'static` and the entry's references do not outlive the call site.
+/// `method` and `path` borrow the request-scoped values for the duration of a
+/// send call. Senders that require owned values materialize them at their
+/// actual ownership boundary.
 #[derive(Debug, Clone, Default)]
-pub struct LogMeta {
+pub struct LogMeta<'a> {
     /// Event timestamp in nanoseconds since Unix epoch.
     pub timestamp_ns: u64,
     /// OTel SeverityNumber (see opentelemetry-proto logs.proto).
@@ -29,12 +30,12 @@ pub struct LogMeta {
     /// HTTP response status code (None for non-HTTP streams).
     pub status_code: Option<u16>,
     /// HTTP request method (e.g. "GET", "POST"). None for non-HTTP streams.
-    pub method: Option<String>,
+    pub method: Option<&'a str>,
     /// Normalized request path. None for non-HTTP streams.
-    pub path: Option<String>,
+    pub path: Option<&'a str>,
 }
 
-impl LogMeta {
+impl LogMeta<'_> {
     /// Derive OTel SeverityNumber from HTTP status code.
     pub fn severity_from_status(status: Option<u16>) -> u32 {
         match status {
@@ -90,7 +91,7 @@ where
     ///
     /// The default implementation ignores `_meta` and delegates to `send`.
     /// Senders that benefit from structured metadata (e.g. OTLP) override this.
-    async fn send_with_meta(&self, data: T, _meta: &LogMeta) -> Result<()> {
+    async fn send_with_meta(&self, data: T, _meta: &LogMeta<'_>) -> Result<()> {
         self.send(data).await
     }
 
@@ -111,5 +112,21 @@ mod tests {
         assert_eq!(LogMeta::severity_from_status(Some(500)), 17);
         assert_eq!(LogMeta::severity_from_status(Some(503)), 17);
         assert_eq!(LogMeta::severity_from_status(None), 0);
+    }
+
+    #[test]
+    fn log_meta_borrows_call_scoped_method_and_path() {
+        let method = String::from("PATCH");
+        let path = String::from("/v1/items/42");
+        let meta = LogMeta {
+            method: Some(method.as_str()),
+            path: Some(path.as_str()),
+            ..Default::default()
+        };
+
+        assert_eq!(meta.method, Some("PATCH"));
+        assert_eq!(meta.path, Some("/v1/items/42"));
+        assert_eq!(meta.method.expect("method is set").as_ptr(), method.as_ptr());
+        assert_eq!(meta.path.expect("path is set").as_ptr(), path.as_ptr());
     }
 }

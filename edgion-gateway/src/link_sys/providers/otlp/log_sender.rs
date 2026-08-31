@@ -187,7 +187,7 @@ impl DataSender<String> for OtlpLogSender {
         self.send_with_meta(data, &meta).await
     }
 
-    async fn send_with_meta(&self, data: String, meta: &LogMeta) -> Result<()> {
+    async fn send_with_meta(&self, data: String, meta: &LogMeta<'_>) -> Result<()> {
         let provider = self
             .provider
             .get()
@@ -208,11 +208,12 @@ impl DataSender<String> for OtlpLogSender {
         if let Some(status) = meta.status_code {
             record.add_attribute("http.response.status_code", status as i64);
         }
-        if let Some(ref method) = meta.method {
-            // Use .clone() — non-'static &str is not Into<AnyValue> in opentelemetry 0.31.
-            record.add_attribute("http.request.method", method.clone());
+        if let Some(method) = meta.method {
+            // Materialize ownership here because non-'static &str is not
+            // Into<AnyValue> in opentelemetry 0.31.
+            record.add_attribute("http.request.method", method.to_owned());
         }
-        if let Some(ref path) = meta.path {
+        if let Some(path) = meta.path {
             record.add_attribute("url.path", render_sensitive_path(path));
         }
 

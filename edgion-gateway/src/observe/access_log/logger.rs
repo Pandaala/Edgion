@@ -71,13 +71,13 @@ impl AccessLogger {
     ///
     /// Falls back to `send` for senders that do not override `send_with_meta`
     /// (ES, Kafka, LocalFile). OTLP senders use `meta` to build typed LogRecords.
-    pub async fn send_with_meta(&self, data: String, meta: LogMeta) {
+    pub async fn send_with_meta(&self, data: String, meta: &LogMeta<'_>) {
         if self.senders.is_empty() {
             return;
         }
         for sender in &self.senders {
             if sender.healthy() {
-                if sender.send_with_meta(data, &meta).await.is_err() {
+                if sender.send_with_meta(data, meta).await.is_err() {
                     global_metrics().access_log_dropped();
                 }
                 return;
@@ -108,6 +108,11 @@ mod tests {
         fail: Arc<AtomicBool>,
     }
 
+    struct BorrowObservingSender {
+        method_ptr: Arc<AtomicUsize>,
+        path_ptr: Arc<AtomicUsize>,
+    }
+
     #[async_trait]
     impl DataSender<String> for FakeSender {
         async fn init(&mut self) -> anyhow::Result<()> {
@@ -125,6 +130,33 @@ mod tests {
         }
         fn name(&self) -> &str {
             &self.name
+        }
+    }
+
+    #[async_trait]
+    impl DataSender<String> for BorrowObservingSender {
+        async fn init(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn healthy(&self) -> bool {
+            true
+        }
+
+        async fn send(&self, _data: String) -> anyhow::Result<()> {
+            anyhow::bail!("metadata-aware sender must receive send_with_meta")
+        }
+
+        async fn send_with_meta(&self, _data: String, meta: &LogMeta<'_>) -> anyhow::Result<()> {
+            let method = meta.method.expect("test metadata includes method");
+            let path = meta.path.expect("test metadata includes path");
+            self.method_ptr.store(method.as_ptr() as usize, Ordering::Relaxed);
+            self.path_ptr.store(path.as_ptr() as usize, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "borrow-observer"
         }
     }
 
@@ -226,7 +258,7 @@ mod tests {
         logger.register(Box::new(first));
         logger.register(Box::new(second));
 
-        logger.send_with_meta("hello".to_string(), LogMeta::default()).await;
+        logger.send_with_meta("hello".to_string(), &LogMeta::default()).await;
 
         assert_eq!(first_rx.load(Ordering::Relaxed), 0, "first errored, nothing recorded");
         assert_eq!(
@@ -234,5 +266,30 @@ mod tests {
             0,
             "no fall-through to the second sender"
         );
+    }
+
+    #[tokio::test]
+    async fn send_with_meta_preserves_borrowed_method_and_path_through_trait_object() {
+        let observed_method_ptr = Arc::new(AtomicUsize::new(0));
+        let observed_path_ptr = Arc::new(AtomicUsize::new(0));
+        let sender: Box<dyn DataSender<String>> = Box::new(BorrowObservingSender {
+            method_ptr: Arc::clone(&observed_method_ptr),
+            path_ptr: Arc::clone(&observed_path_ptr),
+        });
+        let mut logger = AccessLogger::new();
+        logger.register(sender);
+
+        let method = String::from("PATCH");
+        let path = String::from("/v1/items/42");
+        let meta = LogMeta {
+            method: Some(method.as_str()),
+            path: Some(path.as_str()),
+            ..Default::default()
+        };
+
+        logger.send_with_meta("hello".to_string(), &meta).await;
+
+        assert_eq!(observed_method_ptr.load(Ordering::Relaxed), method.as_ptr() as usize);
+        assert_eq!(observed_path_ptr.load(Ordering::Relaxed), path.as_ptr() as usize);
     }
 }

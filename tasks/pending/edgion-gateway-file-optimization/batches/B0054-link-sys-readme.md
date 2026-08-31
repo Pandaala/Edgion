@@ -49,4 +49,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; target closes as changed
-- Commit: pending final staging and automatic commit
+- Commit: `99cc5f7a`

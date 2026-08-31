@@ -83,12 +83,13 @@ pub async fn logging(
     entry.ext = crate::observe::access_log::collect(edgion_http, session, ctx);
     // Extract LogMeta BEFORE serialization — typed fields needed by OTLP sender.
     // entry.timestamp is i64 milliseconds; guard negative values before casting.
+    let status_code = entry.request_info.status_option();
     let meta = LogMeta {
         timestamp_ns: entry.timestamp.max(0) as u64 * 1_000_000,
-        severity_number: LogMeta::severity_from_status(entry.request_info.status_option()),
-        status_code: entry.request_info.status_option(),
-        method: Some(session.req_header().method.as_str().to_string()),
-        path: Some(entry.request_info.normalized_current_path.clone()),
+        severity_number: LogMeta::severity_from_status(status_code),
+        status_code,
+        method: Some(session.req_header().method.as_str()),
+        path: Some(ctx.path()),
     };
     let entry_json = entry.to_json();
 
@@ -110,7 +111,7 @@ pub async fn logging(
         None
     };
 
-    edgion_http.access_logger.send_with_meta(entry_json, meta).await;
+    edgion_http.access_logger.send_with_meta(entry_json, &meta).await;
 
     // Defensive cleanup for mirror state. Dropping JoinHandle detaches task.
     if let Some(mirror_state) = ctx.take_mirror_state() {
