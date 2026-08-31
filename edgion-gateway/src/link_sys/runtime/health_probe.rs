@@ -19,17 +19,11 @@ use tokio::task::JoinHandle;
 
 use crate::observe::metrics::registry::{record_link_sys_health, record_link_sys_health_flip};
 
-/// Flip-log rate-limit window. Matches Kafka's `FLIP_LOG_MIN_INTERVAL_MS` so the
-/// whole project bounds flip-log volume identically.
-pub(crate) const FLIP_LOG_WINDOW_MS: u64 = 5_000;
+/// Canonical LinkSys flip-log rate-limit window.
+const FLIP_LOG_WINDOW_MS: u64 = 5_000;
 
-/// Process-start monotonic base for flip-log rate limiting (same pattern as
-/// `kafka/client.rs`'s `FLIP_CLOCK_BASE`).
+/// Process-start monotonic base for LinkSys flip-log rate limiting.
 static FLIP_CLOCK_BASE: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-fn now_ms() -> u64 {
-    FLIP_CLOCK_BASE.elapsed().as_millis() as u64
-}
 
 /// Deterministic FAILURE backoff state: start 500ms, double, clamp at `max`.
 /// The healthy-cadence interval (10s) is NOT here — it lives in `ProbeConfig`.
@@ -66,13 +60,19 @@ impl ProbeBackoff {
 /// Non-atomic: the load/store pair is not a single CAS, so concurrent first callers
 /// may both return `true` (a one-off double-log). This is acceptable — the gate only
 /// limits log volume; it is not a correctness barrier.
-pub(crate) fn flip_log_allowed_at(last: &AtomicU64, now_ms: u64, window_ms: u64) -> bool {
+fn flip_log_allowed_at(last: &AtomicU64, now_ms: u64, window_ms: u64) -> bool {
     let prev = last.load(Ordering::Relaxed);
     if prev != 0 && now_ms.saturating_sub(prev) < window_ms {
         return false;
     }
     last.store(now_ms.max(1), Ordering::Relaxed);
     true
+}
+
+/// Apply the canonical LinkSys flip-log gate using the real monotonic clock.
+pub(crate) fn flip_log_allowed(last: &AtomicU64) -> bool {
+    let now_ms = Instant::now().saturating_duration_since(*FLIP_CLOCK_BASE).as_millis() as u64;
+    flip_log_allowed_at(last, now_ms, FLIP_LOG_WINDOW_MS)
 }
 
 /// Apply one probe/operation result to `healthy` via CAS, emitting the gauge +
@@ -95,7 +95,7 @@ pub(crate) fn apply_health_result(
         {
             record_link_sys_health(name, true);
             record_link_sys_health_flip(name, true);
-            if flip_log_allowed_at(last_flip_log, now_ms(), FLIP_LOG_WINDOW_MS) {
+            if flip_log_allowed(last_flip_log) {
                 tracing::info!(link = %name, system = %system_type, "link-sys recovered");
             }
             return true;
@@ -107,7 +107,7 @@ pub(crate) fn apply_health_result(
     {
         record_link_sys_health(name, false);
         record_link_sys_health_flip(name, false);
-        if flip_log_allowed_at(last_flip_log, now_ms(), FLIP_LOG_WINDOW_MS) {
+        if flip_log_allowed(last_flip_log) {
             tracing::warn!(link = %name, system = %system_type, "link-sys degraded");
         }
         return true;
@@ -250,6 +250,18 @@ mod tests {
         let last = AtomicU64::new(0);
         assert!(flip_log_allowed_at(&last, 0, 5_000));
         assert_eq!(last.load(Ordering::Relaxed), 1); // now_ms.max(1)
+    }
+
+    #[test]
+    fn flip_log_clock_rollback_waits_for_the_full_window_after_catch_up() {
+        let last = AtomicU64::new(0);
+        assert!(flip_log_allowed_at(&last, 10_000, 5_000));
+
+        assert!(!flip_log_allowed_at(&last, 9_000, 5_000));
+        assert_eq!(last.load(Ordering::Relaxed), 10_000);
+
+        assert!(!flip_log_allowed_at(&last, 10_000, 5_000));
+        assert!(flip_log_allowed_at(&last, 15_000, 5_000));
     }
 
     #[test]

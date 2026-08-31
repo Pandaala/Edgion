@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use arc_swap::ArcSwapOption;
@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::lifecycle::LinkSysLifecycle;
+use crate::link_sys::runtime::health_probe::flip_log_allowed;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
 
@@ -59,37 +60,6 @@ fn record_produce_result(healthy: &AtomicBool, ok: bool) -> bool {
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
     }
-}
-
-const FLIP_LOG_MIN_INTERVAL_MS: u64 = 5_000;
-
-/// Process-start monotonic base for flip-log rate limiting.
-static FLIP_CLOCK_BASE: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-/// Pure rate-limit core (clock-injected, unit-testable without sleeping).
-///
-/// Returns `true` (and stamps `last`) iff this is the first flip (`last == 0` sentinel)
-/// or at least `interval_ms` has passed since the last allowed flip. Shared across both
-/// directions, so total flip-log rate is bounded to <=1 line per window per client even
-/// under partial-outage ping-pong.
-///
-/// Best-effort throttle: the load/store pair is non-atomic, so concurrent first callers
-/// may both return `true` (a one-off double-log). This is acceptable — the gate only
-/// limits log volume, it is not a correctness barrier.
-fn flip_log_allowed_at(last: &AtomicU64, now_ms: u64, interval_ms: u64) -> bool {
-    let prev = last.load(Ordering::Relaxed);
-    if prev != 0 && now_ms.saturating_sub(prev) < interval_ms {
-        return false;
-    }
-    // Never store 0, so the "first flip" sentinel stays meaningful.
-    last.store(now_ms.max(1), Ordering::Relaxed);
-    true
-}
-
-/// Thin wrapper supplying the real monotonic clock and configured interval.
-fn flip_log_allowed(last: &AtomicU64) -> bool {
-    let now_ms = FLIP_CLOCK_BASE.elapsed().as_millis() as u64;
-    flip_log_allowed_at(last, now_ms, FLIP_LOG_MIN_INTERVAL_MS)
 }
 
 /// Build the rustls `ClientConfig` for the rskafka TLS connector.
@@ -527,28 +497,6 @@ mod tests {
             .count();
         assert_eq!(winners, 1, "exactly one task may win the false->true flip");
         assert!(flag.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn flip_log_allowed_at_rate_limits_within_window() {
-        let last = AtomicU64::new(0);
-        // first flip (sentinel 0) always logs
-        assert!(flip_log_allowed_at(&last, 1_000, 5_000));
-        // within the window -> suppressed
-        assert!(!flip_log_allowed_at(&last, 2_000, 5_000));
-        // window elapsed -> allowed again
-        assert!(flip_log_allowed_at(&last, 6_000, 5_000));
-        // never stores the 0 sentinel
-        assert_ne!(last.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn flip_log_allowed_at_first_call_logs_even_at_time_zero() {
-        let last = AtomicU64::new(0);
-        // now_ms == 0 right after process start must still log (sentinel handling)
-        assert!(flip_log_allowed_at(&last, 0, 5_000));
-        // `now_ms.max(1)` must have stored 1, not the forbidden 0 sentinel
-        assert_eq!(last.load(Ordering::Relaxed), 1);
     }
 }
 

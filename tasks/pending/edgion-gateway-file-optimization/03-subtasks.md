@@ -81,7 +81,7 @@
 | `link-sys-provider-webhook` | 5 | 3 | 1 | 1 | complete |
 | `link-sys-providers-root` | 1 | 0 | 1 | 0 | complete |
 | `link-sys-root` | 2 | 2 | 0 | 0 | complete |
-| `link-sys-runtime` | 5 | 2 | 0 | 0 | pending |
+| `link-sys-runtime` | 5 | 3 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
 | `observe-access-log` | 5 | 3 | 2 | 0 | complete |
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
@@ -273,7 +273,7 @@
 | `edgion-gateway/src/link_sys/providers/elasticsearch/log_sender.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: non-blocking DataSender boundary retained |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/mod.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: module exports retained |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/ops.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: bounded request and response handling retained |
-| `edgion-gateway/src/link_sys/providers/kafka/client.rs` | `link-sys-provider-kafka` | source | changed | `B0048`: rejected zero queue capacity and linger values that cannot beat the produce deadline |
+| `edgion-gateway/src/link_sys/providers/kafka/client.rs` | `link-sys-provider-kafka` | source | changed | `B0056`: reused the canonical rollback-safe health flip-log gate while retaining B0048 validation and producer semantics |
 | `edgion-gateway/src/link_sys/providers/kafka/log_sender.rs` | `link-sys-provider-kafka` | source | examined-no-change | `B0048`: non-blocking Kafka DataSender boundary retained |
 | `edgion-gateway/src/link_sys/providers/kafka/mod.rs` | `link-sys-provider-kafka` | source | examined-no-change | `B0048`: module exports retained |
 | `edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: preserved the canonical base path across rotation, gated replacement on flush success, prevented archive overwrite, tracked attachment health, and debounced size-rotation failure logs |
@@ -294,7 +294,7 @@
 | `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | changed | `B0054`: replaced fictional TODO/configuration claims with the current typed provider, output, fallback, and backfill boundaries |
 | `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | changed | `B0055`: made method/path metadata a call-scoped borrowed view |
-| `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | pending | — |
+| `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | changed | `B0056`: became the sole owner of rollback-safe five-second health transition log gating |
 | `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | changed | `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
 | `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | pending | — |

@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 64 changed, 77 examined-no-change, 6 deferred, 385 non-terminal |
-| Active batch | [`B0055-link-sys-borrowed-log-meta`](batches/B0055-link-sys-borrowed-log-meta.md), pending full verification and commit |
-| Analysis queue | B0056 canonical health flip clock is analysis-ready; B0057 template runtime unification is analysis-ready as a deferred candidate; revalidate each only after the prior batch commits |
+| Coverage | 532 tracked files: 65 changed, 77 examined-no-change, 6 deferred, 384 non-terminal |
+| Active batch | [`B0056-link-sys-health-flip-clock`](batches/B0056-link-sys-health-flip-clock.md), pending full verification and commit |
+| Analysis queue | B0057 template runtime unification is analysis-ready as a deferred candidate; revalidate only after B0056 commits |
 
 ## AI guide summary
 
