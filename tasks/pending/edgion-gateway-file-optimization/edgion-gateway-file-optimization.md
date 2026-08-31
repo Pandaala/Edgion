@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 58 changed, 73 examined-no-change, 5 deferred, 394 pending |
-| Active batch | [`B0049-link-sys-local-file`](batches/B0049-link-sys-local-file.md) |
-| Analysis queue | none |
+| Coverage | 530 tracked files: 58 changed, 74 examined-no-change, 5 deferred, 393 pending |
+| Active batch | [`B0050-link-sys-providers-root`](batches/B0050-link-sys-providers-root.md) |
+| Analysis queue | LinkSys OTLP provider candidate after B0050 |
 
 ## AI guide summary
 

@@ -79,7 +79,7 @@
 | `link-sys-provider-otlp` | 2 | 0 | 0 | 0 | pending |
 | `link-sys-provider-redis` | 4 | 0 | 0 | 0 | pending |
 | `link-sys-provider-webhook` | 5 | 0 | 0 | 0 | pending |
-| `link-sys-providers-root` | 1 | 0 | 0 | 0 | pending |
+| `link-sys-providers-root` | 1 | 0 | 1 | 0 | complete |
 | `link-sys-root` | 2 | 1 | 0 | 0 | pending |
 | `link-sys-runtime` | 5 | 0 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
@@ -278,7 +278,7 @@
 | `edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: preserved the canonical base path across rotation, gated replacement on flush success, prevented archive overwrite, tracked attachment health, and debounced size-rotation failure logs |
 | `edgion-gateway/src/link_sys/providers/local_file/mod.rs` | `link-sys-provider-local-file` | source | examined-no-change | `B0049`: retained the narrow provider facade and exports |
 | `edgion-gateway/src/link_sys/providers/local_file/rotation.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: made size-index parsing safe when base-name prefix and suffix overlap |
-| `edgion-gateway/src/link_sys/providers/mod.rs` | `link-sys-providers-root` | source | pending | — |
+| `edgion-gateway/src/link_sys/providers/mod.rs` | `link-sys-providers-root` | source | examined-no-change | `B0050`: retained the accurate provider facade, shared Etcd ownership, and live canonical exports |
 | `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | `link-sys-provider-otlp` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/otlp/mod.rs` | `link-sys-provider-otlp` | source | pending | — |
 | `edgion-gateway/src/link_sys/providers/redis/client.rs` | `link-sys-provider-redis` | source | pending | — |
