@@ -91,5 +91,5 @@ origin evidence and legal plain-`chunked` controls when evaluating that change.
 - Pingora `proxy_h1.rs::{apply_upstream_body_disposition,
   streamed_transfer_encoding}` owns post-admission application-synthesized
   metadata.
-- Edgion `edgion-gateway/src/routes/http/proxy_http/mod.rs::upstream_request_body_disposition`.
+- Edgion `edgion-gateway/src/routes/http/proxy_http/mod.rs::request_relay_plan`.
 - RFC 9112 Sections 6.1 and 7; IANA HTTP Transfer Coding Registry.

@@ -385,12 +385,17 @@ impl RequestFilter for RequestMirrorPlugin {
             cancellation.complete();
             drop(writer_handle);
         } else {
-            session.set_mirror_state(MirrorState::Streaming {
+            if !session.set_mirror_state(MirrorState::Streaming {
                 body_tx,
                 writer_handle,
                 cancellation,
                 channel_full_timeout_ms,
-            });
+            }) {
+                // Dropping the rejected armed state cancels its detached writer
+                // as BodyAbandoned; no body tap is installed after policy freeze.
+                log.push_err("mirror body stage frozen");
+                return PluginRunningResult::GoodNext;
+            }
         }
         log.push("mirror sent");
         PluginRunningResult::GoodNext
@@ -511,10 +516,10 @@ mod arming_tests {
         // declarations cannot replace the transport fact. It also proves the
         // fixture resolves a real mirror target; otherwise the positive test
         // above could pass because of an early mirror-resolution return.
-        session
-            .expect_set_mirror_state()
-            .times(1)
-            .returning(|state| assert!(matches!(state, MirrorState::Streaming { .. })));
+        session.expect_set_mirror_state().times(1).returning(|state| {
+            assert!(matches!(state, MirrorState::Streaming { .. }));
+            true
+        });
         let mut log = PluginLog::new("RequestMirror");
 
         let result = plugin.run_request(&mut session, &mut log).await;
@@ -529,10 +534,26 @@ mod arming_tests {
         let mut session = test_session(None);
         // `None` means the session cannot provide the transport fact: stay
         // conservative.
-        session
-            .expect_set_mirror_state()
-            .times(1)
-            .returning(|state| assert!(matches!(state, MirrorState::Streaming { .. })));
+        session.expect_set_mirror_state().times(1).returning(|state| {
+            assert!(matches!(state, MirrorState::Streaming { .. }));
+            true
+        });
+        let mut log = PluginLog::new("RequestMirror");
+
+        let result = plugin.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn frozen_body_stage_refuses_streaming_mirror_install() {
+        insert_test_endpoint_slice();
+        let plugin = test_plugin();
+        let mut session = test_session(Some(false));
+        session.expect_set_mirror_state().times(1).return_once(|state| {
+            assert!(matches!(state, MirrorState::Streaming { .. }));
+            false
+        });
         let mut log = PluginLog::new("RequestMirror");
 
         let result = plugin.run_request(&mut session, &mut log).await;

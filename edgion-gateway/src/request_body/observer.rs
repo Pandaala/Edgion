@@ -172,7 +172,7 @@ struct ObserverSlot {
     log: Option<PluginLog>,
     budget: ObserverBudget,
     retained_limit: usize,
-    last_attempt: Option<u32>,
+    last_attempt: Option<usize>,
     observed_event: bool,
     semantic_ready: bool,
     outcome: Option<ObserverOutcome>,
@@ -271,7 +271,7 @@ impl ObserverSlot {
         }
     }
 
-    fn dispatch(&mut self, bytes: &[u8], event: RequestBodyEvent, attempt: u32) {
+    fn dispatch(&mut self, bytes: &[u8], event: RequestBodyEvent, attempt: usize) {
         if self.outcome.is_some() {
             return;
         }
@@ -391,7 +391,7 @@ impl RequestBodyObservers {
     }
 
     /// Observe a transport event without copying or mutating its bytes.
-    pub(crate) fn observe(&mut self, bytes: &[u8], event: RequestBodyEvent, attempt: u32) {
+    pub(crate) fn observe(&mut self, bytes: &[u8], event: RequestBodyEvent, attempt: usize) {
         for slot in self.slots[..self.len].iter_mut().flatten() {
             slot.dispatch(bytes, event, attempt);
         }

@@ -1,6 +1,4 @@
-use crate::ai::terminal::{
-    AiClientStreamDialect, FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState,
-};
+use crate::ai::terminal::{AiClientStreamDialect, FinalResponseEligibility, ResponseTerminalState};
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
 use crate::lb::edgion_backend::EdgionBackend;
@@ -1285,18 +1283,12 @@ pub struct RequestInfo {
     /// where the client body (if any) has not yet been proxied upstream.
     ///
     /// Set `true` in `snapshot_body_declared` at the same entry point as
-    /// `body_declared`. Stays `true` through `request_filter`'s route/gateway/
-    /// global request-stage plugins *and* the later backendRef-scoped request
-    /// plugin chains (`pg_upstream_peer.rs`'s HTTP path,
-    /// `routes/grpc/integration.rs`'s gRPC path) that run after `request_filter`
-    /// returns but before an upstream connect is attempted -- a read at either
-    /// of those call sites is serviceable because Pingora has not started
-    /// pumping the downstream body upstream yet. It is flipped back to
-    /// `false` at the tail of `upstream_request_filter`
-    /// (`pg_upstream_request_filter.rs`), which runs only after a successful
-    /// upstream connect and right before body proxying begins -- the true
-    /// moment after which `read_request_body` must be refused, never
-    /// answered with a misleading zero-length `Ok`.
+    /// `body_declared`. Stays `true` only through `request_filter`'s global,
+    /// Gateway, and route request-stage plugins, then flips to `false` before
+    /// backend selection and Pingora's retry loop. This is the request-scoped
+    /// body-policy freeze: backendRef plugins may read an already-cached
+    /// snapshot, but cannot start capture, mutate it, install observers or
+    /// streamed handlers, or enable WAF streaming.
     ///
     /// Defaults to `false` (the safe/refuse direction): a `RequestInfo` built
     /// without going through the real request-entry snapshot (a bare
@@ -2144,6 +2136,7 @@ impl RequestBodyPluginState {
 struct ResponseProcessingState {
     stream_processors: Vec<Box<dyn StreamingResponseProcessor>>,
     trailer_companions: Vec<Box<dyn UpstreamResponseTrailer>>,
+    processor_driver: Option<std::sync::Arc<crate::response_processor_driver::ResponseProcessorDriver>>,
     trailer_lifecycle: UpstreamTrailerLifecycle,
     attached_ext_proc: AttachedExtProcMap,
     framing_reservations: usize,
@@ -2154,6 +2147,7 @@ impl Default for ResponseProcessingState {
         Self {
             stream_processors: Vec::new(),
             trailer_companions: Vec::new(),
+            processor_driver: None,
             trailer_lifecycle: UpstreamTrailerLifecycle::Open,
             attached_ext_proc: HashMap::new(),
             framing_reservations: 0,
@@ -2367,6 +2361,14 @@ pub enum ResponseStreamKind {
     Sse,
 }
 
+/// Request-stage declaration and response-stage activation for the one
+/// response-head Hold claimant.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResponseHeadHoldClaim {
+    pub(crate) limits: pingora_proxy::ResponseHeadHoldLimits,
+    pub(crate) active: bool,
+}
+
 /// AI-only state allocated on first effective AI plugin action.
 ///
 /// Keep this boxed from [`EdgionHttpContext`]: several payloads have large
@@ -2408,6 +2410,9 @@ pub(crate) struct AiHttpState {
         String,
         std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
     )>,
+    /// Installed before cache lookup and activated only after the final
+    /// response onion installs Guardrail's semantic processor.
+    pub(crate) response_head_hold_claim: Option<ResponseHeadHoldClaim>,
     /// Same-callback handoff from the canonical source to the semantic guard.
     pub(crate) canonical_record_batch: Option<crate::ai::canonical_sse::CanonicalRecordBatch>,
     /// Canonical semantic guard, run after the AI source processor.
@@ -2565,9 +2570,6 @@ pub struct EdgionHttpContext {
     pub(crate) ai_state: Option<Box<AiHttpState>>,
 
     // --- Response-stream processors and terminal arbitration ---
-    /// Stable processor instance currently executing in the response driver.
-    pub(crate) active_response_processor_slot: Option<ResponseProcessorSlot>,
-
     /// First-wins request-local terminal and close ownership.
     pub(crate) response_terminal_state: ResponseTerminalState,
 
@@ -2598,8 +2600,9 @@ pub struct EdgionHttpContext {
     /// body-mode configuration.
     pub(crate) upstream_response_headers_end_stream: Option<bool>,
 
-    /// Becomes true at the first response body callback. Late processor
-    /// installation is rejected to keep response composition deterministic.
+    /// Becomes true when the successful final-response filter freezes writable
+    /// processors. A body/trailer callback before this boundary fails closed;
+    /// late installation is rejected to keep composition deterministic.
     pub response_body_processing_started: bool,
 
     // --- Response replacement, denial, and final classification ---
@@ -3053,44 +3056,93 @@ impl EdgionHttpContext {
     }
 
     #[inline]
-    pub(crate) fn push_response_stream_processor(&mut self, processor: Box<dyn StreamingResponseProcessor>) {
+    pub(crate) fn push_response_stream_processor(&mut self, processor: Box<dyn StreamingResponseProcessor>) -> bool {
+        if self.response_body_processing_started {
+            return false;
+        }
         self.ensure_response_processing().stream_processors.push(processor);
+        true
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn has_response_stream_processors(&self) -> bool {
-        self.response_processing()
-            .is_some_and(|state| !state.stream_processors.is_empty())
+        self.response_processing().is_some_and(|state| {
+            !state.stream_processors.is_empty()
+                || state
+                    .processor_driver
+                    .as_ref()
+                    .is_some_and(|driver| driver.has_body_processors())
+        })
     }
 
     #[inline]
     #[cfg(test)]
     pub(crate) fn response_stream_processor_count(&self) -> usize {
-        self.response_processing()
-            .map_or(0, |state| state.stream_processors.len())
+        self.response_processing().map_or(0, |state| {
+            state
+                .processor_driver
+                .as_ref()
+                .map_or(state.stream_processors.len(), |driver| driver.ordinary_count())
+        })
     }
 
     #[inline]
-    pub(crate) fn take_response_stream_processors(&mut self) -> Vec<Box<dyn StreamingResponseProcessor>> {
-        self.response_processing_mut()
-            .map_or_else(Vec::new, |state| std::mem::take(&mut state.stream_processors))
-    }
-
-    #[inline]
-    pub(crate) fn restore_response_stream_processors(&mut self, processors: Vec<Box<dyn StreamingResponseProcessor>>) {
-        if let Some(state) = self.response_processing_mut() {
-            state.stream_processors = processors;
-        }
+    pub(crate) fn response_stream_processors_mut(&mut self) -> Option<&mut [Box<dyn StreamingResponseProcessor>]> {
+        Some(self.response_processing_mut()?.stream_processors.as_mut_slice())
     }
 
     #[inline]
     pub(crate) fn response_stream_processors_change_body_length(&self) -> bool {
         self.response_processing().is_some_and(|state| {
-            state
-                .stream_processors
-                .iter()
-                .any(|processor| processor.changes_body_length())
+            state.processor_driver.as_ref().map_or_else(
+                || {
+                    state
+                        .stream_processors
+                        .iter()
+                        .any(|processor| processor.changes_body_length())
+                },
+                |driver| driver.body_changes_length(),
+            )
         })
+    }
+
+    /// Freeze the final response's writable processors into one request-local
+    /// owner. The empty fast path only flips the inline latch.
+    pub(crate) fn freeze_response_processor_driver(&mut self) {
+        if self.response_body_processing_started {
+            return;
+        }
+        self.response_body_processing_started = true;
+
+        let (ai, semantic) = match self.ai_state_mut() {
+            Some(state) => (state.stream_processor.take(), state.semantic_processor.take()),
+            None => (None, None),
+        };
+        let (ordinary, trailers) = match self.response_processing_mut() {
+            Some(state) => (
+                std::mem::take(&mut state.stream_processors),
+                std::mem::take(&mut state.trailer_companions),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        if let Some(driver) =
+            crate::response_processor_driver::ResponseProcessorDriver::new(ai, semantic, ordinary, trailers)
+        {
+            self.ensure_response_processing().processor_driver = Some(driver);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn response_processors_frozen(&self) -> bool {
+        self.response_body_processing_started
+    }
+
+    #[inline]
+    pub(crate) fn response_processor_driver(
+        &self,
+    ) -> Option<std::sync::Arc<crate::response_processor_driver::ResponseProcessorDriver>> {
+        self.response_processing()?.processor_driver.clone()
     }
 
     #[inline]
@@ -3135,9 +3187,10 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn install_upstream_response_trailer(&mut self, processor: Box<dyn UpstreamResponseTrailer>) -> bool {
-        if self
-            .response_processing()
-            .is_some_and(|state| !state.trailer_lifecycle.is_open())
+        if self.response_body_processing_started
+            || self
+                .response_processing()
+                .is_some_and(|state| !state.trailer_lifecycle.is_open())
         {
             return false;
         }
@@ -3147,21 +3200,12 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn upstream_response_trailer_count(&self) -> usize {
-        self.response_processing()
-            .map_or(0, |state| state.trailer_companions.len())
-    }
-
-    #[inline]
-    pub(crate) fn take_upstream_response_trailers(&mut self) -> Vec<Box<dyn UpstreamResponseTrailer>> {
-        self.response_processing_mut()
-            .map_or_else(Vec::new, |state| std::mem::take(&mut state.trailer_companions))
-    }
-
-    #[inline]
-    pub(crate) fn restore_upstream_response_trailers(&mut self, companions: Vec<Box<dyn UpstreamResponseTrailer>>) {
-        if let Some(state) = self.response_processing_mut() {
-            state.trailer_companions = companions;
-        }
+        self.response_processing().map_or(0, |state| {
+            state
+                .processor_driver
+                .as_ref()
+                .map_or(state.trailer_companions.len(), |driver| driver.trailer_count())
+        })
     }
 
     #[inline]
@@ -3453,7 +3497,6 @@ impl EdgionHttpContext {
             request_body: RequestBodyState::default(),
             request_body_plugins: None,
             ai_state: None,
-            active_response_processor_slot: None,
             response_terminal_state: ResponseTerminalState::Open,
             pre_plugin_response_status: None,
             candidate_downstream_status: None,
@@ -4990,8 +5033,22 @@ mod response_processing_state_tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn response_processing_state_has_one_scenario_box() {
-        assert_eq!(std::mem::size_of::<ResponseProcessingState>(), 112);
+        assert_eq!(std::mem::size_of::<ResponseProcessingState>(), 120);
         assert_eq!(std::mem::size_of::<Option<Box<ResponseProcessingState>>>(), 8);
+    }
+
+    #[test]
+    fn freezing_an_empty_processor_set_does_not_allocate() {
+        let mut ctx = EdgionHttpContext::new();
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            ctx.freeze_response_processor_driver();
+        });
+
+        assert!(ctx.response_processors_frozen());
+        assert!(ctx.response_processor_driver().is_none());
+        assert!(!ctx.has_response_processing());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 
     #[test]

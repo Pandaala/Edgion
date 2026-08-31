@@ -23,13 +23,9 @@ use pingora_proxy::Session;
 /// insert `grpc-timeout: 1n` so the upstream sees "give up immediately"
 /// rather than the stale original client value.
 ///
-/// This hook also owns the exit point for `ctx.request_info.in_request_body_stage`
-/// (see that field's doc for the full lifecycle): it runs only after a
-/// successful upstream connect, which is guaranteed to be after both
-/// backendRef-scoped request-plugin call sites (`pg_upstream_peer.rs`'s HTTP
-/// path and `routes/grpc/integration.rs`'s gRPC path) have already executed,
-/// and it runs right before Pingora starts pumping the downstream body
-/// upstream.
+/// Request-body policy has already been frozen at the end of
+/// `pg_request_filter`; this hook is attempt-local and cannot change its source
+/// or processor set.
 #[inline]
 pub async fn upstream_request_filter(
     _edgion_http: &EdgionHttpProxy,
@@ -85,15 +81,6 @@ pub async fn upstream_request_filter(
     crate::ai::dispatch::mark_ai_dispatch_started(ctx).map_err(|_| {
         pingora_core::Error::explain(pingora_core::ErrorType::InternalError, "AI dispatch state is invalid")
     })?;
-
-    // Body proxying is about to begin: both backendRef-scoped request-plugin
-    // call sites have already run by this point (a prerequisite for reaching
-    // a successful connect and this hook), so `read_request_body` must be
-    // refused from here on UNLESS an earlier request plugin already populated
-    // the shared cache. This is the single exit point paired with
-    // `snapshot_body_declared`'s entry write; it closes capture, not cached
-    // reads.
-    ctx.request_info.in_request_body_stage = false;
 
     Ok(())
 }

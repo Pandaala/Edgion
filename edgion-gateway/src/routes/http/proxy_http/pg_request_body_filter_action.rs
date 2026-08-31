@@ -103,7 +103,10 @@ pub async fn request_body_filter_action(
     // Observation sees the exact post-mutation bytes about to reach the
     // mirror tee and primary upstream. It is synchronous, read-only and
     // failure-open, so it cannot change the body action or backpressure path.
-    let attempt = ctx.try_cnt;
+    // Retry-visible body processors use Pingora's canonical request-attempt
+    // identity. `try_cnt` remains Edgion's backend-selection metric and can
+    // diverge when product-specific sub-attempts are introduced.
+    let attempt = session.request_attempt_id().map_or(0, |attempt| attempt.get());
     if let Some(observers) = ctx.request_body_observers_mut() {
         observers.observe(body.as_deref().unwrap_or_default(), event, attempt);
     }

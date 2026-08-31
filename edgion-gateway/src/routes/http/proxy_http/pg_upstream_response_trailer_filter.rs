@@ -2,38 +2,8 @@ use http::HeaderMap;
 use pingora_proxy::Session;
 
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::{PluginLog, UpstreamResponseTrailer, UpstreamTrailerResult};
+use crate::plugins::runtime::{PluginLog, UpstreamTrailerResult};
 use crate::EdgionHttpContext;
-
-struct TrailerCompanionRunSet {
-    companions: Vec<Box<dyn UpstreamResponseTrailer>>,
-    released: bool,
-}
-
-impl TrailerCompanionRunSet {
-    fn take(ctx: &mut EdgionHttpContext) -> Self {
-        Self {
-            companions: ctx.take_upstream_response_trailers(),
-            released: false,
-        }
-    }
-
-    fn restore(mut self, ctx: &mut EdgionHttpContext) {
-        ctx.restore_upstream_response_trailers(std::mem::take(&mut self.companions));
-        self.released = true;
-    }
-}
-
-impl Drop for TrailerCompanionRunSet {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        for companion in &mut self.companions {
-            companion.release_inflight();
-        }
-    }
-}
 
 /// Dispatch the request-owned trailer companion vector serially.
 ///
@@ -45,22 +15,36 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     ctx: &mut EdgionHttpContext,
     mut trailers: Option<&mut HeaderMap>,
 ) -> pingora_core::Result<()> {
+    if !ctx.response_processors_frozen() {
+        return Err(pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "response trailer callback arrived before processor freeze",
+        ));
+    }
     let claimed = ctx.claim_upstream_response_trailers(trailers.is_some());
     if !claimed {
         return Ok(());
     }
 
-    let mut run_set = TrailerCompanionRunSet::take(ctx);
-    if run_set.companions.is_empty() {
-        run_set.restore(ctx);
+    let Some(driver) = ctx.response_processor_driver() else {
+        return Ok(());
+    };
+    let Some(mut lease) = driver.trailer_lease().await else {
+        return Err(pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "response trailer processor group is closed after callback cancellation",
+        ));
+    };
+    if lease.companions().is_empty() {
+        lease.complete();
         return Ok(());
     }
 
-    let mut logs = Vec::with_capacity(run_set.companions.len());
+    let mut logs = Vec::with_capacity(lease.companions().len());
     let mut fail_close_at = None;
     {
         let mut adapter = PingoraSessionAdapter::new(session, ctx);
-        for (index, companion) in run_set.companions.iter_mut().enumerate() {
+        for (index, companion) in lease.companions().iter_mut().enumerate() {
             let mut log = PluginLog::with_alias(companion.name(), companion.alias());
             let outcome = companion
                 .run_upstream_response_trailer(trailers.as_deref_mut(), &mut adapter, &mut log)
@@ -74,11 +58,11 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     }
 
     if let Some(index) = fail_close_at {
-        for companion in run_set.companions.iter_mut().skip(index + 1) {
+        for companion in lease.companions().iter_mut().skip(index + 1) {
             companion.on_terminal_preempted("earlier-trailer-fail-close");
         }
         ctx.finish_plugin_stage("upstream_response_trailers", logs);
-        run_set.restore(ctx);
+        lease.complete();
         return Err(pingora_core::Error::explain(
             pingora_core::ErrorType::InternalError,
             "upstream response trailer processor failed closed",
@@ -86,12 +70,16 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     }
 
     ctx.finish_plugin_stage("upstream_response_trailers", logs);
-    run_set.restore(ctx);
+    lease.complete();
     Ok(())
 }
 
-pub(crate) fn finalize_incomplete_trailer_companions(ctx: &mut EdgionHttpContext) {
+pub(crate) async fn finalize_incomplete_trailer_companions(ctx: &mut EdgionHttpContext) {
     if !ctx.claim_upstream_trailer_cleanup() {
+        return;
+    }
+    if let Some(driver) = ctx.response_processor_driver() {
+        driver.finalize_trailers_incomplete().await;
         return;
     }
     if let Some(companions) = ctx.upstream_response_trailers_mut() {
@@ -104,10 +92,20 @@ pub(crate) fn finalize_incomplete_trailer_companions(ctx: &mut EdgionHttpContext
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::UpstreamResponseTrailer;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::io::AsyncWriteExt;
+
+    async fn dispatch_upstream_response_trailers(
+        session: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        trailers: Option<&mut HeaderMap>,
+    ) -> pingora_core::Result<()> {
+        ctx.freeze_response_processor_driver();
+        super::dispatch_upstream_response_trailers(session, ctx, trailers).await
+    }
 
     async fn test_session() -> Session {
         let (mut client, server) = tokio::io::duplex(4096);
@@ -238,6 +236,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trailer_event_before_final_header_freeze_is_an_invariant_error() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+
+        let error = super::dispatch_upstream_response_trailers(&mut session, &mut ctx, None)
+            .await
+            .expect_err("unfrozen trailer callback must fail closed");
+
+        assert!(matches!(error.etype(), pingora_core::ErrorType::InternalError));
+        assert!(!ctx.response_processors_frozen());
+    }
+
+    #[tokio::test]
     async fn fail_close_stops_chain_and_preempts_remaining_companions() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
@@ -331,8 +342,8 @@ mod tests {
         assert!(released.load(Ordering::SeqCst));
     }
 
-    #[test]
-    fn logging_fallback_finalizes_once() {
+    #[tokio::test]
+    async fn logging_fallback_finalizes_once() {
         let mut ctx = EdgionHttpContext::default();
         let finalized = Arc::new(AtomicUsize::new(0));
         assert!(ctx.install_upstream_response_trailer(Box::new(PendingCompanion {
@@ -340,8 +351,8 @@ mod tests {
             finalized: Some(Arc::clone(&finalized)),
         })));
 
-        finalize_incomplete_trailer_companions(&mut ctx);
-        finalize_incomplete_trailer_companions(&mut ctx);
+        finalize_incomplete_trailer_companions(&mut ctx).await;
+        finalize_incomplete_trailer_companions(&mut ctx).await;
 
         assert_eq!(finalized.load(Ordering::SeqCst), 1);
     }

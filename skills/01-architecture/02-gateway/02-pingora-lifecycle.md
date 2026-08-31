@@ -22,8 +22,8 @@ flowchart TD
     S3 -->|"504"| TIMEOUT["timeout"]
     S3 --> S4["④ connected_to_upstream"]
     S4 --> S5["⑤ upstream_response_filter (sync)"]
-    S5 --> S6["⑥ upstream_response_body_filter (sync, per chunk)"]
-    S6 --> S7["⑦ response_filter (async)"]
+    S5 --> S6["⑥ response_filter (async, final candidate)"]
+    S6 --> S7["⑦ upstream_response_body_filter_event (async, typed events)"]
     S7 --> S8["⑧ logging"]
 ```
 
@@ -72,6 +72,16 @@ The most complex phase, responsible for request parsing and route matching:
 
 5. **Header handling**: set `X-Real-IP`, append `X-Forwarded-For`.
 
+6. **Freeze request-body policy**: after the global, Gateway, and route
+   request-plugin chain completes, the context closes request-body capability
+   installation. BackendRef-stage plugins may read an already captured
+   snapshot, but cannot first install full-body capture, mutation, an observer,
+   a streamed handler, or a mirror tee. Pingora then freezes the request-scoped
+   `RequestRelayPlan` before the upstream attempt loop. Ordinary requests keep
+   replayable framing; any installed per-chunk handler selects the streamed,
+   non-replayable plan. Retry decisions use Pingora's live
+   `request_relay_retry_state()` rather than a second Edgion predicate.
+
 ### Phase 3: upstream_peer
 
 **File**: `pg_upstream_peer.rs`
@@ -119,19 +129,49 @@ Called when the upstream response headers are received:
    - Rule level: `route_unit.rule.plugin_runtime.run_upstream_response_plugins_sync()`.
    - Backend level: `selected_backend.plugin_runtime.run_upstream_response_plugins_sync()`.
 
-### Phase 6: upstream_response_body_filter (sync, per chunk)
+### Phase 6: response_filter (async)
+
+**File**: `pg_response_filter.rs`
+**Signature**: `async fn response_filter(session, upstream_response, ctx) -> Result<()>`
+
+Async response handling, can perform operations that need to await:
+
+1. **Server header**: applied again (covers framework-generated error responses such as 502).
+2. **Trace ID injection**: add `x-trace-id` to the response header.
+3. **Graceful shutdown**: add the `Connection: close` response header during shutdown.
+4. **Async plugin execution** (UpstreamResponse phase):
+   - Rule level: `run_upstream_response_plugins_async()`.
+   - Backend level: `run_upstream_response_plugins_async()`.
+5. **Select the final candidate and freeze processors**: this phase no longer
+   claims that the candidate header has reached the downstream writer. After
+   the onion returns, Pingora calls `response_head_commit_plan` on the final
+   post-filter header. The default is allocation-free `Immediate`; an active,
+   eligible Guardrail first-window claim may select a hard-bounded `Hold`.
+   Only `response_head_will_commit`, after Release or Replace has chosen the
+   actual header, records the writer claim. Hold boundaries resolve explicitly
+   through Release, Replace, or non-retryable Fail before header preparation.
+
+### Phase 7: upstream_response_body_filter_event (async, per typed event)
 
 **File**: `pg_upstream_response_body_filter.rs`
-**Signature**: `fn upstream_response_body_filter(session, body, end_of_stream, ctx) -> Result<Option<Duration>>`
+**Signature**: `async fn upstream_response_body_filter_event(session, body, event, sink, ctx) -> Result<Option<Duration>>`
 
-Called once per upstream response body chunk; returning `Some(Duration)` enables bandwidth limiting.
-When Phase 7 accepts the final header, the Edgion Pingora fork also calls this hook exactly once
-with `body = None` and `end_of_stream = true` when that upstream header task already ends the response. This terminal
-call is driven by the transport's actual end-of-stream state for H1, H2, and custom upstreams; a
+Called once per upstream response body or terminal event; returning
+`Some(Duration)` enables bandwidth limiting. A request-local
+`ResponseProcessorDriver` freezes the selected AI, semantic, ordinary body,
+and trailer processors after the response onion, then serializes body/trailer
+leases across callbacks. Cancellation closes only the affected processor group
+and releases its in-flight resources; the durable driver handle remains
+available to the logging finalizer.
+When a final Header task already ends the upstream representation, the Edgion
+Pingora fork calls this hook exactly once after Phase 6 `response_filter`
+completes, with `body = None` and `event = TerminalWithoutTrailers`. This
+terminal call is driven by the transport's actual end-of-stream state for H1,
+H2, and custom upstreams; a
 `Content-Length: 0` header alone is not sufficient on H2. It lets streaming processors finalize or
 replace a bodyless upstream response without a provider-specific header-stage workaround.
 Unlike an ordinary body task, the terminal event is initially carried by the header. Pingora
-therefore defers this synthetic call until that header's Phase 7 `response_filter` has completed.
+therefore defers this synthetic call until that header's Phase 6 `response_filter` has completed.
 This preserves the ordinary lifecycle invariant that final response classification, async plugins,
 local replies, and denials run before the body hook. If `response_filter` rejects or writes a local
 reply, the synthetic body hook is not called.
@@ -145,7 +185,7 @@ upstream hook again. Output is discarded for `HEAD`, 1xx,
 cache hits then end on the header instead of replaying the stored body. 101/informational upstream
 headers do not trigger the synthetic call.
 
-Cache policy evaluation still runs on the upstream-filtered header before Phase 7. Admission waits
+Cache policy evaluation still runs on the upstream-filtered header before Phase 6. Admission waits
 for terminal body synthesis so the stored metadata can reconcile `Content-Length` with the actual
 cached representation. Internal cache-control responses consumed by revalidation or stale serving
 (for example, an origin 304 merged into an existing cached response) are not forwarded response
@@ -200,31 +240,16 @@ remaining companions before Pingora forwards trailers. Implementations must
 keep any retained trailer state and mutations bounded; the canonical driver
 does not aggregate the response body.
 
-This lifecycle depends on two APIs implemented in the local Edgion Pingora
-fork worktree:
+This lifecycle depends on two APIs committed in Edgion Pingora
+`af9e1ac057c6ed454b5348beb34e14df1d435410` and selected by the current
+git-source entries in `Cargo.lock`:
 `upstream_response_body_filter_event` supplies the typed terminal evidence,
 and the asynchronous `upstream_response_trailer_filter` is awaited before the
-transport writes the trailer block. The fork change is not yet
-committed/pushed or pinned to an immutable Edgion dependency revision, so the
-ordinary dependency build cannot consume this lifecycle yet. Once pinned,
-replacing the fork with upstream Pingora or reverting either hook without
-disabling trailer consumers would break the contract. H1
+transport writes the trailer block. Replacing the fork with upstream Pingora
+or reverting either hook without disabling trailer consumers would break the
+contract. H1
 parsing/serialization and H2/custom trailer tasks converge on the same Gateway
 companion chain.
-
-### Phase 7: response_filter (async)
-
-**File**: `pg_response_filter.rs`
-**Signature**: `async fn response_filter(session, upstream_response, ctx) -> Result<()>`
-
-Async response handling, can perform operations that need to await:
-
-1. **Server header**: applied again (covers framework-generated error responses such as 502).
-2. **Trace ID injection**: add `x-trace-id` to the response header.
-3. **Graceful shutdown**: add the `Connection: close` response header during shutdown.
-4. **Async plugin execution** (UpstreamResponse phase):
-   - Rule level: `run_upstream_response_plugins_async()`.
-   - Backend level: `run_upstream_response_plugins_async()`.
 
 ### Phase 8: logging
 

@@ -90,12 +90,21 @@ pub fn error_while_proxy(
         }
     }
 
-    // With streamed body handlers installed no retry buffer was ever
-    // allocated, so `retry_buffer_truncated()` reports a misleading `false`
-    // ("nothing truncated") — consult the monotonic latch directly (contract
-    // §4.6). The proxy also suppresses such retries on its side; this keeps
-    // the local decision (and its logging) consistent.
-    let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active();
+    // A bounded response-head processor has already selected this final
+    // attempt, or a final head has reached the writer. Pingora will also veto
+    // retry after this callback, but the gate must be visible here before AI
+    // dispatch consumes retry budget, advances the scheduler, or settles a
+    // successor attempt. Keep the accounting above, then return the final
+    // non-retryable error without entering any retry decision path.
+    if session.response_head_retry_closed() {
+        e.set_retry(false);
+        return e;
+    }
+
+    // Pingora combines the frozen structural policy with the live backing
+    // state. This distinguishes "never enabled" from a usable native buffer,
+    // registered replay, and truncation.
+    let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
 
     if ctx.has_ai_attempt_plan() {
         // A status retry was decided and transitioned exactly once in the

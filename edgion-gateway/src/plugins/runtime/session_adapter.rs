@@ -333,6 +333,8 @@ pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
     ctx: &'a mut EdgionHttpContext,
     response_header: Option<&'a mut ResponseHeader>,
+    /// Callback-local identity used for first-wins terminal arbitration.
+    response_processor_slot: Option<crate::ai::terminal::ResponseProcessorSlot>,
     /// Set to true after a gRPC trailers-only error response has been sent.
     /// Subsequent write_response_body and shutdown calls become no-ops.
     grpc_response_terminated: bool,
@@ -384,7 +386,7 @@ pub(crate) fn build_response_local_reply(
 
 impl<'a> PingoraSessionAdapter<'a> {
     pub(crate) fn set_response_processor_slot(&mut self, slot: crate::ai::terminal::ResponseProcessorSlot) {
-        self.ctx.active_response_processor_slot = Some(slot);
+        self.response_processor_slot = Some(slot);
     }
 
     pub(crate) fn response_terminal_winner(&self) -> Option<crate::ai::terminal::ResponseProcessorSlot> {
@@ -397,6 +399,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             inner,
             ctx,
             response_header: None,
+            response_processor_slot: None,
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
         }
@@ -412,6 +415,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             inner,
             ctx,
             response_header: Some(response_header),
+            response_processor_slot: None,
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
         }
@@ -1300,6 +1304,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn enable_waf_request_body_streaming(&mut self, owner: &Arc<()>, body_limit: u64) -> bool {
+        if !self.ctx.request_info.in_request_body_stage {
+            return false;
+        }
         let enabled = self
             .ctx
             .waf
@@ -1353,8 +1360,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn try_claim_response_terminal(&mut self, cause: crate::ai::terminal::ResponseTerminalCause) -> bool {
-        self.ctx
-            .active_response_processor_slot
+        self.response_processor_slot
             .is_some_and(|slot| self.ctx.response_terminal_state.try_claim(slot, cause))
     }
 
@@ -1378,6 +1384,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 state.semantic_guard_claimed = false;
                 state.canonical_record_batch = None;
                 state.semantic_processor = None;
+                state.response_head_hold_claim = None;
             }
         }
     }
@@ -1386,7 +1393,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
-        if self.ctx.response_body_processing_started
+        if self.ctx.response_processors_frozen()
             || self
                 .ctx
                 .ai_state()
@@ -1394,7 +1401,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         {
             return false;
         }
-        self.ctx.ensure_ai_state().semantic_processor = Some(processor);
+        let state = self.ctx.ensure_ai_state();
+        state.semantic_processor = Some(processor);
+        if let Some(claim) = state.response_head_hold_claim.as_mut() {
+            claim.active = true;
+        }
         true
     }
 
@@ -1418,6 +1429,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         identity: String,
         owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+        head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
         if self
             .ctx
@@ -1429,6 +1441,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let state = self.ctx.ensure_ai_state();
         state.attached_guardrail = Some((identity, owner));
         state.semantic_guard_claimed = true;
+        state.response_head_hold_claim =
+            head_limits.map(|limits| crate::ctx::ResponseHeadHoldClaim { limits, active: false });
         self.ctx.reserve_response_framing();
         true
     }
@@ -1449,7 +1463,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
     ) -> bool {
-        if self.ctx.response_body_processing_started {
+        if self.ctx.response_processors_frozen() {
             return false;
         }
         self.ctx.push_response_stream_processor(processor);
@@ -1460,7 +1474,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         processor: Box<dyn crate::plugins::runtime::traits::UpstreamResponseTrailer>,
     ) -> bool {
-        if self.ctx.response_body_processing_started || !self.ctx.upstream_trailer_lifecycle_is_open() {
+        if self.ctx.response_processors_frozen() || !self.ctx.upstream_trailer_lifecycle_is_open() {
             return false;
         }
         self.ctx.install_upstream_response_trailer(processor)
@@ -1518,13 +1532,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return Ok(len);
         }
 
-        // `in_request_body_stage` (set at request entry, cleared in
-        // `upstream_request_filter` once the upstream is connected and the
-        // request is about to be written — see that field's doc) is the
+        // `in_request_body_stage` (set at request entry and cleared when the
+        // global/Gateway/route request-plugin chain completes) is the
         // ctx-snapshot source of truth for "are we still in the request
-        // stage", covering every post-request-stage
-        // construction site uniformly (response-header-bound stages, the
-        // upstream response *body* stage, and beyond) rather than the
+        // stage", covering backendRef and all later construction sites
+        // uniformly (response-header-bound stages, the upstream response
+        // *body* stage, and beyond) rather than the
         // `response_header.is_some()` proxy this replaced, which was `false`
         // at the upstream response body stage even though that stage runs
         // strictly after the request body is fully proxied upstream.
@@ -1812,8 +1825,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.try_set_jump(target)
     }
 
-    fn set_mirror_state(&mut self, state: MirrorState) {
+    fn set_mirror_state(&mut self, state: MirrorState) -> bool {
+        if !self.ctx.request_info.in_request_body_stage {
+            return false;
+        }
         self.ctx.set_mirror_state(state);
+        true
     }
 
     /// Install the dye plan of the plugin entry about to be invoked.
@@ -1918,17 +1935,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         // The transport fact answers `None` for session types that cannot be
         // driven per chunk (custom-connector, subrequest) — refuse so the
         // caller applies its failure policy.
-        if self.request_headers_end_stream().is_none() {
+        if !self.ctx.request_info.in_request_body_stage || self.request_headers_end_stream().is_none() {
             return false;
         }
-        // Preempt the proxy's disposition coercion: upgrade/CONNECT requests
-        // and pre-HTTP/1.1 downstreams get their `Streamed` disposition
-        // coerced back to `Ordinary` at the transport, while installed
-        // handlers would keep running — a length-changing chunk mutation
-        // under the preserved Content-Length desyncs the upstream, and
-        // post-101 tunnel bytes must never reach an inspection processor as
-        // pseudo body chunks. Refuse the install so the caller fails per its
-        // policy instead of silently degrading.
+        // Reject intrinsically incompatible downstream shapes before a
+        // Streamed plan can be frozen. The proxy independently fails closed if
+        // an attempt-local hook later synthesizes upgrade/CONNECT or H1.0:
+        // length-changing mutation under ordinary/tunnel framing can desync an
+        // upstream, and post-101 tunnel bytes must never reach an inspection
+        // processor as pseudo body chunks.
         let req = self.inner.req_header();
         if req.method == http::Method::CONNECT
             || pingora_core::protocols::http::v1::common::is_upgrade_req(req)
@@ -2905,6 +2920,7 @@ mod record_outcome_tests {
     async fn h1_session_installs_request_body_stream_handler() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.in_request_body_stage = true;
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(adapter.request_headers_end_stream().is_some());
         assert!(adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
@@ -2921,6 +2937,29 @@ mod record_outcome_tests {
             "losing handlers across a cancelled callback must not re-arm replay"
         );
         drop(handlers);
+    }
+
+    #[tokio::test]
+    async fn streamed_handler_install_refuses_after_body_policy_freeze() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.in_request_body_stage = false;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+
+        assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+        assert_eq!(ctx.request_body_stream_handler_count(), 0);
+        assert!(!ctx.request_body_stream_active());
+    }
+
+    #[tokio::test]
+    async fn mirror_body_tap_install_refuses_after_body_policy_freeze() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.in_request_body_stage = false;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+
+        assert!(!adapter.set_mirror_state(MirrorState::Abandoned));
+        assert!(!ctx.has_mirror_state());
     }
 
     #[tokio::test]
@@ -3447,33 +3486,19 @@ mod record_outcome_tests {
         assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
-    /// Regression pin for the backendRef-scoped plugin stage: `request_filter`
-    /// no longer clears `in_request_body_stage` at its own tail -- the marker
-    /// stays `true` through the backendRef request-plugin call sites in
-    /// `pg_upstream_peer.rs` (HTTP) and `routes/grpc/integration.rs` (gRPC),
-    /// both of which run after `request_filter` returns but before Pingora has
-    /// started pumping the downstream body upstream. Drives the real
-    /// `PingoraSessionAdapter::read_request_body` with the exact ctx shape
-    /// that holds at those call sites and asserts it resolves to the
-    /// real buffering path, not the stage/protocol refusal (`NotBuffered` /
-    /// `EdgionErrorCode::BodyRefusedStage`) that
-    /// `read_request_body_refuses_once_past_request_stage` above pins for the
-    /// opposite (post-`upstream_request_filter`) direction.
+    /// BackendRef request plugins run after request-scoped body policy is
+    /// frozen. They may not initiate capture, even though the downstream pump
+    /// has not started yet.
     #[tokio::test]
-    async fn read_request_body_admits_during_backend_ref_plugin_stage() {
+    async fn read_request_body_refuses_during_backend_ref_plugin_stage() {
         let mut session = test_session_with_body(b"backend-body").await;
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.body_declared = Some(true);
-        ctx.request_info.in_request_body_stage = true;
+        ctx.request_info.in_request_body_stage = false;
 
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-        let first = adapter.read_request_body(None).await.expect("body must buffer");
-        let second = adapter
-            .read_request_body(None)
-            .await
-            .expect("body cache must be reusable");
-        assert_eq!(first, Bytes::from_static(b"backend-body"));
-        assert_eq!(first.as_ptr(), second.as_ptr());
+        assert_eq!(adapter.read_request_body(None).await, Err(BodyReadError::NotBuffered));
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::BodyRefusedStage));
     }
 
     #[tokio::test]

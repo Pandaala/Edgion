@@ -4,97 +4,60 @@ use super::EdgionHttpProxy;
 use crate::ai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
 use crate::ai::terminal::{ResponseClose, ResponseProcessorSlot, ResponseTerminalCause};
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::traits::{StreamingResponseEvent, StreamingResponseProcessor};
+use crate::plugins::runtime::traits::StreamingResponseEvent;
 use crate::plugins::runtime::PluginSession;
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ResponseBodySink, Session, UpstreamResponseBodyEvent};
 
-struct ResponseProcessorRunSet {
-    ai: Option<Box<dyn StreamingResponseProcessor>>,
-    semantic: Option<Box<dyn StreamingResponseProcessor>>,
-    ordinary: Vec<Box<dyn StreamingResponseProcessor>>,
-    released: bool,
-}
-
-impl ResponseProcessorRunSet {
-    fn take(ctx: &mut EdgionHttpContext) -> Self {
-        let (ai, semantic) = match ctx.ai_state_mut() {
-            Some(state) => (state.stream_processor.take(), state.semantic_processor.take()),
-            None => (None, None),
-        };
-        Self {
-            ai,
-            semantic,
-            ordinary: ctx.take_response_stream_processors(),
-            released: false,
+fn preempt_processors(
+    processors: &mut crate::response_processor_driver::BodyProcessorSet,
+    winner: ResponseProcessorSlot,
+    cause: ResponseTerminalCause,
+) {
+    if winner != ResponseProcessorSlot::Ai {
+        if let Some(processor) = processors.ai.as_mut() {
+            processor.on_terminal_preempted(cause);
         }
     }
-
-    fn preempt(&mut self, winner: ResponseProcessorSlot, cause: ResponseTerminalCause) {
-        if winner != ResponseProcessorSlot::Ai {
-            if let Some(processor) = self.ai.as_mut() {
-                processor.on_terminal_preempted(cause);
-            }
-        }
-        if winner != ResponseProcessorSlot::Semantic {
-            if let Some(processor) = self.semantic.as_mut() {
-                processor.on_terminal_preempted(cause);
-            }
-        }
-        for (index, processor) in self.ordinary.iter_mut().enumerate() {
-            if winner != ResponseProcessorSlot::Ordinary(index) {
-                processor.on_terminal_preempted(cause);
-            }
+    if winner != ResponseProcessorSlot::Semantic {
+        if let Some(processor) = processors.semantic.as_mut() {
+            processor.on_terminal_preempted(cause);
         }
     }
-
-    fn restore(mut self, ctx: &mut EdgionHttpContext) {
-        if let Some(state) = ctx.ai_state_mut() {
-            state.stream_processor = self.ai.take();
-            state.semantic_processor = self.semantic.take();
-        }
-        ctx.restore_response_stream_processors(std::mem::take(&mut self.ordinary));
-        self.released = true;
-    }
-}
-
-impl Drop for ResponseProcessorRunSet {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        if let Some(processor) = self.ai.as_mut() {
-            processor.release_inflight();
-        }
-        if let Some(processor) = self.semantic.as_mut() {
-            processor.release_inflight();
-        }
-        for processor in &mut self.ordinary {
-            processor.release_inflight();
+    for (index, processor) in processors.ordinary.iter_mut().enumerate() {
+        if winner != ResponseProcessorSlot::Ordinary(index) {
+            processor.on_terminal_preempted(cause);
         }
     }
 }
 
-fn settle_driver_terminal(ctx: &mut EdgionHttpContext, winner: ResponseProcessorSlot, cause: ResponseTerminalCause) {
+async fn settle_driver_terminal(
+    ctx: &mut EdgionHttpContext,
+    winner: ResponseProcessorSlot,
+    cause: ResponseTerminalCause,
+) {
     let _ = ctx.response_terminal_state.try_claim(winner, cause);
-    let mut processors = ResponseProcessorRunSet::take(ctx);
-    processors.preempt(winner, cause);
-    let winner_processor = match winner {
-        ResponseProcessorSlot::Ai => processors.ai.as_mut(),
-        ResponseProcessorSlot::Semantic => processors.semantic.as_mut(),
-        ResponseProcessorSlot::Ordinary(index) => processors.ordinary.get_mut(index),
-    };
-    if let Some(processor) = winner_processor {
-        processor.finalize_incomplete("fail-close", cause.as_str());
-        processor.release_inflight();
+    if let Some(driver) = ctx.response_processor_driver() {
+        if let Some(mut lease) = driver.body_lease().await {
+            let processors = lease.processors();
+            preempt_processors(processors, winner, cause);
+            let winner_processor = match winner {
+                ResponseProcessorSlot::Ai => processors.ai.as_mut(),
+                ResponseProcessorSlot::Semantic => processors.semantic.as_mut(),
+                ResponseProcessorSlot::Ordinary(index) => processors.ordinary.get_mut(index),
+            };
+            if let Some(processor) = winner_processor {
+                processor.finalize_incomplete("fail-close", cause.as_str());
+                processor.release_inflight();
+            }
+            lease.complete();
+        }
     }
     if let Some(state) = ctx.ai_state_mut() {
         state.canonical_record_batch = None;
     }
     ctx.response_terminal_state.close_gateway();
-    processors.restore(ctx);
-    ctx.active_response_processor_slot = None;
 }
 
 /// Run private response-processor header callbacks after raw response retry
@@ -108,11 +71,11 @@ pub(crate) fn run_stream_processor_headers(response: &mut ResponseHeader, ctx: &
             processor.on_response_header(response);
         }
     }
-    let mut processors = ctx.take_response_stream_processors();
-    for processor in processors.iter_mut() {
-        processor.on_response_header(response);
+    if let Some(processors) = ctx.response_stream_processors_mut() {
+        for processor in processors {
+            processor.on_response_header(response);
+        }
     }
-    ctx.restore_response_stream_processors(processors);
 }
 
 /// Remove framing metadata that cannot remain valid after a body-mutating
@@ -136,11 +99,10 @@ pub(crate) fn enforce_stream_processor_framing(response: &mut ResponseHeader, ct
     }
 }
 
-/// Run the per-request streaming processors, in installation order, with
-/// in-place chunk mutation. `mem::take` sidesteps borrowing ctx mutably twice
-/// (once for the session adapter, once for the processor Vec); consequently a
-/// processor cannot install further processors mid-stream — that is
-/// intentional (the set is fixed at request stage).
+/// Run the frozen per-request streaming processors in installation order with
+/// in-place chunk mutation. The driver lease owns the processor set across
+/// awaits while the adapter borrows the request context; processor installation
+/// is closed before this callback begins.
 ///
 /// A terminate stops the chain immediately: the response is ending, so later
 /// processors have nothing to contribute. Settlement belongs in the logging
@@ -166,7 +128,14 @@ pub(crate) async fn run_stream_processors_event(
     event: StreamingResponseEvent,
     sink: &mut ResponseBodySink,
 ) {
-    ctx.response_body_processing_started = true;
+    if !ctx.response_processors_frozen() {
+        // The only legal freeze point is the successful final response-header
+        // filter. Do not silently freeze an incomplete processor builder if a
+        // body event arrives before that boundary.
+        *body = None;
+        sink.terminate();
+        return;
+    }
     if ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
         && body
             .as_ref()
@@ -175,7 +144,7 @@ pub(crate) async fn run_stream_processors_event(
         // The locked Pingora H1/H2 readers both cap one physical response
         // callback at 64 KiB. Treat a larger custom transport callback as an
         // internal invariant violation; fail-open cannot relax a memory bound.
-        settle_driver_terminal(ctx, ResponseProcessorSlot::Ai, ResponseTerminalCause::ProcessorFailure);
+        settle_driver_terminal(ctx, ResponseProcessorSlot::Ai, ResponseTerminalCause::ProcessorFailure).await;
         *body = None;
         sink.terminate();
         return;
@@ -188,22 +157,27 @@ pub(crate) async fn run_stream_processors_event(
             ctx,
             ResponseProcessorSlot::Semantic,
             ResponseTerminalCause::GuardrailDependency,
-        );
+        )
+        .await;
         *body = None;
         sink.terminate();
         return;
     }
-    if !ctx.has_response_stream_processors()
-        && ctx
-            .ai_state()
-            .is_none_or(|state| state.stream_processor.is_none() && state.semantic_processor.is_none())
-    {
+    let Some(driver) = ctx.response_processor_driver() else {
+        return;
+    };
+    if !driver.has_body_processors() {
         return;
     }
     let stream_kind = ctx.response_stream_kind;
-    let mut processors = ResponseProcessorRunSet::take(ctx);
+    let Some(mut lease) = driver.body_lease().await else {
+        *body = None;
+        sink.terminate();
+        return;
+    };
     let mut winner = None;
     {
+        let processors = lease.processors();
         let mut adapter = PingoraSessionAdapter::new(session, ctx);
         // Guarded like the plain chain below: a caller that re-enters this
         // function on an already-terminated sink (unreachable today -- the
@@ -252,11 +226,11 @@ pub(crate) async fn run_stream_processors_event(
             .response_terminal_state
             .winner_cause()
             .unwrap_or(ResponseTerminalCause::LegacyProcessor);
-        processors.preempt(winner_slot, cause);
+        preempt_processors(lease.processors(), winner_slot, cause);
         if let Some(state) = ctx.ai_state_mut() {
             state.canonical_record_batch = None;
         }
-        if !sink.is_terminated() {
+        if !sink.is_terminated() && !sink.response_head_decision_pending() {
             ctx.response_terminal_state.settle_pending_without_event();
             sink.terminate();
         }
@@ -264,8 +238,7 @@ pub(crate) async fn run_stream_processors_event(
     } else if event.closes_without_trailers() {
         ctx.response_terminal_state.close_open(ResponseClose::NaturalEos);
     }
-    processors.restore(ctx);
-    ctx.active_response_processor_slot = None;
+    lease.complete();
     if ctx
         .ai_state_mut()
         .is_some_and(|state| state.semantic_guard_claimed && state.canonical_record_batch.take().is_some())
@@ -274,7 +247,8 @@ pub(crate) async fn run_stream_processors_event(
             ctx,
             ResponseProcessorSlot::Semantic,
             ResponseTerminalCause::GuardrailDependency,
-        );
+        )
+        .await;
         *body = None;
         sink.terminate();
     }
@@ -412,6 +386,28 @@ mod tests {
     use parking_lot::Mutex;
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
+
+    async fn run_stream_processors(
+        session: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        body: &mut Option<bytes::Bytes>,
+        end_of_stream: bool,
+        sink: &mut ResponseBodySink,
+    ) {
+        ctx.freeze_response_processor_driver();
+        super::run_stream_processors(session, ctx, body, end_of_stream, sink).await;
+    }
+
+    async fn run_stream_processors_event(
+        session: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        body: &mut Option<bytes::Bytes>,
+        event: StreamingResponseEvent,
+        sink: &mut ResponseBodySink,
+    ) {
+        ctx.freeze_response_processor_driver();
+        super::run_stream_processors_event(session, ctx, body, event, sink).await;
+    }
 
     fn ctx_with_upstream() -> crate::EdgionHttpContext {
         let mut ctx = crate::EdgionHttpContext::default();
@@ -861,6 +857,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn body_event_before_final_header_freeze_fails_closed() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut body = Some(Bytes::from_static(b"must-not-pass"));
+        let mut sink = ResponseBodySink::new();
+
+        super::run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+
+        assert!(body.is_none());
+        assert!(sink.is_terminated());
+        assert!(!ctx.response_processors_frozen());
+        assert!(ctx.response_processor_driver().is_none());
+    }
+
+    #[tokio::test]
     async fn processor_observes_response_stream_kind() {
         let mut session = test_session().await;
         let mut ctx = crate::EdgionHttpContext::default();
@@ -982,8 +993,10 @@ mod tests {
         run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
 
         assert_eq!(&*order.lock(), &["ai", "guardrail", "ext-proc"]);
-        assert!(ctx.ai_state().unwrap().stream_processor.is_some());
-        assert!(ctx.ai_state().unwrap().semantic_processor.is_some());
+        assert!(ctx.response_processors_frozen());
+        assert!(ctx.ai_state().unwrap().stream_processor.is_none());
+        assert!(ctx.ai_state().unwrap().semantic_processor.is_none());
+        assert!(ctx.response_processor_driver().is_some());
         assert_eq!(ctx.response_stream_processor_count(), 1);
     }
 
@@ -1272,11 +1285,11 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(*released.lock(), 1);
-        assert!(!ctx.has_response_stream_processors());
+        assert!(ctx.has_response_stream_processors());
     }
 
-    #[test]
-    fn cancelled_run_set_releases_all_inflight_owners() {
+    #[tokio::test]
+    async fn cancelled_driver_lease_releases_all_inflight_owners() {
         let ai = Arc::new(Mutex::new(LifecycleCounts::default()));
         let semantic = Arc::new(Mutex::new(LifecycleCounts::default()));
         let ordinary = Arc::new(Mutex::new(LifecycleCounts::default()));
@@ -1294,14 +1307,16 @@ mod tests {
             terminate: false,
         }));
 
-        drop(ResponseProcessorRunSet::take(&mut ctx));
+        ctx.freeze_response_processor_driver();
+        let driver = ctx.response_processor_driver().expect("frozen driver");
+        drop(driver.body_lease().await.expect("body lease"));
 
         assert_eq!(ai.lock().released, 1);
         assert_eq!(semantic.lock().released, 1);
         assert_eq!(ordinary.lock().released, 1);
         assert!(ctx.ai_state().unwrap().stream_processor.is_none());
         assert!(ctx.ai_state().unwrap().semantic_processor.is_none());
-        assert!(!ctx.has_response_stream_processors());
+        assert!(ctx.has_response_stream_processors());
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::sync::Semaphore;
 
 use super::attached::{AttachedGuardrail, GuardrailSummary};
-use super::response::GuardrailResponseProcessor;
+use super::response::{response_head_hold_limits, GuardrailResponseProcessor};
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter, UpstreamResponse};
 use edgion_resources::filters::PluginRunningResult;
@@ -25,6 +25,7 @@ pub struct Guardrail {
     max_request_bytes: usize,
     max_replacement_bytes: usize,
     fail_open: bool,
+    head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
 }
 
 impl Guardrail {
@@ -45,6 +46,9 @@ impl Guardrail {
             "Guardrail decision service",
             false,
         )?;
+        let head_limits = config
+            .hold_first_window
+            .then(|| response_head_hold_limits(std::time::Duration::from_millis(config.head_hold_timeout_ms)));
         Ok(Self {
             identity,
             client: Arc::new(client),
@@ -54,6 +58,7 @@ impl Guardrail {
             max_request_bytes: config.max_request_bytes,
             max_replacement_bytes: config.max_replacement_bytes,
             fail_open: config.fail_open,
+            head_limits,
         })
     }
 
@@ -107,7 +112,7 @@ impl RequestFilter for Guardrail {
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         let owner = Arc::new(AttachedGuardrail::new());
-        if !session.install_attached_guardrail(self.identity.clone(), owner) {
+        if !session.install_attached_guardrail(self.identity.clone(), owner, self.head_limits) {
             // Duplicate claims are structural ambiguity, not dependency
             // availability, and are never softened by either fail-open flag.
             if let Some((_, existing)) = session
@@ -169,6 +174,7 @@ impl UpstreamResponse for Guardrail {
             self.max_request_bytes,
             self.max_replacement_bytes,
             self.fail_open,
+            self.head_limits.is_some(),
         ) {
             Ok(processor) => processor,
             Err(_) => return self.precommit_failure(session, &owner, "window-config", log),

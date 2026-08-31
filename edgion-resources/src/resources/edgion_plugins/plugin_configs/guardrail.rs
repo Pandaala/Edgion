@@ -16,6 +16,8 @@ pub const GUARDRAIL_MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub const GUARDRAIL_MAX_REPLACEMENT_BYTES: usize = 1024 * 1024;
 /// Absolute per-snapshot in-flight decision ceiling.
 pub const GUARDRAIL_MAX_CONCURRENT: usize = 1024;
+/// Absolute first-window response-head deadline ceiling.
+pub const GUARDRAIL_MAX_HEAD_HOLD_TIMEOUT_MS: u64 = 60_000;
 
 fn default_window_bytes() -> usize {
     4096
@@ -35,6 +37,10 @@ fn default_max_replacement_bytes() -> usize {
 
 fn default_max_concurrent() -> usize {
     64
+}
+
+fn default_head_hold_timeout_ms() -> u64 {
+    5_000
 }
 
 /// Operator-facing configuration for one bounded unary decision per canonical
@@ -78,6 +84,16 @@ pub struct GuardrailConfig {
     #[schemars(range(min = 1, max = GUARDRAIL_MAX_CONCURRENT))]
     pub max_concurrent: usize,
 
+    /// Delay the final downstream head until the first semantic window has a
+    /// fail-close decision. Disabled by default for rollout compatibility.
+    #[serde(default)]
+    pub hold_first_window: bool,
+
+    /// Absolute deadline from Hold activation through the first decision.
+    #[serde(default = "default_head_hold_timeout_ms")]
+    #[schemars(range(min = 1, max = GUARDRAIL_MAX_HEAD_HOLD_TIMEOUT_MS))]
+    pub head_hold_timeout_ms: u64,
+
     /// Release original bytes and disable Guardrail after a dependency failure.
     /// A valid policy Reject is never softened by this setting.
     #[serde(default)]
@@ -103,6 +119,8 @@ impl Default for GuardrailConfig {
             max_request_bytes: default_max_request_bytes(),
             max_replacement_bytes: default_max_replacement_bytes(),
             max_concurrent: default_max_concurrent(),
+            hold_first_window: false,
+            head_hold_timeout_ms: default_head_hold_timeout_ms(),
             fail_open: false,
             resolved_secrets: None,
         }
@@ -114,6 +132,11 @@ use super::validate_restricted_template;
 impl GuardrailConfig {
     /// Return the first admission-time configuration error.
     pub fn validation_error(&self) -> Option<String> {
+        if self.hold_first_window && self.fail_open {
+            return Some(
+                "failOpen is not supported with Guardrail response-head Hold; use failOpen: false".to_string(),
+            );
+        }
         if let Some(error) = crate::resources::common::validate_connection_target(&self.conn) {
             return Some(format!("target invalid: {error}"));
         }
@@ -194,6 +217,11 @@ impl GuardrailConfig {
                 "maxConcurrent must be between 1 and {GUARDRAIL_MAX_CONCURRENT}"
             ));
         }
+        if !(1..=GUARDRAIL_MAX_HEAD_HOLD_TIMEOUT_MS).contains(&self.head_hold_timeout_ms) {
+            return Some(format!(
+                "headHoldTimeoutMs must be between 1 and {GUARDRAIL_MAX_HEAD_HOLD_TIMEOUT_MS}"
+            ));
+        }
         None
     }
 }
@@ -221,6 +249,8 @@ mod tests {
         assert_eq!(config.window_bytes, 4096);
         assert_eq!(config.overlap_bytes, 256);
         assert_eq!(config.max_concurrent, 64);
+        assert!(!config.hold_first_window);
+        assert_eq!(config.head_hold_timeout_ms, 5_000);
         assert!(!config.fail_open);
         assert!(config.validation_error().is_none());
     }
@@ -265,6 +295,15 @@ mod tests {
 
         let body = parse("  body:\n    type: raw\n    template: nope\n");
         assert!(body.validation_error().unwrap().contains("body"));
+    }
+
+    #[test]
+    fn rejects_fail_open_while_response_head_hold_is_mandatory() {
+        let config = parse("holdFirstWindow: true\nfailOpen: true\n");
+        assert!(config.validation_error().unwrap().contains("failOpen"));
+
+        let legacy_fail_open = parse("failOpen: true\n");
+        assert!(legacy_fail_open.validation_error().is_none());
     }
 
     #[test]

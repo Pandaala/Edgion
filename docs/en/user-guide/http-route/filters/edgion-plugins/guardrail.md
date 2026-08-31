@@ -8,7 +8,9 @@ service chooses exactly one action:
 - `pass`: release the original SSE bytes byte-for-byte;
 - `replace`: rewrite only the selected semantic JSON string tokens while
   preserving SSE framing and all unrelated event fields;
-- `reject`: discard every unreleased byte and terminate the committed stream.
+- `reject`: discard every unreleased byte; replace a held first response with
+  one complete 403 response, or terminate the stream after its head has
+  already committed.
 
 Guardrail is a `requestPlugins` entry because one matched entry owns the whole
 request/response transaction. Do not add a separate response-stage entry.
@@ -47,6 +49,8 @@ spec:
         maxRequestBytes: 1048576
         maxReplacementBytes: 1048576
         maxConcurrent: 64
+        holdFirstWindow: true
+        headHoldTimeoutMs: 5000
         failOpen: false
 ```
 
@@ -70,6 +74,8 @@ WebSockets, and duplex HTTP streams are not Guardrail inputs.
 | `maxRequestBytes` | `1048576` | Inclusive cap for the serialized decision request, `1..=1048576`. |
 | `maxReplacementBytes` | `1048576` | Inclusive aggregate decoded replacement cap, `0..=1048576`. |
 | `maxConcurrent` | `64` | Shared in-flight decision limit for this immutable plugin snapshot, `1..=1024`. |
+| `holdFirstWindow` | `false` | When enabled, delay the final downstream response head until the first semantic window resolves. This opts the request out of cache lookup/fill and requires `failOpen: false`. |
+| `headHoldTimeoutMs` | `5000` | Absolute first-head deadline, including waiting for source bytes, permit acquisition, dependency I/O, and decision parsing, `1..=60000`. Used only when `holdFirstWindow` is enabled. |
 | `failOpen` | `false` | On a dependency failure, release the original held bytes and disable Guardrail for the rest of this response. It never changes a policy Reject. |
 
 Guardrail fixes the method to POST. Retry, custom success rules, request body,
@@ -131,17 +137,25 @@ snapshot while in-flight requests keep the old one.
 
 Pass releases original bytes unchanged. Replace preserves comments, event/id
 fields, usage, finish reasons, line endings, and `[DONE]`; only the current
-semantic JSON string ranges change. A valid Reject always discards the held
-window before terminating the already-committed response, even when
-`failOpen: true`. Guardrail does not manufacture a provider-specific terminal
-event or a new HTTP status after response commitment.
+semantic JSON string ranges change.
+
+With the default `holdFirstWindow: false`, a valid Reject discards the current
+unreleased window and terminates the already-committed stream. With
+`holdFirstWindow: true`, the final post-plugin response head and bounded body
+prefix remain uncommitted through the first semantic decision. A first-window
+Reject replaces them with one complete `403 application/json` response. A
+first-window Pass or Replace releases the selected origin head and ordered
+processed prefix; later windows continue with normal bounded streaming and can
+no longer change the committed status.
 
 Dependency failures include timeout, concurrency saturation, DNS/TLS/egress
 failure, response-cap overflow, invalid status/content type, malformed JSON,
-and source/bounds failures. With `failOpen: false`, the committed stream is
-terminated after held bytes are discarded. With `failOpen: true`, original
-held bytes are released and Guardrail is disabled for the rest of that
-response.
+and source/bounds failures. With `holdFirstWindow: true`, failures before the
+head decision discard the origin prefix and enter the non-retryable 503 error
+path; `failOpen: true` is rejected at configuration admission. Without the head
+hold, `failOpen: false` terminates the committed stream after held bytes are
+discarded, while `failOpen: true` releases the original held bytes and disables
+Guardrail for the rest of that response.
 
 ## Composition and observability
 
@@ -153,5 +167,7 @@ processors; neither wraps the other.
 Access logging records one bounded aggregate Guardrail result for the complete
 downstream request. It does not create per-window log entries and never logs
 semantic content, replacement text, credentials, the complete target, or raw
-dependency errors. Guardrail callouts are plugin dependency traffic, not
-backend attempts or AI provider usage.
+dependency errors. When the first-head barrier is enabled, the same line also
+records its content-free outcome, aggregate resource usage, configured limits,
+and elapsed hold duration. Guardrail callouts are plugin dependency traffic,
+not backend attempts or AI provider usage.

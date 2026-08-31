@@ -246,7 +246,11 @@ pub async fn response_filter(
         );
         compression_ctx.adjust_level(level);
     }
-    ctx.claim_final_response(upstream_response.status.as_u16());
+    ctx.select_final_downstream_status(upstream_response.status.as_u16());
+    // The response onion and both framing-repair passes are complete. From
+    // this point through body/trailer callbacks and logging, one request-local
+    // driver owns the fixed processor set.
+    ctx.freeze_response_processor_driver();
     Ok(())
 }
 

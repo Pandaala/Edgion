@@ -95,7 +95,7 @@ pub trait StreamingResponseProcessor: Send + Sync {
     fn on_terminal_preempted(&mut self, _winner: crate::ai::terminal::ResponseTerminalCause) {}
 
     /// Release resources held across an async callback when its future is
-    /// cancelled before the run set can be restored to the request context.
+    /// cancelled before its driver execution lease completes.
     fn release_inflight(&mut self) {}
 
     /// Typed response-stream callback.

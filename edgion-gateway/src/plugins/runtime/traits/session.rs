@@ -532,6 +532,7 @@ pub trait PluginSession: Send + Sync {
         &mut self,
         _identity: String,
         _owner: std::sync::Arc<crate::plugins::http::guardrail::AttachedGuardrail>,
+        _head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
     ) -> bool {
         false
     }
@@ -668,8 +669,9 @@ pub trait PluginSession: Send + Sync {
     ///   `Rejected` -> `log.push("jump locked, rejected")`
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome;
 
-    /// Set request mirror state used by request_body_filter tee.
-    fn set_mirror_state(&mut self, state: MirrorState);
+    /// Install request mirror state used by the request-body-filter tee.
+    /// Returns `false` after the request-scoped body policy has frozen.
+    fn set_mirror_state(&mut self, state: MirrorState) -> bool;
 
     // ========== Full-body buffering (OpenResty-style, lazy) ==========
     //

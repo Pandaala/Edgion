@@ -6,10 +6,27 @@ use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
 use std::time::Instant;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectRetryContinuation {
+    Stop,
+    SettleAiOnly,
+    SettleAiAndSelectSuccessor,
+    EvaluateOrdinaryBudget,
+}
+
+fn connect_retry_continuation(is_ai: bool, relay_allows_retry: bool) -> ConnectRetryContinuation {
+    match (is_ai, relay_allows_retry) {
+        (true, false) => ConnectRetryContinuation::SettleAiOnly,
+        (true, true) => ConnectRetryContinuation::SettleAiAndSelectSuccessor,
+        (false, false) => ConnectRetryContinuation::Stop,
+        (false, true) => ConnectRetryContinuation::EvaluateOrdinaryBudget,
+    }
+}
+
 #[inline]
 pub fn fail_to_connect(
     edgion_http: &EdgionHttpProxy,
-    _session: &mut Session,
+    session: &mut Session,
     _peer: &HttpPeer,
     ctx: &mut EdgionHttpContext,
     mut e: Box<Error>,
@@ -62,9 +79,22 @@ pub fn fail_to_connect(
         return e;
     }
 
-    if ctx.has_ai_attempt_plan() {
+    let relay_allows_retry = session.request_relay_retry_state().can_start_next_attempt();
+
+    let continuation = connect_retry_continuation(ctx.has_ai_attempt_plan(), relay_allows_retry);
+
+    if matches!(
+        continuation,
+        ConnectRetryContinuation::SettleAiOnly | ConnectRetryContinuation::SettleAiAndSelectSuccessor
+    ) {
+        // Settle the failed current predispatch attempt even when the relay
+        // forbids a successor; this releases its reservation promptly.
         if let Some(state) = ctx.ai_state_mut() {
             state.attempt_runtime.finish_predispatch();
+        }
+        // Only the successor-selection side effects are retry-owned.
+        if continuation == ConnectRetryContinuation::SettleAiOnly {
+            return e;
         }
         // The typed predispatch hook consumes no scheduler dispatch slot,
         // failure-ledger entry, or retry-budget numerator. The bounded Redis
@@ -72,6 +102,12 @@ pub fn fail_to_connect(
         if crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
             e.set_retry(true);
         }
+        return e;
+    }
+
+    // Apply the structural relay gate before ordinary retry-budget
+    // consumption so a retry Pingora cannot start has no retry-owned effects.
+    if continuation == ConnectRetryContinuation::Stop {
         return e;
     }
 
@@ -99,4 +135,21 @@ pub fn fail_to_connect(
     }
 
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{connect_retry_continuation, ConnectRetryContinuation::*};
+
+    #[test]
+    fn disabled_relay_settles_ai_without_selecting_a_successor() {
+        assert_eq!(connect_retry_continuation(true, false), SettleAiOnly);
+        assert_eq!(connect_retry_continuation(true, true), SettleAiAndSelectSuccessor);
+    }
+
+    #[test]
+    fn disabled_relay_stops_before_ordinary_retry_budget() {
+        assert_eq!(connect_retry_continuation(false, false), Stop);
+        assert_eq!(connect_retry_continuation(false, true), EvaluateOrdinaryBudget);
+    }
 }

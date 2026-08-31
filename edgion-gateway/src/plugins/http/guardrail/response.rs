@@ -2,10 +2,11 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use pingora_proxy::ResponseBodySink;
+use pingora_proxy::{ResponseBodySink, ResponseHeadHoldLimits};
 use tokio::sync::Semaphore;
 
 use super::attached::{AttachedGuardrail, GuardrailSummary};
@@ -25,6 +26,27 @@ use crate::sse::DEFAULT_MAX_PENDING_EVENT_BYTES;
 const MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES: usize =
     MAX_RAW_BYTES + DEFAULT_MAX_PENDING_EVENT_BYTES + MAX_CANONICAL_SOURCE_CHUNK_BYTES;
 const MAX_DECISION_RESPONSE_BYTES: usize = 1024 * 1024;
+const RESPONSE_HEAD_METADATA_BYTES: usize = 256 * 1024;
+const RESPONSE_HEAD_EVENT_SLACK: usize = 4;
+const RESPONSE_HEAD_WORK_SLACK: u64 = 8;
+
+/// Generic transport-retention limits that compose with Guardrail's more
+/// detailed RawWindow bounds. The configured head timeout is an outer absolute
+/// deadline, so waiting for source bytes and the first dependency call consume
+/// one bounded precommit budget. The dependency client's own timeout remains
+/// an independent, potentially shorter, call bound.
+pub(super) fn response_head_hold_limits(timeout: Duration) -> ResponseHeadHoldLimits {
+    let events = crate::sse::window::MAX_EVENTS + RESPONSE_HEAD_EVENT_SLACK;
+    ResponseHeadHoldLimits::new(
+        MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES,
+        MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES,
+        events,
+        events,
+        RESPONSE_HEAD_METADATA_BYTES,
+        events as u64 + RESPONSE_HEAD_WORK_SLACK,
+        timeout,
+    )
+}
 
 pub(super) struct GuardrailResponseProcessor {
     client: Arc<ManagedOutboundClient>,
@@ -35,8 +57,48 @@ pub(super) struct GuardrailResponseProcessor {
     max_request_bytes: usize,
     max_replacement_bytes: usize,
     fail_open: bool,
+    first_head_window_pending: bool,
     disabled: bool,
     summary: GuardrailSummary,
+}
+
+/// The precommit decision surface is deliberately narrower than the body
+/// sink. Keeping it private lets the Guardrail state machine be tested without
+/// exposing framework-owned Hold arming to product code.
+trait HeldResponseHeadSink {
+    fn response_head_is_held(&self) -> bool;
+    fn reserve_response_head_work(&mut self, units: u64) -> pingora_core::Result<()>;
+    fn replace_response_head(
+        &mut self,
+        replacement: pingora_proxy::ResponseHeadReplacement,
+    ) -> pingora_core::Result<()>;
+    fn fail_response_head(&mut self, error: Box<pingora_core::Error>) -> pingora_core::Result<()>;
+    fn terminate(&mut self);
+}
+
+impl HeldResponseHeadSink for ResponseBodySink {
+    fn response_head_is_held(&self) -> bool {
+        ResponseBodySink::response_head_is_held(self)
+    }
+
+    fn reserve_response_head_work(&mut self, units: u64) -> pingora_core::Result<()> {
+        ResponseBodySink::reserve_response_head_work(self, units)
+    }
+
+    fn replace_response_head(
+        &mut self,
+        replacement: pingora_proxy::ResponseHeadReplacement,
+    ) -> pingora_core::Result<()> {
+        ResponseBodySink::replace_response_head(self, replacement)
+    }
+
+    fn fail_response_head(&mut self, error: Box<pingora_core::Error>) -> pingora_core::Result<()> {
+        ResponseBodySink::fail_response_head(self, error)
+    }
+
+    fn terminate(&mut self) {
+        ResponseBodySink::terminate(self);
+    }
 }
 
 impl GuardrailResponseProcessor {
@@ -46,6 +108,9 @@ impl GuardrailResponseProcessor {
         session: &mut dyn PluginSession,
         reason: &'static str,
     ) {
+        if self.stage_head_failure(sink, session, reason) {
+            return;
+        }
         if session.try_claim_response_terminal(ResponseTerminalCause::GuardrailDependency) {
             session.mark_response_terminal_emission(TerminalEmission::NoEvent);
             sink.terminate();
@@ -69,6 +134,7 @@ impl GuardrailResponseProcessor {
         max_request_bytes: usize,
         max_replacement_bytes: usize,
         fail_open: bool,
+        hold_first_window: bool,
     ) -> Result<Self, WindowError> {
         Ok(Self {
             client,
@@ -83,6 +149,7 @@ impl GuardrailResponseProcessor {
             max_request_bytes,
             max_replacement_bytes,
             fail_open,
+            first_head_window_pending: hold_first_window,
             disabled: false,
             summary: GuardrailSummary::default(),
         })
@@ -117,7 +184,81 @@ impl GuardrailResponseProcessor {
         self.owner.publish(self.summary.clone());
     }
 
-    async fn decide(&mut self, session: &dyn PluginSession) -> Result<ParsedDecision, &'static str> {
+    fn stage_head_failure<S: HeldResponseHeadSink>(
+        &mut self,
+        sink: &mut S,
+        session: &mut dyn PluginSession,
+        reason: &'static str,
+    ) -> bool {
+        if !sink.response_head_is_held() {
+            return false;
+        }
+        self.first_head_window_pending = false;
+        let claimed = session.try_claim_response_terminal(ResponseTerminalCause::GuardrailDependency);
+        let _ = self.window.resolve(WindowDecision::Discard);
+        session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+        let mut error = pingora_core::Error::explain(
+            pingora_core::ErrorType::HTTPStatus(503),
+            if claimed {
+                format!("Guardrail first-window dependency failure: {reason}")
+            } else {
+                "Guardrail first-window terminal owner conflict".to_string()
+            },
+        );
+        error.set_retry(false);
+        if sink.fail_response_head(error).is_err() {
+            sink.terminate();
+        }
+        self.publish_terminal("fail-close", reason);
+        true
+    }
+
+    fn release_first_head_window(&mut self, sink: &mut ResponseBodySink, session: &mut dyn PluginSession) -> bool {
+        if !self.first_head_window_pending {
+            return true;
+        }
+        if sink.response_head_is_held() && sink.release_response_head() {
+            self.first_head_window_pending = false;
+            return true;
+        }
+        let _ = self.stage_head_failure(sink, session, "head-release");
+        false
+    }
+
+    fn stage_head_policy_reject<S: HeldResponseHeadSink>(
+        &mut self,
+        sink: &mut S,
+        session: &mut dyn PluginSession,
+    ) -> bool {
+        if !sink.response_head_is_held() {
+            return false;
+        }
+        if !session.try_claim_response_terminal(ResponseTerminalCause::GuardrailRejected) {
+            return self.stage_head_failure(sink, session, "terminal-owner-conflict");
+        }
+        let Some(replacement) = self.owner.head_replacement() else {
+            return self.stage_head_failure(sink, session, "replacement-template");
+        };
+        let _ = self.window.resolve(WindowDecision::Discard);
+        self.first_head_window_pending = false;
+        if sink.replace_response_head(replacement).is_err() {
+            sink.terminate();
+            self.publish_terminal("fail-close", "head-replacement");
+            return true;
+        }
+        session.mark_response_terminal_emission(TerminalEmission::Rendered);
+        self.publish_terminal("reject", "policy");
+        true
+    }
+
+    async fn decide<S: HeldResponseHeadSink>(
+        &mut self,
+        session: &dyn PluginSession,
+        sink: &mut S,
+    ) -> Result<ParsedDecision, &'static str> {
+        if sink.response_head_is_held() {
+            sink.reserve_response_head_work(1).map_err(|_| "head-work-limit")?;
+        }
         let snapshot = self.window.snapshot_all().map_err(|_| "semantic-source")?;
         if snapshot.is_empty() || snapshot.iter().all(|entry| entry.current.is_empty()) {
             return Ok(ParsedDecision::Pass);
@@ -225,6 +366,10 @@ impl GuardrailResponseProcessor {
         session: &mut dyn PluginSession,
         reason: &'static str,
     ) {
+        if self.stage_head_failure(sink, session, reason) {
+            output.clear();
+            return;
+        }
         if self.fail_open {
             match self.window.resolve(WindowDecision::Release) {
                 Ok(resolved) => {
@@ -269,6 +414,9 @@ impl GuardrailResponseProcessor {
     }
 
     fn emit_policy_reject(&mut self, sink: &mut ResponseBodySink, session: &mut dyn PluginSession) {
+        if self.stage_head_policy_reject(sink, session) {
+            return;
+        }
         let emission = session
             .ai_terminal_render_context()
             .map_or(TerminalEmission::NoEvent, |(dialect, eligibility)| {
@@ -358,7 +506,7 @@ impl GuardrailResponseProcessor {
                         }
                         let semantic = stats.current_semantic_bytes != 0;
                         let decision = if semantic {
-                            match self.decide(session).await {
+                            match self.decide(session, sink).await {
                                 Ok(decision) => decision,
                                 Err(reason) => {
                                     records.push_front(record);
@@ -397,15 +545,6 @@ impl GuardrailResponseProcessor {
                             *chunk = (!output.is_empty()).then(|| output.freeze());
                             return;
                         }
-                        let policy_reject = matches!(&decision, ParsedDecision::Reject);
-                        if policy_reject
-                            && !session.try_claim_response_terminal(ResponseTerminalCause::GuardrailRejected)
-                        {
-                            output.clear();
-                            let _ = self.window.resolve(WindowDecision::Discard);
-                            *chunk = None;
-                            return;
-                        }
                         let resolved_result = if semantic {
                             self.apply_decision(decision)
                         } else {
@@ -423,14 +562,22 @@ impl GuardrailResponseProcessor {
                             }
                         };
                         if reject {
-                            output.clear();
+                            if sink.response_head_is_held() {
+                                output.clear();
+                            }
+                            self.summary.output_bytes = self.summary.output_bytes.saturating_add(output.len() as u64);
                             self.emit_policy_reject(sink, session);
-                            *chunk = None;
+                            *chunk = (!output.is_empty()).then(|| output.freeze());
                             return;
                         }
                         if Self::append_output(&mut output, resolved).is_err() || self.window.start_next().is_err() {
                             self.fail_dependency(&mut output, records, sink, session, "window-state");
                             *chunk = (!output.is_empty()).then(|| output.freeze());
+                            return;
+                        }
+                        if semantic && !self.release_first_head_window(sink, session) {
+                            output.clear();
+                            *chunk = None;
                             return;
                         }
                         record = records.pop_front().expect("failed record was restored");
@@ -447,7 +594,7 @@ impl GuardrailResponseProcessor {
             };
             let should_decide = stats.current_semantic_bytes >= self.window_bytes;
             if should_decide {
-                let decision = match self.decide(session).await {
+                let decision = match self.decide(session, sink).await {
                     Ok(decision) => decision,
                     Err(reason) => {
                         self.fail_dependency(&mut output, records, sink, session, reason);
@@ -481,14 +628,6 @@ impl GuardrailResponseProcessor {
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
                 }
-                if matches!(&decision, ParsedDecision::Reject)
-                    && !session.try_claim_response_terminal(ResponseTerminalCause::GuardrailRejected)
-                {
-                    output.clear();
-                    let _ = self.window.resolve(WindowDecision::Discard);
-                    *chunk = None;
-                    return;
-                }
                 let (resolved, reject) = match self.apply_decision(decision) {
                     Ok(result) => result,
                     Err(reason) => {
@@ -498,9 +637,12 @@ impl GuardrailResponseProcessor {
                     }
                 };
                 if reject {
-                    output.clear();
+                    if sink.response_head_is_held() {
+                        output.clear();
+                    }
+                    self.summary.output_bytes = self.summary.output_bytes.saturating_add(output.len() as u64);
                     self.emit_policy_reject(sink, session);
-                    *chunk = None;
+                    *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
                 }
                 if Self::append_output(&mut output, resolved).is_err() {
@@ -511,6 +653,11 @@ impl GuardrailResponseProcessor {
                 if self.window.start_next().is_err() {
                     self.fail_dependency(&mut output, records, sink, session, "window-state");
                     *chunk = (!output.is_empty()).then(|| output.freeze());
+                    return;
+                }
+                if !self.release_first_head_window(sink, session) {
+                    output.clear();
+                    *chunk = None;
                     return;
                 }
             }
@@ -526,7 +673,7 @@ impl GuardrailResponseProcessor {
             };
             let semantic = stats.current_semantic_bytes != 0;
             let resolved = if semantic {
-                let decision = match self.decide(session).await {
+                let decision = match self.decide(session, sink).await {
                     Ok(decision) => decision,
                     Err(reason) => {
                         self.fail_dependency(&mut output, VecDeque::new(), sink, session, reason);
@@ -560,20 +707,15 @@ impl GuardrailResponseProcessor {
                     *chunk = (!output.is_empty()).then(|| output.freeze());
                     return;
                 }
-                if matches!(&decision, ParsedDecision::Reject)
-                    && !session.try_claim_response_terminal(ResponseTerminalCause::GuardrailRejected)
-                {
-                    output.clear();
-                    let _ = self.window.finish(WindowDecision::Discard);
-                    *chunk = None;
-                    return;
-                }
                 match self.apply_final_decision(decision) {
                     Ok((output, false)) => output,
                     Ok((_output, true)) => {
-                        output.clear();
+                        if sink.response_head_is_held() {
+                            output.clear();
+                        }
+                        self.summary.output_bytes = self.summary.output_bytes.saturating_add(output.len() as u64);
                         self.emit_policy_reject(sink, session);
-                        *chunk = None;
+                        *chunk = (!output.is_empty()).then(|| output.freeze());
                         return;
                     }
                     Err(reason) => {
@@ -595,6 +737,11 @@ impl GuardrailResponseProcessor {
             if Self::append_output(&mut output, resolved).is_err() {
                 output.clear();
                 self.terminate_dependency(sink, session, "callback-output-limit");
+                *chunk = None;
+                return;
+            }
+            if !self.release_first_head_window(sink, session) {
+                output.clear();
                 *chunk = None;
                 return;
             }
@@ -709,6 +856,7 @@ mod tests {
             4096,
             4096,
             fail_open,
+            false,
         )
         .unwrap()
     }
@@ -744,6 +892,53 @@ mod tests {
             },
         )));
         session
+    }
+
+    #[derive(Default)]
+    struct PendingReleaseHeadSink {
+        held: bool,
+        remaining_work: u64,
+        work_exhausted: bool,
+        replaced: bool,
+        failed: bool,
+        terminated: bool,
+    }
+
+    impl HeldResponseHeadSink for PendingReleaseHeadSink {
+        fn response_head_is_held(&self) -> bool {
+            self.held
+        }
+
+        fn reserve_response_head_work(&mut self, units: u64) -> pingora_core::Result<()> {
+            if units > self.remaining_work {
+                self.work_exhausted = true;
+                return pingora_core::Error::e_explain(
+                    pingora_core::ErrorType::InternalError,
+                    "test response-head work budget exhausted",
+                );
+            }
+            self.remaining_work -= units;
+            Ok(())
+        }
+
+        fn replace_response_head(
+            &mut self,
+            _replacement: pingora_proxy::ResponseHeadReplacement,
+        ) -> pingora_core::Result<()> {
+            assert!(self.held, "only a pending Hold decision may be upgraded");
+            self.replaced = true;
+            Ok(())
+        }
+
+        fn fail_response_head(&mut self, _error: Box<pingora_core::Error>) -> pingora_core::Result<()> {
+            assert!(self.held, "only a pending Hold decision may be upgraded");
+            self.failed = true;
+            Ok(())
+        }
+
+        fn terminate(&mut self) {
+            self.terminated = true;
+        }
     }
 
     fn localhost_uri(uri: &str) -> String {
@@ -785,6 +980,78 @@ mod tests {
         let (discarded, policy_reject) = reject.apply_decision(ParsedDecision::Reject).unwrap();
         assert!(policy_reject, "policy Reject is independent of fail-open");
         assert_eq!(discarded, WindowOutput::Discard);
+    }
+
+    #[test]
+    fn pending_release_upgrades_to_precommit_replace_or_fail() {
+        let mut reject = processor(false);
+        reject.first_head_window_pending = false;
+        reject
+            .owner
+            .prepare_head_replacement(&pingora_http::ResponseHeader::build(200, None).unwrap());
+        let mut reject_sink = PendingReleaseHeadSink {
+            held: true,
+            ..PendingReleaseHeadSink::default()
+        };
+        let mut reject_session = MockPluginSession::new();
+        reject_session
+            .expect_try_claim_response_terminal()
+            .once()
+            .return_const(true);
+        reject_session
+            .expect_mark_response_terminal_emission()
+            .once()
+            .return_const(());
+
+        assert!(reject.stage_head_policy_reject(&mut reject_sink, &mut reject_session));
+        assert!(reject_sink.replaced);
+        assert!(!reject_sink.failed);
+        assert!(!reject_sink.terminated);
+
+        let mut failure = processor(false);
+        failure.first_head_window_pending = false;
+        let mut failure_sink = PendingReleaseHeadSink {
+            held: true,
+            ..PendingReleaseHeadSink::default()
+        };
+        let mut failure_session = MockPluginSession::new();
+        failure_session
+            .expect_try_claim_response_terminal()
+            .once()
+            .return_const(true);
+        failure_session
+            .expect_mark_response_terminal_emission()
+            .once()
+            .return_const(());
+
+        assert!(failure.stage_head_failure(&mut failure_sink, &mut failure_session, "later-window"));
+        assert!(failure_sink.failed);
+        assert!(!failure_sink.replaced);
+        assert!(!failure_sink.terminated);
+    }
+
+    #[tokio::test]
+    async fn pending_release_continues_to_charge_work_and_exhaustion_stages_fail() {
+        let mut processor = processor(false);
+        processor.first_head_window_pending = false;
+        let mut sink = PendingReleaseHeadSink {
+            held: true,
+            remaining_work: 0,
+            ..PendingReleaseHeadSink::default()
+        };
+
+        assert_eq!(
+            processor.decide(&MockPluginSession::new(), &mut sink).await,
+            Err("head-work-limit")
+        );
+        assert!(sink.work_exhausted);
+
+        let mut session = MockPluginSession::new();
+        session.expect_try_claim_response_terminal().once().return_const(true);
+        session.expect_mark_response_terminal_emission().once().return_const(());
+        assert!(processor.stage_head_failure(&mut sink, &mut session, "head-work-limit"));
+        assert!(sink.failed);
+        assert!(!sink.terminated);
     }
 
     #[test]
@@ -941,6 +1208,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn later_reject_in_one_callback_preserves_the_already_accepted_window() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let responder_calls = Arc::clone(&calls);
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(move |_request: &wiremock::Request| {
+                let action = if responder_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    "pass"
+                } else {
+                    "reject"
+                };
+                ResponseTemplate::new(200)
+                    .append_header("content-type", "application/json")
+                    .set_body_json(serde_json::json!({"version":"v1","action":action}))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let first = semantic_record("accepted");
+        let first_raw: Vec<u8> = first.raw_slices_cloned().into_iter().flatten().collect();
+        let second = semantic_record("blocked");
+        let mut batch = CanonicalRecordBatch::new();
+        batch.push(first).unwrap();
+        batch.push(second).unwrap();
+
+        let mut processor = processor(false);
+        processor.client = Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
+            &server.uri(),
+        )));
+        let mut chunk = None;
+        let mut sink = ResponseBodySink::new();
+        let mut session = mock_request_session();
+        processor
+            .process_batch(batch, false, &mut chunk, &mut sink, &mut session)
+            .await;
+
+        assert_eq!(chunk.as_deref(), Some(first_raw.as_slice()));
+        assert!(sink.is_terminated());
+        assert_eq!(sink.peek_extra().len(), 1);
+        assert_eq!(processor.summary.passed, 1);
+        assert_eq!(processor.summary.outcome, "reject");
+        assert_eq!(processor.summary.output_bytes, first_raw.len() as u64);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn later_dependency_failure_preserves_accepted_replace_and_remaining_originals() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use wiremock::matchers::{method, path};
@@ -1054,10 +1373,15 @@ mod tests {
             4096,
             4096,
             false,
+            false,
         )
         .unwrap();
         processor.window.retain(semantic_record("wait")).unwrap();
-        assert_eq!(processor.decide(&MockPluginSession::new()).await, Err("timeout"));
+        let mut sink = ResponseBodySink::new();
+        assert_eq!(
+            processor.decide(&MockPluginSession::new(), &mut sink).await,
+            Err("timeout")
+        );
     }
 
     #[tokio::test]
@@ -1088,11 +1412,13 @@ mod tests {
             4096,
             4096,
             false,
+            false,
         )
         .unwrap();
         processor.window.retain(semantic_record("cancel")).unwrap();
         let session = mock_request_session();
-        let mut decision = Box::pin(processor.decide(&session));
+        let mut sink = ResponseBodySink::new();
+        let mut decision = Box::pin(processor.decide(&session, &mut sink));
         tokio::select! {
             result = &mut decision => panic!("decision unexpectedly completed: {result:?}"),
             () = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
@@ -1131,6 +1457,7 @@ mod tests {
             4096,
             4096,
             false,
+            false,
         )
         .unwrap();
         let mut ctx = crate::EdgionHttpContext::default();
@@ -1146,6 +1473,7 @@ mod tests {
             b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"cancel-driver\"}}]}\n\n",
         ));
         let mut sink = ResponseBodySink::new();
+        ctx.freeze_response_processor_driver();
         let future =
             crate::routes::http::proxy_http::run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink);
 

@@ -268,15 +268,13 @@ pub async fn request_filter(
         }
     }
 
-    // Request-stage plugins have run, but this is NOT the exit point for
-    // `in_request_body_stage`: two more request-plugin stages still run after
-    // this function returns -- the backendRef-scoped chain in
-    // `pg_upstream_peer.rs::upstream_peer` (HTTP and gRPC) -- and Pingora has
-    // not started pumping the downstream body upstream yet at that point.
-    // The marker is cleared later, at the tail of `upstream_request_filter`
-    // (`pg_upstream_request_filter.rs`), which is the true boundary right
-    // before body proxying begins. See `in_request_body_stage`'s doc for the
-    // full lifecycle.
+    // Body policy is request-scoped. Global, Gateway, and route request
+    // plugins have now had their one opportunity to capture, mutate, observe,
+    // or install streamed processing. BackendRef request plugins run later
+    // during peer selection, but may only consume an already-cached snapshot;
+    // the adapter refuses every operation that could establish or change the
+    // body relay policy after this boundary.
+    ctx.request_info.in_request_body_stage = false;
 
     Ok(false)
 }

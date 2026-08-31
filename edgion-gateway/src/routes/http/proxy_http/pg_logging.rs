@@ -59,15 +59,19 @@ pub async fn logging(
     // stage logs before the access-log entry is assembled.
     super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
     super::pg_request_body_filter_action::drain_request_body_observer_logs(ctx);
-    if let Some(processor) = ctx.ai_state_mut().and_then(|state| state.semantic_processor.as_mut()) {
-        let (outcome, reason) = match _e.map(PingoraError::esource) {
-            Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),
-            Some(ErrorSource::Downstream) | None => ("cancelled", "downstream-cancel"),
-            Some(ErrorSource::Internal | ErrorSource::Unset) => ("fail-close", "internal-stream-error"),
-        };
+    let (outcome, reason) = match _e.map(PingoraError::esource) {
+        Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),
+        Some(ErrorSource::Downstream) | None => ("cancelled", "downstream-cancel"),
+        Some(ErrorSource::Internal | ErrorSource::Unset) => ("fail-close", "internal-stream-error"),
+    };
+    if let Some(driver) = ctx.response_processor_driver() {
+        driver.finalize_semantic_incomplete(outcome, reason).await;
+    } else if let Some(processor) = ctx.ai_state_mut().and_then(|state| state.semantic_processor.as_mut()) {
+        // Local replies and response-stage denials can finish before the final
+        // response header freezes the builder slots into a driver.
         processor.finalize_incomplete(outcome, reason);
     }
-    finalize_attached_ext_proc_logs(ctx);
+    finalize_attached_ext_proc_logs(ctx).await;
     finalize_attached_guardrail_log(ctx);
 
     ctx.finalize_waf_for_logging();
@@ -131,8 +135,8 @@ pub async fn logging(
     }
 }
 
-fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
-    super::pg_upstream_response_trailer_filter::finalize_incomplete_trailer_companions(ctx);
+async fn finalize_attached_ext_proc_logs(ctx: &mut EdgionHttpContext) {
+    super::pg_upstream_response_trailer_filter::finalize_incomplete_trailer_companions(ctx).await;
     let Some((stages, attached)) = ctx.stage_logs_and_attached_ext_proc() else {
         return;
     };
@@ -541,8 +545,8 @@ mod tests {
             edgion_plugins: Vec::new(),
         });
 
-        finalize_attached_ext_proc_logs(&mut ctx);
-        finalize_attached_ext_proc_logs(&mut ctx);
+        finalize_attached_ext_proc_logs(&mut ctx).await;
+        finalize_attached_ext_proc_logs(&mut ctx).await;
         let rendered = serde_json::to_string(&ctx.stage_logs()[0].filters[0]).unwrap();
         assert_eq!(rendered.matches("ext_proc attached").count(), 1);
         assert!(rendered.contains("reason=logging-fallback"));
@@ -555,7 +559,7 @@ mod tests {
         let mut ctx = EdgionHttpContext::default();
         assert!(ctx.install_attached_ext_proc(identity, Arc::clone(&owner), false));
 
-        finalize_attached_ext_proc_logs(&mut ctx);
+        finalize_attached_ext_proc_logs(&mut ctx).await;
 
         assert_eq!(owner.test_state(), ("cancelled", "logging-fallback", true));
         assert!(ctx.stage_logs().is_empty());
@@ -580,8 +584,8 @@ mod tests {
             }],
         });
 
-        finalize_attached_ext_proc_logs(&mut ctx);
-        finalize_attached_ext_proc_logs(&mut ctx);
+        finalize_attached_ext_proc_logs(&mut ctx).await;
+        finalize_attached_ext_proc_logs(&mut ctx).await;
         let rendered = serde_json::to_string(&ctx.stage_logs()[0].edgion_plugins[0].logs[0]).unwrap();
         assert_eq!(rendered.matches("ext_proc attached").count(), 1);
         assert!(rendered.contains("reason=logging-fallback"));

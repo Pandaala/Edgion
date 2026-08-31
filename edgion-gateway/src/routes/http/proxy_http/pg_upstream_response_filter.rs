@@ -189,7 +189,7 @@ pub fn upstream_response_filter(
         if let Some(active) = ctx.ai_state_mut().and_then(|state| state.attempt_runtime.active_mut()) {
             active.record_response(status_code, failure_class);
         }
-        let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active();
+        let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
         let gates_allow_retry = !ctx.request_timeout_exceeded()
             && !ctx.grpc_deadline_exceeded()
             && !ctx.response_write_started()
@@ -255,11 +255,7 @@ pub fn upstream_response_filter(
                             .unwrap_or(false);
                         let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
 
-                        // Streamed body handlers make the request non-replayable
-                        // while `retry_buffer_truncated()` still reports `false`
-                        // (no buffer was allocated) — include the monotonic latch
-                        // in the decision (contract §4.6).
-                        let buffer_ok = !session.as_ref().retry_buffer_truncated() && !ctx.request_body_stream_active();
+                        let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
                         if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
                             // Retry budget (retryConstraint): composes AFTER the
                             // maxRetries/deadline/buffer checks above (D3). This is the

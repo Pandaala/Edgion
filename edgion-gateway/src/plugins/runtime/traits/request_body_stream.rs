@@ -12,7 +12,7 @@
 //!   the body (at most per-chunk state) — the request-body cache invariant
 //!   allows only the `BodyStorage` cache.
 //! - While any handler is installed the request is non-replayable
-//!   (`request_retry_allowed == false`) and the upstream framing switches to
+//!   (`RequestReplayPolicy::Never`) and the upstream framing switches to
 //!   the `Streamed` disposition. The context vector is therefore never cleared
 //!   once populated, which keeps the retry predicate monotonic.
 //! - A `Terminate` verdict makes the hook write the local reply and stop the

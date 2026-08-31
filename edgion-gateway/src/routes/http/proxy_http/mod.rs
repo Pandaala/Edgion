@@ -4,7 +4,11 @@ use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_core::Error;
 use pingora_http::ResponseHeader;
-use pingora_proxy::{FailToProxy, ProxyHttp, RequestBodyEvent, ResponseBodySink, Session, UpstreamResponseBodyEvent};
+use pingora_proxy::{
+    FailToProxy, ProxyHttp, RequestBodyEvent, ResponseBodySink, ResponseHeadBoundary, ResponseHeadBoundaryAction,
+    ResponseHeadCommitPlan, ResponseHeadOutcome, ResponseHeadSource, ResponseHeadUsage, Session,
+    UpstreamResponseBodyEvent,
+};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -34,6 +38,7 @@ mod pg_request_body_filter;
 mod pg_request_body_filter_action;
 mod pg_request_filter;
 mod pg_response_filter;
+mod pg_response_head;
 mod pg_upstream_peer;
 mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
@@ -147,30 +152,22 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_request_body_filter_action::request_body_filter_action(self, session, body, event, ctx).await
     }
 
-    fn upstream_request_body_disposition(
-        &self,
-        _session: &Session,
-        ctx: &Self::CTX,
-    ) -> pingora_proxy::UpstreamRequestBodyDisposition {
+    fn request_relay_plan(&self, _session: &Session, ctx: &Self::CTX) -> pingora_proxy::RequestRelayPlan {
         // Streamed once any per-chunk handler was installed: chunk mutation
         // may change the length, so the upstream must use chunked framing.
-        // The proxy coerces back to Ordinary where Streamed is unsafe
-        // (upgrade/CONNECT, empty-and-done body, H1.0 upstream). Keyed on the
-        // monotonic latch, not the handler vector (see the ctx field docs).
+        // Strictly empty bodies are safely coerced back to Ordinary. A final
+        // upgrade/CONNECT or H1.0 upstream shape instead fails closed before
+        // its header is written. Keyed on the monotonic latch, not the handler
+        // vector (see the ctx field docs).
         if ctx.request_body_stream_active() {
-            pingora_proxy::UpstreamRequestBodyDisposition::Streamed
+            pingora_proxy::RequestRelayPlan::streamed()
         } else {
-            pingora_proxy::UpstreamRequestBodyDisposition::Ordinary
+            pingora_proxy::RequestRelayPlan::ordinary()
         }
     }
 
-    fn request_retry_allowed(&self, _session: &Session, ctx: &Self::CTX) -> bool {
-        // Streamed chunks are forwarded without any replay buffer, so a
-        // request stops being replayable the moment a handler is installed.
-        // The latch is monotonic by construction (set once, never cleared),
-        // as the contract requires — the handler vector is not, because the
-        // hook takes it across await points and the future may be dropped.
-        !ctx.request_body_stream_active()
+    fn response_head_may_hold(&self, _session: &Session, ctx: &Self::CTX) -> bool {
+        pg_response_head::response_head_may_hold(ctx)
     }
 
     async fn upstream_request_filter(
@@ -226,6 +223,44 @@ impl ProxyHttp for EdgionHttpProxy {
         Self::CTX: Send + Sync,
     {
         pg_response_filter::response_filter(self, session, upstream_response, ctx).await
+    }
+
+    fn response_head_commit_plan(
+        &self,
+        session: &Session,
+        source: ResponseHeadSource,
+        response: &ResponseHeader,
+        ctx: &Self::CTX,
+    ) -> pingora_core::Result<ResponseHeadCommitPlan> {
+        pg_response_head::response_head_commit_plan(session, source, response, ctx)
+    }
+
+    fn response_head_will_commit(
+        &self,
+        session: &Session,
+        chosen_header: &ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()> {
+        pg_response_head::response_head_will_commit(session, chosen_header, ctx)
+    }
+
+    fn response_head_hold_boundary(
+        &self,
+        _session: &Session,
+        boundary: ResponseHeadBoundary,
+        _ctx: &mut Self::CTX,
+    ) -> ResponseHeadBoundaryAction {
+        pg_response_head::response_head_hold_boundary(boundary)
+    }
+
+    fn response_head_hold_outcome(
+        &self,
+        _session: &Session,
+        outcome: ResponseHeadOutcome,
+        usage: ResponseHeadUsage,
+        ctx: &mut Self::CTX,
+    ) {
+        pg_response_head::response_head_hold_outcome(outcome, usage, ctx)
     }
 
     /// Returns `Ok(None)` to continue, `Ok(Some(duration))` to rate-limit for the given duration.
