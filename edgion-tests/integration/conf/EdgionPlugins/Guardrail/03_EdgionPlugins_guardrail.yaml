@@ -80,6 +80,34 @@ spec:
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
+  name: guardrail-hold-reject
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        holdFirstWindow: true
+        headHoldTimeoutMs: 5000
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
   name: guardrail-malformed-fail-open
   namespace: edgion-test
 spec:

@@ -635,13 +635,12 @@ impl BackendTrafficPolicyStore {
     }
 }
 
-/// Serializes tests that write the process-global runtime stores. The HC config
-/// store swaps a whole `ArcSwap` map (load-clone-modify-store), which is not
-/// atomic across concurrent writers, so even tests using distinct Service keys
-/// would clobber each other's map without this guard.
+/// Serializes tests that write the process-global runtime stores. This aliases
+/// the cross-module guard because these tests also publish the global panic
+/// threshold; a module-local lock would still race with gateway-config and
+/// panic-threshold tests.
 #[cfg(test)]
-pub(crate) static GLOBAL_STORE_TEST_LOCK: LazyLock<parking_lot::Mutex<()>> =
-    LazyLock::new(|| parking_lot::Mutex::new(()));
+pub(crate) use crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK;
 
 #[cfg(test)]
 mod tests {

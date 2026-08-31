@@ -342,6 +342,7 @@ mod panic_tests {
 
     #[test]
     fn panic_off_all_unhealthy_returns_none() {
+        let _guard = crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let svc = "default/panic-off";
         configure_lb_panic_default(0);
         get_panic_threshold_store().set_service_threshold(svc, None);
@@ -352,6 +353,7 @@ mod panic_tests {
 
     #[test]
     fn panic_on_all_unhealthy_selects_backend() {
+        let _guard = crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let svc = "default/panic-on";
         get_panic_threshold_store().set_service_threshold(svc, Some(50));
         seed_cell(svc, 4);

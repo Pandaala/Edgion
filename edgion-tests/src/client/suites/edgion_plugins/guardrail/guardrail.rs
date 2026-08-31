@@ -11,6 +11,7 @@ pub struct GuardrailTestSuite;
 const PASS_HOST: &str = "guardrail-pass.example.com";
 const REPLACE_HOST: &str = "guardrail-replace.example.com";
 const REJECT_HOST: &str = "guardrail-reject.example.com";
+const HOLD_REJECT_HOST: &str = "guardrail-hold-reject.example.com";
 const MALFORMED_HOST: &str = "guardrail-malformed.example.com";
 const TIMEOUT_HOST: &str = "guardrail-timeout.example.com";
 const EXT_PROC_HOST: &str = "guardrail-ext-proc.example.com";
@@ -21,6 +22,7 @@ const ANTHROPIC_REJECT_HOST: &str = "guardrail-anthropic-reject.example.com";
 const PATH: &str = "/v1/chat/completions?mock_mode=guardrail_split";
 const TWO_WINDOWS_PATH: &str = "/v1/chat/completions?mock_mode=guardrail_two_windows";
 const REJECT_EVENT: &[u8] = b"event: error\ndata: {\"error\":{\"message\":\"The response was blocked by a content policy.\",\"type\":\"content_filter_error\",\"code\":\"content_policy_violation\"}}\n\n";
+const REJECT_JSON: &[u8] = b"{\"error\":{\"message\":\"The response was blocked by a content policy.\",\"type\":\"content_filter_error\",\"code\":\"content_policy_violation\"}}";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +105,31 @@ async fn request_at_path(
 
 async fn request(ctx: &TestContext, host: &str) -> Result<reqwest::Response, String> {
     request_with_trace(ctx, host, None).await
+}
+
+async fn request_openai_protocol(ctx: &TestContext, host: &str, h2: bool) -> Result<reqwest::Response, String> {
+    if !h2 {
+        return request(ctx, host).await;
+    }
+    let address = format!("{}:{}", ctx.target_host, ctx.http_port)
+        .parse()
+        .map_err(|error| format!("invalid test address: {error}"))?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http2_prior_knowledge()
+        .resolve(host, address)
+        .build()
+        .map_err(|error| error.to_string())?;
+    client
+        .post(format!("http://{host}:{}{PATH}", ctx.http_port))
+        .json(&json!({
+            "model": "fixture-model",
+            "stream": true,
+            "messages": [{"role": "user", "content": "fixture prompt"}]
+        }))
+        .send()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn request_anthropic_mode(
@@ -325,6 +352,63 @@ impl GuardrailTestSuite {
         )
     }
 
+    fn held_first_window_reject_replaces_head_on_h1_and_h2() -> TestCase {
+        TestCase::new(
+            "held_first_window_reject_replaces_head_on_h1_and_h2",
+            "holdFirstWindow turns a first-window Reject into one complete 403 JSON response on H1 and H2",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for h2 in [false, true] {
+                        if let Err(error) = reset_observations(&ctx).await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                        let response = match request_openai_protocol(&ctx, HOLD_REJECT_HOST, h2).await {
+                            Ok(response) => response,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let status = response.status();
+                        let content_type = response
+                            .headers()
+                            .get(reqwest::header::CONTENT_TYPE)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_owned);
+                        let cache_control = response
+                            .headers()
+                            .get(reqwest::header::CACHE_CONTROL)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_owned);
+                        let content_length = response.content_length();
+                        let body = response.bytes().await.unwrap_or_default();
+                        if status != reqwest::StatusCode::FORBIDDEN
+                            || content_type.as_deref() != Some("application/json")
+                            || cache_control.as_deref() != Some("no-store")
+                            || content_length != Some(REJECT_JSON.len() as u64)
+                            || body.as_ref() != REJECT_JSON
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "unexpected H{} held Reject: status={status} content-type={content_type:?} cache-control={cache_control:?} content-length={content_length:?} body={}",
+                                    if h2 { 2 } else { 1 },
+                                    String::from_utf8_lossy(&body)
+                                ),
+                            );
+                        }
+                        if let Err(error) = assert_one_canonical_call(&ctx, "reject").await {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "H1/H2 first-window Reject replaced the uncommitted origin head with complete 403 JSON"
+                            .to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     fn one_call_per_canonical_window() -> TestCase {
         TestCase::new(
             "one_call_per_canonical_window",
@@ -467,39 +551,7 @@ impl GuardrailTestSuite {
                         if let Err(error) = reset_observations(&ctx).await {
                             return TestResult::failed(start.elapsed(), error);
                         }
-                        let response = if h2 {
-                            let address = match format!("{}:{}", ctx.target_host, ctx.http_port).parse() {
-                                Ok(address) => address,
-                                Err(error) => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!("invalid test address: {error}"),
-                                    )
-                                }
-                            };
-                            let client = match reqwest::Client::builder()
-                                .no_proxy()
-                                .http2_prior_knowledge()
-                                .resolve(REJECT_EXT_PROC_HOST, address)
-                                .build()
-                            {
-                                Ok(client) => client,
-                                Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
-                            };
-                            client
-                                .post(format!("http://{REJECT_EXT_PROC_HOST}:{}{PATH}", ctx.http_port))
-                                .json(&json!({
-                                    "model": "fixture-model",
-                                    "stream": true,
-                                    "messages": [{"role": "user", "content": "fixture prompt"}]
-                                }))
-                                .send()
-                                .await
-                                .map_err(|error| error.to_string())
-                        } else {
-                            request(&ctx, REJECT_EXT_PROC_HOST).await
-                        };
-                        let response = match response {
+                        let response = match request_openai_protocol(&ctx, REJECT_EXT_PROC_HOST, h2).await {
                             Ok(response) => response,
                             Err(error) => return TestResult::failed(start.elapsed(), error),
                         };
@@ -711,6 +763,7 @@ impl TestSuite for GuardrailTestSuite {
             Self::pass_is_byte_identical(),
             Self::replace_rewrites_only_semantic_token(),
             Self::policy_reject_is_not_failed_open(),
+            Self::held_first_window_reject_replaces_head_on_h1_and_h2(),
             Self::malformed_fail_open_releases_original(),
             Self::one_call_per_canonical_window(),
             Self::timeout_fail_close_discards_window(),

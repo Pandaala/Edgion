@@ -2,7 +2,7 @@
 # routes.
 #
 # Proves: this is the only configuration that makes Edgion select
-# `UpstreamRequestBodyDisposition::Streamed`, which is what the contract §3
+# `RequestRelayPlan::streamed()`, which is what the contract §3
 # framing table is about. `ctx.request_body_stream_active` is computed by the
 # plugin resolution chain and no fork test can observe that computation, so the
 # framing it produces has to be asserted here, end to end, after Edgion's own

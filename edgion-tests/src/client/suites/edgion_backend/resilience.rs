@@ -359,7 +359,7 @@ fn committed_sse_disconnect_never_falls_back(
             || attempts[0]["backend"] != "edgion-test/resilience-stream-primary"
             || attempts[0]["credential"] != "stream-primary"
             || attempts[0]["status"] != 200
-            || attempts[0]["failure"] != "ambiguous_transport"
+            || attempts[0]["failure"] != "incomplete_response"
         {
             return TestResult::failed(
                 start.elapsed(),

@@ -123,7 +123,7 @@ impl Combo {
     ];
 
     /// The same four with the ExtProc `STREAMED` plugin on the route, which is
-    /// what makes Edgion select `UpstreamRequestBodyDisposition::Streamed`.
+    /// what makes Edgion select `RequestRelayPlan::streamed()`.
     pub const STREAMED: [Combo; 4] = [
         Combo::new(Proto::H1, Proto::H1, true),
         Combo::new(Proto::H1, Proto::H2, true),

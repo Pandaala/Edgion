@@ -20,6 +20,16 @@ static PANIC_THRESHOLD_STORE: LazyLock<Arc<PanicThresholdStore>> =
 /// Initialized to 0 (panic disabled) so the feature is strictly opt-in.
 static GLOBAL_DEFAULT: AtomicU8 = AtomicU8::new(0);
 
+/// Serializes tests that mutate process-global gateway and backend stores.
+///
+/// Several test modules exercise configuration publication through different
+/// entry points. They must share one guard across modules because resetting an
+/// atomic after each individual test does not prevent parallel assertions from
+/// observing another test's intermediate value.
+#[cfg(test)]
+pub(crate) static GLOBAL_STORE_TEST_LOCK: LazyLock<parking_lot::Mutex<()>> =
+    LazyLock::new(|| parking_lot::Mutex::new(()));
+
 pub fn get_panic_threshold_store() -> Arc<PanicThresholdStore> {
     PANIC_THRESHOLD_STORE.clone()
 }
@@ -107,6 +117,7 @@ mod tests {
 
     #[test]
     fn resolve_prefers_override_then_global() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         let store = get_panic_threshold_store();
         configure_lb_panic_default(30);
         store.set_service_threshold("default/a", Some(70));
@@ -119,6 +130,7 @@ mod tests {
 
     #[test]
     fn global_default_clamps_invalid() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         configure_lb_panic_default(200);
         assert_eq!(get_lb_panic_default(), 0);
         configure_lb_panic_default(0);

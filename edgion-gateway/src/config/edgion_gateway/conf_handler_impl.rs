@@ -357,8 +357,8 @@ mod tests {
     use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
     use std::collections::HashMap;
 
-    // Serialize tests to avoid global-store interference
-    static TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    // Serialize against every test module that mutates gateway-wide stores.
+    use crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK as TEST_MUTEX;
 
     fn make_config(name: &str) -> EdgionGatewayConfig {
         EdgionGatewayConfig::new(

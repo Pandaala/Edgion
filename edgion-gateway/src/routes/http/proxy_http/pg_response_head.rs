@@ -104,6 +104,12 @@ pub(crate) fn response_head_will_commit(
     chosen_header: &ResponseHeader,
     ctx: &mut EdgionHttpContext,
 ) -> Result<()> {
+    // A real protocol switch becomes terminal only after Pingora reports that
+    // the 101 was written. It is not an ordinary final response and must not
+    // enter the pre-write 200..=599 claim lifecycle.
+    if chosen_header.status == http::StatusCode::SWITCHING_PROTOCOLS {
+        return Ok(());
+    }
     claim_response_head(chosen_header, ctx)
 }
 
@@ -149,6 +155,20 @@ mod tests {
         let mut session = Session::new_h1(Box::new(server));
         session.read_request().await.unwrap();
         session
+    }
+
+    #[tokio::test]
+    async fn will_commit_leaves_switching_protocols_to_transport_confirmation() {
+        let mut ctx = EdgionHttpContext::default();
+        let response = ResponseHeader::build(101, None).unwrap();
+        let session = session().await;
+
+        response_head_will_commit(&session, &response, &mut ctx).unwrap();
+
+        assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
+        ctx.finalize_downstream_status(Some(101));
+        assert_eq!(ctx.request_info.status(), 101);
     }
 
     #[tokio::test]
