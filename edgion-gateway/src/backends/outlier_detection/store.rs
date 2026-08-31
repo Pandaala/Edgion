@@ -326,7 +326,11 @@ mod tests {
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
         assert!(store.is_ejected("default/svc1", 111));
 
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        let service = store.services.get("default/svc1").expect("service state must exist");
+        let endpoint = service.endpoints.get(&111).expect("endpoint state must exist");
+        endpoint.expire_deadlines_for_test();
+        drop(endpoint);
+        drop(service);
 
         assert!(!store.is_ejected("default/svc1", 111));
     }
@@ -637,15 +641,30 @@ mod tests {
         store.record_failure("default/svc", 1, 1, FailureClass::Gateway);
         assert!(store.is_ejected("default/svc", 1));
 
-        // After ~1s the first ejection recovers (num_ejections retained = 1).
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // Expiring the first window recovers lazily and retains num_ejections = 1.
+        let service = store.services.get("default/svc").expect("service state must exist");
+        let endpoint = service.endpoints.get(&1).expect("endpoint state must exist");
+        assert_eq!(endpoint.num_ejections(), 1);
+        endpoint.expire_deadlines_for_test();
+        drop(endpoint);
+        drop(service);
         assert!(!store.is_ejected("default/svc", 1)); // triggers reset-but-retain
 
         // Eject again -> num_ejections becomes 2 -> duration ~2s.
         store.record_failure("default/svc", 1, 1, FailureClass::Gateway);
         assert!(store.is_ejected("default/svc", 1));
-        // Still ejected at ~1.2s because the second window is ~2s.
-        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let service = store.services.get("default/svc").expect("service state must exist");
+        let endpoint = service.endpoints.get(&1).expect("endpoint state must exist");
+        assert_eq!(endpoint.num_ejections(), 2);
+        assert_eq!(
+            ejection_duration(
+                endpoint.config().expect("endpoint config must exist"),
+                endpoint.num_ejections(),
+            ),
+            std::time::Duration::from_secs(2)
+        );
+        drop(endpoint);
+        drop(service);
         assert!(store.is_ejected("default/svc", 1));
     }
 

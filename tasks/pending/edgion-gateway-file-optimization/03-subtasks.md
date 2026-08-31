@@ -48,7 +48,7 @@
 | `backends-discovery-services` | 3 | 0 | 3 | 0 | complete |
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
 | `backends-health` | 6 | 2 | 3 | 1 | complete |
-| `backends-outlier` | 4 | 0 | 0 | 0 | pending |
+| `backends-outlier` | 4 | 2 | 2 | 0 | complete |
 | `backends-panic-threshold` | 1 | 1 | 0 | 0 | complete |
 | `backends-policy-root` | 1 | 0 | 1 | 0 | complete |
 | `backends-policy-tls` | 3 | 1 | 2 | 0 | complete |
@@ -198,10 +198,10 @@
 | `edgion-gateway/src/backends/health/check/status_store.rs` | `backends-health` | source | deferred | `B0040`: D0004 cancellation-safe task/status generation ownership |
 | `edgion-gateway/src/backends/health/mod.rs` | `backends-health` | source | examined-no-change | `B0040`: minimal health façade retained |
 | `edgion-gateway/src/backends/mod.rs` | `backends-core` | source | changed | `B0041`: borrowed ExternalName annotations remove a full hot-path map clone |
-| `edgion-gateway/src/backends/outlier_detection/config.rs` | `backends-outlier` | source | pending | — |
-| `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | pending | — |
-| `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | pending | — |
-| `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | pending | — |
+| `edgion-gateway/src/backends/outlier_detection/config.rs` | `backends-outlier` | source | examined-no-change | `B0042`: canonical schema-layer configuration re-export retained |
+| `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | examined-no-change | `B0042`: coherent outlier module façade retained |
+| `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | changed | `B0042`: deterministic test-only deadline expiry removes wall-clock recovery sleeps |
+| `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | changed | `B0042`: deterministic recovery/backoff tests; detached gauge lifecycle deferred to D0006 |
 | `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | changed | BACKENDS-PANIC-THRESHOLD-001 / `cd048aa9`; atomic capture and metric lifecycle deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | pending | — |
 | `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | changed | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |

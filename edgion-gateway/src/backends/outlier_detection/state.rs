@@ -307,6 +307,20 @@ impl PassiveEjectionState {
             .num_ejections
     }
 
+    /// Move active open deadlines to an already-expired instant without
+    /// changing counters, generation, or the half-open probe lease.
+    #[cfg(test)]
+    pub(crate) fn expire_deadlines_for_test(&self) {
+        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let expired = Instant::now();
+        if state.open_until.is_some() {
+            state.open_until = Some(expired);
+        }
+        if state.explicit_cooldown_until.is_some() {
+            state.explicit_cooldown_until = Some(expired);
+        }
+    }
+
     fn finish_probe(&self, generation: u64, success: bool, class: Option<FailureClass>) {
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.generation != generation || !self.probe_in_flight.load(Ordering::Acquire) {
@@ -412,14 +426,16 @@ mod tests {
             state.record_failure(FailureClass::Gateway, true),
             FailureTransition::Opened
         );
-        std::thread::sleep(Duration::from_millis(1050));
+        assert_eq!(state.num_ejections(), 1);
+        state.expire_deadlines_for_test();
         let EjectionAdmission::Probe(probe) = state.admit() else {
             panic!("probe must be admitted after the first window");
         };
         probe.failure(FailureClass::Gateway);
+        assert_eq!(state.num_ejections(), 2);
         assert!(matches!(state.admit(), EjectionAdmission::Rejected));
 
-        std::thread::sleep(Duration::from_millis(2050));
+        state.expire_deadlines_for_test();
         let EjectionAdmission::Probe(probe) = state.admit() else {
             panic!("probe must be admitted after backoff");
         };
