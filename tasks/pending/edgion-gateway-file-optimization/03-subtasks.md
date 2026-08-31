@@ -141,7 +141,7 @@
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
 | `routes-shared` | 66 | 1 | 1 | 0 | pending |
 | `runtime` | 15 | 0 | 0 | 0 | pending |
-| `services` | 4 | 0 | 0 | 0 | pending |
+| `services` | 4 | 1 | 3 | 0 | complete |
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
@@ -652,10 +652,10 @@
 | `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | pending | — |
-| `edgion-gateway/src/services/acme/challenge_store.rs` | `services` | source | pending | — |
-| `edgion-gateway/src/services/acme/conf_handler_impl.rs` | `services` | source | pending | — |
-| `edgion-gateway/src/services/acme/mod.rs` | `services` | source | pending | — |
-| `edgion-gateway/src/services/mod.rs` | `services` | source | pending | — |
+| `edgion-gateway/src/services/acme/challenge_store.rs` | `services` | source | changed | `B0060`: made the absolute expiry boundary exclusive with deterministic coverage |
+| `edgion-gateway/src/services/acme/conf_handler_impl.rs` | `services` | source | examined-no-change | `B0060`: retained real incremental atomic publication and bounded config logging |
+| `edgion-gateway/src/services/acme/mod.rs` | `services` | source | examined-no-change | `B0060`: retained the minimal live ACME facade and exports |
+| `edgion-gateway/src/services/mod.rs` | `services` | source | examined-no-change | `B0060`: retained the minimal services root declaration |
 | `edgion-gateway/src/sse/chain.rs` | `sse` | source | changed | SSE-CHAIN-001 / `4327da2b` |
 | `edgion-gateway/src/sse/mod.rs` | `sse` | source | examined-no-change | SSE-CHAIN-001 decoder/framing audit; 62-test baseline preserved |
 | `edgion-gateway/src/sse/window.rs` | `sse` | source | examined-no-change | SSE-WINDOW-001: confirmed complex findings deferred to `tasks/todo/sse-window-strict-residency-and-continuity.md`; no window code landed |

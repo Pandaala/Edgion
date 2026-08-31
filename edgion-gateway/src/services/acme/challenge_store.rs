@@ -73,14 +73,18 @@ impl AcmeChallengeStore {
     /// Look up a challenge token and return the key authorization if found and not expired.
     /// Also validates the domain matches.
     pub fn lookup(&self, token: &str, host: &str) -> Option<Bytes> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.lookup_at_epoch_seconds(token, host, now)
+    }
+
+    fn lookup_at_epoch_seconds(&self, token: &str, host: &str, now: u64) -> Option<Bytes> {
         let tokens = self.tokens.load();
         if let Some(entry) = tokens.get(token) {
             // Check expiry
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            if now > entry.expire_at {
+            if now >= entry.expire_at {
                 record_acme_challenge_lookup("expired");
                 return None;
             }
@@ -302,6 +306,32 @@ mod tests {
 
         assert!(!store.is_empty());
         assert!(store.lookup("expired-token", "example.com").is_none());
+    }
+
+    #[test]
+    fn test_expiration_boundary_is_exclusive() {
+        let store = AcmeChallengeStore::new();
+        let expire_at = 100;
+
+        let mut data = HashMap::new();
+        data.insert(
+            "ns/acme1".to_string(),
+            make_acme(vec![challenge(
+                "example.com",
+                "boundary-token",
+                "boundary-token.thumbprint",
+                expire_at,
+            )]),
+        );
+        store.full_set(&data);
+
+        assert_eq!(
+            store.lookup_at_epoch_seconds("boundary-token", "example.com", expire_at - 1),
+            Some(Bytes::from_static(b"boundary-token.thumbprint"))
+        );
+        assert!(store
+            .lookup_at_epoch_seconds("boundary-token", "example.com", expire_at)
+            .is_none());
     }
 
     #[test]

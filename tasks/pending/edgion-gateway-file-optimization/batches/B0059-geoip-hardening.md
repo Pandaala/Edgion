@@ -71,4 +71,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; two changed, two examined-no-change, and one deferred to D0025
-- Commit: pending
+- Commit: `564e77ba`

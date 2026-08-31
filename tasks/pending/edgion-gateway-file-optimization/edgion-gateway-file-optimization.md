@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 67 changed, 81 examined-no-change, 9 deferred, 375 non-terminal |
-| Active batch | B0059 GeoIP updater hardening; verified and awaiting local commit |
-| Analysis queue | B0060 services/ACME is a read-only queued candidate; revalidate again after B0059 commits |
+| Coverage | 532 tracked files: 68 changed, 84 examined-no-change, 9 deferred, 371 non-terminal |
+| Active batch | B0060 ACME challenge expiry boundary; verified and awaiting local commit |
+| Analysis queue | next Gateway batch will be selected after B0060 reaches its commit gate |
 
 ## AI guide summary
 
