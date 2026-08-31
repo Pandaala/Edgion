@@ -13,6 +13,6 @@ pub mod runtime;
 pub use client::WebhookLinkClient;
 pub use manager::{
     configure_webhook_global_max, get_webhook_call_handle, get_webhook_global_max, get_webhook_manager,
-    StaticWebhookManagerAdapter, WebhookCallHandle, WebhookManager, WebhookManagerOps,
+    WebhookCallHandle, WebhookManager,
 };
 pub use resolver::resolve_webhook_key;

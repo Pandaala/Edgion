@@ -1,115 +1,42 @@
-//! WebhookLinkClient — `LinkSysLifecycle` wrapper around the global `WebhookManager`.
+//! Prepared Webhook client owned by the ordered LinkSys store transition.
 //!
-//! Holds the per-LinkSys-resource view of a webhook (key + config). The actual
-//! manager state lives in the global `WebhookManager`; this struct's `init` /
-//! `shutdown` proxy through `WebhookManagerOps` so production wires to the
-//! global manager via `StaticWebhookManagerAdapter` while tests inject a fake.
-//!
-//! `SHUTDOWN_ON_REPLACE = false` because `init` is an idempotent
-//! `manager.upsert`. Calling `shutdown` (i.e. `manager.remove`) on the old
-//! instance after an update would delete the entry just written by the new
-//! instance's `init`.
+//! Webhook manager publication is deliberately not implemented through the
+//! generic `LinkSysLifecycle` trait. A Webhook candidate must be fully built
+//! before publication, then committed through the manager's sequence-checked
+//! mutation guard before the runtime bookkeeping map is updated. Keeping this
+//! type outside `LinkSysLifecycle` makes accidental use of the generic spawned
+//! init/shutdown helpers a compile-time error.
 
-use std::sync::Arc;
-
-use async_trait::async_trait;
-
-use crate::link_sys::lifecycle::LinkSysLifecycle;
-use crate::link_sys::providers::webhook::manager::{StaticWebhookManagerAdapter, WebhookManagerOps};
-use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
+use crate::link_sys::providers::webhook::manager::PreparedWebhookEntry;
 
 pub struct WebhookLinkClient {
-    key: String,
-    config: WebhookServiceConfig,
-    linksys_ns: Option<String>,
-    manager: Arc<dyn WebhookManagerOps>,
+    prepared: PreparedWebhookEntry,
 }
 
 impl WebhookLinkClient {
-    /// Production constructor — wires to the global `WebhookManager` via
-    /// the zero-sized `StaticWebhookManagerAdapter`.
-    pub fn new(key: impl Into<String>, config: WebhookServiceConfig, linksys_ns: Option<String>) -> Self {
-        Self::with_manager(
-            key,
-            config,
-            linksys_ns,
-            Arc::new(StaticWebhookManagerAdapter) as Arc<dyn WebhookManagerOps>,
-        )
+    pub(crate) fn from_prepared(prepared: PreparedWebhookEntry) -> Self {
+        Self { prepared }
     }
 
-    /// Test constructor — accepts any `WebhookManagerOps` implementor.
-    pub fn with_manager(
-        key: impl Into<String>,
-        config: WebhookServiceConfig,
-        linksys_ns: Option<String>,
-        manager: Arc<dyn WebhookManagerOps>,
-    ) -> Self {
-        Self {
-            key: key.into(),
-            config,
-            linksys_ns,
-            manager,
-        }
+    pub(crate) fn prepared_entry(&self) -> PreparedWebhookEntry {
+        self.prepared.clone()
     }
 }
-
-#[async_trait]
-impl LinkSysLifecycle for WebhookLinkClient {
-    const SHUTDOWN_ON_REPLACE: bool = false;
-
-    async fn init(&self) -> anyhow::Result<()> {
-        self.manager
-            .upsert(&self.key, self.config.clone(), self.linksys_ns.as_deref())
-            .await
-    }
-
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        self.manager.remove(&self.key).await;
-        Ok(())
-    }
-}
-
-// Compile-time assertion documenting Webhook's idempotent-upsert semantic.
-const _ASSERT_NO_SHUTDOWN_ON_REPLACE: () = {
-    assert!(!<WebhookLinkClient as LinkSysLifecycle>::SHUTDOWN_ON_REPLACE);
-};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parking_lot::Mutex;
-
-    #[derive(Default)]
-    struct FakeManager {
-        calls: Mutex<Vec<(String, String)>>, // (op, key)
-    }
-
-    #[async_trait]
-    impl WebhookManagerOps for FakeManager {
-        async fn upsert(
-            &self,
-            key: &str,
-            _config: WebhookServiceConfig,
-            _linksys_ns: Option<&str>,
-        ) -> anyhow::Result<()> {
-            self.calls.lock().push(("upsert".into(), key.into()));
-            Ok(())
-        }
-
-        async fn remove(&self, key: &str) {
-            self.calls.lock().push(("remove".into(), key.into()));
-        }
-    }
+    use crate::link_sys::providers::webhook::manager::WebhookManager;
+    use edgion_resources::resources::link_sys::webhook::{
+        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
+    };
+    use std::sync::Arc;
 
     fn config() -> WebhookServiceConfig {
-        use edgion_resources::resources::link_sys::webhook::{
-            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
-        };
         WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
                     service: WebhookServiceRef {
-                        kind: None,
                         name: Some("example-svc".into()),
                         namespace: Some("default".into()),
                         port: Some(80),
@@ -124,26 +51,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_calls_upsert_on_manager() {
-        let mgr = Arc::new(FakeManager::default());
-        let client =
-            WebhookLinkClient::with_manager("ns/wh", config(), None, mgr.clone() as Arc<dyn WebhookManagerOps>);
+    async fn prepared_entry_keeps_registration_identity() {
+        let manager = WebhookManager::new_for_test();
+        let mutation = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let prepared = mutation
+            .prepare("ns/wh", config(), None)
+            .expect("valid webhook prepares");
+        let client = WebhookLinkClient::from_prepared(prepared);
 
-        client.init().await.unwrap();
-
-        let calls = mgr.calls.lock().clone();
-        assert_eq!(calls, vec![("upsert".to_string(), "ns/wh".to_string())]);
-    }
-
-    #[tokio::test]
-    async fn shutdown_calls_remove_on_manager() {
-        let mgr = Arc::new(FakeManager::default());
-        let client =
-            WebhookLinkClient::with_manager("ns/wh", config(), None, mgr.clone() as Arc<dyn WebhookManagerOps>);
-
-        client.shutdown().await.unwrap();
-
-        let calls = mgr.calls.lock().clone();
-        assert_eq!(calls, vec![("remove".to_string(), "ns/wh".to_string())]);
+        let first = client.prepared_entry();
+        let second = client.prepared_entry();
+        assert!(Arc::ptr_eq(first.registration(), second.registration()));
+        assert!(Arc::ptr_eq(first.client(), second.client()));
     }
 }

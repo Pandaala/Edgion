@@ -8,9 +8,10 @@
 //! callers use `get_redis_client("namespace/name")` to obtain a ready-to-use client.
 
 use arc_swap::ArcSwap;
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use edgion_resources::resources::link_sys::LinkSys;
 
@@ -20,7 +21,7 @@ use crate::link_sys::providers::elasticsearch::EsLinkClient;
 use crate::link_sys::providers::etcd::EtcdLinkClient;
 use crate::link_sys::providers::kafka::KafkaLinkClient;
 use crate::link_sys::providers::redis::RedisLinkClient;
-use crate::link_sys::providers::webhook::WebhookLinkClient;
+use crate::link_sys::providers::webhook::{get_webhook_manager, WebhookLinkClient, WebhookManager};
 use crate::link_sys::LinkSysHealth;
 
 // ============================================================
@@ -28,6 +29,19 @@ use crate::link_sys::LinkSysHealth;
 // ============================================================
 
 type LinkSysMap = HashMap<String, LinkSys>;
+
+static LINK_SYS_SOURCE_EVENT_LOCK: Mutex<()> = Mutex::new(());
+static NEXT_LINK_SYS_DISPATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn reserve_dispatch_sequence(counter: &AtomicU64) -> Option<u64> {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
+        .ok()
+        .and_then(|previous| previous.checked_add(1))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DispatchSequenceExhausted;
 
 // ============================================================
 // LinkSysStore
@@ -73,60 +87,128 @@ impl LinkSysStore {
     /// Dispatches each resource to the appropriate sub-module manager
     /// based on its SystemConfig type.
     pub fn replace_all(&self, data: HashMap<String, LinkSys>) {
-        // Wrap once and share with the dispatch task to avoid cloning the entire map
-        // (full_sync replays every LinkSys resource and used to copy the whole HashMap).
-        let data = Arc::new(data);
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let data_for_dispatch = Arc::clone(&data);
-            handle.spawn(async move {
-                dispatch_full_set(&data_for_dispatch).await;
-            });
-        } else {
-            // Reachable only outside a tokio runtime (currently: the four sync
-            // unit tests that exercise the resource map only). Production
-            // callers all run inside tokio; if this fires there, provider
-            // clients were never built and `get_*_client` will look like
-            // "config not synced yet" — surface it instead of failing silently.
-            tracing::error!("LinkSysStore::replace_all called outside a tokio runtime — dispatch skipped");
+        if self
+            .replace_all_with_dispatch(
+                data,
+                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
+                &LINK_SYS_SOURCE_EVENT_LOCK,
+                |sequence, dispatch_data| {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            dispatch_full_set(sequence, &dispatch_data).await;
+                        });
+                    } else {
+                        // Reachable only outside a tokio runtime (currently: the four sync
+                        // unit tests that exercise the resource map only). Production
+                        // callers all run inside tokio; if this fires there, provider
+                        // clients were never built and `get_*_client` will look like
+                        // "config not synced yet" — surface it instead of failing silently.
+                        tracing::error!("LinkSysStore::replace_all called outside a tokio runtime — dispatch skipped");
+                    }
+                },
+            )
+            .is_err()
+        {
+            tracing::error!("LinkSys dispatch sequence exhausted; full set rejected");
         }
-
-        self.resources.store(data);
     }
 
     /// Update LinkSys resources atomically (incremental sync).
     ///
     /// Dispatches changes to the appropriate sub-module managers.
     pub fn update(&self, add_or_update: HashMap<String, LinkSys>, remove: &HashSet<String>) {
-        // Wrap once and share with the dispatch task to avoid a second deep clone of
-        // `add_or_update` (each LinkSys carries nested credential structs).
+        if self
+            .update_with_dispatch(
+                add_or_update,
+                remove,
+                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
+                &LINK_SYS_SOURCE_EVENT_LOCK,
+                |sequence, dispatch_data, remove_set| {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            dispatch_partial_update(sequence, &dispatch_data, &remove_set).await;
+                        });
+                    } else {
+                        // See `replace_all` for the rationale — this branch is only hit by
+                        // sync unit tests today; logging makes any future outside-runtime
+                        // regression visible rather than presenting as "config not synced".
+                        tracing::error!("LinkSysStore::update called outside a tokio runtime — dispatch skipped");
+                    }
+                },
+            )
+            .is_err()
+        {
+            tracing::error!("LinkSys dispatch sequence exhausted; partial update rejected");
+        }
+    }
+
+    fn publish_source_event(
+        &self,
+        counter: &AtomicU64,
+        source_lock: &Mutex<()>,
+        build_snapshot: impl FnOnce(&LinkSysMap) -> Arc<LinkSysMap>,
+        create_dispatch_task: impl FnOnce(u64),
+    ) -> Result<u64, DispatchSequenceExhausted> {
+        let _source_guard = source_lock.lock();
+        let sequence = reserve_dispatch_sequence(counter).ok_or(DispatchSequenceExhausted)?;
+        let current = self.resources.load_full();
+        let next = build_snapshot(current.as_ref());
+
+        // Publication and task creation share the same synchronous source-event
+        // critical section. Async polling order may differ, but sequence order
+        // always reflects the authoritative source entry order.
+        self.resources.store(next);
+        create_dispatch_task(sequence);
+        Ok(sequence)
+    }
+
+    fn replace_all_with_dispatch(
+        &self,
+        data: HashMap<String, LinkSys>,
+        counter: &AtomicU64,
+        source_lock: &Mutex<()>,
+        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>),
+    ) -> Result<u64, DispatchSequenceExhausted> {
+        // Wrap once and share the exact authoritative snapshot with both the
+        // ArcSwap publication and the dispatch task.
+        let data = Arc::new(data);
+        let dispatch_data = Arc::clone(&data);
+        self.publish_source_event(
+            counter,
+            source_lock,
+            |_| Arc::clone(&data),
+            |sequence| create_dispatch_task(sequence, dispatch_data),
+        )
+    }
+
+    fn update_with_dispatch(
+        &self,
+        add_or_update: HashMap<String, LinkSys>,
+        remove: &HashSet<String>,
+        counter: &AtomicU64,
+        source_lock: &Mutex<()>,
+        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>, HashSet<String>),
+    ) -> Result<u64, DispatchSequenceExhausted> {
+        // Wrap once and share with the dispatch task to avoid a second deep clone
+        // of the delta (each LinkSys carries nested credential structs).
         let add_or_update = Arc::new(add_or_update);
-
-        let current = self.resources.load();
-        let mut new_map: LinkSysMap = (**current).clone();
-
-        for key in remove {
-            new_map.remove(key);
-        }
-        for (key, ls) in add_or_update.iter() {
-            new_map.insert(key.clone(), ls.clone());
-        }
-
-        // Dispatch changes to sub-module managers
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let dispatch_data = Arc::clone(&add_or_update);
-            let remove_set = remove.clone();
-            handle.spawn(async move {
-                dispatch_partial_update(&dispatch_data, &remove_set).await;
-            });
-        } else {
-            // See `replace_all` for the rationale — this branch is only hit by
-            // sync unit tests today; logging makes any future outside-runtime
-            // regression visible rather than presenting as "config not synced".
-            tracing::error!("LinkSysStore::update called outside a tokio runtime — dispatch skipped");
-        }
-
-        self.resources.store(Arc::new(new_map));
+        let dispatch_data = Arc::clone(&add_or_update);
+        let remove_set = remove.clone();
+        self.publish_source_event(
+            counter,
+            source_lock,
+            |current| {
+                let mut new_map = current.clone();
+                for key in remove {
+                    new_map.remove(key);
+                }
+                for (key, ls) in add_or_update.iter() {
+                    new_map.insert(key.clone(), ls.clone());
+                }
+                Arc::new(new_map)
+            },
+            |sequence| create_dispatch_task(sequence, dispatch_data, remove_set),
+        )
     }
 }
 
@@ -379,8 +461,8 @@ fn webhook_secrets_ready(config: &edgion_resources::resources::link_sys::webhook
 ///
 /// Note: this helper always calls `shutdown` and ignores `SHUTDOWN_ON_REPLACE`.
 /// That const only controls the *replace* case (the old Arc on update); it
-/// does not affect *remove* -- on a real removal every provider needs cleanup
-/// (including Webhook's `manager.remove`).
+/// does not affect a real removal. Webhook uses its ordered specialized path
+/// instead of this generic lifecycle helper.
 fn spawn_shutdown_if_present<C: LinkSysLifecycle>(client: Option<Arc<C>>, label: &'static str) {
     if let Some(c) = client {
         tokio::spawn(async move {
@@ -558,10 +640,31 @@ fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
 // ============================================================
 
 /// Dispatch a full set of LinkSys resources to sub-module managers.
-async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
+async fn dispatch_full_set(sequence: u64, data: &HashMap<String, LinkSys>) {
+    dispatch_full_set_with(sequence, data, get_webhook_manager(), &WEBHOOK_RUNTIME).await;
+}
+
+async fn dispatch_full_set_with(
+    sequence: u64,
+    data: &HashMap<String, LinkSys>,
+    webhook_manager: &WebhookManager,
+    webhook_runtime: &ProviderRuntimeStore<WebhookLinkClient>,
+) {
+    let webhook_mutation = match webhook_manager.begin_mutation(sequence).await {
+        Ok(mutation) => mutation,
+        Err(stale) => {
+            tracing::info!(
+                sequence = stale.sequence,
+                latest_sequence = stale.latest_accepted_sequence,
+                "Skipping stale LinkSys full-set dispatch"
+            );
+            return;
+        }
+    };
+
     // Snapshot current runtime maps so that we can carry over clients for
     // resources whose credentials are not yet resolved.
-    let old_webhook_snapshot = WEBHOOK_RUNTIME.load_full();
+    let old_webhook_snapshot = webhook_runtime.load_full();
     let old_redis_snapshot = REDIS_RUNTIME.load_full();
     let old_etcd_snapshot = ETCD_RUNTIME.load_full();
     let old_es_snapshot = ES_RUNTIME.load_full();
@@ -573,7 +676,6 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     let mut new_es_map: HashMap<String, Arc<EsLinkClient>> = HashMap::new();
     let mut new_kafka_map: HashMap<String, Arc<KafkaLinkClient>> = HashMap::new();
 
-    let mut preserved_webhook_keys: HashSet<String> = HashSet::new();
     let mut preserved_redis_keys: HashSet<String> = HashSet::new();
     let mut preserved_etcd_keys: HashSet<String> = HashSet::new();
     let mut preserved_es_keys: HashSet<String> = HashSet::new();
@@ -589,32 +691,38 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 // Mirrors the Elasticsearch arm below.
                 let auth = credential::resolved_state(ls);
                 let ready = auth.is_buildable() && webhook_secrets_ready(config);
-                if carry_over_if_not_ready(
-                    key,
-                    "Webhook",
-                    auth.kind(),
-                    // Webhook TLS material is validated inside the manager's
-                    // build_webhook_client; only auth is gated here.
-                    true,
-                    ready,
-                    &*old_webhook_snapshot,
-                    &mut new_webhook_map,
-                    &mut preserved_webhook_keys,
-                ) {
+                if !ready {
+                    if let Some(existing) = old_webhook_snapshot.get(key) {
+                        tracing::info!(
+                            key,
+                            label = "Webhook",
+                            auth_kind = auth.kind(),
+                            tls_ready = true,
+                            "LinkSys not ready; keeping existing client"
+                        );
+                        new_webhook_map.insert(key.clone(), existing.clone());
+                    } else {
+                        tracing::info!(
+                            key,
+                            label = "Webhook",
+                            auth_kind = auth.kind(),
+                            tls_ready = true,
+                            "LinkSys not ready; skipping client build"
+                        );
+                    }
                     continue;
                 }
-                register_for_full_set(
-                    key,
-                    "Webhook",
-                    || {
-                        Ok(WebhookLinkClient::new(
-                            key.clone(),
-                            config.clone(),
-                            ls.metadata.namespace.clone(),
-                        ))
-                    },
-                    &mut new_webhook_map,
-                );
+                match webhook_mutation.prepare(key, config.clone(), ls.metadata.namespace.as_deref()) {
+                    Ok(prepared) => {
+                        new_webhook_map.insert(key.clone(), Arc::new(WebhookLinkClient::from_prepared(prepared)));
+                    }
+                    Err(e) => {
+                        tracing::error!(key, label = "Webhook", error = %e, "prepare failed");
+                        if let Some(existing) = old_webhook_snapshot.get(key) {
+                            new_webhook_map.insert(key.clone(), existing.clone());
+                        }
+                    }
+                }
             }
             edgion_resources::resources::link_sys::SystemConfig::Redis(redis_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
@@ -708,8 +816,17 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
         }
     }
 
+    let prepared_webhooks = new_webhook_map
+        .iter()
+        .map(|(key, client)| (key.clone(), client.prepared_entry()))
+        .collect();
+    if let Err(e) = webhook_mutation.commit_full(prepared_webhooks).await {
+        tracing::error!(sequence, error = %e, "Webhook full-set commit rejected");
+        return;
+    }
+    webhook_runtime.replace_all(new_webhook_map);
+
     // Atomic swap + background shutdown of evicted old Arcs, gated by SHUTDOWN_ON_REPLACE
-    swap_and_shutdown_olds("Webhook", new_webhook_map, preserved_webhook_keys, &WEBHOOK_RUNTIME);
     swap_and_shutdown_olds("Redis", new_redis_map, preserved_redis_keys, &REDIS_RUNTIME);
     swap_and_shutdown_olds("Etcd", new_etcd_map, preserved_etcd_keys, &ETCD_RUNTIME);
     swap_and_shutdown_olds("Elasticsearch", new_es_map, preserved_es_keys, &ES_RUNTIME);
@@ -717,7 +834,29 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
 }
 
 /// Dispatch incremental changes to sub-module managers.
-async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remove: &HashSet<String>) {
+async fn dispatch_partial_update(sequence: u64, add_or_update: &HashMap<String, LinkSys>, remove: &HashSet<String>) {
+    dispatch_partial_update_with(sequence, add_or_update, remove, get_webhook_manager(), &WEBHOOK_RUNTIME).await;
+}
+
+async fn dispatch_partial_update_with(
+    sequence: u64,
+    add_or_update: &HashMap<String, LinkSys>,
+    remove: &HashSet<String>,
+    webhook_manager: &WebhookManager,
+    webhook_runtime: &ProviderRuntimeStore<WebhookLinkClient>,
+) {
+    let webhook_mutation = match webhook_manager.begin_mutation(sequence).await {
+        Ok(mutation) => mutation,
+        Err(stale) => {
+            tracing::info!(
+                sequence = stale.sequence,
+                latest_sequence = stale.latest_accepted_sequence,
+                "Skipping stale LinkSys partial dispatch"
+            );
+            return;
+        }
+    };
+
     // Handle add/update
     for (key, ls) in add_or_update {
         match &ls.spec.config {
@@ -730,21 +869,20 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                 let auth = credential::resolved_state(ls);
                 let tls_ok = true; // Webhook TLS material is validated inside build_webhook_client.
                 let ready = auth.is_buildable() && webhook_secrets_ready(config);
-                if preserve_if_not_ready(key, "Webhook", auth.kind(), tls_ok, ready, &WEBHOOK_RUNTIME) {
+                if preserve_if_not_ready(key, "Webhook", auth.kind(), tls_ok, ready, webhook_runtime) {
                     continue;
                 }
-                spawn_and_swap_partial(
-                    key,
-                    "Webhook",
-                    || {
-                        Ok(WebhookLinkClient::new(
-                            key.clone(),
-                            config.clone(),
-                            ls.metadata.namespace.clone(),
-                        ))
-                    },
-                    &WEBHOOK_RUNTIME,
-                );
+                match webhook_mutation.prepare(key, config.clone(), ls.metadata.namespace.as_deref()) {
+                    Err(e) => tracing::error!(key, label = "Webhook", error = %e, "prepare failed"),
+                    Ok(prepared) => {
+                        let client = Arc::new(WebhookLinkClient::from_prepared(prepared));
+                        if let Err(e) = webhook_mutation.commit_one(key, client.prepared_entry()).await {
+                            tracing::error!(key, label = "Webhook", error = %e, "commit failed");
+                        } else {
+                            webhook_runtime.insert(key.clone(), client);
+                        }
+                    }
+                }
             }
             edgion_resources::resources::link_sys::SystemConfig::Redis(redis_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
@@ -803,7 +941,8 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
 
     // Handle remove — uniform across all providers
     for key in remove {
-        spawn_shutdown_if_present(WEBHOOK_RUNTIME.remove(key), "Webhook");
+        webhook_mutation.commit_remove(key).await;
+        webhook_runtime.remove(key);
         spawn_shutdown_if_present(REDIS_RUNTIME.remove(key), "Redis");
         spawn_shutdown_if_present(ETCD_RUNTIME.remove(key), "Etcd");
         spawn_shutdown_if_present(ES_RUNTIME.remove(key), "Elasticsearch");
@@ -829,8 +968,20 @@ pub fn get_global_link_sys_store() -> Arc<LinkSysStore> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    type DispatchTaskSlot = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
+
+    fn next_dispatch_sequence() -> u64 {
+        reserve_dispatch_sequence(&NEXT_LINK_SYS_DISPATCH_SEQUENCE)
+            .expect("test dispatch sequence must remain available")
+    }
 
     fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
+        create_test_webhook_linksys_with_port(namespace, name, 8080)
+    }
+
+    fn create_test_webhook_linksys_with_port(namespace: &str, name: &str, port: i32) -> LinkSys {
         use edgion_resources::resources::link_sys::webhook::{
             ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
         };
@@ -851,7 +1002,7 @@ mod tests {
                                 kind: None,
                                 name: Some("resolve-svc".to_string()),
                                 namespace: Some(namespace.to_string()),
-                                port: Some(8080),
+                                port: Some(port),
                                 ..Default::default()
                             },
                             ..Default::default()
@@ -862,6 +1013,81 @@ mod tests {
                 }),
             },
             status: None,
+        }
+    }
+
+    fn spawn_partial_dispatch(
+        manager: Arc<WebhookManager>,
+        runtime: Arc<ProviderRuntimeStore<WebhookLinkClient>>,
+        gate: Option<tokio::sync::oneshot::Receiver<()>>,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+        slot: DispatchTaskSlot,
+    ) -> impl FnOnce(u64, Arc<LinkSysMap>, HashSet<String>) {
+        move |sequence, data, remove| {
+            let task = tokio::spawn(async move {
+                if let Some(started) = started {
+                    started.send(()).expect("dispatch start receiver remains alive");
+                }
+                if let Some(gate) = gate {
+                    gate.await.expect("dispatch gate sender remains alive");
+                }
+                dispatch_partial_update_with(sequence, &data, &remove, &manager, &runtime).await;
+            });
+            *slot.lock() = Some(task);
+        }
+    }
+
+    fn spawn_full_dispatch(
+        manager: Arc<WebhookManager>,
+        runtime: Arc<ProviderRuntimeStore<WebhookLinkClient>>,
+        gate: Option<tokio::sync::oneshot::Receiver<()>>,
+        slot: DispatchTaskSlot,
+    ) -> impl FnOnce(u64, Arc<LinkSysMap>) {
+        move |sequence, data| {
+            let task = tokio::spawn(async move {
+                if let Some(gate) = gate {
+                    gate.await.expect("dispatch gate sender remains alive");
+                }
+                dispatch_full_set_with(sequence, &data, &manager, &runtime).await;
+            });
+            *slot.lock() = Some(task);
+        }
+    }
+
+    async fn await_dispatch_task(slot: &DispatchTaskSlot) {
+        let task = slot.lock().take().expect("source entry creates one dispatch task");
+        task.await.expect("dispatch task completes without panic");
+    }
+
+    fn source_webhook_port(store: &LinkSysStore, key: &str) -> i32 {
+        use edgion_resources::resources::link_sys::SystemConfig;
+
+        let resource = store.get(key).expect("source snapshot contains webhook");
+        let SystemConfig::Webhook(config) = resource.spec.config else {
+            panic!("source snapshot entry must remain a webhook");
+        };
+        config
+            .conn
+            .target
+            .service
+            .port
+            .expect("test webhook has a service port")
+    }
+
+    async fn assert_callable_webhook_port(
+        manager: &WebhookManager,
+        runtime: &ProviderRuntimeStore<WebhookLinkClient>,
+        key: &str,
+        expected_port: i32,
+    ) {
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
+
+        let bookkeeping = runtime.get(key).expect("runtime bookkeeping contains webhook");
+        let callable = manager.get(key).await.expect("manager contains callable webhook");
+        assert!(Arc::ptr_eq(bookkeeping.prepared_entry().client(), &callable));
+        match &callable.resolved_target {
+            ResolvedTarget::Service { port, .. } => assert_eq!(*port, Some(expected_port)),
+            other => panic!("expected Service target, got {other:?}"),
         }
     }
 
@@ -936,6 +1162,244 @@ mod tests {
 
         let ls = store.get("default/nonexistent");
         assert!(ls.is_none());
+    }
+
+    #[test]
+    fn source_entry_sequence_overflow_preserves_snapshot_and_skips_task_creation() {
+        let store = LinkSysStore::new();
+        let source_lock = Mutex::new(());
+        let counter = AtomicU64::new(u64::MAX - 1);
+        let task_creations = AtomicUsize::new(0);
+        let stable_key = "ordered/stable".to_string();
+
+        let sequence = store
+            .replace_all_with_dispatch(
+                HashMap::from([(
+                    stable_key.clone(),
+                    create_test_webhook_linksys_with_port("ordered", "stable", 8080),
+                )]),
+                &counter,
+                &source_lock,
+                |sequence, _| {
+                    assert_eq!(sequence, u64::MAX);
+                    task_creations.fetch_add(1, Ordering::Relaxed);
+                },
+            )
+            .expect("u64::MAX is the final accepted sequence");
+        assert_eq!(sequence, u64::MAX);
+        let before = store.resources.load_full();
+
+        let result = store.update_with_dispatch(
+            HashMap::from([(
+                "ordered/rejected".to_string(),
+                create_test_webhook_linksys_with_port("ordered", "rejected", 9090),
+            )]),
+            &HashSet::new(),
+            &counter,
+            &source_lock,
+            |_, _, _| {
+                task_creations.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+
+        assert_eq!(result, Err(DispatchSequenceExhausted));
+        let after = store.resources.load_full();
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(task_creations.load(Ordering::Relaxed), 1);
+        assert_eq!(counter.load(Ordering::Acquire), u64::MAX);
+        assert_eq!(source_webhook_port(&store, &stable_key), 8080);
+        assert!(!store.contains("ordered/rejected"));
+    }
+
+    async fn assert_newer_source_event_wins(older_full: bool, newer_full: bool) {
+        let _global_guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let store = LinkSysStore::new();
+        let source_lock = Mutex::new(());
+        let counter = AtomicU64::new(0);
+        let manager = Arc::new(WebhookManager::new_for_test());
+        let runtime = Arc::new(ProviderRuntimeStore::new());
+        let key = "ordered/interleaving".to_string();
+        let older = HashMap::from([(
+            key.clone(),
+            create_test_webhook_linksys_with_port("ordered", "interleaving", 8081),
+        )]);
+        let newer = HashMap::from([(
+            key.clone(),
+            create_test_webhook_linksys_with_port("ordered", "interleaving", 8082),
+        )]);
+        let (release_older_tx, release_older_rx) = tokio::sync::oneshot::channel();
+        let older_slot: DispatchTaskSlot = Arc::new(Mutex::new(None));
+        let newer_slot: DispatchTaskSlot = Arc::new(Mutex::new(None));
+
+        let older_sequence = if older_full {
+            store.replace_all_with_dispatch(
+                older,
+                &counter,
+                &source_lock,
+                spawn_full_dispatch(
+                    manager.clone(),
+                    runtime.clone(),
+                    Some(release_older_rx),
+                    older_slot.clone(),
+                ),
+            )
+        } else {
+            store.update_with_dispatch(
+                older,
+                &HashSet::new(),
+                &counter,
+                &source_lock,
+                spawn_partial_dispatch(
+                    manager.clone(),
+                    runtime.clone(),
+                    Some(release_older_rx),
+                    None,
+                    older_slot.clone(),
+                ),
+            )
+        }
+        .expect("older source event is accepted");
+
+        let newer_sequence = if newer_full {
+            store.replace_all_with_dispatch(
+                newer,
+                &counter,
+                &source_lock,
+                spawn_full_dispatch(manager.clone(), runtime.clone(), None, newer_slot.clone()),
+            )
+        } else {
+            store.update_with_dispatch(
+                newer,
+                &HashSet::new(),
+                &counter,
+                &source_lock,
+                spawn_partial_dispatch(manager.clone(), runtime.clone(), None, None, newer_slot.clone()),
+            )
+        }
+        .expect("newer source event is accepted");
+
+        assert_eq!(older_sequence, 1);
+        assert_eq!(newer_sequence, 2);
+        await_dispatch_task(&newer_slot).await;
+        release_older_tx
+            .send(())
+            .expect("older dispatch still waits on its gate");
+        await_dispatch_task(&older_slot).await;
+
+        assert_eq!(source_webhook_port(&store, &key), 8082);
+        assert_callable_webhook_port(&manager, &runtime, &key, 8082).await;
+    }
+
+    #[tokio::test]
+    async fn source_entry_partial_partial_reversed_polling_keeps_newer_state() {
+        assert_newer_source_event_wins(false, false).await;
+    }
+
+    #[tokio::test]
+    async fn source_entry_older_full_newer_partial_keeps_newer_state() {
+        assert_newer_source_event_wins(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn source_entry_older_partial_newer_full_keeps_newer_state() {
+        assert_newer_source_event_wins(false, true).await;
+    }
+
+    #[tokio::test]
+    async fn source_entry_older_guard_makes_newer_dispatch_wait_then_win() {
+        use edgion_resources::resources::link_sys::SystemConfig;
+
+        let store = LinkSysStore::new();
+        let source_lock = Mutex::new(());
+        let counter = AtomicU64::new(0);
+        let manager = Arc::new(WebhookManager::new_for_test());
+        let runtime = Arc::new(ProviderRuntimeStore::new());
+        let key = "ordered/waiting".to_string();
+        let (older_acquired_tx, older_acquired_rx) = tokio::sync::oneshot::channel();
+        let (release_older_tx, release_older_rx) = tokio::sync::oneshot::channel();
+        let older_slot: DispatchTaskSlot = Arc::new(Mutex::new(None));
+        let older_task_slot = older_slot.clone();
+        let older_manager = manager.clone();
+        let older_runtime = runtime.clone();
+
+        let older_sequence = store
+            .update_with_dispatch(
+                HashMap::from([(
+                    key.clone(),
+                    create_test_webhook_linksys_with_port("ordered", "waiting", 8081),
+                )]),
+                &HashSet::new(),
+                &counter,
+                &source_lock,
+                move |sequence, data, _| {
+                    let task = tokio::spawn(async move {
+                        let mutation = older_manager
+                            .begin_mutation(sequence)
+                            .await
+                            .expect("older transition acquires the manager guard");
+                        older_acquired_tx
+                            .send(())
+                            .expect("older-acquired receiver remains alive");
+                        release_older_rx.await.expect("older release sender remains alive");
+                        let (key, resource) = data.iter().next().expect("test delta has one webhook");
+                        let SystemConfig::Webhook(config) = &resource.spec.config else {
+                            panic!("test delta must contain a webhook");
+                        };
+                        let prepared = mutation
+                            .prepare(key, config.clone(), resource.metadata.namespace.as_deref())
+                            .expect("older webhook prepares");
+                        let client = Arc::new(WebhookLinkClient::from_prepared(prepared));
+                        mutation
+                            .commit_one(key, client.prepared_entry())
+                            .await
+                            .expect("older webhook commits");
+                        older_runtime.insert(key.clone(), client);
+                    });
+                    *older_task_slot.lock() = Some(task);
+                },
+            )
+            .expect("older source event is accepted");
+        assert_eq!(older_sequence, 1);
+        older_acquired_rx.await.expect("older task reports guard acquisition");
+
+        let (newer_started_tx, newer_started_rx) = tokio::sync::oneshot::channel();
+        let newer_slot: DispatchTaskSlot = Arc::new(Mutex::new(None));
+        let newer_sequence = store
+            .update_with_dispatch(
+                HashMap::from([(
+                    key.clone(),
+                    create_test_webhook_linksys_with_port("ordered", "waiting", 8082),
+                )]),
+                &HashSet::new(),
+                &counter,
+                &source_lock,
+                spawn_partial_dispatch(
+                    manager.clone(),
+                    runtime.clone(),
+                    None,
+                    Some(newer_started_tx),
+                    newer_slot.clone(),
+                ),
+            )
+            .expect("newer source event is accepted");
+        assert_eq!(newer_sequence, 2);
+        newer_started_rx.await.expect("newer task begins dispatch");
+        tokio::task::yield_now().await;
+        assert!(
+            !newer_slot
+                .lock()
+                .as_ref()
+                .expect("newer task was created")
+                .is_finished(),
+            "newer dispatch must wait while the older manager guard is held"
+        );
+
+        release_older_tx.send(()).expect("older task still waits for release");
+        await_dispatch_task(&older_slot).await;
+        await_dispatch_task(&newer_slot).await;
+
+        assert_eq!(source_webhook_port(&store, &key), 8082);
+        assert_callable_webhook_port(&manager, &runtime, &key, 8082).await;
     }
 
     // ============================================================
@@ -1037,7 +1501,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(key.clone(), ls);
 
-        dispatch_full_set(&data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data).await;
 
         assert!(
             get_redis_client(&key).is_none(),
@@ -1057,14 +1521,14 @@ mod tests {
         let ready = create_redis_linksys("i5-ns", "preserve-full-set", InjectedSecret::Valid);
         let mut data = HashMap::new();
         data.insert(key.clone(), ready);
-        dispatch_full_set(&data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data).await;
         let first = get_redis_client(&key).expect("client should be built when ready");
 
         // Second full-set for the same key but with pending credentials.
         let pending = create_redis_linksys("i5-ns", "preserve-full-set", InjectedSecret::Missing);
         let mut data = HashMap::new();
         data.insert(key.clone(), pending);
-        dispatch_full_set(&data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data).await;
 
         let second = get_redis_client(&key).expect("client should be preserved on pending update");
         assert!(
@@ -1086,7 +1550,7 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(key.clone(), ls);
 
-        dispatch_partial_update(&add, &HashSet::new()).await;
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
 
         assert!(
             get_redis_client(&key).is_none(),
@@ -1105,14 +1569,14 @@ mod tests {
         let ready = create_redis_linksys("i5-ns", "preserve-partial", InjectedSecret::Valid);
         let mut add = HashMap::new();
         add.insert(key.clone(), ready);
-        dispatch_partial_update(&add, &HashSet::new()).await;
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
         let first = get_redis_client(&key).expect("client should be built when ready");
 
         // Pending update
         let pending = create_redis_linksys("i5-ns", "preserve-partial", InjectedSecret::Missing);
         let mut add = HashMap::new();
         add.insert(key.clone(), pending);
-        dispatch_partial_update(&add, &HashSet::new()).await;
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
 
         let second = get_redis_client(&key).expect("client should be preserved on pending update");
         assert!(
@@ -1135,7 +1599,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(key.clone(), ls);
 
-        dispatch_full_set(&data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data).await;
 
         assert!(
             get_redis_client(&key).is_none(),
@@ -1153,7 +1617,7 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(key.clone(), ls);
 
-        dispatch_partial_update(&add, &HashSet::new()).await;
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
 
         assert!(
             get_redis_client(&key).is_none(),
@@ -1238,29 +1702,53 @@ mod tests {
         // Add
         let mut add = HashMap::new();
         add.insert(key.clone(), make_ls());
-        dispatch_partial_update(&add, &HashSet::new()).await;
-        // spawn_and_swap_partial inserts into WEBHOOK_RUNTIME synchronously before
-        // spawning background init, so the Arc is visible immediately after await.
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+        // The prepared commit publishes the manager before atomically updating
+        // WEBHOOK_RUNTIME, so the Arc is visible when dispatch returns.
         let arc1 = WEBHOOK_RUNTIME.get(&key);
         assert!(arc1.is_some(), "first dispatch must populate WEBHOOK_RUNTIME");
+        let manager1 = get_webhook_manager()
+            .get(&key)
+            .await
+            .expect("first dispatch must populate WebhookManager");
+        assert!(
+            Arc::ptr_eq(arc1.as_ref().unwrap().prepared_entry().client(), &manager1),
+            "runtime bookkeeping and callable manager must publish the same client"
+        );
 
         // Update (different config) — a new Arc should replace the old one.
-        // SHUTDOWN_ON_REPLACE is false for Webhook, so the old Arc is simply dropped.
+        // Webhook replacement is manager-atomic and does not use generic shutdown.
         let mut update = HashMap::new();
         update.insert(key.clone(), make_ls());
-        dispatch_partial_update(&update, &HashSet::new()).await;
+        dispatch_partial_update(next_dispatch_sequence(), &update, &HashSet::new()).await;
         let arc2 = WEBHOOK_RUNTIME.get(&key);
         assert!(arc2.is_some(), "after update, WEBHOOK_RUNTIME must still hold a client");
         assert!(
             !Arc::ptr_eq(arc1.as_ref().unwrap(), arc2.as_ref().unwrap()),
             "update must produce a fresh Arc"
         );
+        let manager2 = get_webhook_manager()
+            .get(&key)
+            .await
+            .expect("updated manager registration must remain callable");
+        assert!(
+            Arc::ptr_eq(arc2.as_ref().unwrap().prepared_entry().client(), &manager2),
+            "manager and runtime must agree after replacement"
+        );
+        assert!(
+            !Arc::ptr_eq(&manager1, &manager2),
+            "replacement must atomically publish a new callable client"
+        );
 
         // Remove
         let mut remove = HashSet::new();
         remove.insert(key.clone());
-        dispatch_partial_update(&HashMap::new(), &remove).await;
+        dispatch_partial_update(next_dispatch_sequence(), &HashMap::new(), &remove).await;
         assert!(WEBHOOK_RUNTIME.get(&key).is_none(), "remove must clear WEBHOOK_RUNTIME");
+        assert!(
+            get_webhook_manager().get(&key).await.is_none(),
+            "remove must clear the callable manager entry"
+        );
     }
 }
 

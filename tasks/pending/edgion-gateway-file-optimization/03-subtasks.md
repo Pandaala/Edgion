@@ -78,10 +78,10 @@
 | `link-sys-provider-local-file` | 3 | 2 | 1 | 0 | complete |
 | `link-sys-provider-otlp` | 2 | 1 | 1 | 0 | complete |
 | `link-sys-provider-redis` | 4 | 1 | 3 | 0 | complete |
-| `link-sys-provider-webhook` | 5 | 0 | 0 | 0 | pending |
+| `link-sys-provider-webhook` | 5 | 3 | 1 | 1 | complete |
 | `link-sys-providers-root` | 1 | 0 | 1 | 0 | complete |
 | `link-sys-root` | 2 | 1 | 0 | 0 | pending |
-| `link-sys-runtime` | 5 | 0 | 0 | 0 | pending |
+| `link-sys-runtime` | 5 | 1 | 0 | 0 | pending |
 | `link-sys-template` | 2 | 0 | 0 | 0 | pending |
 | `observe-access-log` | 5 | 2 | 3 | 0 | complete |
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
@@ -203,7 +203,7 @@
 | `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | examined-no-change | `B0042`: coherent outlier module façade retained |
 | `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | changed | `B0042`: deterministic test-only deadline expiry removes wall-clock recovery sleeps |
 | `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | changed | `B0042`: deterministic recovery/backoff tests; detached gauge lifecycle deferred to D0006 |
-| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | changed | BACKENDS-PANIC-THRESHOLD-001 / `cd048aa9`; atomic capture and metric lifecycle deferred to dedicated TODOs |
+| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | changed | `B0043`: preserved complete upstream mTLS client chains and removed peer-construction allocations |
 | `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | changed | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | examined-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |
@@ -212,12 +212,12 @@
 | `edgion-gateway/src/backends/policy/backend_traffic/conf_handler_impl.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: ownership-required full-set clone and metadata-only logs retained |
 | `edgion-gateway/src/backends/policy/backend_traffic/mod.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: narrow exports retained; isolated singleton refcount change rejected |
 | `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic window/generation redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic Service snapshot and reverse-index redesign deferred to dedicated TODO |
+| `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | examined-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | examined-no-change | BACKENDS-PORT-RESOLVER-001: precompiled typed fail-close redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | changed | BACKENDS-PRELOAD-001: routable-ref filtering and accurate hydration result; L4 runtime denial deferred to dedicated TODO |
 | `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | changed | BACKENDS-RUNTIME-001: TLS-policy-safe selected-backend Debug boundary |
-| `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | changed | BACKENDS-SELECTOR-001: borrowed hash keys and per-selection health/outlier handles; lifecycle/runtime snapshot work deferred to TODOs |
+| `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | examined-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
 | `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | examined-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |
 | `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | examined-no-change | `B0044`: minimal allocator, panic, crypto, capability, and CLI handoff retained |
@@ -238,7 +238,7 @@
 | `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
 | `edgion-gateway/src/conf_sync/conf_client/rotation.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
 | `edgion-gateway/src/conf_sync/mod.rs` | `conf-sync-root` | source | examined-no-change | CONF-SYNC-ROOT-001 |
-| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | changed | CONFIG-001 / `4621d075` |
+| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | `config-edgion-gateway` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/config/edgion_gateway/mod.rs` | `config-edgion-gateway` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
@@ -286,17 +286,17 @@
 | `edgion-gateway/src/link_sys/providers/redis/config_mapping.rs` | `link-sys-provider-redis` | source | changed | `B0052`: made `rediss://` transport TLS effective and rejected ambiguous mixed active transports |
 | `edgion-gateway/src/link_sys/providers/redis/mod.rs` | `link-sys-provider-redis` | source | examined-no-change | `B0052`: retained the narrow Redis provider facade and exports |
 | `edgion-gateway/src/link_sys/providers/redis/ops.rs` | `link-sys-provider-redis` | source | examined-no-change | `B0052`: retained command, lock, and canonical RedisLinkClient operation behavior |
-| `edgion-gateway/src/link_sys/providers/webhook/client.rs` | `link-sys-provider-webhook` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | `link-sys-provider-webhook` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/webhook/mod.rs` | `link-sys-provider-webhook` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | pending | — |
-| `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | pending | — |
-| `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | pending | — |
+| `edgion-gateway/src/link_sys/providers/webhook/client.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: made Webhook publication a prepared, sequence-checked store transition instead of a spawned generic lifecycle |
+| `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: serialized source generations and made one-key/full-map replacement and retirement atomic |
+| `edgion-gateway/src/link_sys/providers/webhook/mod.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: removed the obsolete manager lifecycle adapter exports |
+| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | examined-no-change | `B0053`: retained canonical service resolution and namespace behavior |
+| `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | deferred | `B0053` / `D0019`: window rotation and time-source semantics require a wider limiter contract |
+| `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | analysis-ready | `B0054` |
 | `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | pending | — |
 | `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | pending | — |
-| `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | pending | — |
+| `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | changed | `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
 | `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | pending | — |
 | `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | pending | — |
 | `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |

@@ -4,11 +4,10 @@
 //! Keyed by "namespace/name" matching webhook_ref in the WebhookKeyGet plugin.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
@@ -40,19 +39,66 @@ pub fn get_webhook_manager() -> &'static WebhookManager {
 }
 
 /// Global webhook manager, keyed by "namespace/name" matching webhook_ref.
-struct WebhookEntry {
+pub(crate) struct WebhookRegistration {
+    retired: AtomicBool,
+}
+
+impl WebhookRegistration {
+    fn new() -> Self {
+        Self {
+            retired: AtomicBool::new(false),
+        }
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire)
+    }
+
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparedWebhookEntry {
+    registration: Arc<WebhookRegistration>,
     client: Arc<ManagedOutboundClient>,
+}
+
+impl PreparedWebhookEntry {
+    #[cfg(test)]
+    pub(crate) fn registration(&self) -> &Arc<WebhookRegistration> {
+        &self.registration
+    }
+
+    #[cfg(test)]
+    pub(crate) fn client(&self) -> &Arc<ManagedOutboundClient> {
+        &self.client
+    }
+}
+
+struct WebhookEntry {
+    registration: Arc<WebhookRegistration>,
+    client: Arc<ManagedOutboundClient>,
+}
+
+struct WebhookMutationState {
+    latest_accepted_sequence: u64,
 }
 
 pub struct WebhookManager {
     /// Registered webhook services: webhook_ref → managed client
     services: RwLock<HashMap<String, WebhookEntry>>,
+    mutation: Mutex<WebhookMutationState>,
 }
 
 impl WebhookManager {
     fn new() -> Self {
         Self {
             services: RwLock::new(HashMap::new()),
+            mutation: Mutex::new(WebhookMutationState {
+                latest_accepted_sequence: 0,
+            }),
         }
     }
 
@@ -61,31 +107,80 @@ impl WebhookManager {
         self.services.read().await.get(webhook_ref).map(|e| e.client.clone())
     }
 
-    /// Register or update a webhook from a LinkSys resource change.
-    ///
-    /// `linksys_ns` is the namespace of the LinkSys resource, used to resolve
-    /// a `WebhookTarget::Service` whose `namespace` field is absent.
-    ///
-    /// Returns `Err` when `ManagedOutboundClient::from_parts` rejects the config —
-    /// currently when the supplied PEM material is malformed, when the port is missing,
-    /// or when the request template has an invalid syntax. The webhook is **not**
-    /// registered in that case, so the LinkSys's `init()` surfaces the failure to the
-    /// resource processor. This avoids silently downgrading a misconfigured webhook to
-    /// the default secure client.
-    pub async fn upsert(
+    pub(crate) async fn begin_mutation(&self, sequence: u64) -> Result<WebhookMutationGuard<'_>, StaleWebhookDispatch> {
+        let mut state = self.mutation.lock().await;
+        if sequence <= state.latest_accepted_sequence {
+            return Err(StaleWebhookDispatch {
+                sequence,
+                latest_accepted_sequence: state.latest_accepted_sequence,
+            });
+        }
+        state.latest_accepted_sequence = sequence;
+        Ok(WebhookMutationGuard {
+            manager: self,
+            _state: state,
+        })
+    }
+}
+
+#[cfg(test)]
+static NEXT_TEST_MUTATION_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
+
+#[cfg(test)]
+impl WebhookManager {
+    pub(crate) fn new_for_test() -> Self {
+        Self::new()
+    }
+
+    fn next_test_sequence() -> u64 {
+        NEXT_TEST_MUTATION_SEQUENCE.fetch_add(1, Ordering::Relaxed) as u64
+    }
+
+    async fn upsert(
+        &self,
+        webhook_ref: &str,
+        config: WebhookServiceConfig,
+        linksys_ns: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mutation = self
+            .begin_mutation(Self::next_test_sequence())
+            .await
+            .map_err(|e| anyhow::anyhow!("stale test mutation: {e:?}"))?;
+        let prepared = mutation.prepare(webhook_ref, config, linksys_ns)?;
+        mutation.commit_one(webhook_ref, prepared).await
+    }
+
+    async fn remove(&self, webhook_ref: &str) {
+        let mutation = self
+            .begin_mutation(Self::next_test_sequence())
+            .await
+            .expect("test mutation sequences are strictly increasing");
+        mutation.commit_remove(webhook_ref).await;
+    }
+}
+
+// ============================================================
+// Ordered mutation capability
+// ============================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StaleWebhookDispatch {
+    pub(crate) sequence: u64,
+    pub(crate) latest_accepted_sequence: u64,
+}
+
+pub(crate) struct WebhookMutationGuard<'a> {
+    manager: &'a WebhookManager,
+    _state: MutexGuard<'a, WebhookMutationState>,
+}
+
+impl WebhookMutationGuard<'_> {
+    pub(crate) fn prepare(
         &self,
         webhook_ref: &str,
         mut config: WebhookServiceConfig,
         linksys_ns: Option<&str>,
-    ) -> anyhow::Result<()> {
-        // Note: auth field is now a deprecated shim field (Option<serde_json::Value>)
-        // that is accepted for backward compatibility but not used at runtime.
-        // Auth validation and injection will be re-implemented in Wave B with the new request field.
-        // Skip auth validation for shim fields.
-
-        // Apply linksys_ns fallback: when the target is a Service whose namespace is
-        // absent, use the namespace of the LinkSys resource. A URL target has no
-        // namespace to backfill.
+    ) -> anyhow::Result<PreparedWebhookEntry> {
         if config.conn.target.url.is_none() && config.conn.target.service.namespace.is_none() {
             if let Some(ns) = linksys_ns {
                 config.conn.target.service.namespace = Some(ns.to_string());
@@ -97,61 +192,76 @@ impl WebhookManager {
             &config.request,
             config.resolved_secrets.as_ref(),
             webhook_ref,
-            // Webhook deliveries are typically non-idempotent POSTs: do not retry
-            // a timed-out request by default.
             false,
         )
         .map_err(|e| anyhow::anyhow!("failed to register webhook '{}': {}", webhook_ref, e))?;
 
-        let mut services = self.services.write().await;
-        // Dropping the old entry aborts its health task via ManagedOutboundClient::drop.
-        services.remove(webhook_ref);
+        Ok(PreparedWebhookEntry {
+            registration: Arc::new(WebhookRegistration::new()),
+            client: Arc::new(managed_client),
+        })
+    }
+
+    pub(crate) async fn commit_one(&self, webhook_ref: &str, prepared: PreparedWebhookEntry) -> anyhow::Result<()> {
+        let mut services = self.manager.services.write().await;
+        if prepared.registration.is_retired() {
+            anyhow::bail!("prepared webhook registration for '{webhook_ref}' is retired");
+        }
+
+        if let Some(old) = services.get(webhook_ref) {
+            if !Arc::ptr_eq(&old.registration, &prepared.registration) {
+                old.registration.retire();
+            }
+        }
         services.insert(
             webhook_ref.to_string(),
             WebhookEntry {
-                client: Arc::new(managed_client),
+                registration: prepared.registration,
+                client: prepared.client,
             },
         );
         tracing::info!(webhook = %webhook_ref, "Webhook registered/updated in manager");
         Ok(())
     }
 
-    /// Remove a webhook (LinkSys resource deleted)
-    pub async fn remove(&self, webhook_ref: &str) {
-        // Dropping the entry aborts the health task via ManagedOutboundClient::drop.
-        self.services.write().await.remove(webhook_ref);
+    pub(crate) async fn commit_remove(&self, webhook_ref: &str) {
+        let mut services = self.manager.services.write().await;
+        if let Some(old) = services.remove(webhook_ref) {
+            old.registration.retire();
+        }
         tracing::info!(webhook = %webhook_ref, "Webhook removed from manager");
     }
-}
 
-// ============================================================
-// WebhookManagerOps — abstraction for testability
-// ============================================================
+    pub(crate) async fn commit_full(&self, prepared: HashMap<String, PreparedWebhookEntry>) -> anyhow::Result<()> {
+        let new_services: HashMap<String, WebhookEntry> = prepared
+            .into_iter()
+            .map(|(key, entry)| {
+                (
+                    key,
+                    WebhookEntry {
+                        registration: entry.registration,
+                        client: entry.client,
+                    },
+                )
+            })
+            .collect();
 
-/// Abstraction over the webhook manager's mutating operations, so that
-/// `WebhookLinkClient` can be unit-tested with a fake implementation.
-///
-/// Production wiring uses `StaticWebhookManagerAdapter` to delegate to the
-/// global `get_webhook_manager()`. Tests provide their own implementor.
-#[async_trait]
-pub trait WebhookManagerOps: Send + Sync + 'static {
-    async fn upsert(&self, key: &str, config: WebhookServiceConfig, linksys_ns: Option<&str>) -> anyhow::Result<()>;
-    async fn remove(&self, key: &str);
-}
+        let mut services = self.manager.services.write().await;
+        if let Some((key, _)) = new_services.iter().find(|(_, entry)| entry.registration.is_retired()) {
+            anyhow::bail!("prepared webhook registration for '{key}' is retired");
+        }
 
-/// Zero-sized adapter that bridges the `&'static WebhookManager` returned by
-/// `get_webhook_manager()` into the `Arc<dyn WebhookManagerOps>` shape that
-/// `WebhookLinkClient` holds.
-pub struct StaticWebhookManagerAdapter;
-
-#[async_trait]
-impl WebhookManagerOps for StaticWebhookManagerAdapter {
-    async fn upsert(&self, key: &str, config: WebhookServiceConfig, linksys_ns: Option<&str>) -> anyhow::Result<()> {
-        get_webhook_manager().upsert(key, config, linksys_ns).await
-    }
-
-    async fn remove(&self, key: &str) {
-        get_webhook_manager().remove(key).await
+        for (key, old) in services.iter() {
+            let preserved = new_services
+                .get(key)
+                .is_some_and(|new| Arc::ptr_eq(&old.registration, &new.registration));
+            if !preserved {
+                old.registration.retire();
+            }
+        }
+        *services = new_services;
+        tracing::info!(count = services.len(), "Webhook manager full set committed");
+        Ok(())
     }
 }
 
@@ -717,5 +827,285 @@ mod tests {
 
         // Cleanup.
         store.update_data_only(HashMap::new(), HashMap::new(), &HashSet::from([slice_key.to_string()]));
+    }
+
+    fn config_with_port(port: i32) -> WebhookServiceConfig {
+        let mut config = make_config_with_target("ordered-svc");
+        config.conn.target.service.port = Some(port);
+        config
+    }
+
+    async fn registered_entry(
+        manager: &WebhookManager,
+        key: &str,
+    ) -> Option<(Arc<WebhookRegistration>, Arc<ManagedOutboundClient>)> {
+        manager
+            .services
+            .read()
+            .await
+            .get(key)
+            .map(|entry| (entry.registration.clone(), entry.client.clone()))
+    }
+
+    fn assert_service_port(client: &ManagedOutboundClient, expected: i32) {
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
+
+        match &client.resolved_target {
+            ResolvedTarget::Service { port, .. } => assert_eq!(*port, Some(expected)),
+            other => panic!("expected Service target, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_sequence_is_rejected_after_guard_release() {
+        let manager = WebhookManager::new();
+        let accepted = manager.begin_mutation(7).await.expect("sequence is accepted once");
+        drop(accepted);
+
+        let stale = match manager.begin_mutation(7).await {
+            Ok(_) => panic!("equal sequence must be stale"),
+            Err(stale) => stale,
+        };
+        assert_eq!(stale.latest_accepted_sequence, 7);
+    }
+
+    #[tokio::test]
+    async fn full_commit_replaces_the_registry_as_one_snapshot() {
+        let manager = WebhookManager::new();
+        let first = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let old_a = first
+            .prepare("ns/old-a", config_with_port(8001), None)
+            .expect("old-a prepares");
+        let old_b = first
+            .prepare("ns/old-b", config_with_port(8002), None)
+            .expect("old-b prepares");
+        let old_a_registration = old_a.registration.clone();
+        let old_b_registration = old_b.registration.clone();
+        first
+            .commit_full(HashMap::from([
+                ("ns/old-a".to_string(), old_a),
+                ("ns/old-b".to_string(), old_b),
+            ]))
+            .await
+            .expect("initial full set commits");
+        drop(first);
+
+        let second = manager.begin_mutation(2).await.expect("second sequence is accepted");
+        let new_a = second
+            .prepare("ns/new-a", config_with_port(9001), None)
+            .expect("new-a prepares");
+        let new_b = second
+            .prepare("ns/new-b", config_with_port(9002), None)
+            .expect("new-b prepares");
+        second
+            .commit_full(HashMap::from([
+                ("ns/new-a".to_string(), new_a),
+                ("ns/new-b".to_string(), new_b),
+            ]))
+            .await
+            .expect("replacement full set commits");
+
+        let services = manager.services.read().await;
+        assert_eq!(services.len(), 2);
+        assert!(services.contains_key("ns/new-a"));
+        assert!(services.contains_key("ns/new-b"));
+        assert!(old_a_registration.is_retired());
+        assert!(old_b_registration.is_retired());
+    }
+
+    #[tokio::test]
+    async fn full_commit_carries_over_the_exact_registration() {
+        let manager = WebhookManager::new();
+        let first = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let prepared = first
+            .prepare("ns/stable", config_with_port(8080), None)
+            .expect("stable webhook prepares");
+        let carried = prepared.clone();
+        let registration = prepared.registration.clone();
+        let client = prepared.client.clone();
+        first
+            .commit_one("ns/stable", prepared)
+            .await
+            .expect("stable webhook commits");
+        drop(first);
+
+        let second = manager.begin_mutation(2).await.expect("second sequence is accepted");
+        second
+            .commit_full(HashMap::from([("ns/stable".to_string(), carried)]))
+            .await
+            .expect("carry-over full set commits");
+
+        let (published_registration, published_client) = registered_entry(&manager, "ns/stable")
+            .await
+            .expect("carried webhook remains registered");
+        assert!(Arc::ptr_eq(&registration, &published_registration));
+        assert!(Arc::ptr_eq(&client, &published_client));
+        assert!(!registration.is_retired());
+    }
+
+    #[tokio::test]
+    async fn full_commit_prevalidates_every_entry_before_replacing_snapshot() {
+        let manager = WebhookManager::new();
+        let first = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let stable = first
+            .prepare("ns/stable", config_with_port(8080), None)
+            .expect("stable webhook prepares");
+        first
+            .commit_one("ns/stable", stable)
+            .await
+            .expect("stable webhook commits");
+        drop(first);
+
+        let second = manager.begin_mutation(2).await.expect("second sequence is accepted");
+        let candidate = second
+            .prepare("ns/replaced", config_with_port(8081), None)
+            .expect("candidate webhook prepares");
+        let delayed_candidate = candidate.clone();
+        second
+            .commit_one("ns/replaced", candidate)
+            .await
+            .expect("candidate webhook commits");
+        drop(second);
+
+        let third = manager.begin_mutation(3).await.expect("third sequence is accepted");
+        let replacement = third
+            .prepare("ns/replaced", config_with_port(8082), None)
+            .expect("replacement webhook prepares");
+        let replacement_client = replacement.client.clone();
+        third
+            .commit_one("ns/replaced", replacement)
+            .await
+            .expect("replacement webhook commits");
+        drop(third);
+        assert!(delayed_candidate.registration.is_retired());
+
+        let fourth = manager.begin_mutation(4).await.expect("fourth sequence is accepted");
+        let valid = fourth
+            .prepare("ns/new", config_with_port(9090), None)
+            .expect("new webhook prepares");
+        assert!(
+            fourth
+                .commit_full(HashMap::from([
+                    ("ns/replaced".to_string(), delayed_candidate),
+                    ("ns/new".to_string(), valid),
+                ]))
+                .await
+                .is_err(),
+            "one retired entry rejects the whole full-set candidate"
+        );
+
+        assert!(registered_entry(&manager, "ns/stable").await.is_some());
+        let (_, still_replacement) = registered_entry(&manager, "ns/replaced")
+            .await
+            .expect("current replacement remains registered");
+        assert!(Arc::ptr_eq(&replacement_client, &still_replacement));
+        assert!(registered_entry(&manager, "ns/new").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn prepare_failure_preserves_live_entry_and_advances_sequence() {
+        use edgion_resources::resources::link_sys::webhook::{PathSpec, WebhookOutboundRequest};
+
+        let manager = WebhookManager::new();
+        let first = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let prepared = first
+            .prepare("ns/stable", config_with_port(8080), None)
+            .expect("stable webhook prepares");
+        first
+            .commit_one("ns/stable", prepared)
+            .await
+            .expect("stable webhook commits");
+        drop(first);
+        let before = registered_entry(&manager, "ns/stable")
+            .await
+            .expect("stable webhook is live");
+
+        let failed = manager.begin_mutation(2).await.expect("failing sequence is accepted");
+        let mut invalid = config_with_port(9090);
+        invalid.request = WebhookOutboundRequest {
+            path: Some(PathSpec {
+                template: "/${ctx:unclosed".to_string(),
+                allow_override: false,
+            }),
+            ..Default::default()
+        };
+        assert!(failed.prepare("ns/stable", invalid.clone(), None).is_err());
+        assert!(failed.prepare("ns/cold", invalid, None).is_err());
+        drop(failed);
+
+        let after = registered_entry(&manager, "ns/stable")
+            .await
+            .expect("failed replacement preserves the live webhook");
+        assert!(Arc::ptr_eq(&before.0, &after.0));
+        assert!(Arc::ptr_eq(&before.1, &after.1));
+        assert!(registered_entry(&manager, "ns/cold").await.is_none());
+        assert!(
+            manager.begin_mutation(2).await.is_err(),
+            "failed preparation does not roll sequence back"
+        );
+        assert!(manager.begin_mutation(3).await.is_ok(), "next sequence remains usable");
+    }
+
+    #[tokio::test]
+    async fn omission_retires_old_registration_and_blocks_delayed_republication() {
+        let manager = WebhookManager::new();
+        let first = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let prepared = first
+            .prepare("ns/recreated", config_with_port(8081), None)
+            .expect("initial webhook prepares");
+        let delayed_old = prepared.clone();
+        let old_registration = prepared.registration.clone();
+        first
+            .commit_one("ns/recreated", prepared)
+            .await
+            .expect("initial webhook commits");
+        drop(first);
+
+        let omitted = manager.begin_mutation(2).await.expect("omission sequence is accepted");
+        omitted
+            .commit_full(HashMap::new())
+            .await
+            .expect("empty authoritative full set commits");
+        drop(omitted);
+        assert!(old_registration.is_retired());
+        assert!(registered_entry(&manager, "ns/recreated").await.is_none());
+
+        let recreated = manager.begin_mutation(3).await.expect("recreate sequence is accepted");
+        let replacement = recreated
+            .prepare("ns/recreated", config_with_port(8083), None)
+            .expect("replacement webhook prepares");
+        recreated
+            .commit_one("ns/recreated", replacement)
+            .await
+            .expect("replacement webhook commits");
+        drop(recreated);
+
+        let delayed = manager.begin_mutation(4).await.expect("later guard is accepted");
+        assert!(
+            delayed.commit_one("ns/recreated", delayed_old).await.is_err(),
+            "a retired registration cannot erase a recreated webhook"
+        );
+        let (_, client) = registered_entry(&manager, "ns/recreated")
+            .await
+            .expect("replacement remains callable");
+        assert_service_port(&client, 8083);
+    }
+
+    #[tokio::test]
+    async fn partial_remove_retires_and_deletes_registration() {
+        let manager = WebhookManager::new();
+        let first = manager.begin_mutation(1).await.expect("first sequence is accepted");
+        let prepared = first
+            .prepare("ns/deleted", config_with_port(8080), None)
+            .expect("webhook prepares");
+        let registration = prepared.registration.clone();
+        first.commit_one("ns/deleted", prepared).await.expect("webhook commits");
+        drop(first);
+
+        let removed = manager.begin_mutation(2).await.expect("remove sequence is accepted");
+        removed.commit_remove("ns/deleted").await;
+
+        assert!(registration.is_retired());
+        assert!(registered_entry(&manager, "ns/deleted").await.is_none());
     }
 }
