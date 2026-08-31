@@ -73,8 +73,8 @@ filters:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `secretRef` | Object | 无 | **必填**。引用一个 Kubernetes Secret，其 `key` 数据条目存储 CSRF 签名密钥。 |
-| `expires` | Integer | `7200` (2小时) | Token 过期时间（秒）。建议与会话过期时间一致 |
-| `name` | String | `"apisix-csrf-token"` | Token 名称，用于 cookie 和 header |
+| `expires` | Integer | `7200` (2小时) | Token 过期时间（秒），必须大于零。建议与会话过期时间一致。 |
+| `name` | String | `"apisix-csrf-token"` | 同时用于 cookie 和请求 header 的 Token 名称。必须是 1–256 字节的有效 HTTP token，且任何大小写形式都不能为 `cookie`。 |
 | `cookieSecure` | Boolean | `true` | 是否为 token cookie 设置 `Secure` 属性。客户端通过 HTTPS 访问 Edgion 时保持 `true`。对于 HTTP-only 部署模型（上游 LB/sidecar 终结 TLS、mesh 内部纯 HTTP、本地开发）设为 `false`——否则浏览器会丢弃 HTTP 上收到的 `Secure` cookie，导致每个修改型请求都因 `no csrf cookie` 失败 |
 
 ---
@@ -316,7 +316,8 @@ export default {
 
 2. **通过 Secret 轮换签名密钥**
    - 每 30-90 天更新一次 Secret 的 `key` 数据条目
-   - 轮换后旧 CSRF token 会失效
+   - 更新后的配置到达 Gateway 后，旧 CSRF token 会失效；客户端必须重新获取 token
+   - 如果 Secret 被删除或无法解析，插件会保持失败关闭，直到密钥重新可用
    - 使用 `kubectl create secret generic ... --dry-run=client -o yaml | kubectl apply -f -` 进行原地轮换
 
 3. **用 RBAC 限制 Secret 访问权限**

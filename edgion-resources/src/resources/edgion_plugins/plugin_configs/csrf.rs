@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::gwapi_types::{is_valid_header_token, HEADER_NAME_MAX_LEN};
 use crate::resources::gateway::SecretObjectReference;
 
 /// CSRF (Cross-Site Request Forgery) protection plugin configuration
@@ -27,11 +28,11 @@ pub struct CsrfConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<SecretObjectReference>,
 
-    /// Token expiration time in seconds (default: 7200 = 2 hours)
+    /// Positive token expiration time in seconds (default: 7200 = 2 hours)
     #[serde(default = "default_expires")]
     pub expires: i64,
 
-    /// Token name used in both cookie and header (default: "apisix-csrf-token")
+    /// HTTP-token name used in both cookie and header (default: "apisix-csrf-token")
     #[serde(default = "default_name")]
     pub name: String,
 
@@ -86,6 +87,15 @@ impl PluginValidation for CsrfConfig {
         // goes live lives in plugin_runtime.rs::plugin_validation_error.
         if self.secret_ref.is_none() && self.resolved_key.is_none() {
             return Some("CSRF config: 'secretRef' is required".to_string());
+        }
+        if self.expires <= 0 {
+            return Some("CSRF config: 'expires' must be positive".to_string());
+        }
+        if self.name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(&self.name) {
+            return Some("CSRF config: 'name' must be a valid HTTP token of at most 256 bytes".to_string());
+        }
+        if self.name.eq_ignore_ascii_case("cookie") {
+            return Some("CSRF config: 'name' must not be 'cookie'".to_string());
         }
         None
     }
@@ -146,5 +156,75 @@ mod tests {
         assert_eq!(redacted["resolvedKey"], "[redacted]");
         let plain = serde_json::to_value(&cfg).unwrap();
         assert_eq!(plain["resolvedKey"], "SUPER-SECRET");
+    }
+
+    #[test]
+    fn csrf_validation_requires_a_positive_expiration() {
+        for expires in [0, -1, i64::MIN] {
+            let cfg = CsrfConfig {
+                resolved_key: Some("k".into()),
+                expires,
+                ..Default::default()
+            };
+            assert_eq!(
+                cfg.validation_error().as_deref(),
+                Some("CSRF config: 'expires' must be positive")
+            );
+        }
+
+        let cfg = CsrfConfig {
+            resolved_key: Some("k".into()),
+            expires: 1,
+            ..Default::default()
+        };
+        assert!(cfg.validation_error().is_none());
+    }
+
+    #[test]
+    fn csrf_validation_bounds_the_shared_header_and_cookie_token_name() {
+        for name in [
+            default_name(),
+            "x".repeat(HEADER_NAME_MAX_LEN as usize),
+            "x-cookie".to_string(),
+        ] {
+            let cfg = CsrfConfig {
+                resolved_key: Some("k".into()),
+                name,
+                ..Default::default()
+            };
+            assert!(cfg.validation_error().is_none());
+        }
+
+        for name in [
+            String::new(),
+            "bad name".to_string(),
+            "bad:name".to_string(),
+            "x".repeat(HEADER_NAME_MAX_LEN as usize + 1),
+        ] {
+            let cfg = CsrfConfig {
+                resolved_key: Some("k".into()),
+                name,
+                ..Default::default()
+            };
+            assert_eq!(
+                cfg.validation_error().as_deref(),
+                Some("CSRF config: 'name' must be a valid HTTP token of at most 256 bytes")
+            );
+        }
+    }
+
+    #[test]
+    fn csrf_validation_rejects_the_cookie_header_name_case_insensitively() {
+        for name in ["cookie", "Cookie", "COOKIE"] {
+            let cfg = CsrfConfig {
+                resolved_key: Some("k".into()),
+                name: name.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(
+                cfg.validation_error().as_deref(),
+                Some("CSRF config: 'name' must not be 'cookie'")
+            );
+        }
     }
 }

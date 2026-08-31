@@ -73,8 +73,8 @@ filters:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `secretRef` | Object | none | **Required**. Reference to a Kubernetes Secret whose `key` data entry holds the CSRF signing key. |
-| `expires` | Integer | `7200` (2 hours) | Token expiration time (seconds). Recommended to match the session expiration time |
-| `name` | String | `"apisix-csrf-token"` | Token name, used for cookie and header |
+| `expires` | Integer | `7200` (2 hours) | Token expiration time in seconds. Must be greater than zero; matching the session expiration time is recommended. |
+| `name` | String | `"apisix-csrf-token"` | Token name used for both the cookie and request header. Must be a valid HTTP token of 1–256 bytes and must not be `cookie` in any letter case. |
 | `cookieSecure` | Boolean | `true` | Whether to set the `Secure` attribute on the token cookie. Keep `true` when clients reach Edgion over HTTPS. Set `false` for HTTP-only deployment models (TLS terminated upstream at an LB/sidecar, mesh-internal plain HTTP, local development) — otherwise browsers drop the `Secure` cookie over HTTP and every state-mutating request fails with `no csrf cookie` |
 
 ---
@@ -316,7 +316,8 @@ export default {
 
 2. **Rotate the signing key via the Secret**
    - Update the Secret's `key` data entry every 30-90 days
-   - Old CSRF tokens will become invalid after rotation
+   - After the updated configuration reaches the Gateway, old CSRF tokens become invalid; clients must fetch a new token
+   - If the Secret is deleted or cannot be resolved, the plugin fails closed until the key is available again
    - Use `kubectl create secret generic ... --dry-run=client -o yaml | kubectl apply -f -` for in-place rotation
 
 3. **Restrict Secret access with RBAC**
