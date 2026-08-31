@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 68 changed, 84 examined-no-change, 9 deferred, 371 non-terminal |
-| Active batch | B0060 ACME challenge expiry boundary; verified and awaiting local commit |
-| Analysis queue | next Gateway batch will be selected after B0060 reaches its commit gate |
+| Coverage | 532 tracked files: 69 changed, 86 examined-no-change, 9 deferred, 368 non-terminal |
+| Active batch | B0061 Redis token-bucket deny balance; reviewed, fully verified, and awaiting local commit |
+| Analysis queue | B0062 HTTP plugin framework is a read-only queued candidate; revalidate after B0061 commits |
 
 ## AI guide summary
 

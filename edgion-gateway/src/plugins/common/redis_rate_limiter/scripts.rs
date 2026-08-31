@@ -455,8 +455,36 @@ if tokens >= cost then
 else
     local needed = cost - tokens
     local retry_ms = math.ceil(needed * interval_ms / refill_rate)
-    redis.call('HMSET', key, 'ts', last_ts)
+    redis.call('HMSET', key, 'tokens', tokens, 'ts', last_ts)
     redis.call('PEXPIRE', key, interval_ms * 2)
     return {0, tokens, 0, retry_ms}
 end
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::TOKEN_BUCKET_SCRIPT;
+
+    #[test]
+    fn token_bucket_persists_balance_and_timestamp_for_allow_and_deny() {
+        const PERSIST_BALANCE_AND_TIMESTAMP: &str = "redis.call('HMSET', key, 'tokens', tokens, 'ts', last_ts)";
+        const ALLOW_TO_DENY_BOUNDARY: &str = "    return {1, tokens, tokens, 0}\nelse\n";
+        const DENY_RETURN_AND_END: &str = "    return {0, tokens, 0, retry_ms}\nend";
+
+        let (through_allow_branch, deny_branch_and_tail) = TOKEN_BUCKET_SCRIPT
+            .split_once(ALLOW_TO_DENY_BOUNDARY)
+            .expect("token-bucket script must contain the outer allow-return/deny boundary");
+        let allow_branch = through_allow_branch
+            .rsplit_once("if tokens >= cost then")
+            .expect("token-bucket script must contain the outer token-balance branch")
+            .1;
+        let deny_branch = deny_branch_and_tail
+            .split_once(DENY_RETURN_AND_END)
+            .expect("token-bucket script must contain the outer deny return and end")
+            .0;
+
+        assert!(allow_branch.contains(PERSIST_BALANCE_AND_TIMESTAMP));
+        assert!(deny_branch.contains(PERSIST_BALANCE_AND_TIMESTAMP));
+        assert_eq!(TOKEN_BUCKET_SCRIPT.matches(PERSIST_BALANCE_AND_TIMESTAMP).count(), 2);
+    }
+}

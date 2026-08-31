@@ -31,6 +31,8 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0025 — Make GeoIP lookup failures follow failure policy | needs-discussion | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
 | D0026 — Enforce EdgionAcme HTTP-01 gatewayRef ownership | needs-discussion | [campaign finding](D0026-acme-http01-gatewayref-ownership.md) |
 | D0027 — Add ACME gatewayRef isolation integration coverage | blocked | [campaign finding](D0027-acme-gatewayref-integration-coverage.md) |
+| D0028 — Define the Redis rate-limiter numeric domain | needs-discussion | [campaign finding](D0028-redis-rate-limiter-numeric-domain.md) |
+| D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -53,3 +55,5 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Make GeoIP lookup failures follow failure policy | pending | [task](../../../todo/make-geoip-lookup-failures-follow-failure-policy/make-geoip-lookup-failures-follow-failure-policy.md) |
 | Enforce EdgionAcme HTTP-01 gatewayRef ownership | pending | [task](../../../todo/enforce-edgion-acme-http01-gatewayref-ownership/enforce-edgion-acme-http01-gatewayref-ownership.md) |
 | Add ACME gatewayRef isolation integration coverage | blocked | [task](../../../todo/add-acme-gatewayref-isolation-integration-coverage.md) |
+| Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
+| Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
