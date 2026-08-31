@@ -11,8 +11,8 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 53 changed, 63 examined-no-change, 5 deferred, 409 pending |
-| Active batch | [`B0043-backend-peer-builder`](batches/B0043-backend-peer-builder.md) |
+| Coverage | 530 tracked files: 53 changed, 64 examined-no-change, 5 deferred, 408 pending |
+| Active batch | [`B0044-gateway-binary-entry`](batches/B0044-gateway-binary-entry.md) |
 
 ## AI guide summary
 

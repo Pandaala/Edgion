@@ -62,7 +62,7 @@
 | `config-edgion-gateway` | 2 | 1 | 1 | 0 | complete |
 | `config-gateway-class` | 2 | 0 | 2 | 0 | complete |
 | `config-root` | 1 | 0 | 1 | 0 | complete |
-| `crate-entry` | 2 | 0 | 0 | 0 | pending |
+| `crate-entry` | 2 | 0 | 1 | 0 | pending |
 | `crate-root` | 2 | 0 | 0 | 0 | pending |
 | `external-tests` | 1 | 0 | 0 | 0 | pending |
 | `geoip` | 5 | 0 | 0 | 0 | pending |
@@ -219,7 +219,7 @@
 | `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | changed | BACKENDS-SELECTOR-001: borrowed hash keys and per-selection health/outlier handles; lifecycle/runtime snapshot work deferred to TODOs |
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | examined-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
 | `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | examined-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |
-| `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | pending | — |
+| `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | examined-no-change | `B0044`: minimal allocator, panic, crypto, capability, and CLI handoff retained |
 | `edgion-gateway/src/cache/lru.rs` | `cache` | source | changed | CACHE-001 / `40f7eb74` |
 | `edgion-gateway/src/cache/mod.rs` | `cache` | source | examined-no-change | CACHE-001 / `40f7eb74` |
 | `edgion-gateway/src/cache/sharded.rs` | `cache` | source | changed | CACHE-001 / `40f7eb74` |
