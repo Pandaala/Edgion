@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 76 changed, 93 examined-no-change, 9 deferred, 354 non-terminal |
-| Active batch | B0067 BasicAuth credential ownership and unsupported hashes; independently reviewed and fully verified, pending local commit |
-| Analysis queue | CORS allocation/config-validation candidate requires revalidation after B0067 commits |
+| Coverage | 532 tracked files: 77 changed, 94 examined-no-change, 9 deferred, 352 non-terminal |
+| Active batch | B0068 CORS bounded header assembly; independently reviewed and fully verified, pending local commit |
+| Analysis queue | Empty until B0068 completes its commit gate |
 
 ## AI guide summary
 

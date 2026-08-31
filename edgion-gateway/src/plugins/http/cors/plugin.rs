@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use smallvec::SmallVec;
 use std::sync::Arc;
 
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -9,10 +10,10 @@ use edgion_resources::resources::edgion_plugins::CorsConfig;
 
 type CorsError = Box<dyn std::error::Error + Send + Sync>;
 type CorsResult<T> = Result<T, CorsError>;
+type CorsHeaderPairs = SmallVec<[(&'static str, String); 8]>;
 
 /// CORS (Cross-Origin Resource Sharing) plugin
 pub struct Cors {
-    name: String,
     config: Arc<CorsConfig>,
 }
 
@@ -46,10 +47,7 @@ impl Cors {
     /// Create from a shared, already-initialized `Arc<CorsConfig>` without
     /// cloning the underlying config.
     pub fn from_arc(config: Arc<CorsConfig>) -> Self {
-        Cors {
-            name: "Cors".to_string(),
-            config,
-        }
+        Cors { config }
     }
 
     /// Check if this is a CORS preflight request
@@ -96,8 +94,8 @@ impl Cors {
         session: &mut dyn PluginSession,
         allowed_origin: &str,
         is_preflight: bool,
-    ) -> Vec<(&'static str, String)> {
-        let mut headers = Vec::new();
+    ) -> CorsHeaderPairs {
+        let mut headers = CorsHeaderPairs::new();
 
         headers.push(("Access-Control-Allow-Origin", allowed_origin.to_string()));
 
@@ -226,7 +224,7 @@ impl Cors {
 #[async_trait]
 impl RequestFilter for Cors {
     fn name(&self) -> &str {
-        &self.name
+        "Cors"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
@@ -304,6 +302,58 @@ mod tests {
             compiled_origins_regex: None,
             compiled_timing_regex: None,
         }
+    }
+
+    #[test]
+    fn plugin_name_is_static_across_configs() {
+        let first = Cors::new(&create_cors_config());
+        let mut second_config = create_cors_config();
+        second_config.allow_origins = "https://other.example.com".to_string();
+        let second = Cors::new(&second_config);
+
+        let first_name = RequestFilter::name(&first);
+        let second_name = RequestFilter::name(&second);
+        assert_eq!(first_name, "Cors");
+        assert_eq!(second_name, "Cors");
+        assert!(std::ptr::eq(first_name, second_name));
+    }
+
+    #[test]
+    fn maximum_header_set_stays_inline_and_preserves_order() {
+        let mut config = create_cors_config();
+        config.expose_headers = "X-Trace-Id,X-RateLimit-Remaining".to_string();
+        config.allow_private_network = true;
+        config.timing_allow_origins = Some("https://example.com".to_string());
+        let cors = Cors::new(&config);
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().returning(|name| match name {
+            "origin" => Some("https://example.com".to_string()),
+            "access-control-request-headers" => Some("X-Requested".to_string()),
+            "access-control-request-private-network" => Some("true".to_string()),
+            _ => None,
+        });
+
+        let headers = cors.build_cors_header_pairs(&mut session, "https://example.com", true);
+
+        assert_eq!(headers.len(), 8);
+        assert!(!headers.spilled());
+        assert_eq!(
+            headers.as_slice(),
+            [
+                ("Access-Control-Allow-Origin", "https://example.com".to_string()),
+                ("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE".to_string()),
+                ("Access-Control-Allow-Headers", "Content-Type,Authorization".to_string(),),
+                (
+                    "Access-Control-Expose-Headers",
+                    "X-Trace-Id,X-RateLimit-Remaining".to_string(),
+                ),
+                ("Access-Control-Allow-Credentials", "true".to_string()),
+                ("Access-Control-Max-Age", "3600".to_string()),
+                ("Timing-Allow-Origin", "https://example.com".to_string()),
+                ("Access-Control-Allow-Private-Network", "true".to_string()),
+            ]
+            .as_slice()
+        );
     }
 
     #[tokio::test]

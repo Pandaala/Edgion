@@ -43,6 +43,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0037 — Unify auth identity-header sanitization | needs-discussion | [campaign finding](D0037-auth-identity-header-sanitization.md) |
 | D0038 — Add auth identity-header spoofing integration coverage | blocked | [campaign finding](D0038-auth-identity-header-integration-coverage.md) |
 | D0039 — Harden auth challenge realm quoted strings | needs-implementation | [campaign finding](D0039-auth-challenge-realm-quoted-string.md) |
+| D0040 — Unify CORS validation and header precomputation | needs-implementation | [campaign finding](D0040-cors-validation-header-precomputation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -77,3 +78,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Unify auth identity-header sanitization | pending | [task](../../../todo/unify-auth-identity-header-sanitization/unify-auth-identity-header-sanitization.md) |
 | Add auth identity-header spoofing integration coverage | blocked | [task](../../../todo/add-auth-identity-header-spoofing-integration-coverage.md) |
 | Harden auth challenge realm quoted strings | pending | [task](../../../todo/harden-auth-challenge-realm-quoted-strings.md) |
+| Unify CORS validation and header precomputation | pending | [task](../../../todo/unify-cors-validation-and-header-precomputation.md) |
