@@ -82,7 +82,7 @@
 | `link-sys-providers-root` | 1 | 0 | 1 | 0 | complete |
 | `link-sys-root` | 2 | 2 | 0 | 0 | complete |
 | `link-sys-runtime` | 5 | 3 | 2 | 0 | complete |
-| `link-sys-template` | 2 | 0 | 0 | 0 | pending |
+| `link-sys-template` | 2 | 0 | 0 | 2 | complete |
 | `observe-access-log` | 5 | 3 | 2 | 0 | complete |
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
 | `observe-metrics` | 5 | 3 | 2 | 0 | complete |
@@ -297,8 +297,8 @@
 | `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | changed | `B0056`: became the sole owner of rollback-safe five-second health transition log gating |
 | `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the live minimal module facade and visibility boundaries |
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | changed | `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
-| `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | pending | — |
-| `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | pending | — |
+| `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | deferred | `B0058` / `D0024`: canonical policy-aware evaluator migration requires a cross-consumer design |
+| `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | deferred | `B0058` / `D0024`: facade ownership must move only with the canonical evaluator design |
 | `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log/entry.rs` | `observe-access-log` | source | examined-no-change | OBS-ACCESS-001 / `9d99d213` |
 | `edgion-gateway/src/observe/access_log/log_ext.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |

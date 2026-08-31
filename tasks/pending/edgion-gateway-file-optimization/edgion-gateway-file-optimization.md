@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 65 changed, 79 examined-no-change, 6 deferred, 382 non-terminal |
-| Active batch | B0057 residual LinkSys runtime facade audit; verified and awaiting local commit |
-| Analysis queue | B0058 template runtime unification is analysis-ready as a deferred candidate; revalidate only after B0057 commits |
+| Coverage | 532 tracked files: 65 changed, 79 examined-no-change, 8 deferred, 380 non-terminal |
+| Active batch | B0058 LinkSys template runtime audit; verified and awaiting local commit |
+| Analysis queue | next Gateway batch will be selected after B0058 reaches its commit gate |
 
 ## AI guide summary
 

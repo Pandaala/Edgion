@@ -5,14 +5,14 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-08-31 |
-| Status | pending |
+| Status | skipped |
 | Type | optimization |
 | Priority | P2 |
 | Issue | N/A |
 
 ## AI guide summary
 
-Render the dynamic `upstreamAuthority` wildcard label under its 63-byte DNS limit instead of building the complete request-derived string and rejecting it afterward. The current `render_authority` calls the unbounded convenience template evaluator, then `validate_label`; an oversized header, query, path, URI, or context value therefore allocates and copies data that can never be a valid label. The existing bounded evaluator is not a drop-in replacement because it treats a missing variable as an error, while the authority path currently renders missing variables as empty and distinguishes only an empty final label from other invalid labels.
+Superseded by [`unify-gateway-request-template-runtime`](unify-gateway-request-template-runtime/unify-gateway-request-template-runtime.md), which absorbs this task's 63-byte authority budget and DNS-label acceptance into the required canonical evaluator design and also closes the destination-template variable-admission gap.
 
 ## Requirements
 
@@ -32,7 +32,6 @@ Render the dynamic `upstreamAuthority` wildcard label under its 63-byte DNS limi
 
 ### Out of scope
 
-- Changing allowed template variable types or authority schema.
 - General template-engine migration for unrelated plugins.
 - Dynamic DNS destinations outside the fixed wildcard suffix contract.
 
@@ -56,3 +55,4 @@ Render the dynamic `upstreamAuthority` wildcard label under its 63-byte DNS limi
 | Date | Decision | Reason |
 |------|----------|--------|
 | 2026-08-31 | Defer implementation from the file audit. | Reusing the current bounded evaluator would change missing-variable semantics; the shared engine needs an explicit policy and cross-consumer tests rather than an authority-local copy. |
+| 2026-08-31 | Superseded by the canonical request-template runtime task. | Running this narrow task separately would duplicate the same bounded evaluator seam; its acceptance criteria move intact to the wider task, which also enforces restricted destination variables. |

@@ -45,4 +45,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; both target rows close as examined-no-change
-- Commit: pending
+- Commit: `e8eb6ff7`
