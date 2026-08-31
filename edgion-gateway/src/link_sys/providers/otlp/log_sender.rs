@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use async_trait::async_trait;
+use edgion_resources::sensitive::apply_sensitive;
 use opentelemetry::logs::{AnyValue, LogRecord, Logger, LoggerProvider, Severity};
 use opentelemetry_otlp::{LogExporter, WithExportConfig};
 use opentelemetry_sdk::logs::SdkLoggerProvider;
@@ -99,6 +100,11 @@ pub(crate) fn numeric_to_severity(n: u32) -> Option<Severity> {
         21..=24 => Some(Severity::Fatal),
         _ => None,
     }
+}
+
+#[inline]
+fn render_sensitive_path(path: &str) -> String {
+    apply_sensitive(path, str::to_owned)
 }
 
 #[async_trait]
@@ -207,7 +213,7 @@ impl DataSender<String> for OtlpLogSender {
             record.add_attribute("http.request.method", method.clone());
         }
         if let Some(ref path) = meta.path {
-            record.add_attribute("url.path", path.clone());
+            record.add_attribute("url.path", render_sensitive_path(path));
         }
 
         logger.emit(record);
@@ -234,6 +240,36 @@ impl DataSender<String> for OtlpLogSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::sensitive::{SensitiveMode, SENSITIVE_MODE};
+    use std::sync::atomic::Ordering;
+
+    fn assert_sensitive_path_in_subprocess(test_name: &str, mode: SensitiveMode, expected: &str) {
+        const CHILD_ENV: &str = "EDGION_OTLP_SENSITIVE_PATH_CHILD";
+        const TEST_MODULE: &str = "link_sys::providers::otlp::log_sender::tests";
+
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
+            // This process runs only the exact test selected below, so changing
+            // the process-global mode cannot race another lib test.
+            SENSITIVE_MODE.store(mode as u8, Ordering::SeqCst);
+            assert_eq!(render_sensitive_path("/customers/alice"), expected);
+            return;
+        }
+
+        let exact_test_name = format!("{TEST_MODULE}::{test_name}");
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("the Rust test harness must have a current executable"),
+        )
+        .args(["--exact", exact_test_name.as_str(), "--nocapture"])
+        .env(CHILD_ENV, test_name)
+        .output()
+        .expect("the isolated OTLP sensitive-path test process must start");
+        assert!(
+            output.status.success(),
+            "isolated OTLP sensitive-path test failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     fn make_grpc_config() -> OtlpOutputConfig {
         OtlpOutputConfig {
@@ -277,6 +313,33 @@ mod tests {
         assert_eq!(numeric_to_severity(17), Some(Severity::Error));
         assert_eq!(numeric_to_severity(24), Some(Severity::Fatal));
         assert_eq!(numeric_to_severity(25), None);
+    }
+
+    #[test]
+    fn url_path_is_clear_when_sensitive_mode_is_off() {
+        assert_sensitive_path_in_subprocess(
+            "url_path_is_clear_when_sensitive_mode_is_off",
+            SensitiveMode::Off,
+            "/customers/alice",
+        );
+    }
+
+    #[test]
+    fn url_path_is_replaced_when_sensitive_mode_is_replace() {
+        assert_sensitive_path_in_subprocess(
+            "url_path_is_replaced_when_sensitive_mode_is_replace",
+            SensitiveMode::Replace,
+            "***",
+        );
+    }
+
+    #[test]
+    fn url_path_is_wrapped_when_sensitive_mode_is_wrap() {
+        assert_sensitive_path_in_subprocess(
+            "url_path_is_wrapped_when_sensitive_mode_is_wrap",
+            SensitiveMode::Wrap,
+            "<E>/customers/alice</E>",
+        );
     }
 
     #[tokio::test]
