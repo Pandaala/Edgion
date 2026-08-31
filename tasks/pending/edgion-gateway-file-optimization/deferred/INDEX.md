@@ -16,6 +16,12 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0010 — Enforce Kafka broker egress and DNS policy | needs-investigation | [campaign finding](D0010-kafka-broker-egress-dns-policy.md) |
 | D0011 — Define a DataSender graceful shutdown contract | needs-discussion | [campaign finding](D0011-data-sender-graceful-shutdown-contract.md) |
 | D0012 — Refresh OTLP masking and health integration coverage | needs-implementation | [campaign finding](D0012-otlp-integration-masking-health-refresh.md) |
+| D0013 — Define a strict Redis endpoint contract | needs-discussion | [campaign finding](D0013-redis-endpoint-contract.md) |
+| D0014 — Reconcile the Redis configuration contract | needs-discussion | [campaign finding](D0014-redis-configuration-contract.md) |
+| D0015 — Enforce Redis DNS and egress policy | needs-investigation | [campaign finding](D0015-redis-dns-egress-policy.md) |
+| D0016 — Define Redis pool health and safe connection logging | needs-discussion | [campaign finding](D0016-redis-pool-health-logging.md) |
+| D0017 — Add successful Redis TLS integration coverage | needs-implementation | [campaign finding](D0017-redis-tls-integration-coverage.md) |
+| D0018 — Make disabled outbound TLS inert before publication | needs-investigation | [campaign finding](D0018-disabled-tls-publication-readiness.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |

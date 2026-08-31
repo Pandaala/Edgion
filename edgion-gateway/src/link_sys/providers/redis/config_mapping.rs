@@ -12,6 +12,7 @@ use fred::types::Builder;
 
 use crate::link_sys::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
+use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode};
 
 // ============================================================================
@@ -111,7 +112,7 @@ fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
             let hosts: Vec<(String, u16)> = sentinel
                 .sentinels
                 .iter()
-                .filter_map(|s| parse_host_port(s).ok())
+                .filter_map(|s| parse_redis_url(s).ok())
                 .collect();
             if hosts.is_empty() {
                 anyhow::bail!("No valid sentinel endpoints could be parsed");
@@ -138,7 +139,7 @@ fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
 /// - Reconnection policy (exponential backoff)
 /// - Connection timeout + TCP settings
 /// - Command timeout (performance config)
-/// - TLS (if enabled)
+/// - TLS (when required by a `rediss://` endpoint or explicitly enabled)
 pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, usize)> {
     let mut builder = Builder::from_config(config);
 
@@ -176,36 +177,46 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
         perf.default_command_timeout = Duration::from_millis(cmd_timeout);
     });
 
-    if let Some(tls) = &crd.tls {
-        if tls.enabled {
-            // fred's rustls connector always verifies; reject verify=false up front
-            // (provider_can_disable=false → rejected even outside production).
-            crate::link_sys::outbound_tls::resolve_outbound_tls(
-                &tls.outbound,
-                tls.resolved_ca_certificates.as_deref(),
-                tls.resolved_client_certificate.as_ref(),
-                false,
-                "Redis",
+    let explicit_tls = crd.tls.as_ref().is_some_and(|tls| tls.enabled);
+    let scheme_requires_tls = if explicit_tls {
+        false
+    } else {
+        implicit_tls_required(crd)?
+    };
+    if scheme_requires_tls || explicit_tls {
+        let default_tls = TlsConfig::default();
+        // A disabled TLS block cannot customize an implicitly secure rediss://
+        // transport. Only an explicitly enabled block contributes CA, mTLS,
+        // and verification policy; implicit TLS uses the library defaults.
+        let tls = crd.tls.as_ref().filter(|tls| tls.enabled).unwrap_or(&default_tls);
+
+        // fred's rustls connector always verifies; reject verify=false up front
+        // (provider_can_disable=false → rejected even outside production).
+        crate::link_sys::outbound_tls::resolve_outbound_tls(
+            &tls.outbound,
+            tls.resolved_ca_certificates.as_deref(),
+            tls.resolved_client_certificate.as_ref(),
+            false,
+            "Redis",
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Redis TLS configuration error: {e:?}. fred does not support skip-verify; \
+                 use a proper CA certificate or connect without TLS."
             )
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Redis TLS configuration error: {e:?}. fred does not support skip-verify; \
-                     use a proper CA certificate or connect without TLS."
-                )
-            })?;
-            // Prefer a custom rustls `ClientConfig` built from CRD / Secret
-            // material (private CA, client mTLS). Falls back to fred's default
-            // rustls connector (system CA roots, no client auth) when the CRD
-            // carries no TLS material at all.
-            let tls_connector = match crate::link_sys::tls::build_rustls_client_config(tls)? {
-                Some(client_config) => fred::types::config::TlsConnector::from(client_config),
-                None => fred::types::config::TlsConnector::default_rustls()
-                    .map_err(|e| anyhow::anyhow!("Failed to create default rustls TLS config: {:?}", e))?,
-            };
-            builder.with_config(|config| {
-                config.tls = Some(tls_connector.into());
-            });
-        }
+        })?;
+        // Prefer a custom rustls `ClientConfig` built from CRD / Secret
+        // material (private CA, client mTLS). Falls back to fred's default
+        // rustls connector (system CA roots, no client auth) when the CRD
+        // carries no TLS material at all.
+        let tls_connector = match crate::link_sys::tls::build_rustls_client_config(tls)? {
+            Some(client_config) => fred::types::config::TlsConnector::from(client_config),
+            None => fred::types::config::TlsConnector::default_rustls()
+                .map_err(|e| anyhow::anyhow!("Failed to create default rustls TLS config: {:?}", e))?,
+        };
+        builder.with_config(|config| {
+            config.tls = Some(tls_connector.into());
+        });
     }
 
     let pool_size = crd
@@ -221,6 +232,52 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
 // ============================================================================
 // URL / address parsing helpers
 // ============================================================================
+
+/// Return the endpoints used by the selected topology.
+///
+/// Sentinel uses its dedicated endpoint list, cluster uses every top-level
+/// endpoint, and standalone uses only its first top-level endpoint. This keeps
+/// URL parsing and transport selection aligned with [`build_server_config`].
+fn active_endpoints(crd: &RedisClientConfig) -> impl Iterator<Item = &str> {
+    let endpoints = match crd.topology.as_ref().map(|topology| &topology.mode) {
+        Some(RedisTopologyMode::Cluster) => crd.endpoints.as_slice(),
+        Some(RedisTopologyMode::Sentinel) => crd
+            .topology
+            .as_ref()
+            .and_then(|topology| topology.sentinel.as_ref())
+            .map(|sentinel| sentinel.sentinels.as_slice())
+            .unwrap_or_default(),
+        _ => crd.endpoints.get(..1).unwrap_or_default(),
+    };
+
+    endpoints.iter().map(String::as_str)
+}
+
+/// Determine whether endpoint schemes require implicit TLS.
+///
+/// fred applies one TLS connector to the whole client configuration, so a
+/// topology cannot safely combine secure and plaintext active endpoints unless
+/// the operator explicitly enables TLS for the complete topology.
+fn implicit_tls_required(crd: &RedisClientConfig) -> Result<bool> {
+    let mut has_secure = false;
+    let mut has_plaintext = false;
+
+    for endpoint in active_endpoints(crd) {
+        if endpoint.starts_with("rediss://") {
+            has_secure = true;
+        } else {
+            has_plaintext = true;
+        }
+    }
+
+    if has_secure && has_plaintext {
+        anyhow::bail!(
+            "Redis active endpoints cannot mix TLS and plaintext transports; use consistent schemes or set tls.enabled=true"
+        );
+    }
+
+    Ok(has_secure)
+}
 
 /// Parse "redis://host:port", "rediss://host:port", or "host:port" into (host, port).
 pub(crate) fn parse_redis_url(url: &str) -> Result<(String, u16)> {
@@ -259,7 +316,6 @@ pub(crate) fn parse_host_port(addr: &str) -> Result<(String, u16)> {
 // ============================================================================
 // Tests
 // ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +340,40 @@ mod tests {
     /// Shorthand: `NotRequired` state (no auth configured).
     fn no_auth() -> CredentialState<BasicAuthMaterial> {
         CredentialState::NotRequired
+    }
+
+    fn uses_tls(crd: &RedisClientConfig) -> Result<bool> {
+        let config = build_fred_config(crd, &no_auth())?;
+        let (builder, _) = build_fred_pool(crd, config)?;
+        Ok(builder.get_config().is_some_and(Config::uses_tls))
+    }
+
+    fn assert_outbound_tls_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
+        const CHILD_ENV: &str = "EDGION_REDIS_TLS_MAPPING_CHILD";
+        const TEST_MODULE: &str = "link_sys::providers::redis::config_mapping::tests";
+
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
+            // This process runs only the exact test selected below, so resolving
+            // the process-global outbound TLS default cannot race another test.
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            assertion();
+            return;
+        }
+
+        let exact_test_name = format!("{TEST_MODULE}::{test_name}");
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("the Rust test harness must have a current executable"),
+        )
+        .args(["--exact", exact_test_name.as_str(), "--nocapture"])
+        .env(CHILD_ENV, test_name)
+        .output()
+        .expect("the isolated Redis TLS mapping test process must start");
+        assert!(
+            output.status.success(),
+            "isolated Redis TLS mapping test failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -355,6 +445,32 @@ mod tests {
         };
         let config = build_fred_config(&crd, &no_auth()).unwrap();
         assert!(config.server.is_sentinel());
+    }
+
+    #[test]
+    fn sentinel_endpoints_accept_redis_schemes() {
+        assert_outbound_tls_in_subprocess("sentinel_endpoints_accept_redis_schemes", || {
+            let crd = RedisClientConfig {
+                endpoints: vec!["redis://unused:6379".to_string()],
+                topology: Some(RedisTopology {
+                    mode: RedisTopologyMode::Sentinel,
+                    sentinel: Some(RedisSentinel {
+                        master_name: "mymaster".to_string(),
+                        sentinels: vec!["rediss://sentinel-1:26379".to_string()],
+                    }),
+                    cluster: None,
+                }),
+                ..minimal_config(vec![])
+            };
+
+            let config = build_fred_config(&crd, &no_auth()).unwrap();
+            let ServerConfig::Sentinel { hosts, .. } = config.server else {
+                panic!("expected sentinel server config");
+            };
+            assert_eq!(hosts[0].host, "sentinel-1");
+            assert_eq!(hosts[0].port, 26379);
+            assert!(uses_tls(&crd).unwrap());
+        });
     }
 
     #[test]
@@ -496,6 +612,191 @@ mod tests {
     }
 
     #[test]
+    fn rediss_without_tls_block_enables_tls() {
+        assert_outbound_tls_in_subprocess("rediss_without_tls_block_enables_tls", || {
+            let crd = minimal_config(vec!["rediss://redis.example.com:6380".to_string()]);
+
+            assert!(uses_tls(&crd).unwrap());
+        });
+    }
+
+    #[test]
+    fn rediss_with_disabled_tls_block_still_enables_tls() {
+        assert_outbound_tls_in_subprocess("rediss_with_disabled_tls_block_still_enables_tls", || {
+            use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+            use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, SecretObjectReference};
+            use k8s_openapi::api::core::v1::Secret;
+
+            let crd = RedisClientConfig {
+                tls: Some(TlsConfig {
+                    enabled: false,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                group: String::new(),
+                                kind: "Secret".to_string(),
+                                name: "ignored-ca".to_string(),
+                                namespace: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        client_certificate_ref: Some(SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "ignored-client".to_string(),
+                            namespace: None,
+                        }),
+                        ..Default::default()
+                    },
+                    // Invalid placeholder material would fail closed if the
+                    // disabled policy reached the shared TLS resolver.
+                    resolved_ca_certificates: Some(vec![Secret::default()]),
+                    resolved_client_certificate: Some(Secret::default()),
+                }),
+                ..minimal_config(vec!["rediss://redis.example.com:6380".to_string()])
+            };
+
+            assert!(uses_tls(&crd).unwrap());
+        });
+    }
+
+    #[test]
+    fn redis_without_enabled_tls_remains_plaintext() {
+        let crd = minimal_config(vec!["redis://redis.example.com:6379".to_string()]);
+
+        assert!(!uses_tls(&crd).unwrap());
+    }
+
+    #[test]
+    fn standalone_ignores_later_rediss_endpoint() {
+        assert_outbound_tls_in_subprocess("standalone_ignores_later_rediss_endpoint", || {
+            let crd = minimal_config(vec![
+                "redis://redis.example.com:6379".to_string(),
+                "rediss://unused.example.com:6380".to_string(),
+            ]);
+
+            assert!(!uses_tls(&crd).unwrap());
+        });
+    }
+
+    #[test]
+    fn redis_with_explicit_tls_enables_tls() {
+        assert_outbound_tls_in_subprocess("redis_with_explicit_tls_enables_tls", || {
+            let crd = RedisClientConfig {
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    ..Default::default()
+                }),
+                ..minimal_config(vec!["redis://redis.example.com:6379".to_string()])
+            };
+
+            assert!(uses_tls(&crd).unwrap());
+        });
+    }
+
+    #[test]
+    fn rediss_cluster_endpoints_enable_tls() {
+        assert_outbound_tls_in_subprocess("rediss_cluster_endpoints_enable_tls", || {
+            let crd = RedisClientConfig {
+                endpoints: vec![
+                    "rediss://redis-1.example.com:6380".to_string(),
+                    "rediss://redis-2.example.com:6380".to_string(),
+                ],
+                topology: Some(RedisTopology {
+                    mode: RedisTopologyMode::Cluster,
+                    sentinel: None,
+                    cluster: Some(RedisCluster {
+                        read_from_replicas: Some(true),
+                        max_redirects: Some(5),
+                    }),
+                }),
+                ..minimal_config(vec![])
+            };
+
+            assert!(uses_tls(&crd).unwrap());
+        });
+    }
+
+    #[test]
+    fn mixed_cluster_endpoint_transports_are_rejected_without_explicit_tls() {
+        let crd = RedisClientConfig {
+            endpoints: vec![
+                "rediss://redis-1.example.com:6380".to_string(),
+                "redis-2.example.com:6379".to_string(),
+            ],
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: Some(RedisCluster {
+                    read_from_replicas: Some(true),
+                    max_redirects: Some(5),
+                }),
+            }),
+            ..minimal_config(vec![])
+        };
+
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
+        let err = build_fred_pool(&crd, config).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Redis active endpoints cannot mix TLS and plaintext transports; use consistent schemes or set tls.enabled=true"
+        );
+    }
+
+    #[test]
+    fn mixed_sentinel_endpoint_transports_are_rejected_without_explicit_tls() {
+        let crd = RedisClientConfig {
+            endpoints: vec!["redis://unused:6379".to_string()],
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Sentinel,
+                sentinel: Some(RedisSentinel {
+                    master_name: "mymaster".to_string(),
+                    sentinels: vec![
+                        "rediss://sentinel-1:26380".to_string(),
+                        "redis://sentinel-2:26379".to_string(),
+                    ],
+                }),
+                cluster: None,
+            }),
+            ..minimal_config(vec![])
+        };
+
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
+        let err = build_fred_pool(&crd, config).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Redis active endpoints cannot mix TLS and plaintext transports; use consistent schemes or set tls.enabled=true"
+        );
+    }
+
+    #[test]
+    fn explicit_tls_allows_mixed_cluster_endpoint_spelling() {
+        assert_outbound_tls_in_subprocess("explicit_tls_allows_mixed_cluster_endpoint_spelling", || {
+            let crd = RedisClientConfig {
+                endpoints: vec![
+                    "rediss://redis-1.example.com:6380".to_string(),
+                    "redis://redis-2.example.com:6379".to_string(),
+                ],
+                topology: Some(RedisTopology {
+                    mode: RedisTopologyMode::Cluster,
+                    sentinel: None,
+                    cluster: Some(RedisCluster {
+                        read_from_replicas: Some(true),
+                        max_redirects: Some(5),
+                    }),
+                }),
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    ..Default::default()
+                }),
+                ..minimal_config(vec![])
+            };
+
+            assert!(uses_tls(&crd).unwrap());
+        });
+    }
+
+    #[test]
     fn effective_timeout_treats_zero_and_none_as_default() {
         assert_eq!(effective_timeout_ms(None, 5_000, 30_000), 5_000);
         assert_eq!(effective_timeout_ms(Some(0), 5_000, 30_000), 5_000);
@@ -509,24 +810,26 @@ mod tests {
     fn redis_rejects_verify_false_always() {
         use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
-        let crd = RedisClientConfig {
-            tls: Some(TlsConfig {
-                enabled: true,
-                outbound: OutboundTlsLocal {
-                    verify: Some(false),
-                    ..Default::default()
-                },
-                resolved_ca_certificates: None,
-                resolved_client_certificate: None,
-            }),
-            ..minimal_config(vec!["redis://localhost:6379".to_string()])
-        };
-        // provider_can_disable=false causes the resolver to reject verify=false
-        // (Redis SDK has no skip-verify API) regardless of any environment variable.
-        let err = build_fred_pool(&crd, build_fred_config(&crd, &no_auth()).unwrap()).unwrap_err();
-        assert!(
-            err.to_string().contains("Redis TLS configuration error"),
-            "unexpected error: {err}"
-        );
+        assert_outbound_tls_in_subprocess("redis_rejects_verify_false_always", || {
+            let crd = RedisClientConfig {
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        verify: Some(false),
+                        ..Default::default()
+                    },
+                    resolved_ca_certificates: None,
+                    resolved_client_certificate: None,
+                }),
+                ..minimal_config(vec!["redis://localhost:6379".to_string()])
+            };
+            // provider_can_disable=false causes the resolver to reject verify=false
+            // (Redis SDK has no skip-verify API) regardless of any environment variable.
+            let err = build_fred_pool(&crd, build_fred_config(&crd, &no_auth()).unwrap()).unwrap_err();
+            assert!(
+                err.to_string().contains("Redis TLS configuration error"),
+                "unexpected error: {err}"
+            );
+        });
     }
 }

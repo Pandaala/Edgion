@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress |
-| Coverage | 530 tracked files: 59 changed, 75 examined-no-change, 5 deferred, 391 pending |
-| Active batch | [`B0051-link-sys-otlp`](batches/B0051-link-sys-otlp.md) |
-| Analysis queue | none |
+| Coverage | 532 tracked files: 59 changed, 78 examined-no-change, 5 deferred, 390 non-terminal |
+| Active batch | [`B0052-link-sys-redis`](batches/B0052-link-sys-redis.md) |
+| Analysis queue | none; `f31d0169` drift reconciled with two added files and one reopened lifecycle row |
 
 ## AI guide summary
 
