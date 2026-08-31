@@ -7,7 +7,6 @@ use edgion_resources::resources::edgion_plugins::{DynamicInternalUpstreamConfig,
 use edgion_resources::HTTPBackendRefKind;
 
 pub struct DynamicInternalUpstream {
-    name: String,
     config: DynamicInternalUpstreamConfig,
 }
 
@@ -15,17 +14,14 @@ impl DynamicInternalUpstream {
     pub fn create(config: &DynamicInternalUpstreamConfig) -> Box<dyn RequestFilter> {
         let mut validated = config.clone();
         validated.validate();
-        Box::new(Self {
-            name: "DynamicInternalUpstream".to_string(),
-            config: validated,
-        })
+        Box::new(Self { config: validated })
     }
 }
 
 #[async_trait]
 impl RequestFilter for DynamicInternalUpstream {
     fn name(&self) -> &str {
-        &self.name
+        "DynamicInternalUpstream"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -61,7 +57,7 @@ impl RequestFilter for DynamicInternalUpstream {
         let routing_key = if let Some(ref extract) = self.config.extract {
             if let Some(ref regex) = self.config.compiled_regex {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
-                    Some(m) => m.as_str().to_string(),
+                    Some(m) => m.as_str(),
                     None => {
                         return match self.config.on_missing {
                             UpstreamFallback::Fallback => {
@@ -81,15 +77,15 @@ impl RequestFilter for DynamicInternalUpstream {
                     }
                 }
             } else {
-                raw_value
+                raw_value.as_str()
             }
         } else {
-            raw_value
+            raw_value.as_str()
         };
 
         // 3. Resolve routing key → target backend_ref (name, namespace)
-        let (target_name, target_namespace) = match self.config.resolve_target(&routing_key) {
-            Some((name, ns)) => (name.to_string(), ns.map(|s| s.to_string())),
+        let (target_name, target_namespace) = match self.config.resolve_target(routing_key) {
+            Some(target) => target,
             None => {
                 // Rules mode: no rule matched
                 return match self.config.on_no_match {
@@ -133,12 +129,12 @@ impl RequestFilter for DynamicInternalUpstream {
             if br.backend_kind() != HTTPBackendRefKind::Service {
                 return false;
             }
-            if br.name != target_name {
+            if br.name.as_str() != target_name {
                 return false;
             }
-            if let Some(ref ns) = target_namespace {
+            if let Some(ns) = target_namespace {
                 let br_ns = br.namespace.as_deref().unwrap_or(route_ns);
-                br_ns == ns.as_str()
+                br_ns == ns
             } else {
                 true
             }
@@ -161,19 +157,20 @@ impl RequestFilter for DynamicInternalUpstream {
             };
         }
 
-        // 5. Build InternalJumpPreset and set in context
-        // Resolved selection value for dye rendering: "[namespace/]name".
-        let resolved = match &target_namespace {
-            Some(ns) => format!("{}/{}", ns, target_name),
-            None => target_name.clone(),
-        };
+        // 5. Clone only at the owned request-context boundary.
         let info = InternalJumpPreset {
-            backend_ref_name: target_name,
-            backend_ref_namespace: target_namespace,
+            backend_ref_name: target_name.to_owned(),
+            backend_ref_namespace: target_namespace.map(str::to_owned),
         };
         match session.set_upstream_jump(UpstreamJumpTarget::Internal(info)) {
             SetJumpOutcome::Set => {
-                session.record_outcome(DyeOutcome::Success, &resolved);
+                match target_namespace {
+                    Some(namespace) => {
+                        let resolved = format!("{}/{}", namespace, target_name);
+                        session.record_outcome(DyeOutcome::Success, &resolved);
+                    }
+                    None => session.record_outcome(DyeOutcome::Success, target_name),
+                }
                 log.push("upstream selected");
             }
             SetJumpOutcome::Rejected => {
@@ -193,6 +190,9 @@ mod tests {
     use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
     use crate::{EdgionHttpContext, MatchInfo, Rsc};
     use edgion_resources::common::KeyGet;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{
+        DynUpstreamExtract, DynUpstreamRule, DynUpstreamTarget,
+    };
     use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
     use std::sync::Arc;
 
@@ -209,6 +209,13 @@ mod tests {
             filters: None,
             backend_tls_policy: None,
             ref_denied: None,
+        }
+    }
+
+    fn test_backend_ref_in(name: &str, namespace: &str) -> HTTPBackendRef {
+        HTTPBackendRef {
+            namespace: Some(namespace.to_string()),
+            ..test_backend_ref(name)
         }
     }
 
@@ -292,23 +299,94 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dynamic_internal_upstream_name_is_static_across_instances() {
+        let first = DynamicInternalUpstream::create(&direct_mode_config());
+        let second = DynamicInternalUpstream::create(&DynamicInternalUpstreamConfig {
+            on_invalid: UpstreamFallback::Fallback,
+            ..direct_mode_config()
+        });
+
+        assert_eq!(first.name(), "DynamicInternalUpstream");
+        assert_eq!(second.name(), "DynamicInternalUpstream");
+    }
+
+    #[tokio::test]
+    async fn regex_capture_selects_namespaced_rule_and_records_namespaced_success() {
+        let config = DynamicInternalUpstreamConfig {
+            extract: Some(DynUpstreamExtract {
+                regex: r"^tier=(.+)$".to_string(),
+                group: 1,
+            }),
+            rules: Some(vec![DynUpstreamRule {
+                value: "premium".to_string(),
+                backend_ref: DynUpstreamTarget {
+                    name: "premium-api".to_string(),
+                    namespace: Some("shared-services".to_string()),
+                },
+            }]),
+            ..direct_mode_config()
+        };
+        let plugin = DynamicInternalUpstream::create(&config);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(vec![test_backend_ref_in(
+                "premium-api",
+                "shared-services",
+            )]));
+        session.expect_key_get().return_const(Some("tier=premium".to_string()));
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| {
+                matches!(
+                    target,
+                    UpstreamJumpTarget::Internal(jump)
+                        if jump.backend_ref_name == "premium-api"
+                            && jump.backend_ref_namespace.as_deref() == Some("shared-services")
+                )
+            })
+            .times(1)
+            .return_const(SetJumpOutcome::Set);
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| *outcome == DyeOutcome::Success && value == "shared-services/premium-api")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DynamicInternalUpstream");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(log.contains("upstream selected"));
+    }
+
     /// A successful selection (resolved backend_ref found in the route's
     /// backend_refs, `SetJumpOutcome::Set`) must record `Success` with the
     /// resolved `"[namespace/]name"` value — the value the deleted
     /// `apply_dye_headers` call used to pass.
     #[tokio::test]
     async fn diu_records_success_outcome_with_resolved_name() {
-        let plugin = DynamicInternalUpstream {
-            name: "DynamicInternalUpstream".to_string(),
-            config: direct_mode_config(),
-        };
+        let plugin = DynamicInternalUpstream::create(&direct_mode_config());
 
         let mut session = MockPluginSession::new();
         session
             .expect_ctx()
             .return_const(ctx_with_backend_refs(vec![test_backend_ref("app-v1")]));
         session.expect_key_get().return_const(Some("app-v1".to_string()));
-        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| {
+                matches!(
+                    target,
+                    UpstreamJumpTarget::Internal(jump)
+                        if jump.backend_ref_name == "app-v1" && jump.backend_ref_namespace.is_none()
+                )
+            })
+            .times(1)
+            .return_const(SetJumpOutcome::Set);
         session
             .expect_record_outcome()
             .withf(|o, v| *o == DyeOutcome::Success && v == "app-v1")
@@ -318,6 +396,54 @@ mod tests {
         let mut log = PluginLog::new("DynamicInternalUpstream");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(log.contains("upstream selected"));
+    }
+
+    #[tokio::test]
+    async fn rejected_jump_records_only_locked_log_and_no_success_dye() {
+        let config = DynamicInternalUpstreamConfig {
+            rules: Some(vec![DynUpstreamRule {
+                value: "premium".to_string(),
+                backend_ref: DynUpstreamTarget {
+                    name: "premium-api".to_string(),
+                    namespace: Some("shared-services".to_string()),
+                },
+            }]),
+            ..direct_mode_config()
+        };
+        let plugin = DynamicInternalUpstream::create(&config);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(vec![test_backend_ref_in(
+                "premium-api",
+                "shared-services",
+            )]));
+        session.expect_key_get().return_const(Some("premium".to_string()));
+        session
+            .expect_set_upstream_jump()
+            .withf(|target| {
+                matches!(
+                    target,
+                    UpstreamJumpTarget::Internal(jump)
+                        if jump.backend_ref_name == "premium-api"
+                            && jump.backend_ref_namespace.as_deref() == Some("shared-services")
+                )
+            })
+            .times(1)
+            .return_const(SetJumpOutcome::Rejected);
+        // No record_outcome expectation: any Success Dye publication fails the mock.
+
+        let mut log = PluginLog::new("DynamicInternalUpstream");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(
+            serde_json::to_value(&log).unwrap()["log"],
+            serde_json::json!(["jump locked, rejected"])
+        );
     }
 
     /// Missing routing key with `on_missing: Reject` must record `Reject` with
@@ -328,10 +454,7 @@ mod tests {
             on_missing: UpstreamFallback::Reject,
             ..direct_mode_config()
         };
-        let plugin = DynamicInternalUpstream {
-            name: "DynamicInternalUpstream".to_string(),
-            config,
-        };
+        let plugin = DynamicInternalUpstream::create(&config);
 
         let mut session = MockPluginSession::new();
         session.expect_ctx().return_const(EdgionHttpContext::new());
@@ -361,10 +484,7 @@ mod tests {
             on_invalid: UpstreamFallback::Fallback,
             ..direct_mode_config()
         };
-        let plugin = DynamicInternalUpstream {
-            name: "DynamicInternalUpstream".to_string(),
-            config,
-        };
+        let plugin = DynamicInternalUpstream::create(&config);
 
         let mut session = MockPluginSession::new();
         // Route's only backend_ref is "other-svc" — never matches the resolved

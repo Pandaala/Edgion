@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 84 changed, 98 examined-no-change, 9 deferred, 341 non-terminal |
-| Active batch | B0073 DynamicExternalUpstream jump ownership and allocation cleanup; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0073 completes its commit gate |
+| Coverage | 532 tracked files: 85 changed, 99 examined-no-change, 9 deferred, 339 non-terminal |
+| Active batch | B0074 DynamicInternalUpstream borrowed selection and accepted-jump formatting; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0074 completes its commit gate |
 
 ## AI guide summary
 
