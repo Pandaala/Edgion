@@ -27,7 +27,7 @@ hooks. Generic H1 framing rejections can instead return 400 before
 proxy error. The full current contract, evidence, Envoy comparison, and
 upstream revisit trigger live in the Pingora canonical record:
 
-- [Unsupported H1 request transfer coding fails closed](../../../../pingora/edgion-changes/review/http1/h1-unsupported-request-transfer-coding-fail-closed.md)
+- [Unsupported H1 request transfer coding fails closed](https://github.com/Pandaala/pingora/blob/edgion_v3/edgion-changes/review/http1/h1-unsupported-request-transfer-coding-fail-closed.md)
 
 The re-evaluation trigger requiring a documented common ingress policy has
 therefore fired. The old conclusion must not be used to re-admit external

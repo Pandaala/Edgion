@@ -26,7 +26,7 @@ because an H2 HEADERS frame may declare zero length while leaving the stream ope
   A source that reports a completed Upgrade as `Header(101, true)` is normalized by the custom
   pump into `Header(101, false)` + `Done`, so the terminal hook still fires exactly once and the
   released bytes keep the upgraded body variant. See
-  [custom-terminal-101-normalized-before-dispatch.md](../../../../pingora/edgion-changes/review/http1/custom-terminal-101-normalized-before-dispatch.md).
+  [custom-terminal-101-normalized-before-dispatch.md](https://github.com/Pandaala/pingora/blob/edgion_v3/edgion-changes/review/http1/custom-terminal-101-normalized-before-dispatch.md).
 - The header's final `response_filter` runs before synthetic terminal dispatch. A local reply,
   denial, or header-filter error prevents the body hook and all of its side effects.
 - A filter-produced current chunk precedes chunks emitted through `ResponseBodySink`.
