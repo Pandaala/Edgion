@@ -29,6 +29,11 @@ Trait composition:
 `CenterLifeCycle` is implemented at the center layer by `FileSystemCenter`, `KubernetesCenter`, and `EtcdCenter`.
 The center layer delegates CRUD operations to the storage layer via the delegation pattern, focusing on lifecycle management itself.
 
+Initialization uses three ordered phases in every backend: reference providers (including
+EdgionConfigData and ReferenceGrant), then Gateway, then dependents. Provider readiness is a hard
+gate; there is no parallel fallback. This ensures the first Gateway parse can resolve security
+references deterministically before its typed snapshot is exposed to ConfigSync.
+
 ### ConfMgr Facade
 
 `ConfMgr` is the unified entry point for external callers; internally it holds an `Arc<dyn ConfCenter>`.

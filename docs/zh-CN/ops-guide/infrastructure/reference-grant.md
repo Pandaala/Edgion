@@ -12,7 +12,8 @@ namespace A (source)              namespace B (target)
                                   ReferenceGrant  ← lives here, allows the reference
 ```
 
-> **API 版本**：ReferenceGrant 在 `gateway.networking.k8s.io/v1beta1` 提供服务。与 Gateway 和 HTTPRoute（GA 版本为 `v1`）不同，ReferenceGrant 仍处于 `v1beta1`。
+> **API 版本**：Edgion 安装的 Gateway API CRD 以
+> `gateway.networking.k8s.io/v1` 提供 ReferenceGrant；Edgion manifest 应使用该版本。
 
 ## 典型场景
 
@@ -24,7 +25,7 @@ namespace A (source)              namespace B (target)
 Secret 位于 `security` 命名空间，因此 Grant 在 `security` 中创建：
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-gw-to-secret
@@ -66,7 +67,7 @@ spec:
 Service 位于 `shared` 命名空间，因此 Grant 在 `shared` 中创建：
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-route-to-service
@@ -80,6 +81,67 @@ spec:
     - group: ""
       kind: Service
 ```
+
+## 示例：允许 Gateway 引用 ProxyProtocolTrust 数据
+
+Gateway 可通过 `edgion.io/inbound-proxy-protocol` 引用入站 PROXY protocol 信任策略：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edge
+  namespace: gateway-system
+  annotations:
+    edgion.io/inbound-proxy-protocol: >-
+      {"source":"resourceRef","resourceRef":{"name":"edge-load-balancers","namespace":"networking"}}
+```
+
+目标必须是已启用、没有 overlay 的 `ProxyProtocolTrust` EdgionConfigData：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: edge-load-balancers
+  namespace: networking
+spec:
+  enable: true
+  visibility: Namespace
+  data:
+    type: ProxyProtocolTrust
+    config:
+      mode: trustedSources
+      trustedCidrs: [10.0.0.0/8]
+```
+
+因为该目标为跨 namespace 且 `visibility: Namespace`，必须在 `networking` 中创建以下精确授权：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-edge-proxy-trust
+  namespace: networking
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      namespace: gateway-system
+  to:
+    - group: edgion.io
+      kind: EdgionConfigData
+      name: edge-load-balancers
+```
+
+开启引用校验时，同 namespace 目标始终允许；跨 namespace 但
+`visibility: Cluster` 的目标无需 grant；只有跨 namespace 且
+`visibility: Namespace` 时需要上述精确 grant。关闭 Controller 引用校验时，三种情况均允许。
+
+group、kind、source namespace、target kind 或可选 target name 任一不匹配都会拒绝引用。
+Gateway 条件为 `ResolvedRefs=False/RefNotPermitted`，被选 listener 为
+`ResolvedRefs=False/InvalidProxyProtocolRef`，`Programmed` 保持 false。Controller 仍会同步显式
+Invalid transport state，因此 Gateway 收到该快照后会在启动阶段 fail-close，不会扩大信任范围。
 
 ## 字段参考
 
@@ -112,7 +174,7 @@ spec:
 
 ### Q3：为什么我的 ReferenceGrant 被 API server 拒绝？
 
-**A**：使用 `apiVersion: gateway.networking.k8s.io/v1beta1`。ReferenceGrant 不在 `v1` 提供服务，因此 `v1` 的 apiVersion 会导致应用失败。
+**A**：使用 `apiVersion: gateway.networking.k8s.io/v1`，与 Edgion 安装的 Gateway API CRD 保持一致。
 
 ## 相关文档
 

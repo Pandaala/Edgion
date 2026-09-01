@@ -667,6 +667,20 @@ spec:
           cidrz: [10.0.0.0/8]
 "#;
 
+    const TYPO_PROXY_PROTOCOL_CONFIG_DATA: &str = r#"
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: proxy-policy
+  namespace: default
+spec:
+  data:
+    type: ProxyProtocolTrust
+    config:
+      mode: required
+      typo: true
+"#;
+
     const TYPO_LINK_SYS: &str = r#"
 apiVersion: edgion.io/v1
 kind: LinkSys
@@ -718,6 +732,17 @@ spec:
         assert_eq!(
             parsed.spec.unknown_fields,
             vec!["data.config.items[0].cidrz".to_string()]
+        );
+    }
+
+    #[test]
+    fn proxy_protocol_config_data_typo_parses_and_is_fatal() {
+        let parsed: EdgionConfigData = parse_resource_content(TYPO_PROXY_PROTOCOL_CONFIG_DATA)
+            .expect("ProxyProtocolTrust typo must remain loadable for status reporting");
+        assert_eq!(parsed.spec.unknown_fields, ["data.config.typo"]);
+        assert_eq!(
+            parsed.validate_pre_parse(),
+            ["ProxyProtocolTrust invalid: policy validation failed"]
         );
     }
 

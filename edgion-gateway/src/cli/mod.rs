@@ -6,6 +6,7 @@ use crate::lb::leastconn::BackendCleaner;
 use crate::observe::access_log::init_access_logger;
 use crate::observe::logs::{init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger};
 use crate::observe::metrics;
+use crate::runtime::server::proxy_protocol_policy::init_global_proxy_protocol_policy_runtime;
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use edgion_resources::{init_work_dir, work_dir};
@@ -547,7 +548,11 @@ impl EdgionGatewayCli {
             "Starting Edgion Gateway"
         );
 
-        // 7. Create ConfigSyncClient
+        // 7. Initialize the process-wide listener-policy guard before any
+        // ConfigClient handler can receive a full or incremental snapshot.
+        init_global_proxy_protocol_policy_runtime();
+
+        // 8. Create ConfigSyncClient
         let mut sync_client = runtime.block_on(Self::create_config_sync_client(&config))?;
         let config_client = sync_client.get_config_client();
 
@@ -723,7 +728,7 @@ impl EdgionGatewayCli {
         });
 
         // 23. Run Pingora server (blocks until shutdown)
-        run_server(pingora_server);
+        let run_result = run_server(pingora_server);
 
         // 24. Signal auxiliary services to shut down
         tracing::info!(
@@ -736,6 +741,6 @@ impl EdgionGatewayCli {
         let _ = bg_thread.join();
 
         tracing::info!(component = "gateway", "Gateway shutdown complete");
-        Ok(())
+        run_result
     }
 }

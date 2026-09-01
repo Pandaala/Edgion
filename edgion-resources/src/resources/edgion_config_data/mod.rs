@@ -8,6 +8,7 @@
 //! | Standard primitive | `KeyList` | Unified string+regex list |
 //! | Standard primitive | `IpList` | CIDR range list |
 //! | Policy data | `RequestAccessUrlAllowList` | URL allow candidates bound by RequestAccessPolicy |
+//! | Security policy | `ProxyProtocolTrust` | Strict inbound PROXY sender trust policy |
 //! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
@@ -32,6 +33,9 @@ pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
 
 use crate::resources::common::Condition;
+use crate::resources::proxy_protocol::{
+    CanonicalProxyProtocolTrustPolicy, ProxyProtocolConfigErrorCode, ProxyProtocolTrustPolicy,
+};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -127,6 +131,27 @@ impl From<EdgionConfigDataSpecShadow> for EdgionConfigDataSpec {
     }
 }
 
+impl EdgionConfigDataSpec {
+    /// Validate a ProxyProtocolTrust entry without losing ingest-time unknown
+    /// field findings. Consumers must use this instead of canonicalizing the
+    /// policy directly so a typo can never be accepted after lenient capture.
+    pub fn canonical_proxy_protocol_trust_policy(
+        &self,
+    ) -> Option<Result<CanonicalProxyProtocolTrustPolicy, ProxyProtocolConfigErrorCode>> {
+        let ConfigEntry::ProxyProtocolTrust(policy) = &self.data else {
+            return None;
+        };
+        if self
+            .unknown_fields
+            .iter()
+            .any(|path| path == "data.config" || path.starts_with("data.config."))
+        {
+            return Some(Err(ProxyProtocolConfigErrorCode::InvalidPolicy));
+        }
+        Some(policy.canonicalize())
+    }
+}
+
 /// Cached production schema used by all EdgionConfigData unknown-key checks.
 pub fn edgion_config_data_spec_schema() -> &'static schemars::Schema {
     static SCHEMA: std::sync::OnceLock<schemars::Schema> = std::sync::OnceLock::new();
@@ -189,6 +214,10 @@ pub enum ConfigEntry {
     /// Controller binds nested IP/Secret references into the referring plugin.
     RequestAccessUrlAllowList(RequestAccessUrlAllowListData),
 
+    /// Strict, non-overlay inbound PROXY protocol sender trust policy. This
+    /// variant is all-or-nothing and never participates in fail-to-base.
+    ProxyProtocolTrust(ProxyProtocolTrustPolicy),
+
     /// Generic active-profile selector. Carries only `active` (the profile name to
     /// activate) + an optional `description`. Referenced via `activeProfileRef` from a
     /// `GlobalConnectionIpRestriction` stream plugin (and reusable by other
@@ -216,6 +245,7 @@ impl EdgionConfigData {
             ConfigEntry::KeyList(_) => "KeyList",
             ConfigEntry::IpList(_) => "IpList",
             ConfigEntry::RequestAccessUrlAllowList(_) => "RequestAccessUrlAllowList",
+            ConfigEntry::ProxyProtocolTrust(_) => "ProxyProtocolTrust",
             ConfigEntry::Selector(_) => "Selector",
             ConfigEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             ConfigEntry::Misc(_) => "Misc",
@@ -237,6 +267,15 @@ impl EdgionConfigData {
             ConfigEntry::RequestAccessUrlAllowList(data) => {
                 if let Err(error) = data.validate() {
                     errors.push(error);
+                }
+            }
+            ConfigEntry::ProxyProtocolTrust(_) => {
+                if self
+                    .spec
+                    .canonical_proxy_protocol_trust_policy()
+                    .is_some_and(|result| result.is_err())
+                {
+                    errors.push("ProxyProtocolTrust invalid: policy validation failed".to_string());
                 }
             }
             ConfigEntry::KeyList(key_list) => {

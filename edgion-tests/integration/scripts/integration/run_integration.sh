@@ -626,6 +626,7 @@ run_isolated_scenarios() {
         "geoip_db_states"
         "plugin_policy"
         "unknown_config_fields"
+        "proxy_protocol_policy_lifecycle"
     )
     local commands=(
         "${SCRIPT_DIR}/test_controller_no_auth.sh"
@@ -634,6 +635,7 @@ run_isolated_scenarios() {
         "${SCRIPT_DIR}/test_geoip_db_states.sh"
         "${SCRIPT_DIR}/test_plugin_policy.sh"
         "${SCRIPT_DIR}/test_unknown_config_fields.sh"
+        "${SCRIPT_DIR}/test_proxy_protocol_policy_lifecycle.sh"
     )
 
     local proxy_scenarios_skipped=false
@@ -2646,7 +2648,7 @@ main() {
 
     # Inbound PROXY protocol (standalone, boots its own stack on isolated 584xx
     # ports; the chain suite uses 585xx). Isolated on purpose: a listener with
-    # `edgion.io/accept-proxy-protocol` rejects every connection that does not
+    # `edgion.io/inbound-proxy-protocol` in required mode rejects every connection that does not
     # begin with a header, so it is unusable by any suite sharing the stack, and
     # the flag is read once at bind time so it cannot be toggled between phases.
     #
@@ -2656,6 +2658,12 @@ main() {
     # suite drives both v1 and v2; the chain suite drives v2 only, since what it
     # tests is address propagation across hops, not the parsers. Skipped where
     # docker is unavailable rather than failing.
+
+    # The separate proxy_protocol_policy_lifecycle scenario uses the file-system
+    # Controller on isolated 589xx ports. It covers ECD visibility/grant
+    # authorization, invalid startup snapshots, and restart-scoped inline/ref
+    # policy transitions without depending on Docker. It refuses to execute
+    # stale binaries, so a source/build mismatch is an infrastructure failure.
     # Admin token for the main suite (token-only model).
     #
     # The Controller authenticates the Admin API with a single pre-shared bearer

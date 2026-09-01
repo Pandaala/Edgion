@@ -94,7 +94,7 @@ impl CenterBase {
         *self.reload_tx.lock() = tx;
     }
 
-    async fn wait_registry_ready(&self, timeout_secs: u64, component: &str) {
+    async fn wait_registry_ready(&self, timeout_secs: u64, component: &str) -> bool {
         let registry = &self.runtime.processor_registry;
         let timeout = Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
@@ -107,9 +107,9 @@ impl CenterBase {
                 tracing::warn!(
                     component = component,
                     timeout_secs = timeout_secs,
-                    "Timeout waiting for processor registration to complete, proceeding anyway"
+                    "Timeout waiting for processor registration to complete"
                 );
-                return;
+                return false;
             }
             let remaining = timeout - elapsed;
             let _ = tokio::time::timeout(remaining.min(Duration::from_secs(1)), notify.notified()).await;
@@ -120,13 +120,14 @@ impl CenterBase {
         let all_kinds = registry.all_kinds();
         let ready = registry.wait_kinds_ready(&all_kinds, remaining).await;
         if !ready {
-            tracing::warn!(
+            tracing::error!(
                 component = component,
                 timeout_secs = timeout_secs,
                 not_ready = ?registry.not_ready_kinds(),
-                "Timeout waiting for all processors, proceeding anyway"
+                "Timeout waiting for all processors"
             );
         }
+        ready
     }
 
     // ==================== Public proxy methods ====================
@@ -244,7 +245,15 @@ impl CenterBase {
             self.set_controller_handle(handle);
 
             // 5. Wait for processor registry to become ready.
-            self.wait_registry_ready(30, component).await;
+            if !self.wait_registry_ready(30, component).await {
+                iteration_shutdown.shutdown();
+                self.abort_controller();
+                self.runtime.reset();
+                self.set_reload_tx(None);
+                return Err(anyhow::anyhow!(
+                    "resource controller initialization did not complete before the readiness deadline"
+                ));
+            }
 
             // 5.5. Post-cache-ready cross-resource revalidations.
             run_post_cache_ready_revalidations(self.runtime.clone()).await;
@@ -451,7 +460,7 @@ where
     backend.launch::<K>(kind, processor, event_rx, shutdown_signal)
 }
 
-/// Spawn all resource controllers (Phase 1 + Phase 2) using the given backend.
+/// Spawn all resource controllers in provider, Gateway, then dependent phases.
 ///
 /// This is the single authoritative resource list shared by both the Etcd and
 /// FileSystem controller implementations.  Editing this function is the only
@@ -459,12 +468,10 @@ where
 ///
 /// # Phase ordering
 ///
-/// - **Phase 1** (Foundation): GatewayClass, Gateway, Secret, ConfigMap,
-///   ReferenceGrant, Service, and EndpointSlice.
-///   The function waits up to 15 s for all Phase-1 processors to become ready
-///   before proceeding.
-/// - **Phase 2** (Dependent): All route, TLS, plugin, ACME, and config
-///   resource types that depend on Phase-1 data being available.
+/// - **Providers**: GatewayClass, Secret, ConfigMap, ReferenceGrant, Service,
+///   EndpointSlice, and EdgionConfigData.
+/// - **Gateway**: starts only after every provider is ready.
+/// - **Dependents**: start only after Gateway is ready.
 pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     backend: &B,
     shutdown_signal: ShutdownSignal,
@@ -473,7 +480,7 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
 ) -> Result<Vec<JoinHandle<Result<()>>>> {
     let mut handles = Vec::new();
     // Collects the kind name of every spawned controller, in spawn order.
-    // Sliced at the Phase-1/Phase-2 boundary below (see `phase1_count`).
+    // Sliced at phase boundaries below.
     let mut spawned_kinds: Vec<&'static str> = Vec::new();
 
     // Helper macro: reduces the per-resource boilerplate inside this function.
@@ -496,58 +503,92 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     // Snapshot backend state once, up front, before any dispatch.
     backend.prime().await?;
 
-    // ==================== Phase 1: Foundation Resources ====================
-    tracing::info!(
-        component = component,
-        "Phase 1: Spawning foundation resource controllers"
-    );
+    // ==================== Phase 1: Provider Resources ====================
+    tracing::info!(component = component, "Phase 1: Spawning provider resource controllers");
 
-    for_each_phase1_core_resource!(do_spawn);
+    for_each_provider_core_resource!(do_spawn);
 
-    tracing::info!(component = component, "Registering EndpointSlice controller (Phase 1)");
+    tracing::info!(component = component, "Registering EndpointSlice provider controller");
     do_spawn!(EndpointSlice, EndpointSliceHandler::new());
 
-    let phase1_count = handles.len();
-    let phase1_kinds: Vec<&'static str> = spawned_kinds[..phase1_count].to_vec();
+    let provider_count = handles.len();
+    let provider_kinds: Vec<&'static str> = spawned_kinds[..provider_count].to_vec();
     tracing::info!(
         component = component,
-        count = phase1_count,
-        "Phase 1 foundation controllers spawned, dispatching init"
+        count = provider_count,
+        "Provider controllers spawned, dispatching init"
     );
 
-    // Pump Phase-1 init from the snapshot, then wait for readiness (now real).
-    backend.dispatch_init(&phase1_kinds).await?;
-
-    const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
-    let phase1_ready = runtime
-        .processor_registry
-        .wait_kinds_ready(&phase1_kinds, PHASE1_TIMEOUT)
-        .await;
-
-    if phase1_ready {
-        tracing::info!(
-            component = component,
-            "Phase 1 complete: all foundation resources ready"
-        );
-    } else {
-        tracing::warn!(component = component, "Phase 1 timeout: starting Phase 2 anyway");
+    if let Err(error) = backend.dispatch_init(&provider_kinds).await {
+        for handle in &handles {
+            handle.abort();
+        }
+        return Err(error);
     }
 
-    // ==================== Phase 2: Dependent Resources ====================
+    const PHASE_TIMEOUT: Duration = Duration::from_secs(15);
+    let providers_ready = runtime
+        .processor_registry
+        .wait_kinds_ready(&provider_kinds, PHASE_TIMEOUT)
+        .await;
+
+    if !providers_ready {
+        for handle in &handles {
+            handle.abort();
+        }
+        return Err(anyhow::anyhow!(
+            "provider resource initialization did not complete within {:?}",
+            PHASE_TIMEOUT
+        ));
+    }
+    tracing::info!(component = component, "Phase 1 complete: all providers ready");
+
+    // ==================== Phase 2: Gateway ====================
+    tracing::info!(component = component, "Phase 2: Spawning Gateway controller");
+    do_spawn!(Gateway, GatewayHandler::new(None, None));
+    let gateway_count = handles.len();
+    let gateway_kinds: Vec<&'static str> = spawned_kinds[provider_count..gateway_count].to_vec();
+    if let Err(error) = backend.dispatch_init(&gateway_kinds).await {
+        for handle in &handles {
+            handle.abort();
+        }
+        return Err(error);
+    }
+    if !runtime
+        .processor_registry
+        .wait_kinds_ready(&gateway_kinds, PHASE_TIMEOUT)
+        .await
+    {
+        for handle in &handles {
+            handle.abort();
+        }
+        return Err(anyhow::anyhow!(
+            "Gateway initialization did not complete within {:?}",
+            PHASE_TIMEOUT
+        ));
+    }
+    tracing::info!(component = component, "Phase 2 complete: Gateway ready");
+
+    // ==================== Phase 3: Dependent Resources ====================
     tracing::info!(
         component = component,
-        "Phase 2: Spawning dependent resource controllers"
+        "Phase 3: Spawning dependent resource controllers"
     );
+    for_each_dependent_resource!(do_spawn);
 
-    for_each_phase2_resource!(do_spawn);
-
-    let phase2_kinds: Vec<&'static str> = spawned_kinds[phase1_count..].to_vec();
-    backend.dispatch_init(&phase2_kinds).await?;
+    let dependent_kinds: Vec<&'static str> = spawned_kinds[gateway_count..].to_vec();
+    if let Err(error) = backend.dispatch_init(&dependent_kinds).await {
+        for handle in &handles {
+            handle.abort();
+        }
+        return Err(error);
+    }
 
     tracing::info!(
         component = component,
-        phase1_count = phase1_count,
-        phase2_count = handles.len() - phase1_count,
+        provider_count = provider_count,
+        gateway_count = gateway_count - provider_count,
+        dependent_count = handles.len() - gateway_count,
         total = handles.len(),
         "All resource controllers spawned"
     );
@@ -566,6 +607,31 @@ mod tests {
     use crate::conf_mgr::sync_runtime::ShutdownHandle;
 
     use super::CenterBase;
+
+    #[test]
+    fn local_controller_phase_definitions_put_config_data_before_gateway() {
+        let mut providers = Vec::new();
+        macro_rules! collect_provider {
+            ($K:ty, $handler:expr) => {
+                providers.push(stringify!($K));
+            };
+        }
+        for_each_provider_core_resource!(collect_provider);
+        providers.push("EndpointSlice");
+
+        let mut dependents = Vec::new();
+        macro_rules! collect_dependent {
+            ($K:ty, $handler:expr) => {
+                dependents.push(stringify!($K));
+            };
+        }
+        for_each_dependent_resource!(collect_dependent);
+
+        assert!(providers.contains(&"EdgionConfigData"));
+        assert!(!providers.contains(&"Gateway"));
+        assert!(!dependents.contains(&"EdgionConfigData"));
+        assert!(!dependents.contains(&"Gateway"));
+    }
 
     #[tokio::test]
     async fn filesystem_none_leadership_runs_immediately() {

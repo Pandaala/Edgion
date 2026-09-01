@@ -1,6 +1,6 @@
 # Hop 2 must treat hop 1 as a trusted proxy, otherwise the X-Forwarded-For walk
 # stops at hop 1's own address. This is the L7 trust list and is deliberately
-# separate from edgion.io/proxy-protocol-trusted-cidrs, which is the L4 one.
+# separate from the Gateway's inbound PROXY protocol trust policy at L4.
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:

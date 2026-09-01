@@ -41,24 +41,24 @@ pub mod traits;
 // child modules (non_kube_common, etcd, file_system) inherit them via textual
 // scoping without needing explicit `use` imports.
 
-/// Invoke `$cb!(TypeIdent, handler_expr)` for each Phase-1 core resource.
-/// Excludes conditional `Endpoints`/`EndpointSlice`; callers handle those.
-macro_rules! for_each_phase1_core_resource {
+/// Invoke `$cb!(TypeIdent, handler_expr)` for each provider resource.
+/// Excludes conditional `EndpointSlice`; callers handle it.
+macro_rules! for_each_provider_core_resource {
     ($cb:ident) => {
         $cb!(
             GatewayClass,
             GatewayClassHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
         );
-        $cb!(Gateway, GatewayHandler::new(None, None));
         $cb!(Secret, SecretHandler::new());
         $cb!(ConfigMap, ConfigMapHandler::new());
         $cb!(ReferenceGrant, ReferenceGrantHandler::new());
         $cb!(Service, ServiceHandler::new());
+        $cb!(EdgionConfigData, EdgionConfigDataHandler::new());
     };
 }
 
-/// Invoke `$cb!(TypeIdent, handler_expr)` for each Phase-2 dependent resource.
-macro_rules! for_each_phase2_resource {
+/// Invoke `$cb!(TypeIdent, handler_expr)` for each dependent resource.
+macro_rules! for_each_dependent_resource {
     ($cb:ident) => {
         // Routes
         $cb!(
@@ -93,7 +93,6 @@ macro_rules! for_each_phase2_resource {
         // Plugins
         $cb!(EdgionPlugins, EdgionPluginsHandler::new());
         $cb!(EdgionStreamPlugins, EdgionStreamPluginsHandler::new());
-        $cb!(EdgionConfigData, EdgionConfigDataHandler::new());
         $cb!(LinkSys, LinkSysHandler::new());
         $cb!(EdgionBackend, EdgionBackendHandler::new());
         // ACME

@@ -584,7 +584,7 @@ fn config_data_generated_schema_keeps_only_misc_open() {
     let branches = schema["$defs"]["ConfigEntry"]["oneOf"]
         .as_array()
         .expect("ConfigEntry must remain an adjacent-tagged oneOf");
-    assert_eq!(branches.len(), 6);
+    assert_eq!(branches.len(), 7);
     let mut saw_misc = false;
     let mut typed_branches = 0usize;
 

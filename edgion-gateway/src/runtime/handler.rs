@@ -5,12 +5,16 @@ use crate::routes::tcp::get_global_tcp_route_managers;
 use crate::routes::tls::get_global_tls_route_managers;
 use crate::routes::udp::get_global_udp_route_managers;
 use crate::runtime::matching::rebuild_gateway_tls_matcher;
+use crate::runtime::server::proxy_protocol_policy::{
+    get_global_proxy_protocol_policy_runtime, ProxyProtocolPolicyRuntime, SnapshotDisposition,
+};
 use crate::runtime::store::{
     get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos,
 };
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::ListenerKey;
+use edgion_resources::ResourceMeta;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -25,16 +29,27 @@ use std::sync::Arc;
 /// Listener-level routing state is rebuilt into `ListenerGatewayInfoStore`
 /// (see `rebuild_listener_gateway_infos`); per-listener route managers are
 /// only rebuilt when the listener key set actually changes.
-pub struct GatewayHandler;
+pub struct GatewayHandler {
+    policy_runtime: Arc<ProxyProtocolPolicyRuntime>,
+}
 
 impl GatewayHandler {
     pub fn new() -> Self {
-        Self
+        Self {
+            policy_runtime: get_global_proxy_protocol_policy_runtime(),
+        }
     }
 }
 
 impl ConfHandler<Gateway> for GatewayHandler {
     fn full_set(&self, data: &HashMap<String, Arc<Gateway>>) {
+        if matches!(
+            self.policy_runtime.observe_snapshot(data.values().map(Arc::as_ref)),
+            SnapshotDisposition::RejectFatal
+        ) {
+            return;
+        }
+
         tracing::info!(
             count = data.len(),
             "Gateway full_set: received {} Gateway resources",
@@ -97,6 +112,16 @@ impl ConfHandler<Gateway> for GatewayHandler {
         update: HashMap<String, Arc<Gateway>>,
         remove: HashSet<String>,
     ) {
+        if !add.is_empty() || !update.is_empty() || !remove.is_empty() {
+            let prospective = prospective_gateway_snapshot(&add, &update, &remove);
+            if matches!(
+                self.policy_runtime.observe_snapshot(prospective.values()),
+                SnapshotDisposition::RejectFatal
+            ) {
+                return;
+            }
+        }
+
         let mut needs_rebuild = false;
 
         // Mirror `full_set`: keep all GatewayStore mutations inside a scoped block
@@ -209,8 +234,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
             // (ListenerGatewayInfoStore + per-listener route managers). The OS-level listener sockets
             // are bound once during startup (create_and_configure_server ->
             // configure_listeners) and the Server is then consumed by
-            // run_forever() (cli/pingora.rs), so we hold no handle to bind/drain
-            // sockets here. Adding a new listener port to a live Gateway updates
+            // Server::run(RunArgs) (cli/pingora.rs), so we hold no handle to
+            // bind/drain sockets here. Adding a new listener port to a live Gateway updates
             // routing but leaves the new port unbound (traffic silently dropped);
             // removing a port leaves its socket bound with no route. A port-set
             // change therefore requires a gateway process restart. TLS certificate
@@ -229,6 +254,26 @@ impl ConfHandler<Gateway> for GatewayHandler {
             }
         }
     }
+}
+
+fn prospective_gateway_snapshot(
+    add: &HashMap<String, Arc<Gateway>>,
+    update: &HashMap<String, Arc<Gateway>>,
+    remove: &HashSet<String>,
+) -> HashMap<String, Gateway> {
+    let mut prospective: HashMap<String, Gateway> = get_global_gateway_store()
+        .read()
+        .list_gateways()
+        .into_iter()
+        .map(|gateway| (gateway.key_name(), gateway))
+        .collect();
+    for key in remove {
+        prospective.remove(key);
+    }
+    for (key, gateway) in add.iter().chain(update) {
+        prospective.insert(key.clone(), (**gateway).clone());
+    }
+    prospective
 }
 
 /// Update GatewayBackendTlsStore from a Gateway's resolved client certificate.

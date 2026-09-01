@@ -12,6 +12,8 @@ spec:
   parentRefs:
     - name: ppin-gw
       namespace: edgion-test
+    - name: ppin-trusted-gw
+      namespace: edgion-test
   # Deliberately no `hostnames`: the probes run from a BusyBox container whose
   # wget sends `Host: <ip>:<port>`, and host matching is not what this test is
   # about. Matching every host keeps the probe to a plain one-liner.

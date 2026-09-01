@@ -282,6 +282,20 @@ fn config_data_gate_on_captures_typed_typo_and_skips_serialization() {
 }
 
 #[test]
+fn proxy_protocol_config_data_gate_on_captures_fatal_config_typo() {
+    let _guard = GateGuard::set(&GATE_LOCK, true);
+    let spec: EdgionConfigDataSpec = serde_json::from_value(json!({
+        "data": {"type": "ProxyProtocolTrust", "config": {"mode": "required", "typo": true}}
+    }))
+    .expect("security policy typo must remain deserializable for status reporting");
+    assert_eq!(spec.unknown_fields, ["data.config.typo"]);
+    assert!(spec
+        .canonical_proxy_protocol_trust_policy()
+        .expect("ProxyProtocolTrust variant")
+        .is_err());
+}
+
+#[test]
 fn config_data_url_allow_list_typo_is_advisory_with_gate_off_and_on() {
     let cases = [
         (

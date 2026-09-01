@@ -37,16 +37,63 @@ If the placement is wrong, the code path and the documentation usually drift wit
 | `edgion.io/metrics-test-key` | Integration-test metrics correlation key |
 | `edgion.io/metrics-test-type` | Integration-test metrics mode |
 | `edgion.io/edgion-stream-plugins` | Gateway-level connection-filter entry |
-| `edgion.io/accept-proxy-protocol` | Expect an inbound PROXY protocol header (v1/v2 auto-detected) on every listener of this Gateway, as sent by an L4 load balancer such as AWS NLB. The addresses it carries replace the peer address the whole request path sees. Connections without a valid header are rejected. **Inbound only** — unrelated to `edgion.io/proxy-protocol` below, which *sends* a header upstream |
-| `edgion.io/accept-proxy-protocol.<listener-name>` | Overrides the Gateway-wide value for one listener (a Gateway API `Listener` has no annotations of its own) |
-| `edgion.io/proxy-protocol-trusted-cidrs` | Restricts the above to connections from these IP/CIDRs (comma- or space-separated; a bare address means /32 or /128). Peers outside the list are served as ordinary direct connections and their bytes are never parsed as a header, so one listener can serve both load-balanced and direct traffic. Absent means every connection must carry a header. An invalid or match-all entry falls back to requiring a header. Gateway-wide only — no per-listener suffix |
+| `edgion.io/inbound-proxy-protocol` | Strict JSON policy for receiving PROXY protocol v1/v2 on selected Gateway listeners. See below. **Inbound only** — unrelated to `edgion.io/proxy-protocol`, which sends a header upstream. |
 
-> **Trust:** a PROXY protocol header is unauthenticated. Without
-> `proxy-protocol-trusted-cidrs` the listener must be reachable exclusively
-> through the trusted load balancer, enforced at the network layer, and must not
-> also serve kubelet probes (those hit the pod directly and carry no header).
-> With the CIDR list set, other peers are simply served as direct connections.
->
+#### Inbound PROXY protocol
+
+Use one of these exact JSON shapes:
+
+```yaml
+metadata:
+  annotations:
+    edgion.io/inbound-proxy-protocol: >-
+      {"source":"inline","listeners":["https"],"config":{"mode":"trustedSources","trustedCidrs":["10.0.0.0/8","192.168.1.5"]}}
+```
+
+```json
+{"source":"inline","listeners":["tcp-edge"],"config":{"mode":"required"}}
+```
+
+```json
+{"source":"resourceRef","listeners":["https"],"resourceRef":{"name":"edge-load-balancers","namespace":"networking"}}
+```
+
+`listeners` is optional. When omitted, the policy selects every TCP-based listener
+(HTTP, HTTPS, TCP, and TLS) and ignores UDP listeners on a mixed Gateway. A present
+list must contain 1–64 unique existing TCP-based listener names. Selecting UDP,
+using an unknown name, or applying the annotation to a UDP-only Gateway is invalid.
+
+`required` requires every connection to begin with a valid v1 or v2 header. Use it
+only when the network boundary guarantees that every reachable peer is a
+header-producing load balancer. `trustedSources` parses a header only when the
+physical peer matches one of 1–256 `trustedCidrs`; an untrusted peer remains an
+ordinary direct connection and cannot forge `RemoteIp` by sending header bytes.
+Bare addresses mean `/32` or `/128`. Invalid entries, duplicates after
+normalization, and `/0` reject the entire policy; there is no partial or wider
+fallback.
+
+The resource reference always targets `edgion.io/EdgionConfigData`. The target
+must have `spec.enable: true`, no `spec.active`, and
+`spec.data.type: ProxyProtocolTrust`. When EdgionConfigData reference validation
+is disabled, the reference is allowed. With validation enabled, a same-namespace
+reference is always allowed. A cross-namespace target with
+`spec.visibility: Cluster` is allowed without a grant; a cross-namespace target
+with `spec.visibility: Namespace` requires an exact Gateway API
+`ReferenceGrant` from group `gateway.networking.k8s.io`, kind `Gateway`, to
+group `edgion.io`, kind `EdgionConfigData`.
+
+Invalid JSON, policy, selection, reference, or shared-listener configuration is
+reported in Gateway conditions and makes Gateway startup fail closed. After
+startup, any effective socket-policy change makes readiness return 503, rejects
+new TCP connections, and terminates the process non-zero so a supervisor can
+restart it with the newest valid snapshot.
+
+The transport peer observed before parsing is `DirectPeerIp`; it is never
+rewritten. A header accepted from a trusted peer supplies `RemoteIp`, the client
+identity used by later layers. A PROXY protocol header is unauthenticated, so a
+trusted endpoint must generate the header itself rather than transparently relay
+client-authored bytes.
+
 > In both modes the listener must only be reachable via something that writes
 > the header **itself**: a transparent L4 relay forwards the client's first bytes
 > verbatim, so a client can author a header and the relay launders it into a

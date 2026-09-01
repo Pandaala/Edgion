@@ -21,6 +21,7 @@ fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) ->
             listeners: Some(listeners),
             addresses: None,
             tls: None,
+            resolved_inbound_proxy_protocol: Default::default(),
         },
         status: None,
     }

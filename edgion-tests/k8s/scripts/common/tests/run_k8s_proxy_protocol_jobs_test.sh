@@ -54,6 +54,11 @@ case "$command_name" in
       deployment)
         printf '1'
         ;;
+      gateway)
+        cat <<'JSON'
+{"status":{"conditions":[{"type":"Accepted","status":"False","reason":"InvalidProxyProtocolConfig"},{"type":"ResolvedRefs","status":"False","reason":"RefNotPermitted"},{"type":"ListenersNotValid","status":"True","reason":"ProxyProtocolPolicyConflict"}],"listeners":[{"name":"tcp","conditions":[{"type":"Accepted","status":"False","reason":"InvalidProxyProtocolListener"},{"type":"ResolvedRefs","status":"False","reason":"InvalidProxyProtocolRef"},{"type":"Conflicted","status":"True","reason":"ProxyProtocolPolicyConflict"}]}]}}
+JSON
+        ;;
       job)
         if [[ "$joined" == *'jsonpath={.status.succeeded}'* ]]; then
           if [ "$name" = edgion-proxy-cert-bootstrap ]; then
@@ -160,7 +165,10 @@ run_helper_case() {
       > "${case_dir}/output.log" 2>&1
   actual_rc=$?
   set -e
-  [ "$actual_rc" -eq "$expected_rc" ]
+  if [ "$actual_rc" -ne "$expected_rc" ]; then
+    cat "${case_dir}/output.log" >&2
+    return 1
+  fi
   grep -qx "$expected_result" "${case_dir}/output.log"
   grep -qx "$expected_summary" "${case_dir}/output.log"
   grep -q '^create namespace edgion-proxy-isolated-' "$MUTATIONS"
@@ -170,6 +178,31 @@ run_helper_case() {
 run_helper_case success proxy_protocol_inbound 0 \
   '@@ISOLATED_RESULT proxy_protocol_inbound PASS 0' \
   '@@ISOLATED_SUMMARY total=1 failed=0 infrastructure_failed=0'
+grep -qx 'PASS: Kubernetes inbound PROXY protocol Gateway conditions' \
+  "${TEST_ROOT}/success-proxy_protocol_inbound/output.log"
+TRUST_RBAC="${TEST_ROOT}/success-proxy_protocol_inbound/proxy_protocol_inbound/trust-rbac.yaml"
+grep -q 'namespace: edgion-proxy-isolated-.*-pp-trust' "$TRUST_RBAC"
+[ "$(grep -c '^kind: Role$' "$TRUST_RBAC")" -eq 1 ]
+[ "$(grep -c '^kind: RoleBinding$' "$TRUST_RBAC")" -eq 1 ]
+[ "$(grep -c '^  - apiGroups:' "$TRUST_RBAC")" -eq 5 ]
+grep -q 'name: edgion-proxy-controller-trust-reader' "$TRUST_RBAC"
+grep -q 'apiGroups: \[""\]' "$TRUST_RBAC"
+grep -q 'resources: \["services", "endpoints", "secrets", "configmaps"\]' "$TRUST_RBAC"
+grep -q 'apiGroups: \["discovery.k8s.io"\]' "$TRUST_RBAC"
+grep -q 'resources: \["endpointslices"\]' "$TRUST_RBAC"
+grep -q 'apiGroups: \["gateway.networking.k8s.io"\]' "$TRUST_RBAC"
+grep -q 'resources: \["gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes", "tlsroutes", "referencegrants", "backendtlspolicies"\]' "$TRUST_RBAC"
+grep -q 'apiGroups: \["edgion.io"\]' "$TRUST_RBAC"
+grep -q 'resources: \["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdatas", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"\]' "$TRUST_RBAC"
+grep -q 'resources: \["edgionconfigdatas/status"\]' "$TRUST_RBAC"
+[ "$(grep -c 'verbs: \["get", "list", "watch"\]' "$TRUST_RBAC")" -eq 4 ]
+[ "$(grep -c 'verbs: \["get", "update", "patch"\]' "$TRUST_RBAC")" -eq 1 ]
+! grep -q '"\*"' "$TRUST_RBAC"
+grep -A3 '^roleRef:' "$TRUST_RBAC" | grep -q 'kind: Role'
+grep -A3 '^roleRef:' "$TRUST_RBAC" | grep -q 'name: edgion-proxy-controller-trust-reader'
+grep -A3 '^subjects:' "$TRUST_RBAC" | grep -q 'name: edgion-proxy-controller'
+grep -q 'namespace: edgion-proxy-isolated-.*-inbound$' "$TRUST_RBAC"
+grep -q '^delete namespace edgion-proxy-isolated-.*-pp-trust ' "$MUTATIONS"
 ! find "${TEST_ROOT}/success-proxy_protocol_inbound/proxy_protocol_inbound/conf" \
   -type f -name '*Endpoint*' | grep -q .
 grep -q 'app.kubernetes.io/name: edgion-proxy-test-server' \

@@ -37,6 +37,49 @@
 | `edgion.io/metrics-test-key` | 集成测试 metrics 关联键 |
 | `edgion.io/metrics-test-type` | 集成测试 metrics 模式 |
 | `edgion.io/edgion-stream-plugins` | Gateway 级连接过滤入口 |
+| `edgion.io/inbound-proxy-protocol` | 在选定的 TCP 类 listener 上接收 PROXY protocol v1/v2；值为严格 JSON，见下文 |
+
+#### 入站 PROXY protocol
+
+内联信任列表：
+
+```json
+{"source":"inline","listeners":["https"],"config":{"mode":"trustedSources","trustedCidrs":["10.0.0.0/8","192.168.1.5"]}}
+```
+
+强制要求每条连接携带 header：
+
+```json
+{"source":"inline","listeners":["tcp-edge"],"config":{"mode":"required"}}
+```
+
+引用 `EdgionConfigData`：
+
+```json
+{"source":"resourceRef","listeners":["https"],"resourceRef":{"name":"edge-load-balancers","namespace":"networking"}}
+```
+
+`listeners` 可省略；省略时选择 Gateway 的全部 HTTP、HTTPS、TCP、TLS listener，并在混合
+Gateway 中忽略 UDP。显式列表必须包含 1–64 个不重复且真实存在的 TCP 类 listener 名称；
+显式选择 UDP 或在纯 UDP Gateway 上配置本注解均为非法。
+
+`required` 会从任意 peer 解析 header，缺少或非法 header 时拒绝连接，仅适合网络边界已保证
+所有连接均来自会生成 header 的负载均衡器的场景。`trustedSources` 仅在物理连接来源
+`DirectPeerIp` 命中 `trustedCidrs` 时解析 header；未命中的连接保持普通直连语义，不能通过
+伪造 header 改写 `RemoteIp`。裸 IP 会规范化为 `/32` 或 `/128`；空列表、非法 CIDR、
+规范化后重复项以及 `/0` 会使整条策略无效，不会部分生效或退化为更宽的信任范围。
+
+引用目标必须是已启用、没有 `spec.active` overlay、且 `data.type: ProxyProtocolTrust` 的
+`EdgionConfigData`。关闭 ECD 引用校验时允许引用；开启时，同 namespace 始终允许，跨
+namespace 的 `visibility: Cluster` 无需 grant，跨 namespace 的 `visibility: Namespace`
+则需要从 `gateway.networking.k8s.io/Gateway` 到 `edgion.io/EdgionConfigData` 的精确
+`ReferenceGrant`。
+
+非法 JSON、listener 选择、策略、引用或共享物理 listener 冲突都会写入 Gateway conditions，
+并在启动 Pingora 前 fail-close。启动后只要有效 socket 策略发生变化，readiness 会变为 503，
+新 TCP 连接会被拒绝，Gateway 以非零状态快速退出，由 supervisor 使用最新有效快照重启。
+`DirectPeerIp` 始终表示解析 header 前的物理 peer，永不被改写；可信 header 中的客户端地址
+成为后续层使用的 `RemoteIp`。
 
 ### Route / TLS / Backend
 

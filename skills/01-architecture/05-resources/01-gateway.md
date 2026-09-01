@@ -33,6 +33,14 @@ Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(na
    - If it is a cross-namespace reference, also register it in CrossNsRefManager
    - Read Secret data from `ctx.runtime().secret_store` and populate the resolved TLS transport field
    - If the Secret has not yet arrived, do not error out; SecretRefManager guarantees automatic re-processing later
+4. **Resolve inbound PROXY protocol**: strictly parse `edgion.io/inbound-proxy-protocol`, validate
+   listener selection, canonicalize an inline policy or resolve its typed `ProxyProtocolTrust`
+   EdgionConfigData target, and always write Disabled/Ready/Invalid into the non-CRD transport
+   field. Same-namespace ECD refs are allowed; Cluster-visible cross-namespace targets need no
+   grant; Namespace-visible cross-namespace targets require the exact Gateway-to-ECD grant.
+5. **Replace physical-listener contributions atomically**: publish the complete Gateway
+   contribution set to `ProxyProtocolListenerPolicyManager`; requeue only peers affected by a net
+   declaration change. Apply fully replaces old contributions and delete replaces with an empty set.
 
 ### on_change
 
@@ -41,6 +49,7 @@ Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(na
 ### on_delete
 
 - Clear SecretRefManager and CrossNsRefManager registrations
+- Clear EdgionConfigData reverse references and atomically remove PROXY policy contributions
 - Clear hostname/port caches in GatewayRouteIndex
 
 ### update_status
@@ -52,6 +61,10 @@ Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(na
   - `Accepted`: True when there are no validation_errors
   - `Conflicted`: True when Listener ports conflict within the same Gateway (not detected across Gateways)
   - `ResolvedRefs`: checks the certificateRef kind (must be Secret), whether the Secret exists, whether the Secret data is valid (contains tls.crt/tls.key, non-empty, valid PEM, **cert/key public-key match**), and whether cross-namespace references are permitted by ReferenceGrant
+  - Inbound PROXY policy errors merge into the existing condition types without duplicates. Intrinsic
+    JSON/selection/policy errors set Accepted false; reference failures set ResolvedRefs false;
+    shared physical-listener declaration conflicts set Conflicted true with reason
+    `ProxyProtocolPolicyConflict`. Programmed remains false for every invalid case.
   - `supportedKinds`: computes the supported route types based on the protocol (HTTP/HTTPS → HTTPRoute+GRPCRoute, TCP → TCPRoute, UDP → UDPRoute, TLS → TLSRoute); if `allowedRoutes.kinds` contains any unmatched type, reports InvalidRouteKind
   - `attachedRoutes`: obtained from AttachedRouteTracker as the number of attached routes
 - **Addresses**: derived in priority order: spec.addresses > ClusterIP of a Service with the same name > the default address configuration > "0.0.0.0"

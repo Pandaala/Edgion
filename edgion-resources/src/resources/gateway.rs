@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::Condition;
+use super::proxy_protocol::ResolvedInboundProxyProtocol;
 
 /// Gateway defines a network gateway
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -35,6 +36,12 @@ pub struct GatewaySpec {
     /// Gateway-level TLS configuration (Gateway API v1.5)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<GatewaySpecTLS>,
+
+    /// Controller-resolved inbound PROXY protocol policy transported to the
+    /// Gateway. This is not an operator-authored Gateway API field.
+    #[serde(default)]
+    #[schemars(skip)]
+    pub resolved_inbound_proxy_protocol: ResolvedInboundProxyProtocol,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -368,6 +375,7 @@ mod tests {
                 }]),
                 addresses: None,
                 tls: None,
+                resolved_inbound_proxy_protocol: ResolvedInboundProxyProtocol::Disabled,
             },
             status: None,
         };

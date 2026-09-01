@@ -1,4 +1,5 @@
 use crate::conf_sync::ConfigClient;
+use crate::runtime::server::proxy_protocol_policy::get_global_proxy_protocol_policy_runtime;
 use axum::{
     extract::{Path, Query, State},
     response::Json,
@@ -79,9 +80,17 @@ async fn health_check() -> Json<ApiResponse<String>> {
 
 /// Readiness check endpoint - returns OK only when all caches are ready
 async fn readiness_check(State(client): State<Arc<ConfigClient>>) -> axum::http::StatusCode {
-    match client.is_ready() {
-        Ok(()) => axum::http::StatusCode::OK,
-        Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    readiness_status(
+        client.is_ready().is_ok(),
+        get_global_proxy_protocol_policy_runtime().is_fatal(),
+    )
+}
+
+fn readiness_status(config_ready: bool, policy_fatal: bool) -> axum::http::StatusCode {
+    if config_ready && !policy_fatal {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
     }
 }
 
@@ -91,7 +100,7 @@ async fn readiness_check(State(client): State<Arc<ConfigClient>>) -> axum::http:
 /// After a reload, this value should change to match the Controller's new server_id.
 async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<ServerInfoResponse>> {
     let server_id = client.current_server_id();
-    let ready = client.is_ready().is_ok();
+    let ready = client.is_ready().is_ok() && !get_global_proxy_protocol_policy_runtime().is_fatal();
     Json(ApiResponse::ok_body(ServerInfoResponse { server_id, ready }))
 }
 
@@ -2020,6 +2029,13 @@ mod router_shape_tests {
         assert_eq!(status_of(r.clone(), "/health").await, StatusCode::OK);
         let ready = status_of(r, "/ready").await;
         assert!(ready == StatusCode::OK || ready == StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn policy_fatal_overrides_ready_config_cache() {
+        assert_eq!(readiness_status(true, false), StatusCode::OK);
+        assert_eq!(readiness_status(true, true), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(readiness_status(false, false), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

@@ -15,51 +15,10 @@ pub mod edgion {
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
 
-    /// Expect an inbound PROXY protocol header (v1 and v2 are auto-detected) on
-    /// every connection accepted by this Gateway's listeners, as sent by an L4
-    /// load balancer such as AWS NLB. The addresses it carries replace the peer
-    /// address seen by the whole request path.
-    ///
-    /// Lives on `Gateway.metadata.annotations`; value `"true"` enables it. A
-    /// per-listener form `edgion.io/accept-proxy-protocol.<listener-name>`
-    /// overrides the Gateway-wide value for one listener, since a Gateway API
-    /// `Listener` carries no annotations of its own.
-    ///
-    /// This is the **inbound** direction and is unrelated to [`PROXY_PROTOCOL`]
-    /// above, which makes Edgion *send* a header to the upstream.
-    ///
-    /// The header is unauthenticated: anything able to reach the listener
-    /// directly can claim any source address, so only enable this where the
-    /// listener is reachable exclusively through the trusted load balancer.
-    /// A listener with it enabled rejects connections that do not start with a
-    /// valid header (HAProxy `accept-proxy` semantics).
-    pub const ACCEPT_PROXY_PROTOCOL: &str = "edgion.io/accept-proxy-protocol";
-
-    /// Restrict [`ACCEPT_PROXY_PROTOCOL`] to connections from these sources.
-    ///
-    /// IP/CIDR list on `Gateway.metadata.annotations`, separated by commas or any
-    /// whitespace (so a YAML block scalar works), e.g. `"10.0.0.0/8, 192.168.1.5"`.
-    /// A bare address is taken as /32 or /128.
-    /// When present, a connection from any other address is served as an
-    /// ordinary direct connection and its bytes are never parsed as a PROXY
-    /// header — that is what lets one listener serve both load-balanced and
-    /// direct traffic safely. When absent, every connection must carry a header.
-    ///
-    /// An unparseable entry, or one matching every address, falls back to
-    /// requiring a header rather than building a partial or wide-open matcher.
-    /// Match-all is judged on the parsed prefix, not the text, so `0.0.0.0/00`
-    /// and `0.0.0.0/+0` are refused alongside `0.0.0.0/0`. Note a pair such as
-    /// `0.0.0.0/1, 128.0.0.0/1` still covers all of IPv4 and is accepted — the
-    /// check rejects an accidental wildcard, not a deliberate one.
-    ///
-    /// This list says who may SPEAK proxy protocol (the load balancer). It is
-    /// unrelated to `EdgionGatewayConfig.spec.realIp.trustedIps`, which says
-    /// which addresses count as proxy hops when walking X-Forwarded-For. The two
-    /// normally hold different addresses; do not conflate them.
-    ///
-    /// Only the Gateway-wide key is read: there is no per-listener suffix, so
-    /// all PROXY-enabled listeners of a Gateway share one trust list.
-    pub const PROXY_PROTOCOL_TRUSTED_CIDRS: &str = "edgion.io/proxy-protocol-trusted-cidrs";
+    /// Strict JSON configuration for inbound PROXY protocol parsing on a
+    /// Gateway. This is unrelated to [`PROXY_PROTOCOL`], which configures the
+    /// outbound Gateway-to-upstream direction.
+    pub const INBOUND_PROXY_PROTOCOL: &str = "edgion.io/inbound-proxy-protocol";
 
     /// Per-route opt-out / opt-in for upstream path forwarding view.
     /// Three-state on HTTPRoute.metadata.annotations:

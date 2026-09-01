@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ppin-loopback-trust
+  namespace: edgion-test
+spec:
+  enable: true
+  visibility: Namespace
+  data:
+    type: ProxyProtocolTrust
+    config:
+      mode: trustedSources
+      trustedCidrs:
+        - 127.0.0.1

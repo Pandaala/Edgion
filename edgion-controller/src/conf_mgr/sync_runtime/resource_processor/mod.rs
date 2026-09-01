@@ -26,6 +26,7 @@ pub mod listener_port_manager;
 pub mod namespace_store;
 pub(crate) mod plugin_policy_stamp;
 mod processor;
+pub mod proxy_protocol_listener_policy;
 pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
@@ -74,6 +75,9 @@ pub use ref_grant::{
 };
 
 pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey};
+pub use proxy_protocol_listener_policy::{
+    ProxyProtocolListenerContribution, ProxyProtocolListenerPolicyManager, ProxyProtocolPolicyDeclaration,
+};
 
 pub use attached_route_tracker::AttachedRouteTracker;
 

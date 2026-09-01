@@ -467,6 +467,7 @@ mod tests {
                 }]),
                 addresses: None,
                 tls: None,
+                resolved_inbound_proxy_protocol: Default::default(),
             },
             status: Some(GatewayStatus {
                 addresses: None,
@@ -486,6 +487,7 @@ mod tests {
                 listeners: None,
                 addresses: None,
                 tls: None,
+                resolved_inbound_proxy_protocol: Default::default(),
             },
             status: None,
         };

@@ -14,7 +14,7 @@
 #                                                     test_server :30062 /headers
 #
 # gw1 gets the client from the PROXY header and appends it to X-Forwarded-For.
-# gw2 has NO proxy-protocol annotation — nothing sends it a header — and resolves
+# gw2 has no inbound PROXY protocol annotation — nothing sends it a header — and resolves
 # the client by walking XFF, which only works because the GatewayClass carries a
 # parametersRef to an EdgionGatewayConfig listing hop 1 in realIp.trustedIps.
 # The config also uses X-Edgion-Remote-IP to prove the upstream RemoteIp header

@@ -210,6 +210,10 @@ impl EdgionConfigDataStore {
                 ConfigEntry::Misc(_) => {
                     // Misc is an opaque escape hatch; no typed index is built for it.
                 }
+                ConfigEntry::ProxyProtocolTrust(_) => {
+                    // Resolved by the Controller into GatewaySpec; the Gateway
+                    // never builds a second EdgionConfigData runtime index.
+                }
             }
         }
 

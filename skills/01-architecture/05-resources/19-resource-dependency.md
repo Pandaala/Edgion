@@ -32,6 +32,7 @@ flowchart LR
 
     subgraph ReferenceGrantDeps
         ReferenceGrant -- "on_change requeue\ncross-ns referrers" --> Gateway4["Gateway\n(cross-ns Secret/CA)"]
+        EdgionConfigData -- "ProxyProtocolTrust change/delete\nworkqueue requeue" --> Gateway4
         ReferenceGrant -- "cross-ns authorization check" --> Routes2["Route family\n(cross-ns backendRef)"]
     end
 
@@ -65,6 +66,8 @@ flowchart LR
 | **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
 | **ServiceRefManager** | Route family (register backends during parse) | ServiceHandler (look up dependents on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
 | **CrossNsRefManager** | Gateway / Route family (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
+| **EdgionConfigDataRefManager** | Gateway and plugin resources (clear-before-add during parse) | EdgionConfigData handler (requeue dependents on apply/delete) |
+| **ProxyProtocolListenerPolicyManager** | Gateway (atomic whole-Gateway contribution replacement) | Gateway handler (requeue only peers affected by a net physical-listener declaration change) |
 | **GatewayRouteIndex** | Route family / EdgionTls (write on on_change) | GatewayHandler (look up associated Routes on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
 | **RouteDelegationIndex** (`route_delegation_index`) | HTTPRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | HTTPRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: HTTPRoute` parentRefs) |
 | **RouteDelegationIndex** (`grpc_route_delegation_index`, second instance, same type, disjoint `"ns/name"` keys) | GRPCRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | GRPCRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: GRPCRoute` parentRefs) |
@@ -86,4 +89,7 @@ credential.
 
 ## Resources without external dependencies
 
-EdgionGatewayConfig, EdgionStreamPlugins, LinkSys, EdgionConfigData, ConfigMap, EndpointSlice, Namespace
+EdgionGatewayConfig, EdgionStreamPlugins, LinkSys, ConfigMap, EndpointSlice, Namespace
+
+EdgionConfigData is a provider for Gateway inbound PROXY protocol `resourceRef` policies and is
+therefore no longer dependency-free. Provider changes and deletes requeue registered Gateways.

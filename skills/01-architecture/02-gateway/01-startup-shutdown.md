@@ -64,6 +64,13 @@ Startup then waits until every watched `ClientCache` has completed its initial L
 hydrates backend lists for services referenced by HTTP, gRPC, TCP, TLS, and UDP routes, and
 initializes the access, SSL, TCP, TLS, and UDP loggers.
 
+Before any Pingora service starts, the Gateway also performs typed inbound PROXY protocol
+preflight over the complete Gateway snapshot. It rejects explicit invalid states, impossible Ready
+states, noncanonical transported CIDRs, and conflicting declarations for one physical
+`ListenerKey`. The validated key-to-declaration map is frozen for the process lifetime; only
+`required` maps to Pingora's unbounded-source representation, while `trustedSources` always builds
+an explicit matcher.
+
 ### 4. Pingora handoff
 
 `create_and_configure_server()` runs in `spawn_blocking` while the Tokio runtime is active:
@@ -73,7 +80,11 @@ initializes the access, SSL, TCP, TLS, and UDP loggers.
 3. Create `GatewayBase`, list Gateway resources, and configure startup listener sockets.
 
 The Tokio runtime is then moved to a background thread that waits on the auxiliary shutdown watch.
-The main thread calls `run_server()` → `Server::run_forever()`.
+The main thread calls `run_server()` → `Server::run(RunArgs)`. On Unix, `RunArgs` carries
+`PolicyShutdownSignalWatch`, which races the ordinary `UnixShutdownSignalWatch` against the
+process-wide inbound-PROXY-policy fatal watch. Unix SIGTERM/SIGINT keep their normal graceful/fast
+semantics; the internal fatal branch returns `FastShutdown`. Non-Unix builds use default
+`RunArgs`.
 
 ## Shutdown
 
@@ -81,7 +92,9 @@ The main thread calls `run_server()` → `Server::run_forever()`.
    graceful-shutdown timeout (default 10 seconds).
 2. During process shutdown, the HTTP proxy disables keepalive and adds `Connection: close` where
    applicable.
-3. After `run_forever()` returns, the main thread sends the auxiliary shutdown signal.
+3. After `Server::run(RunArgs)` returns, the main thread checks the bounded internal fatal
+   diagnostic, sends the auxiliary shutdown signal, and returns an error only for that internal
+   policy-fatal path.
 4. Admin, probe, metrics, backend-cleaner, and other shutdown-aware tasks begin draining.
 5. The background runtime allows a five-second drain window, returns, and is joined before
    `EdgionGatewayCli::run()` completes.
@@ -92,13 +105,21 @@ The background Tokio thread is therefore not an intentionally permanent `pending
 
 Listener sockets are bound once during Pingora construction. Runtime Gateway updates rebuild
 listener metadata and per-listener route snapshots, but cannot add or remove Pingora services after
-`run_forever()` begins.
+`Server::run(RunArgs)` begins.
 
 - Adding a new listener port does not bind a socket in the running process.
 - Removing a port does not close its already-bound socket.
 - Route data and TLS certificates on existing sockets hot-reload through atomic snapshots.
 
 Changing the listener port set requires a Gateway process restart/rolling restart.
+
+Inbound PROXY protocol is part of the same socket boundary. After the baseline is frozen, any
+effective key or declaration change trips a process-wide monotonic fatal guard. Readiness becomes
+503, every TCP service's accept filter rejects new connections before optional stream plugins and
+before PROXY header parsing, and the internal shutdown watcher requests FastShutdown. The process
+returns non-zero so its supervisor can restart it with the newest complete valid snapshot. A
+revert cannot clear the fatal state. Contributor-only changes with the same physical key and
+canonical declaration are diagnostic metadata and do not trip the guard.
 
 ## Key source files
 

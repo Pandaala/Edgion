@@ -409,24 +409,23 @@ impl KubernetesController {
         self.run_controllers(shutdown_signal, runtime).await
     }
 
-    /// Phase 1 foundation resource kinds that must be ready before Phase 2 starts.
+    /// Provider kinds that must be ready before Gateway initialization starts.
     ///
     /// These are the resources that Phase 2 resources (Routes, EdgionTls, etc.)
     /// depend on during their init processing:
     /// - GatewayClass: Gateway validation requires GatewayClass reference
-    /// - Gateway: Route lookup_gateway() needs Gateway in cache
     /// - Secret: Gateway TLS listeners and Route auth need Secret
     /// - ReferenceGrant: Cross-namespace reference validation
     /// - Service: Route backend references need Service info
-    fn phase1_kinds(&self) -> Vec<&'static str> {
+    fn provider_kinds(&self) -> Vec<&'static str> {
         let mut kinds = vec![
             "GatewayClass",
-            "Gateway",
             "Secret",
             "ConfigMap",
             "ReferenceGrant",
             "Service",
             "EndpointSlice",
+            "EdgionConfigData",
         ];
         kinds.retain(|k| !self.no_watch_kinds.contains(*k));
         kinds
@@ -434,12 +433,15 @@ impl KubernetesController {
 
     /// All resource kinds that should register processors during controller startup.
     ///
-    /// This includes both Phase 1 foundation resources and Phase 2 dependent
+    /// This includes providers, Gateway, and dependent
     /// resources. The namespace watcher is intentionally excluded because it
     /// does not participate in PROCESSOR_REGISTRY readiness gating.
     /// Kinds listed in `no_watch_kinds` are excluded.
     pub(crate) fn all_processor_kinds(&self) -> Vec<&'static str> {
-        let mut kinds = self.phase1_kinds();
+        let mut kinds = self.provider_kinds();
+        if self.should_watch("Gateway") {
+            kinds.push("Gateway");
+        }
         kinds.extend(
             [
                 "HTTPRoute",
@@ -451,7 +453,6 @@ impl KubernetesController {
                 "BackendTLSPolicy",
                 "EdgionPlugins",
                 "EdgionStreamPlugins",
-                "EdgionConfigData",
                 "LinkSys",
                 "EdgionBackend",
                 "EdgionAcme",
@@ -471,11 +472,12 @@ impl KubernetesController {
 
     /// Internal method to run all controllers with phased initialization.
     ///
-    /// Phase 1 (Foundation): GatewayClass, Gateway, Secret, ReferenceGrant,
-    ///   Service, EndpointSlice, Namespace watcher
-    /// Phase 2 (Dependent): Routes, EdgionTls, BackendTLSPolicy, Plugins, etc.
+    /// Phase 1 (Providers): GatewayClass, Secret, ConfigMap, ReferenceGrant,
+    ///   Service, EndpointSlice, EdgionConfigData, and Namespace watcher
+    /// Phase 2: Gateway
+    /// Phase 3 (Dependents): Routes, EdgionTls, BackendTLSPolicy, Plugins, etc.
     ///
-    /// Phase 2 waits for Phase 1 to complete init before starting, so that
+    /// Each phase waits for the previous one to complete init, so that
     /// dependent resources find their references already in cache on first
     /// processing — reducing post-init revalidation and duplicate status writes.
     ///
@@ -540,13 +542,11 @@ impl KubernetesController {
 
         let mut h = Vec::new();
 
-        // ==================== Phase 1: Foundation Resources ====================
-        // These must be ready before Phase 2 resources start, so that
-        // Routes can resolve Gateway/Secret/Service references on first processing.
+        // ==================== Phase 1: Provider Resources ====================
 
         tracing::info!(
             component = "k8s_controller",
-            "Phase 1: Spawning foundation resource controllers"
+            "Phase 1: Spawning provider resource controllers"
         );
 
         // Cluster-scoped foundation
@@ -555,16 +555,6 @@ impl KubernetesController {
                 self,
                 "GatewayClass",
                 GatewayClassHandler::new(self.controller_name.clone()),
-                &ctx,
-            ));
-        }
-
-        // Gateway (needs GatewayClass, filter by gateway_class)
-        if self.should_watch("Gateway") {
-            h.push(spawn::<Gateway, _>(
-                self,
-                "Gateway",
-                GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
                 &ctx,
             ));
         }
@@ -627,38 +617,77 @@ impl KubernetesController {
             ctx.runtime.clone(),
         ));
 
-        let phase1_count = h.len();
-        tracing::info!(
-            component = "k8s_controller",
-            count = phase1_count,
-            "Phase 1 foundation controllers spawned, waiting for init completion"
-        );
-
-        // Wait for Phase 1 resources to complete their init phase
-        const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
-        let phase1_ready = runtime
-            .processor_registry
-            .wait_kinds_ready(&self.phase1_kinds(), PHASE1_TIMEOUT)
-            .await;
-
-        if phase1_ready {
-            tracing::info!(
-                component = "k8s_controller",
-                "Phase 1 complete: all foundation resources ready, starting Phase 2"
-            );
-        } else {
-            tracing::warn!(
-                component = "k8s_controller",
-                "Phase 1 timeout: starting Phase 2 anyway (fallback to parallel init)"
-            );
+        // EdgionConfigData supplies referenced inbound PROXY policies and must
+        // be complete before any Gateway is resolved.
+        if self.should_watch("EdgionConfigData") {
+            h.push(spawn::<EdgionConfigData, _>(
+                self,
+                "EdgionConfigData",
+                EdgionConfigDataHandler::new(),
+                &ctx,
+            ));
         }
 
-        // ==================== Phase 2: Dependent Resources ====================
-        // These resources depend on Phase 1 resources being in cache.
+        let provider_count = h.len();
+        tracing::info!(
+            component = "k8s_controller",
+            count = provider_count,
+            "Provider controllers spawned, waiting for init completion"
+        );
+
+        const PHASE_TIMEOUT: Duration = Duration::from_secs(15);
+        let providers_ready = runtime
+            .processor_registry
+            .wait_kinds_ready(&self.provider_kinds(), PHASE_TIMEOUT)
+            .await;
+
+        if !providers_ready {
+            for handle in &h {
+                handle.abort();
+            }
+            return Err(anyhow::anyhow!(
+                "provider resource initialization did not complete within {:?}",
+                PHASE_TIMEOUT
+            ));
+        }
+        tracing::info!(component = "k8s_controller", "Phase 1 complete: all providers ready");
+
+        // ==================== Phase 2: Gateway ====================
+        tracing::info!(component = "k8s_controller", "Phase 2: Spawning Gateway controller");
+        if self.should_watch("Gateway") {
+            h.push(spawn::<Gateway, _>(
+                self,
+                "Gateway",
+                GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
+                &ctx,
+            ));
+        }
+        let gateway_count = h.len();
+        let gateway_kinds = if self.should_watch("Gateway") {
+            vec!["Gateway"]
+        } else {
+            Vec::new()
+        };
+        if !runtime
+            .processor_registry
+            .wait_kinds_ready(&gateway_kinds, PHASE_TIMEOUT)
+            .await
+        {
+            for handle in &h {
+                handle.abort();
+            }
+            return Err(anyhow::anyhow!(
+                "Gateway initialization did not complete within {:?}",
+                PHASE_TIMEOUT
+            ));
+        }
+        tracing::info!(component = "k8s_controller", "Phase 2 complete: Gateway ready");
+
+        // ==================== Phase 3: Dependent Resources ====================
 
         tracing::info!(
             component = "k8s_controller",
-            "Phase 2: Spawning dependent resource controllers"
+            "Phase 3: Spawning dependent resource controllers"
         );
 
         // Route resources
@@ -764,14 +793,6 @@ impl KubernetesController {
                 &ctx,
             ));
         }
-        if self.should_watch("EdgionConfigData") {
-            h.push(spawn::<EdgionConfigData, _>(
-                self,
-                "EdgionConfigData",
-                EdgionConfigDataHandler::new(),
-                &ctx,
-            ));
-        }
         if self.should_watch("LinkSys") {
             h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
         }
@@ -819,10 +840,11 @@ impl KubernetesController {
 
         tracing::info!(
             component = "k8s_controller",
-            phase1_count = phase1_count,
-            phase2_count = h.len() - phase1_count,
+            provider_count = provider_count,
+            gateway_count = gateway_count - provider_count,
+            dependent_count = h.len() - gateway_count,
             total = h.len(),
-            "All ResourceControllers spawned (Phase 1 + Phase 2)"
+            "All ResourceControllers spawned (providers + Gateway + dependents)"
         );
 
         // Wait for either:

@@ -37,7 +37,7 @@ Two runtimes coexist within the Gateway process:
 | Runtime | Responsibility | Lifecycle |
 |---------|----------------|-----------|
 | **Tokio** | gRPC Watch/List, configuration handling, auxiliary services (Admin API, Metrics API, health checks), all async tasks | Created at startup, moved to a shutdown-aware background thread, drained and joined after Pingora stops |
-| **Pingora** | Proxy main loop: TCP connection accept, TLS handshake, HTTP/gRPC request handling, upstream connection reuse | Runs blocking on the main thread via `Server::run_forever()` |
+| **Pingora** | Proxy main loop: TCP connection accept, TLS handshake, HTTP/gRPC request handling, upstream connection reuse | Runs blocking on the main thread via `Server::run(RunArgs)`; on Unix the arguments carry the composite external/internal shutdown watcher |
 
 The two runtimes share configuration data via an **ArcSwap** atomic pointer — the Tokio side writes, the Pingora side reads lock-free. This design ensures that hot configuration updates do not block proxy request handling.
 

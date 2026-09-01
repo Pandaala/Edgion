@@ -7,28 +7,39 @@
 //! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
+use crate::conf_mgr::sync_runtime::resource_processor::ref_grant::is_edgion_config_data_ref_allowed_from;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, make_conflict_key,
-    ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ProxyProtocolListenerContribution,
+    ProxyProtocolPolicyDeclaration, ResourceRef,
 };
 use crate::conf_mgr::ControllerRuntime;
 use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::constants::annotations;
 use edgion_resources::constants::app::GATEWAY_NAME;
-use edgion_resources::listener_key::resolve_listener_addr;
+use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::is_core_api_group;
 use edgion_resources::resources::gateway::{
     FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, GatewayTlsMode,
     Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
+use edgion_resources::resources::proxy_protocol::{
+    BoundedProxyProtocolReferenceIdentity, InboundProxyProtocolAnnotation, ProxyProtocolConfigErrorCode,
+    ProxyProtocolPolicySourceKind, ResolvedInboundProxyProtocol,
+};
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const GATEWAY_SYSTEM_NAMESPACE: &str = "edgion-system";
+const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
+const INVALID_PROXY_PROTOCOL_CONFIG: &str = "InvalidProxyProtocolConfig";
+const INVALID_PROXY_PROTOCOL_LISTENER: &str = "InvalidProxyProtocolListener";
+const INVALID_PROXY_PROTOCOL_REF: &str = "InvalidProxyProtocolRef";
+const PROXY_PROTOCOL_POLICY_CONFLICT: &str = "ProxyProtocolPolicyConflict";
 
 /// Gateway handler
 ///
@@ -161,6 +172,7 @@ impl GatewayResolvedRefsError {
 
 struct ListenerInfo {
     name: String,
+    protocol: String,
     supported_kinds: Vec<RouteGroupKind>,
     route_count: i32,
     resolved_refs_errors: Vec<GatewayResolvedRefsError>,
@@ -185,6 +197,257 @@ impl GatewayHandler {
             gateway_class_name,
             default_address,
         }
+    }
+}
+
+fn is_tcp_listener(listener: &GatewayListener) -> bool {
+    matches!(
+        listener.protocol.to_ascii_uppercase().as_str(),
+        "HTTP" | "HTTPS" | "TCP" | "TLS"
+    )
+}
+
+fn tcp_listener_names(gateway: &Gateway) -> Vec<String> {
+    gateway
+        .spec
+        .listeners
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|listener| is_tcp_listener(listener))
+        .map(|listener| listener.name.clone())
+        .collect()
+}
+
+fn invalid_proxy_protocol_state(
+    code: ProxyProtocolConfigErrorCode,
+    listener_names: Vec<String>,
+    reference: Option<BoundedProxyProtocolReferenceIdentity>,
+) -> ResolvedInboundProxyProtocol {
+    ResolvedInboundProxyProtocol::Invalid {
+        code,
+        listener_names,
+        reference,
+    }
+}
+
+fn resolve_proxy_protocol_listener_selection(
+    gateway: &Gateway,
+    requested: Option<&[String]>,
+) -> Result<Vec<String>, (ProxyProtocolConfigErrorCode, Vec<String>)> {
+    let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
+    match requested {
+        Some(requested) => {
+            let selected: Vec<String> = requested
+                .iter()
+                .filter(|name| listeners.iter().any(|listener| listener.name.as_str() == name.as_str()))
+                .cloned()
+                .collect();
+            let valid = selected.len() == requested.len()
+                && requested.iter().all(|name| {
+                    listeners
+                        .iter()
+                        .find(|listener| listener.name.as_str() == name.as_str())
+                        .is_some_and(is_tcp_listener)
+                });
+            if valid {
+                Ok(selected)
+            } else {
+                Err((ProxyProtocolConfigErrorCode::InvalidListenerSelection, selected))
+            }
+        }
+        None => {
+            let selected = tcp_listener_names(gateway);
+            if selected.is_empty() {
+                Err((ProxyProtocolConfigErrorCode::InvalidListenerSelection, Vec::new()))
+            } else {
+                Ok(selected)
+            }
+        }
+    }
+}
+
+fn resolve_inbound_proxy_protocol(
+    gateway: &Gateway,
+    ctx: &HandlerContext,
+    resource_ref: &ResourceRef,
+) -> ResolvedInboundProxyProtocol {
+    let Some(raw) = gateway
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(annotations::edgion::INBOUND_PROXY_PROTOCOL))
+    else {
+        return ResolvedInboundProxyProtocol::Disabled;
+    };
+
+    let annotation = match InboundProxyProtocolAnnotation::parse(raw) {
+        Ok(annotation) => annotation,
+        Err(code) => return invalid_proxy_protocol_state(code, tcp_listener_names(gateway), None),
+    };
+    let listener_names = match resolve_proxy_protocol_listener_selection(gateway, annotation.listeners()) {
+        Ok(listener_names) => listener_names,
+        Err((code, selected)) => return invalid_proxy_protocol_state(code, selected, None),
+    };
+
+    if let Some(policy) = annotation.policy() {
+        return match policy.canonicalize() {
+            Ok(policy) => ResolvedInboundProxyProtocol::Ready {
+                listener_names,
+                policy,
+                source: ProxyProtocolPolicySourceKind::Inline,
+            },
+            Err(code) => invalid_proxy_protocol_state(code, listener_names, None),
+        };
+    }
+
+    let Some(reference) = annotation.resource_ref() else {
+        return invalid_proxy_protocol_state(ProxyProtocolConfigErrorCode::InternalInvariant, listener_names, None);
+    };
+    let gateway_namespace = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let target_namespace = reference.namespace.as_deref().unwrap_or(gateway_namespace);
+    let reference_identity =
+        BoundedProxyProtocolReferenceIdentity::new(target_namespace.to_string(), reference.name.clone()).ok();
+    let target_key = format!("{}/{}", target_namespace, reference.name);
+    ctx.runtime()
+        .edgion_config_data_refs
+        .add_ref(target_key, format!("Gateway:{}", resource_ref.resource_key()));
+    if target_namespace != gateway_namespace {
+        ctx.runtime()
+            .cross_ns_ref_mgr
+            .add_ref(target_namespace.to_string(), resource_ref.clone());
+    }
+
+    let Some(target) = ctx
+        .runtime()
+        .edgion_config_data_store
+        .get(Some(target_namespace), &reference.name)
+    else {
+        return invalid_proxy_protocol_state(
+            ProxyProtocolConfigErrorCode::ReferenceNotFound,
+            listener_names,
+            reference_identity,
+        );
+    };
+    if !is_edgion_config_data_ref_allowed_from(
+        ctx.runtime(),
+        gateway_namespace,
+        GATEWAY_API_GROUP,
+        "Gateway",
+        target_namespace,
+        &reference.name,
+        target.spec.visibility,
+    ) {
+        return invalid_proxy_protocol_state(
+            ProxyProtocolConfigErrorCode::ReferenceNotPermitted,
+            listener_names,
+            reference_identity,
+        );
+    }
+    if !target.spec.enable {
+        return invalid_proxy_protocol_state(
+            ProxyProtocolConfigErrorCode::ReferenceDisabled,
+            listener_names,
+            reference_identity,
+        );
+    }
+    if target.spec.active.is_some() {
+        return invalid_proxy_protocol_state(
+            ProxyProtocolConfigErrorCode::ReferenceActiveUnsupported,
+            listener_names,
+            reference_identity,
+        );
+    }
+    let Some(policy) = target.spec.canonical_proxy_protocol_trust_policy() else {
+        return invalid_proxy_protocol_state(
+            ProxyProtocolConfigErrorCode::ReferenceWrongType,
+            listener_names,
+            reference_identity,
+        );
+    };
+    match policy {
+        Ok(policy) => ResolvedInboundProxyProtocol::Ready {
+            listener_names,
+            policy,
+            source: ProxyProtocolPolicySourceKind::ResourceRef,
+        },
+        Err(_) => invalid_proxy_protocol_state(
+            ProxyProtocolConfigErrorCode::ReferenceInvalidPolicy,
+            listener_names,
+            reference_identity,
+        ),
+    }
+}
+
+fn proxy_protocol_contributions(gateway: &Gateway) -> Vec<ProxyProtocolListenerContribution> {
+    let selected: BTreeSet<&str> = match &gateway.spec.resolved_inbound_proxy_protocol {
+        ResolvedInboundProxyProtocol::Ready { listener_names, .. }
+        | ResolvedInboundProxyProtocol::Invalid { listener_names, .. } => {
+            listener_names.iter().map(String::as_str).collect()
+        }
+        ResolvedInboundProxyProtocol::Disabled => BTreeSet::new(),
+    };
+    let ready_policy = match &gateway.spec.resolved_inbound_proxy_protocol {
+        ResolvedInboundProxyProtocol::Ready { policy, .. } => Some(policy),
+        _ => None,
+    };
+
+    gateway
+        .spec
+        .listeners
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|listener| is_tcp_listener(listener))
+        .filter_map(|listener| {
+            let declaration = if selected.contains(listener.name.as_str()) {
+                ready_policy.map(ProxyProtocolPolicyDeclaration::from)?
+            } else {
+                ProxyProtocolPolicyDeclaration::Disabled
+            };
+            Some(ProxyProtocolListenerContribution {
+                listener_name: listener.name.clone(),
+                listener_key: ListenerKey::new(
+                    resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
+                    &listener.protocol,
+                ),
+                declaration,
+            })
+        })
+        .collect()
+}
+
+fn is_proxy_protocol_reference_error(code: ProxyProtocolConfigErrorCode) -> bool {
+    matches!(
+        code,
+        ProxyProtocolConfigErrorCode::ReferenceNotFound
+            | ProxyProtocolConfigErrorCode::ReferenceNotPermitted
+            | ProxyProtocolConfigErrorCode::ReferenceDisabled
+            | ProxyProtocolConfigErrorCode::ReferenceActiveUnsupported
+            | ProxyProtocolConfigErrorCode::ReferenceWrongType
+            | ProxyProtocolConfigErrorCode::ReferenceInvalidPolicy
+    )
+}
+
+fn is_proxy_protocol_shared_conflict(code: ProxyProtocolConfigErrorCode) -> bool {
+    code == ProxyProtocolConfigErrorCode::SharedListenerConflict
+}
+
+fn proxy_protocol_error_message(
+    code: ProxyProtocolConfigErrorCode,
+    reference: Option<&BoundedProxyProtocolReferenceIdentity>,
+    gateway_namespace: &str,
+    gateway_name: &str,
+) -> String {
+    match reference {
+        Some(reference) => format!(
+            "Gateway '{gateway_namespace}/{gateway_name}' inbound PROXY protocol reference '{}/{}' is invalid ({code:?})",
+            reference.namespace, reference.name,
+        ),
+        None => format!(
+            "Gateway '{gateway_namespace}/{gateway_name}' annotation '{}' is invalid ({code:?})",
+            annotations::edgion::INBOUND_PROXY_PROTOCOL,
+        ),
     }
 }
 
@@ -275,6 +538,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let cross_ns_manager = &ctx.runtime().cross_ns_ref_mgr;
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
+        // Clear the previous EdgionConfigData dependency before rebuilding the
+        // annotation's complete reference set. Missing targets are registered
+        // below as well, so their later arrival requeues this Gateway.
+        let gateway_config_data_ref_key = format!("Gateway:{}", resource_ref.resource_key());
+        ctx.runtime()
+            .edgion_config_data_refs
+            .clear_refs_from(&gateway_config_data_ref_key);
+
         // Track a cross-namespace `edgion.io/dns-resolver-ref` (Gateway → httpdns
         // LinkSys) so a ReferenceGrant add/remove requeues this Gateway. The grant
         // check + annotation strip happen in `update_status` (which reports the
@@ -291,6 +562,32 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     cross_ns_manager.add_ref(key.namespace, cross_ns_ref.clone());
                 }
             }
+        }
+
+        g.spec.resolved_inbound_proxy_protocol = resolve_inbound_proxy_protocol(&g, ctx, &resource_ref);
+        let gateway_key_for_policy = resource_ref.resource_key();
+        let dirty_peers = ctx
+            .runtime()
+            .proxy_protocol_listener_policy
+            .replace_gateway_contributions(&gateway_key_for_policy, proxy_protocol_contributions(&g));
+        let shared_conflicts = ctx
+            .runtime()
+            .proxy_protocol_listener_policy
+            .conflicting_listener_names(&gateway_key_for_policy);
+        if !shared_conflicts.is_empty()
+            && !matches!(
+                g.spec.resolved_inbound_proxy_protocol,
+                ResolvedInboundProxyProtocol::Invalid { .. }
+            )
+        {
+            g.spec.resolved_inbound_proxy_protocol = invalid_proxy_protocol_state(
+                ProxyProtocolConfigErrorCode::SharedListenerConflict,
+                shared_conflicts.into_iter().collect(),
+                None,
+            );
+        }
+        for peer in dirty_peers {
+            ctx.requeue("Gateway", peer).await;
         }
 
         // Register listeners to ListenerPortManager (empty list clears stale registrations)
@@ -579,6 +876,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime()
+            .edgion_config_data_refs
+            .clear_refs_from(&format!("Gateway:{}", resource_ref.resource_key()));
 
         // Clear cross-namespace reference tracking
         let cross_ns_ref = ResourceRef::new(
@@ -595,6 +895,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             g.metadata.name.as_deref().unwrap_or("")
         );
         ctx.runtime().listener_port_manager.unregister_gateway(&gateway_key);
+        let dirty_peers = ctx
+            .runtime()
+            .proxy_protocol_listener_policy
+            .replace_gateway_contributions(&gateway_key, Vec::new());
+        for peer in dirty_peers {
+            ctx.requeue("Gateway", peer).await;
+        }
 
         let route_index = &ctx.runtime().gateway_route_index;
         route_index.remove_gateway_hostnames(&gateway_key);
@@ -650,6 +957,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
                 ListenerInfo {
                     name: l.name.clone(),
+                    protocol: l.protocol.clone(),
                     supported_kinds: effective_kinds,
                     route_count,
                     resolved_refs_errors,
@@ -669,6 +977,29 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Cross-namespace dns-resolver-ref grant denial (Gateway → httpdns LinkSys).
         let dns_resolver_ref_error = validate_gateway_dns_resolver_ref(gateway, _ctx.runtime());
 
+        let (proxy_protocol_error, proxy_protocol_affected): (
+            Option<(ProxyProtocolConfigErrorCode, String)>,
+            BTreeSet<String>,
+        ) = match &gateway.spec.resolved_inbound_proxy_protocol {
+            ResolvedInboundProxyProtocol::Invalid {
+                code,
+                listener_names,
+                reference,
+            } => (
+                Some((
+                    *code,
+                    proxy_protocol_error_message(*code, reference.as_ref(), &gateway_ns, &gateway_name),
+                )),
+                listener_names.iter().cloned().collect(),
+            ),
+            _ => (None, BTreeSet::new()),
+        };
+        let gateway_policy_key = format!("{}/{}", gateway_ns, gateway_name);
+        let proxy_protocol_conflicts = _ctx
+            .runtime()
+            .proxy_protocol_listener_policy
+            .conflicting_listener_names(&gateway_policy_key);
+
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
 
@@ -685,13 +1016,30 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         let conflicts = _ctx.runtime().listener_port_manager.detect_conflicts(&gateway_key);
 
-        // Set Gateway-level conditions
-        // Accepted: True if no validation errors
-        if validation_errors.is_empty() {
+        let proxy_intrinsic_error = proxy_protocol_error
+            .as_ref()
+            .filter(|(code, _)| !is_proxy_protocol_reference_error(*code) && !is_proxy_protocol_shared_conflict(*code));
+        let proxy_reference_error = proxy_protocol_error
+            .as_ref()
+            .filter(|(code, _)| is_proxy_protocol_reference_error(*code));
+
+        // Set Gateway-level conditions. Intrinsic PROXY annotation errors are
+        // admission errors; reference failures are merged into ResolvedRefs.
+        if validation_errors.is_empty() && proxy_intrinsic_error.is_none() {
             let cond = condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
                 "Gateway accepted",
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        } else if let Some((_, message)) = proxy_intrinsic_error {
+            let mut messages = validation_errors.to_vec();
+            messages.push(message.clone());
+            let cond = condition_false(
+                condition_types::ACCEPTED,
+                INVALID_PROXY_PROTOCOL_CONFIG,
+                messages.join("; "),
                 generation,
             );
             update_gateway_condition(conditions, cond);
@@ -721,6 +1069,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             if let Some(d) = dns_resolver_ref_error.as_ref() {
                 parts.push(d.clone());
             }
+            if let Some((_, message)) = proxy_reference_error {
+                parts.push(message.clone());
+            }
             let merged = if parts.is_empty() {
                 None
             } else {
@@ -728,8 +1079,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     condition_reasons::INVALID_PLUGINS_REF
                 } else if stream_plugin_ref_error.is_some() {
                     condition_reasons::INVALID_STREAM_PLUGINS_REF
-                } else {
+                } else if dns_resolver_ref_error.is_some()
+                    || proxy_reference_error
+                        .is_some_and(|(code, _)| *code == ProxyProtocolConfigErrorCode::ReferenceNotPermitted)
+                {
                     condition_reasons::REF_NOT_PERMITTED
+                } else {
+                    INVALID_PROXY_PROTOCOL_REF
                 };
                 Some((reason, parts.join("; ")))
             };
@@ -764,7 +1120,12 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // required by the conformance test framework (NamespacesMustBeReady waits
         // for Programmed=True on ALL infrastructure gateways).
         {
-            if validation_errors.is_empty() {
+            if validation_errors.is_empty()
+                && proxy_protocol_error
+                    .as_ref()
+                    .is_none_or(|(code, _)| is_proxy_protocol_shared_conflict(*code))
+                && proxy_protocol_conflicts.is_empty()
+            {
                 let cond = condition_true(
                     condition_types::PROGRAMMED,
                     condition_reasons::PROGRAMMED,
@@ -773,18 +1134,44 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 );
                 update_gateway_condition(conditions, cond);
             } else {
+                let message = proxy_protocol_error
+                    .as_ref()
+                    .filter(|(code, _)| !is_proxy_protocol_shared_conflict(*code))
+                    .map(|(_, message)| message.clone())
+                    .or_else(|| {
+                        (!proxy_protocol_conflicts.is_empty())
+                            .then(|| "Inbound PROXY protocol policies conflict on a shared listener".to_string())
+                    })
+                    .unwrap_or_else(|| validation_errors.join("; "));
                 let cond = condition_false(
                     condition_types::PROGRAMMED,
                     condition_reasons::INVALID_LISTENER,
-                    validation_errors.join("; "),
+                    message,
                     generation,
                 );
                 update_gateway_condition(conditions, cond);
             }
         }
 
-        // ListenersNotValid: True if any listener has port conflicts
-        if !conflicts.is_empty() {
+        // ListenersNotValid: shared PROXY policy conflict is process-fatal and
+        // therefore also blocks the Gateway-level Programmed condition.
+        if !proxy_protocol_conflicts.is_empty() {
+            let mut message = format!(
+                "Listeners have conflicting inbound PROXY protocol policies: {:?}",
+                proxy_protocol_conflicts
+            );
+            if !conflicts.is_empty() {
+                let conflicting_names: Vec<&String> = conflicts.keys().collect();
+                message.push_str(&format!("; listeners also have port conflicts: {conflicting_names:?}"));
+            }
+            let cond = condition_true(
+                condition_types::LISTENERS_NOT_VALID,
+                PROXY_PROTOCOL_POLICY_CONFLICT,
+                message,
+                generation,
+            );
+            update_gateway_condition(conditions, cond);
+        } else if !conflicts.is_empty() {
             let conflicting_names: Vec<&String> = conflicts.keys().collect();
             let cond = condition_true(
                 condition_types::LISTENERS_NOT_VALID,
@@ -818,6 +1205,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
             for ListenerInfo {
                 name,
+                protocol,
                 supported_kinds,
                 route_count,
                 resolved_refs_errors,
@@ -845,8 +1233,30 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 ls.supported_kinds = supported_kinds;
                 ls.attached_routes = route_count;
 
-                // Set Conflicted condition: mixed TLS mode or ListenerPortManager conflicts
-                let is_conflicted = if mixed_tls_conflict {
+                let proxy_listener_error = proxy_protocol_error
+                    .as_ref()
+                    .filter(|_| proxy_protocol_affected.contains(&ls.name));
+                let proxy_listener_conflict = proxy_protocol_conflicts.contains(&ls.name);
+
+                // Set Conflicted condition: mixed TLS mode, port conflict, or
+                // mismatched PROXY policy on one physical listener.
+                let is_conflicted = if proxy_listener_conflict {
+                    let mut message = "Inbound PROXY protocol policies conflict on this shared listener".to_string();
+                    if mixed_tls_conflict {
+                        message.push_str("; mixed TLS termination modes also conflict on this listener");
+                    }
+                    if let Some(reason) = conflicts.get(&ls.name) {
+                        message.push_str(&format!("; port conflict: {reason}"));
+                    }
+                    let cond = condition_true(
+                        condition_types::CONFLICTED,
+                        PROXY_PROTOCOL_POLICY_CONFLICT,
+                        message,
+                        generation,
+                    );
+                    update_gateway_condition(&mut ls.conditions, cond);
+                    true
+                } else if mixed_tls_conflict {
                     let cond = condition_true(
                         condition_types::CONFLICTED,
                         condition_reasons::PROTOCOL_CONFLICT,
@@ -884,6 +1294,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     no_valid_ca_certificate,
                     unsupported_tls_mode,
                     mixed_tls_conflict,
+                    proxy_listener_error,
+                    protocol.eq_ignore_ascii_case("UDP"),
+                    proxy_listener_conflict,
                 );
             }
 
@@ -1098,9 +1511,26 @@ fn update_listener_conditions(
     no_valid_ca_certificate: bool,
     unsupported_tls_mode: bool,
     mixed_tls_conflict: bool,
+    proxy_protocol_error: Option<&(ProxyProtocolConfigErrorCode, String)>,
+    is_udp_listener: bool,
+    proxy_protocol_conflict: bool,
 ) {
     // Accepted: False if mixed TLS termination on the same port
-    if mixed_tls_conflict {
+    let proxy_intrinsic_error = proxy_protocol_error
+        .filter(|(code, _)| !is_proxy_protocol_reference_error(*code) && !is_proxy_protocol_shared_conflict(*code));
+    let proxy_reference_error = proxy_protocol_error.filter(|(code, _)| is_proxy_protocol_reference_error(*code));
+
+    if let Some((code, message)) = proxy_intrinsic_error {
+        let reason = if is_udp_listener && *code == ProxyProtocolConfigErrorCode::InvalidListenerSelection {
+            INVALID_PROXY_PROTOCOL_LISTENER
+        } else {
+            INVALID_PROXY_PROTOCOL_CONFIG
+        };
+        let mut messages = validation_errors.to_vec();
+        messages.push(message.clone());
+        let cond = condition_false(condition_types::ACCEPTED, reason, messages.join("; "), generation);
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if mixed_tls_conflict {
         let cond = condition_false(
             condition_types::ACCEPTED,
             condition_reasons::PROTOCOL_CONFLICT,
@@ -1143,14 +1573,22 @@ fn update_listener_conditions(
     }
 
     // ResolvedRefs: True only when all references are valid and resolvable.
-    let has_unresolved_refs = !resolved_refs_errors.is_empty();
+    let has_unresolved_refs = !resolved_refs_errors.is_empty() || proxy_reference_error.is_some();
     if has_unresolved_refs {
-        let reason = pick_gateway_resolved_refs_reason(resolved_refs_errors);
-        let message = resolved_refs_errors
-            .iter()
-            .map(|e| e.message())
-            .collect::<Vec<_>>()
-            .join("; ");
+        let reason = if !resolved_refs_errors.is_empty() {
+            pick_gateway_resolved_refs_reason(resolved_refs_errors)
+        } else if proxy_reference_error
+            .is_some_and(|(code, _)| *code == ProxyProtocolConfigErrorCode::ReferenceNotPermitted)
+        {
+            condition_reasons::REF_NOT_PERMITTED
+        } else {
+            INVALID_PROXY_PROTOCOL_REF
+        };
+        let mut message_parts = resolved_refs_errors.iter().map(|e| e.message()).collect::<Vec<_>>();
+        if let Some((_, message)) = proxy_reference_error {
+            message_parts.push(message.clone());
+        }
+        let message = message_parts.join("; ");
         let resolved = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
         update_gateway_condition(&mut ls.conditions, resolved);
     } else {
@@ -1164,7 +1602,15 @@ fn update_listener_conditions(
     }
 
     // Programmed: True if listener is accepted, not conflicted, and all refs resolved; False otherwise.
-    if is_conflicted {
+    if proxy_protocol_conflict {
+        let cond = condition_false(
+            condition_types::PROGRAMMED,
+            condition_reasons::INVALID_LISTENER,
+            "Inbound PROXY protocol policies conflict on this shared listener",
+            generation,
+        );
+        update_gateway_condition(&mut ls.conditions, cond);
+    } else if is_conflicted {
         let cond = condition_false(
             condition_types::PROGRAMMED,
             condition_reasons::INVALID_LISTENER,
@@ -1177,6 +1623,7 @@ fn update_listener_conditions(
         || no_valid_ca_certificate
         || unsupported_tls_mode
         || mixed_tls_conflict
+        || proxy_intrinsic_error.is_some()
     {
         let cond = condition_false(
             condition_types::PROGRAMMED,
@@ -1752,18 +2199,25 @@ fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRunt
 mod tests {
     use super::{
         gateway_service_lookup_candidates, has_all_ca_refs_invalid, resolve_gateway_stream_plugin_ref,
-        validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
-        GatewayHandler, GatewayResolvedRefsError,
+        resolve_inbound_proxy_protocol, validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref,
+        validate_gateway_stream_plugin_ref, GatewayHandler, GatewayResolvedRefsError,
     };
-    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    };
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::constants::app::GATEWAY_NAME;
-    use edgion_resources::prelude_resources::Gateway;
+    use edgion_resources::prelude_resources::{EdgionConfigData, Gateway};
     use edgion_resources::resources::common::SecretObjectReference;
     use edgion_resources::resources::gateway::{
         FrontendTLSValidation, GatewayBackendTLS, GatewaySpec, GatewaySpecTLS, GatewayTLSConfig, GatewayTlsMode,
         Listener as GatewayListener,
     };
+    use edgion_resources::resources::proxy_protocol::{
+        CanonicalProxyProtocolTrustPolicy, ProxyProtocolConfigErrorCode, ProxyProtocolPolicySourceKind,
+        ResolvedInboundProxyProtocol,
+    };
+    use edgion_resources::ResourceKind;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -1780,8 +2234,481 @@ mod tests {
                 listeners: None,
                 addresses: None,
                 tls: None,
+                resolved_inbound_proxy_protocol: Default::default(),
             },
             status: None,
+        }
+    }
+
+    fn proxy_protocol_test_context(runtime: Arc<ControllerRuntime>) -> HandlerContext {
+        HandlerContext::new(None, None, Default::default(), 5, 20, runtime)
+    }
+
+    fn make_proxy_protocol_gateway(annotation: &str) -> Gateway {
+        let mut gateway = make_test_gateway("default");
+        gateway.metadata.name = Some("gateway".to_string());
+        gateway.metadata.annotations = Some(BTreeMap::from([(
+            "edgion.io/inbound-proxy-protocol".to_string(),
+            annotation.to_string(),
+        )]));
+        gateway.spec.listeners = Some(vec![
+            GatewayListener {
+                name: "http".to_string(),
+                hostname: None,
+                port: 80,
+                protocol: "HTTP".to_string(),
+                tls: None,
+                allowed_routes: None,
+            },
+            GatewayListener {
+                name: "udp".to_string(),
+                hostname: None,
+                port: 53,
+                protocol: "UDP".to_string(),
+                tls: None,
+                allowed_routes: None,
+            },
+        ]);
+        gateway
+    }
+
+    #[test]
+    fn proxy_protocol_omitted_listener_selection_ignores_udp() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let gateway = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+        let resource_ref = ResourceRef::new(
+            ResourceKind::Gateway,
+            Some("default".to_string()),
+            "gateway".to_string(),
+        );
+
+        assert_eq!(
+            resolve_inbound_proxy_protocol(&gateway, &ctx, &resource_ref),
+            ResolvedInboundProxyProtocol::Ready {
+                listener_names: vec!["http".to_string()],
+                policy: CanonicalProxyProtocolTrustPolicy::Required {},
+                source: ProxyProtocolPolicySourceKind::Inline,
+            }
+        );
+    }
+
+    #[test]
+    fn proxy_protocol_explicit_udp_selection_is_invalid_only_for_udp() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let gateway =
+            make_proxy_protocol_gateway(r#"{"source":"inline","listeners":["udp"],"config":{"mode":"required"}}"#);
+        let resource_ref = ResourceRef::new(
+            ResourceKind::Gateway,
+            Some("default".to_string()),
+            "gateway".to_string(),
+        );
+
+        assert_eq!(
+            resolve_inbound_proxy_protocol(&gateway, &ctx, &resource_ref),
+            ResolvedInboundProxyProtocol::Invalid {
+                code: ProxyProtocolConfigErrorCode::InvalidListenerSelection,
+                listener_names: vec!["udp".to_string()],
+                reference: None,
+            }
+        );
+    }
+
+    #[test]
+    fn proxy_protocol_missing_reference_is_invalid_and_registered() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime.clone());
+        let gateway = make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"missing"}}"#);
+        let resource_ref = ResourceRef::new(
+            ResourceKind::Gateway,
+            Some("default".to_string()),
+            "gateway".to_string(),
+        );
+
+        assert!(matches!(
+            resolve_inbound_proxy_protocol(&gateway, &ctx, &resource_ref),
+            ResolvedInboundProxyProtocol::Invalid {
+                code: ProxyProtocolConfigErrorCode::ReferenceNotFound,
+                ..
+            }
+        ));
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs("default/missing"),
+            vec!["Gateway:default/gateway".to_string()]
+        );
+    }
+
+    #[test]
+    fn proxy_protocol_same_namespace_reference_resolves_strict_variant() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let target: EdgionConfigData = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionConfigData",
+            "metadata": {"namespace": "default", "name": "policy"},
+            "spec": {
+                "enable": true,
+                "visibility": "Namespace",
+                "data": {"type": "ProxyProtocolTrust", "config": {"mode": "required"}}
+            }
+        }))
+        .unwrap();
+        runtime
+            .edgion_config_data_store
+            .update(HashMap::from([("default/policy".to_string(), target)]), &HashSet::new());
+        let ctx = proxy_protocol_test_context(runtime);
+        let gateway = make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"policy"}}"#);
+        let resource_ref = ResourceRef::new(
+            ResourceKind::Gateway,
+            Some("default".to_string()),
+            "gateway".to_string(),
+        );
+
+        assert!(matches!(
+            resolve_inbound_proxy_protocol(&gateway, &ctx, &resource_ref),
+            ResolvedInboundProxyProtocol::Ready {
+                source: ProxyProtocolPolicySourceKind::ResourceRef,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn proxy_protocol_reference_rejects_target_with_captured_unknown_field() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let mut target: EdgionConfigData = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionConfigData",
+            "metadata": {"namespace": "default", "name": "policy"},
+            "spec": {
+                "data": {
+                    "type": "ProxyProtocolTrust",
+                    "config": {"mode": "required", "typo": true}
+                }
+            }
+        }))
+        .expect("target typo must remain deserializable");
+        target.spec.unknown_fields = vec!["data.config.typo".to_string()];
+        runtime
+            .edgion_config_data_store
+            .update(HashMap::from([("default/policy".to_string(), target)]), &HashSet::new());
+        let ctx = proxy_protocol_test_context(runtime);
+        let mut gateway = make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"policy"}}"#);
+        let resource_ref = ResourceRef::new(
+            ResourceKind::Gateway,
+            Some("default".to_string()),
+            "gateway".to_string(),
+        );
+
+        gateway.spec.resolved_inbound_proxy_protocol = resolve_inbound_proxy_protocol(&gateway, &ctx, &resource_ref);
+        assert!(matches!(
+            gateway.spec.resolved_inbound_proxy_protocol,
+            ResolvedInboundProxyProtocol::Invalid {
+                code: ProxyProtocolConfigErrorCode::ReferenceInvalidPolicy,
+                ..
+            }
+        ));
+        GatewayHandler::new(None, None).update_status(&mut gateway, &ctx, &[]);
+        let resolved_refs = gateway
+            .status
+            .unwrap()
+            .conditions
+            .unwrap()
+            .into_iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved_refs.status, "False");
+        assert_eq!(resolved_refs.reason, "InvalidProxyProtocolRef");
+    }
+
+    #[test]
+    fn proxy_protocol_udp_status_does_not_pollute_unselected_tcp_listener() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let mut gateway =
+            make_proxy_protocol_gateway(r#"{"source":"inline","listeners":["udp"],"config":{"mode":"required"}}"#);
+        gateway.spec.resolved_inbound_proxy_protocol = ResolvedInboundProxyProtocol::Invalid {
+            code: ProxyProtocolConfigErrorCode::InvalidListenerSelection,
+            listener_names: vec!["udp".to_string()],
+            reference: None,
+        };
+
+        GatewayHandler::new(None, None).update_status(&mut gateway, &ctx, &[]);
+        let statuses = gateway.status.unwrap().listeners.unwrap();
+        let http = statuses.iter().find(|status| status.name == "http").unwrap();
+        let udp = statuses.iter().find(|status| status.name == "udp").unwrap();
+        assert_eq!(
+            http.conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap()
+                .status,
+            "True"
+        );
+        let udp_accepted = udp
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "Accepted")
+            .unwrap();
+        assert_eq!(udp_accepted.status, "False");
+        assert_eq!(udp_accepted.reason, "InvalidProxyProtocolListener");
+    }
+
+    #[test]
+    fn proxy_protocol_reference_error_merges_exact_conditions() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let mut gateway = make_proxy_protocol_gateway(r#"{"source":"resourceRef","resourceRef":{"name":"missing"}}"#);
+        gateway.spec.resolved_inbound_proxy_protocol = ResolvedInboundProxyProtocol::Invalid {
+            code: ProxyProtocolConfigErrorCode::ReferenceNotFound,
+            listener_names: vec!["http".to_string()],
+            reference: Some(
+                edgion_resources::resources::proxy_protocol::BoundedProxyProtocolReferenceIdentity::new(
+                    "default".to_string(),
+                    "missing".to_string(),
+                )
+                .unwrap(),
+            ),
+        };
+
+        GatewayHandler::new(None, None).update_status(&mut gateway, &ctx, &[]);
+        let status = gateway.status.unwrap();
+        assert_eq!(
+            status
+                .conditions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|condition| condition.type_ == "ResolvedRefs")
+                .count(),
+            1
+        );
+        let gateway_resolved = status
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(gateway_resolved.status, "False");
+        assert_eq!(gateway_resolved.reason, "InvalidProxyProtocolRef");
+
+        let listeners = status.listeners.unwrap();
+        let http = listeners.iter().find(|listener| listener.name == "http").unwrap();
+        let udp = listeners.iter().find(|listener| listener.name == "udp").unwrap();
+        assert_eq!(
+            http.conditions
+                .iter()
+                .find(|condition| condition.type_ == "ResolvedRefs")
+                .unwrap()
+                .reason,
+            "InvalidProxyProtocolRef"
+        );
+        assert_eq!(
+            udp.conditions
+                .iter()
+                .find(|condition| condition.type_ == "ResolvedRefs")
+                .unwrap()
+                .status,
+            "True"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_shared_listener_conflict_syncs_invalid_and_status() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let handler = GatewayHandler::new(None, None);
+        let first = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+        let ProcessResult::Continue(_first) = handler.parse(first, &ctx).await else {
+            panic!("first Gateway should continue");
+        };
+
+        let mut second = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+        second.metadata.name = Some("second".to_string());
+        second.metadata.annotations = None;
+        let ProcessResult::Continue(mut second) = handler.parse(second, &ctx).await else {
+            panic!("second Gateway should continue");
+        };
+        assert!(matches!(
+            second.spec.resolved_inbound_proxy_protocol,
+            ResolvedInboundProxyProtocol::Invalid {
+                code: ProxyProtocolConfigErrorCode::SharedListenerConflict,
+                ..
+            }
+        ));
+
+        handler.update_status(&mut second, &ctx, &[]);
+        let status = second.status.unwrap();
+        let conditions = status.conditions.unwrap();
+        assert_eq!(
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "ListenersNotValid")
+                .unwrap()
+                .reason,
+            "ProxyProtocolPolicyConflict"
+        );
+        assert_eq!(
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap()
+                .status,
+            "True"
+        );
+        let http = status
+            .listeners
+            .unwrap()
+            .into_iter()
+            .find(|listener| listener.name == "http")
+            .unwrap();
+        let conflicted = http
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "Conflicted")
+            .unwrap();
+        assert_eq!(conflicted.status, "True");
+        assert_eq!(conflicted.reason, "ProxyProtocolPolicyConflict");
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_primary_invalid_survives_shared_conflict() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let handler = GatewayHandler::new(None, None);
+        let first = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+        let ProcessResult::Continue(_first) = handler.parse(first, &ctx).await else {
+            panic!("first Gateway should continue");
+        };
+
+        let mut second =
+            make_proxy_protocol_gateway(r#"{"source":"inline","listeners":["udp"],"config":{"mode":"required"}}"#);
+        second.metadata.name = Some("second".to_string());
+        let ProcessResult::Continue(mut second) = handler.parse(second, &ctx).await else {
+            panic!("second Gateway should continue");
+        };
+        assert!(matches!(
+            second.spec.resolved_inbound_proxy_protocol,
+            ResolvedInboundProxyProtocol::Invalid {
+                code: ProxyProtocolConfigErrorCode::InvalidListenerSelection,
+                ..
+            }
+        ));
+
+        handler.update_status(&mut second, &ctx, &[]);
+        let status = second.status.unwrap();
+        let conditions = status.conditions.unwrap();
+        assert_eq!(
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap()
+                .reason,
+            "InvalidProxyProtocolConfig"
+        );
+        assert_eq!(
+            conditions
+                .iter()
+                .find(|condition| condition.type_ == "ListenersNotValid")
+                .unwrap()
+                .reason,
+            "ProxyProtocolPolicyConflict"
+        );
+        let listeners = status.listeners.unwrap();
+        assert_eq!(
+            listeners
+                .iter()
+                .find(|listener| listener.name == "udp")
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "Accepted")
+                .unwrap()
+                .reason,
+            "InvalidProxyProtocolListener"
+        );
+        assert_eq!(
+            listeners
+                .iter()
+                .find(|listener| listener.name == "http")
+                .unwrap()
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "Conflicted")
+                .unwrap()
+                .reason,
+            "ProxyProtocolPolicyConflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_conflict_precedes_mixed_tls_and_port_conflict() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = proxy_protocol_test_context(runtime);
+        let handler = GatewayHandler::new(None, None);
+        let tls = |name: &str, mode: GatewayTlsMode| GatewayListener {
+            name: name.to_string(),
+            hostname: None,
+            port: 443,
+            protocol: "TLS".to_string(),
+            tls: Some(GatewayTLSConfig {
+                mode: Some(mode),
+                certificate_refs: None,
+                options: None,
+                secrets: None,
+                frontend_validation: None,
+                resolved_frontend_ca_secrets: None,
+            }),
+            allowed_routes: None,
+        };
+
+        let mut first = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+        first.spec.listeners = Some(vec![tls("tls", GatewayTlsMode::Passthrough)]);
+        let ProcessResult::Continue(_first) = handler.parse(first, &ctx).await else {
+            panic!("first Gateway should continue");
+        };
+
+        let mut second = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+        second.metadata.name = Some("second".to_string());
+        second.metadata.annotations = None;
+        second.spec.listeners = Some(vec![
+            tls("terminate", GatewayTlsMode::Terminate),
+            tls("passthrough", GatewayTlsMode::Passthrough),
+        ]);
+        let ProcessResult::Continue(mut second) = handler.parse(second, &ctx).await else {
+            panic!("second Gateway should continue");
+        };
+        handler.update_status(&mut second, &ctx, &[]);
+
+        let status = second.status.unwrap();
+        let gateway_conflict = status
+            .conditions
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|condition| condition.type_ == "ListenersNotValid")
+            .unwrap();
+        assert_eq!(gateway_conflict.reason, "ProxyProtocolPolicyConflict");
+        assert!(gateway_conflict.message.contains("port conflicts"));
+        for listener in status.listeners.unwrap() {
+            let conflicted = listener
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "Conflicted")
+                .unwrap();
+            assert_eq!(conflicted.reason, "ProxyProtocolPolicyConflict");
+            assert!(conflicted.message.contains("mixed TLS"));
+            assert!(conflicted.message.contains("port conflict"));
+            assert_eq!(
+                listener
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.type_ == "Accepted")
+                    .unwrap()
+                    .reason,
+                "ProtocolConflict"
+            );
         }
     }
 

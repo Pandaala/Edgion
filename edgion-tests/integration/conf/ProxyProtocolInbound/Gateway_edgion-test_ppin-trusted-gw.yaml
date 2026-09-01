@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ppin-trusted-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/inbound-proxy-protocol: '{"source":"resourceRef","resourceRef":{"name":"ppin-loopback-trust"}}'
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: trusted
+      protocol: HTTP
+      port: 58432
+      allowedRoutes:
+        namespaces:
+          from: All

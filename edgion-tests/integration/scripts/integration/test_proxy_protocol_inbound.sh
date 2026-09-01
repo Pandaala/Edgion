@@ -5,11 +5,12 @@
 # Contract: docs/en/dev-guide/annotations-guide.md
 #
 # WHY STANDALONE (cannot join the shared run_integration.sh stack):
-#   A listener with `edgion.io/accept-proxy-protocol` REJECTS every connection
+#   A listener selected by `edgion.io/inbound-proxy-protocol` in `required` mode
+#   REJECTS every connection
 #   that does not begin with a PROXY header (HAProxy `accept-proxy` semantics),
 #   so the listener is unusable by any other suite sharing the stack. The flag is
 #   also read once at listener-bind time — there is no hot-rebind path — so it
-#   cannot be toggled between phases. This script therefore boots its own minimal
+#   cannot be changed while serving. This script therefore boots its own minimal
 #   stack (test_server + file_system controller + gateway) on dedicated 584xx
 #   ports, mirroring test_plugin_policy.sh.
 #
@@ -44,9 +45,10 @@
 #   1. via HAProxy (PPv2)  → XFF/X-Real-IP == 172.28.0.100
 #   2. via HAProxy (PPv1)  → XFF/X-Real-IP == 172.28.0.100
 #   3. direct to the PP listener, no header → rejected (mandatory-mode contract)
-#   4. direct to the `plain` listener → 200 with XFF 127.0.0.1, proving the
-#      per-listener `edgion.io/accept-proxy-protocol.plain: "false"` override
-#      beats the Gateway-wide "true" and leaves that listener untouched.
+#   4. direct to the unselected `plain` listener → 200 with XFF 127.0.0.1
+#   5. trustedSources: a local trusted peer's valid v1/v2 header is adopted;
+#      a Docker peer first proves its effective direct address is outside the
+#      trusted CIDR, then its forged header is not parsed while plain HTTP works.
 # =============================================================================
 set -euo pipefail
 
@@ -70,8 +72,9 @@ CTRL_PROBE_PORT=58422
 GW_ADMIN_PORT=58423
 GW_PROBE_PORT=58424
 GW_METRICS_PORT=58425
-GW_PP_PORT=58430      # PROXY protocol required (Gateway-wide annotation)
-GW_PLAIN_PORT=58431   # per-listener override back to off
+GW_PP_PORT=58430      # selected by a required policy
+GW_PLAIN_PORT=58431   # unselected and therefore disabled
+GW_TRUST_PORT=58432   # trustedSources: only 127.0.0.1 may supply a header
 # One HAProxy serves both legs. Keeping the sender, image, and topology identical
 # means the v1 and v2 legs differ in exactly one variable — the `send-proxy` vs
 # `send-proxy-v2` flag — so a failure on either is attributable to the protocol
@@ -289,6 +292,7 @@ EOF
     precheck_port "$GW_METRICS_PORT" "gateway metrics" || return 1
     precheck_port "$GW_PP_PORT"      "gateway pp http" || return 1
     precheck_port "$GW_PLAIN_PORT"   "gateway plain http" || return 1
+    precheck_port "$GW_TRUST_PORT"   "gateway trusted-sources http" || return 1
     precheck_port "$V2_DUMP_PORT" "v2 byte dumper" || return 1
     precheck_port "$V1_DUMP_PORT" "v1 byte dumper" || return 1
 
@@ -309,7 +313,8 @@ EOF
     wait_for_url_200 "http://127.0.0.1:${GW_PROBE_PORT}/health" "$GW_PID" "gateway /health" 60 || { tail -40 "$GW_LOG"; return 1; }
     wait_for_tcp_port 127.0.0.1 "$GW_PP_PORT"    "$GW_PID" "gateway PP listener"    60 || { tail -40 "$GW_LOG"; return 1; }
     wait_for_tcp_port 127.0.0.1 "$GW_PLAIN_PORT" "$GW_PID" "gateway plain listener" 60 || { tail -40 "$GW_LOG"; return 1; }
-    log_ok "gateway up (pp ${GW_PP_PORT}, plain ${GW_PLAIN_PORT})"
+    wait_for_tcp_port 127.0.0.1 "$GW_TRUST_PORT" "$GW_PID" "gateway trusted-sources listener" 60 || { tail -40 "$GW_LOG"; return 1; }
+    log_ok "gateway up (pp ${GW_PP_PORT}, plain ${GW_PLAIN_PORT}, trusted ${GW_TRUST_PORT})"
 
     # The flag is only observable at bind time; prove it was actually applied
     # rather than silently defaulted off.
@@ -511,15 +516,14 @@ phase_missing_header() {
     fi
 }
 
-phase_per_listener_override() {
-    log_section "Phase: per-listener override (plain listener)"
-    # Gateway-wide annotation is "true"; this listener's own key says "false", so
-    # a plain request must be served normally.
+phase_unselected_listener() {
+    log_section "Phase: unselected listener remains disabled"
+    # The strict annotation selects only `pp`, so a plain request must be served normally.
     local body code xff
     code=$(curl -s -o "${WORK_DIR}/plain_body.json" -m 5 -w "%{http_code}" \
         "http://127.0.0.1:${GW_PLAIN_PORT}/headers" 2>/dev/null || echo "000")
     if [ "$code" != "200" ]; then
-        fail "plain listener returned ${code}, expected 200 — per-listener override not honoured"
+        fail "plain listener returned ${code}, expected 200 — listener selection not honoured"
         return
     fi
     body=$(cat "${WORK_DIR}/plain_body.json")
@@ -529,6 +533,105 @@ phase_per_listener_override() {
         *127.0.0.1*) log_ok "plain listener served normally with the direct peer address" ;;
         *) fail "plain listener X-Forwarded-For '${xff}' does not contain 127.0.0.1" ;;
     esac
+}
+
+trusted_probe() {
+    local version="$1"
+    python3 - "$GW_TRUST_PORT" "$version" <<'PY'
+import socket, struct, sys
+port, version = int(sys.argv[1]), sys.argv[2]
+client = "203.0.113.77"
+if version == "v1":
+    prefix = f"PROXY TCP4 {client} 127.0.0.1 45678 {port}\r\n".encode()
+else:
+    addresses = socket.inet_aton(client) + socket.inet_aton("127.0.0.1") + struct.pack("!HH", 45678, port)
+    prefix = b"\r\n\r\n\x00\r\nQUIT\n" + bytes((0x21, 0x11)) + struct.pack("!H", len(addresses)) + addresses
+request = b"GET /headers HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+sock = socket.create_connection(("127.0.0.1", port), 5)
+sock.sendall(prefix + request)
+chunks = []
+while True:
+    chunk = sock.recv(65536)
+    if not chunk:
+        break
+    chunks.append(chunk)
+sock.close()
+response = b"".join(chunks)
+body = response.split(b"\r\n\r\n", 1)[-1]
+print(body.decode("utf-8", "replace"))
+PY
+}
+
+phase_trusted_sources() {
+    log_section "Phase: trustedSources adoption and forged-header rejection"
+    local version body xff plain forged forged_rc status_line
+    for version in v1 v2; do
+        body=$(trusted_probe "$version")
+        xff=$(header_value "$body" x-forwarded-for)
+        case "$xff" in
+            *203.0.113.77*) log_ok "trusted local ${version} header was adopted" ;;
+            *) fail "trusted local ${version} header was not adopted: '${xff}'" ;;
+        esac
+    done
+
+    plain=$(docker run --rm --network "$DOCKER_NET" --ip "$CLIENT_IP" \
+        --add-host host.docker.internal:host-gateway "$LB_IMAGE" \
+        wget -q -T 8 -O - "http://host.docker.internal:${GW_TRUST_PORT}/headers" 2>/dev/null || true)
+    if [ -z "$plain" ]; then
+        fail "Docker peer's plain HTTP was not served; it may have reached the Gateway inside trusted CIDR 127.0.0.1/32, so this platform cannot prove a distinct untrusted source"
+        return
+    fi
+    xff=$(header_value "$plain" x-forwarded-for)
+    case "$xff" in
+        "") fail "untrusted peer response did not expose an effective direct address"; return ;;
+        *127.0.0.1*)
+            fail "Docker peer resolved inside trusted CIDR 127.0.0.1/32 on this platform; source distinction is not valid"
+            return
+            ;;
+        *203.0.113.77*) fail "untrusted plain peer unexpectedly acquired the forged identity"; return ;;
+        *) log_ok "Docker peer effective direct address '${xff}' is outside trusted CIDR 127.0.0.1/32" ;;
+    esac
+
+    python3 - "$WORK_DIR" "$GW_TRUST_PORT" <<'PY'
+import pathlib, socket, struct, sys
+work_dir, port = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+request = b"GET /headers HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+v1 = f"PROXY TCP4 203.0.113.77 127.0.0.1 45678 {port}\r\n".encode() + request
+addresses = socket.inet_aton("203.0.113.77") + socket.inet_aton("127.0.0.1") + struct.pack("!HH", 45678, port)
+v2 = b"\r\n\r\n\x00\r\nQUIT\n" + bytes((0x21, 0x11)) + struct.pack("!H", len(addresses)) + addresses + request
+(work_dir / "forged-v1.bin").write_bytes(v1)
+(work_dir / "forged-v2.bin").write_bytes(v2)
+PY
+
+    for version in v1 v2; do
+        set +e
+        forged=$(docker run --rm --network "$DOCKER_NET" --ip "$CLIENT_IP" \
+            --add-host host.docker.internal:host-gateway \
+            -v "${WORK_DIR}/forged-${version}.bin:/tmp/forged.bin:ro" \
+            "$LB_IMAGE" sh -c "nc -w 8 host.docker.internal ${GW_TRUST_PORT} < /tmp/forged.bin")
+        forged_rc=$?
+        set -e
+        if [ "$forged_rc" -ne 0 ] || [ -z "$forged" ]; then
+            fail "untrusted forged ${version} probe did not receive a response from the live Gateway (rc=${forged_rc})"
+            continue
+        fi
+        status_line=$(printf '%s' "$forged" | sed -n '1{s/\r$//;p;}')
+        case "$status_line" in
+            "HTTP/1.0 200"*|"HTTP/1.1 200"*)
+                fail "untrusted forged ${version} request reached the /headers backend"
+                ;;
+            "HTTP/1.0 "[45][0-9][0-9]*|"HTTP/1.1 "[45][0-9][0-9]*)
+                case "$forged" in
+                    *203.0.113.77*) fail "untrusted forged ${version} identity appeared in the response" ;;
+                    *) log_ok "untrusted forged ${version} bytes reached the Gateway, were handled as ordinary invalid HTTP (${status_line}), and did not reach the 200 /headers backend" ;;
+                esac
+                ;;
+            *) fail "untrusted forged ${version} probe returned unexpected status '${status_line}'" ;;
+        esac
+        if ! kill -0 "$GW_PID" 2>/dev/null; then
+            fail "Gateway exited after the untrusted forged ${version} probe"
+        fi
+    done
 }
 
 # =============================================================================
@@ -546,7 +649,8 @@ main() {
     phase_proxied "HAProxy PPv2" "${LB_IP}:${LB_V2_PORT}"
     phase_proxied "HAProxy PPv1" "${LB_IP}:${LB_V1_PORT}"
     phase_missing_header
-    phase_per_listener_override
+    phase_unselected_listener
+    phase_trusted_sources
 
     log_section "Result"
     if [ "$FAILURES" -eq 0 ]; then

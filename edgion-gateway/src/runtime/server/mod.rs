@@ -1,6 +1,7 @@
 pub mod base;
 mod error_response;
 pub mod listener_builder;
+pub mod proxy_protocol_policy;
 pub mod server_header;
 
 pub use base::GatewayBase;

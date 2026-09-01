@@ -31,7 +31,7 @@ through brainstorming as a `tasks/todo/` feature, not this workflow.
 **1. The startup window is already gated; the real gap is only runtime incremental updates**
 
 Pingora does not accept traffic until startup step 21 (`create_and_configure_server`
-+ `run_forever`, `edgion-gateway/src/cli/mod.rs`). Step 18 `wait_for_ready` blocks
++ `Server::run(RunArgs)`, `edgion-gateway/src/cli/mod.rs`). Step 18 `wait_for_ready` blocks
 until every kind has completed its first List, and step 19 `preload_load_balancers`
 warms the LB pools — both *before* traffic flows. Early route rebuilds during the
 List phase observe an incomplete world, but backend resolution is a request-time
@@ -97,7 +97,7 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 - `tasks/review-envoy/sync-02-no-cross-kind-ordering.md` (closed 2026-06-14, ⚠️ accepted-tradeoff)
 - `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` (`start_watch_kinds` — per-kind watch, no sequencing)
 - `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` (`start_watch` — independent `tokio::spawn` per kind)
-- `edgion-gateway/src/cli/mod.rs` (`wait_for_ready` step 18 + `preload_load_balancers` step 19 gate traffic before `run_forever`)
+- `edgion-gateway/src/cli/mod.rs` (`wait_for_ready` step 18 + `preload_load_balancers` step 19 gate traffic before `Server::run(RunArgs)`)
 - `edgion-gateway/src/backends/mod.rs` (transient zero-backend → `end_response_503`, self-healing on LB ArcSwap refresh)
 - `skills/04-review/architecture/gateway-no-local-config-snapshot.md` (sync-05 — sibling Envoy-comparison tradeoff that cross-references this finding)
 - `skills/04-review/architecture/listener-port-set-frozen-at-startup.md` (listener-01 — sibling startup/Envoy-comparison limitation)

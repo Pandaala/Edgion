@@ -1,6 +1,6 @@
 ---
 name: listener-bind-probe-symmetric
-description: Use when reviewing findings of the form "`add_http_listener` / `add_tcp_listener` / `add_tls_terminate_to_tcp_listener` / `add_tls_passthrough_listener` defer bind to `run_forever`; an EADDRINUSE / EACCES at startup surfaces as `.expect(\"Failed to build listeners\")` panic with no listener name; asymmetric with UDP". The synchronous TCP bind probe was added in runtime-F009 to mirror the UDP path.
+description: Use when reviewing findings of the form "`add_http_listener` / `add_tcp_listener` / `add_tls_terminate_to_tcp_listener` / `add_tls_passthrough_listener` defer bind until `Server::run(RunArgs)` starts; an EADDRINUSE / EACCES at startup surfaces as `.expect(\"Failed to build listeners\")` panic with no listener name; asymmetric with UDP". The synchronous TCP bind probe was added in runtime-F009 to mirror the UDP path.
 ---
 
 # Listener Bind Probe — Symmetric With UDP (HTTP/HTTPS/TCP/TLS)
@@ -45,7 +45,7 @@ same way.
 
 The TOCTOU window between the probe drop and Pingora's real bind is bounded:
 `configure_listeners` (`runtime/server/base.rs`) runs single-threaded before
-`run_forever`, the `bound_listeners` HashSet deduplicates the same
+`Server::run(RunArgs)`, the `bound_listeners` HashSet deduplicates the same
 `ListenerKey` inside one configuration pass, and `SO_REUSEADDR` is set by
 Pingora. The realistic conflict cases (another process already holding the
 port, missing `CAP_NET_BIND_SERVICE` for ports <1024) are all detected
@@ -53,7 +53,7 @@ synchronously by the probe.
 
 ## Fix Suggestions Not Accepted
 
-- "Set a custom panic hook around `run_forever` to enrich
+- "Set a custom panic hook around `Server::run(RunArgs)` to enrich
   `Failed to build listeners`" — the panic still aborts all listeners
   together, the hook can't return a Result to the caller, and a stringly
   parsed message is more fragile than synchronous binding.

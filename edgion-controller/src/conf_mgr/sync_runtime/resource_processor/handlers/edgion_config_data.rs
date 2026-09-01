@@ -7,7 +7,8 @@
 //! - Register cross-EdgionConfigData references (overrideRef → RegionRouteOverride for EdgionPlugins;
 //!   activeProfileRef → Selector for EdgionStreamPlugins GlobalConnectionIpRestriction)
 //!   so a change to a referenced EdgionConfigData requeues the dependent EdgionPlugins/EdgionStreamPlugins.
-//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins so they pick up updated data.
+//! - On change: requeue referencing Gateways/EdgionPlugins/EdgionStreamPlugins
+//!   so they pick up updated data.
 //! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
 //!   (from ref resolution) conditions per Gateway API conventions.
 
@@ -49,8 +50,7 @@ impl Default for EdgionConfigDataHandler {
 
 /// Requeue resources that reference this EdgionConfigData.
 ///
-/// EdgionPlugins (via `overrideRef`) / EdgionStreamPlugins (via `activeProfileRef`) referencing this
-/// EdgionConfigData are requeued so they pick up any changed data.
+/// Every registered consumer is requeued so it picks up changed data.
 async fn requeue_edgion_config_data_referrers(ed: &EdgionConfigData, ctx: &HandlerContext) {
     let ns = ed.metadata.namespace.as_deref().unwrap_or("");
     let name = ed.metadata.name.as_deref().unwrap_or("");
@@ -69,15 +69,33 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
     fn preparse(&self, ed: &mut EdgionConfigData, _ctx: &HandlerContext) -> Vec<String> {
         if !ed.spec.unknown_fields.is_empty() {
             let paths = bounded_unknown_field_paths(&ed.spec.unknown_fields);
-            tracing::warn!(
-                component = "conf_mgr",
-                event = "unknown_config_fields_detected",
-                kind = "EdgionConfigData",
-                namespace = %ed.metadata.namespace.as_deref().unwrap_or("default"),
-                name = %ed.metadata.name.as_deref().unwrap_or(""),
-                paths = ?paths,
-                "EdgionConfigData document has keys the typed schema does not recognize; they are ignored and config still syncs"
-            );
+            if matches!(ed.spec.data, ConfigEntry::ProxyProtocolTrust(_))
+                && ed
+                    .spec
+                    .unknown_fields
+                    .iter()
+                    .any(|path| path == "data.config" || path.starts_with("data.config."))
+            {
+                tracing::warn!(
+                    component = "conf_mgr",
+                    event = "invalid_security_config_fields_detected",
+                    kind = "EdgionConfigData",
+                    namespace = %ed.metadata.namespace.as_deref().unwrap_or("default"),
+                    name = %ed.metadata.name.as_deref().unwrap_or(""),
+                    paths = ?paths,
+                    "ProxyProtocolTrust config contains unknown fields and is rejected"
+                );
+            } else {
+                tracing::warn!(
+                    component = "conf_mgr",
+                    event = "unknown_config_fields_detected",
+                    kind = "EdgionConfigData",
+                    namespace = %ed.metadata.namespace.as_deref().unwrap_or("default"),
+                    name = %ed.metadata.name.as_deref().unwrap_or(""),
+                    paths = ?paths,
+                    "EdgionConfigData document has keys the typed schema does not recognize; they are ignored and config still syncs"
+                );
+            }
         }
         ed.validate_pre_parse()
     }
@@ -236,6 +254,40 @@ mod unknown_fields_tests {
             .all(|condition| condition.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
         assert!(conditions.iter().any(|condition| condition.type_ == "Unrelated"));
     }
+
+    #[test]
+    fn proxy_protocol_unknown_config_field_sets_accepted_false() {
+        let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
+            "data": {"type": "ProxyProtocolTrust", "config": {"mode": "required", "typo": true}}
+        }))
+        .expect("security policy typo must remain deserializable");
+        let mut resource = EdgionConfigData::new("proxy-policy", spec);
+        resource.metadata.namespace = Some("default".to_string());
+        resource.spec.unknown_fields = vec!["data.config.typo".to_string()];
+        let handler = EdgionConfigDataHandler::new();
+        let ctx = HandlerContext::new(
+            None,
+            None,
+            Default::default(),
+            5,
+            20,
+            Arc::new(crate::conf_mgr::ControllerRuntime::default()),
+        );
+
+        let errors = handler.preparse(&mut resource, &ctx);
+        assert_eq!(errors, ["ProxyProtocolTrust invalid: policy validation failed"]);
+        handler.update_status(&mut resource, &ctx, &errors);
+        let accepted = resource
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == condition_types::ACCEPTED)
+            .unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, condition_reasons::INVALID);
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +297,7 @@ mod dependency_requeue_tests {
     use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::prelude_resources::EdgionPlugins;
+    use edgion_resources::prelude_resources::Gateway;
     use edgion_resources::resources::edgion_config_data::EdgionConfigDataSpec;
     use std::sync::Arc;
     use std::time::Duration;
@@ -253,6 +306,11 @@ mod dependency_requeue_tests {
 
     #[async_trait::async_trait]
     impl ProcessorHandler<EdgionPlugins> for PluginsNoop {}
+
+    struct GatewayNoop;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<Gateway> for GatewayNoop {}
 
     fn resource() -> EdgionConfigData {
         let spec: EdgionConfigDataSpec = serde_json::from_value(serde_json::json!({
@@ -270,6 +328,15 @@ mod dependency_requeue_tests {
             .expect("dependent plugin should be requeued")
             .expect("work item should exist");
         assert_eq!(item.key, "default/policy");
+        processor.workqueue().done(&item.key);
+    }
+
+    async fn assert_gateway_requeued(processor: &ResourceProcessor<Gateway>) {
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .expect("dependent Gateway should be requeued")
+            .expect("work item should exist");
+        assert_eq!(item.key, "default/gateway");
         processor.workqueue().done(&item.key);
     }
 
@@ -297,6 +364,33 @@ mod dependency_requeue_tests {
         runtime.edgion_config_data_refs.add_ref(source_key, dependent_key);
         EdgionConfigDataHandler::new().on_delete(&resource, &ctx).await;
         assert_plugins_requeued(&processor).await;
+        assert!(runtime.edgion_config_data_refs.get_refs("default/url-list").is_empty());
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_config_data_apply_and_delete_requeue_gateway() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            100,
+            Arc::new(GatewayNoop),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(processor.clone());
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+        let resource = resource();
+        let source_key = "default/url-list".to_string();
+        let dependent_key = "Gateway:default/gateway".to_string();
+
+        runtime
+            .edgion_config_data_refs
+            .add_ref(source_key.clone(), dependent_key.clone());
+        EdgionConfigDataHandler::new().on_change(&resource, &ctx).await;
+        assert_gateway_requeued(&processor).await;
+
+        runtime.edgion_config_data_refs.add_ref(source_key, dependent_key);
+        EdgionConfigDataHandler::new().on_delete(&resource, &ctx).await;
+        assert_gateway_requeued(&processor).await;
         assert!(runtime.edgion_config_data_refs.get_refs("default/url-list").is_empty());
     }
 }

@@ -108,6 +108,7 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`,
 | typed policy data | `RequestAccessUrlAllowList` | `{ items: [UrlAccessCandidate] }` | URL allow candidates expanded into RequestAccessPolicy by the Controller |
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
+| security policy | `ProxyProtocolTrust` | `{ mode: required }` or `{ mode: trustedSources, trustedCidrs: [...] }` | Non-overlay, all-or-nothing Gateway listener trust policy. Requires envelope `enable=true` and `active` absent. Unknown config fields are fatal rather than advisory. |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
 
 ## Unknown Config Fields
@@ -138,6 +139,14 @@ No separate `StringList`/`RegexList` (folded into `KeyList(matchMode)`). No stan
 overlay: GlobalConnectionIpRestriction now carries its full rule data inline (git-owned plugin config) and
 exposes only "which profile is active" as the hot-swappable surface — see the example below.
 
+`ProxyProtocolTrust` is the deliberate exception to the ordinary overlay/advisory behavior. It is
+a security-policy target for `Gateway.metadata.annotations["edgion.io/inbound-proxy-protocol"]`,
+not an overlay and never fails to a base. Unknown fields, invalid CIDRs, `enable=false`, any
+`active`, or a wrong variant make the referring Gateway explicitly Invalid. Same-namespace
+references are allowed; cross-namespace Cluster-visible targets need no grant; cross-namespace
+Namespace-visible targets require an exact grant from `gateway.networking.k8s.io/Gateway` to
+`edgion.io/EdgionConfigData`.
+
 ## Controller-Side Processing
 
 ### preparse
@@ -158,7 +167,7 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 ### on_change
 
 - Looks up resources referencing this EdgionConfigData via `EdgionConfigDataRefManager` and requeues them.
-  Consumers include EdgionPlugins (via `overrideRef` in `RegionRouteConfig`) and EdgionStreamPlugins
+  Consumers include Gateway inbound PROXY policies, EdgionPlugins (via `overrideRef` in `RegionRouteConfig`) and EdgionStreamPlugins
   (via `activeProfileRef` in `GlobalConnectionIpRestrictionConfig`). Also requeues EdgionPlugins and
   EdgionStreamPlugins that reference this object as an `IpList` via `allowRefs`/`denyRefs` in
   IpRestriction configs or GCIR per-profile `ProfileRules`.

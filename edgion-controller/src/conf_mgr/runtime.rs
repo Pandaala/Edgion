@@ -22,6 +22,7 @@ use super::sync_runtime::resource_processor::{
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
     namespace_store::NamespaceStore,
+    proxy_protocol_listener_policy::ProxyProtocolListenerPolicyManager,
     ref_grant::{
         cross_ns_ref_manager::{new_cross_ns_ref_manager, CrossNamespaceRefManager},
         events::ReferenceGrantEventDispatcher,
@@ -62,6 +63,7 @@ pub struct ControllerRuntime {
     pub(crate) grpc_route_delegation_index: RouteDelegationIndex,
     pub(crate) attached_route_tracker: AttachedRouteTracker,
     pub(crate) listener_port_manager: ListenerPortManager,
+    pub(crate) proxy_protocol_listener_policy: ProxyProtocolListenerPolicyManager,
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
     /// Target-conflict + creation-timestamp index for `EdgionBackendTrafficPolicy`.
@@ -119,6 +121,7 @@ impl ControllerRuntime {
             grpc_route_delegation_index: RouteDelegationIndex::new(),
             attached_route_tracker: AttachedRouteTracker::new(),
             listener_port_manager: ListenerPortManager::new(),
+            proxy_protocol_listener_policy: ProxyProtocolListenerPolicyManager::new(),
             configmap_store: ConfigMapStore::new(),
             backend_tls_policy: BackendTLSPolicyState::new(),
             edgion_backend_traffic_policy: BackendTLSPolicyState::new(),
@@ -211,6 +214,12 @@ impl ControllerRuntime {
 
         self.attached_route_tracker.clear();
         tracing::info!(component = "controller_runtime", "Cleared AttachedRouteTracker");
+
+        self.proxy_protocol_listener_policy.clear();
+        tracing::info!(
+            component = "controller_runtime",
+            "Cleared ProxyProtocolListenerPolicyManager"
+        );
 
         self.secret_store.replace_all(HashMap::new());
         tracing::info!(component = "controller_runtime", "Cleared SecretStore");

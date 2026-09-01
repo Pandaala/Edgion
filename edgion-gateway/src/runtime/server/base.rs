@@ -2,10 +2,14 @@ use crate::conf_sync::conf_client::ConfigClient;
 use crate::observe::access_log::get_access_logger_unchecked;
 use crate::observe::AccessLogger;
 use crate::runtime::server::listener_builder;
+use crate::runtime::server::proxy_protocol_policy::{
+    get_global_proxy_protocol_policy_runtime, PreparedProxyProtocolPolicy,
+};
 use crate::runtime::store::listener_gateway_info::is_listener_conflicted;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
+use edgion_resources::resources::proxy_protocol::ResolvedInboundProxyProtocol;
 use edgion_resources::{Gateway, ResourceMeta};
 use kube::ResourceExt;
 use pingora_core::server::Server;
@@ -57,6 +61,13 @@ impl GatewayBase {
         pingora_server: &mut Server,
         gateways: Vec<edgion_resources::Gateway>,
     ) -> Result<()> {
+        // Validate every Gateway and shared physical listener before adding any
+        // service to Pingora. This also freezes the process-lifetime policy map
+        // used by runtime update enforcement.
+        let prepared_proxy_policies = get_global_proxy_protocol_policy_runtime()
+            .preflight_and_freeze(gateways.iter())
+            .context("inbound PROXY protocol startup preflight failed")?;
+
         if gateways.is_empty() {
             // The cache is marked ready as soon as the first gRPC list response arrives,
             // regardless of item count, so reaching this branch means the controller pushed
@@ -200,6 +211,26 @@ impl GatewayBase {
                         server_conf: server_conf_arc.clone(),
                         enable_http2,
                         gateway_annotations: gateway_annotations.clone(),
+                        proxy_protocol_policy: if matches!(
+                            listener.protocol.to_ascii_uppercase().as_str(),
+                            "HTTP" | "HTTPS" | "TCP" | "TLS"
+                        ) {
+                            prepared_proxy_policies.get(&listener_key).cloned().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Gateway '{}' listener '{}' has no prepared inbound PROXY protocol policy",
+                                    gateway.key_name(),
+                                    listener.name
+                                )
+                            })?
+                        } else {
+                            PreparedProxyProtocolPolicy::Disabled
+                        },
+                        proxy_protocol_source: match &gateway.spec.resolved_inbound_proxy_protocol {
+                            ResolvedInboundProxyProtocol::Ready {
+                                listener_names, source, ..
+                            } if listener_names.contains(&listener.name) => Some(*source),
+                            _ => None,
+                        },
                     };
 
                     // Add listener to pingora_server

@@ -12,7 +12,8 @@ namespace A (source)              namespace B (target)
                                   ReferenceGrant  ← lives here, allows the reference
 ```
 
-> **API version**: ReferenceGrant is served at `gateway.networking.k8s.io/v1beta1`. Unlike Gateway and HTTPRoute (which are GA at `v1`), ReferenceGrant remains at `v1beta1`.
+> **API version**: Edgion's installed Gateway API CRDs serve ReferenceGrant at
+> `gateway.networking.k8s.io/v1`; use that version in Edgion manifests.
 
 ## Typical scenarios
 
@@ -24,7 +25,7 @@ namespace A (source)              namespace B (target)
 The Secret lives in `security`, so the grant is created in `security`:
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-gw-to-secret
@@ -67,7 +68,7 @@ spec:
 The Service lives in `shared`, so the grant is created in `shared`:
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1beta1
+apiVersion: gateway.networking.k8s.io/v1
 kind: ReferenceGrant
 metadata:
   name: allow-route-to-service
@@ -81,6 +82,71 @@ spec:
     - group: ""
       kind: Service
 ```
+
+## Example: allow a Gateway to reference ProxyProtocolTrust data
+
+A Gateway may select a typed inbound PROXY protocol trust policy through
+`edgion.io/inbound-proxy-protocol`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edge
+  namespace: gateway-system
+  annotations:
+    edgion.io/inbound-proxy-protocol: >-
+      {"source":"resourceRef","resourceRef":{"name":"edge-load-balancers","namespace":"networking"}}
+```
+
+The target is an enabled, non-overlay `ProxyProtocolTrust` EdgionConfigData:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: edge-load-balancers
+  namespace: networking
+spec:
+  enable: true
+  visibility: Namespace
+  data:
+    type: ProxyProtocolTrust
+    config:
+      mode: trustedSources
+      trustedCidrs: [10.0.0.0/8]
+```
+
+Because the target is cross-namespace and has `visibility: Namespace`, this exact grant must live
+in `networking`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-edge-proxy-trust
+  namespace: networking
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      namespace: gateway-system
+  to:
+    - group: edgion.io
+      kind: EdgionConfigData
+      name: edge-load-balancers
+```
+
+With reference validation enabled, same-namespace targets are always allowed and cross-namespace
+targets with `visibility: Cluster` are allowed without a grant. Only cross-namespace
+`visibility: Namespace` targets require the exact grant above. Disabling Controller reference
+validation allows all three cases.
+
+A missing or mismatched group, kind, namespace, target kind, or optional target name denies the
+reference. The Gateway reports `ResolvedRefs=False/RefNotPermitted`; the selected listener reports
+`ResolvedRefs=False/InvalidProxyProtocolRef`; `Programmed` remains false. The Controller still
+syncs an explicit Invalid transport state, so a Gateway process receiving that snapshot fails
+startup closed rather than widening trust.
 
 ## Field reference
 
@@ -113,7 +179,7 @@ spec:
 
 ### Q3: Why is my ReferenceGrant rejected by the API server?
 
-**A**: Use `apiVersion: gateway.networking.k8s.io/v1beta1`. ReferenceGrant is not served at `v1`, so a `v1` apiVersion fails to apply.
+**A**: Use `apiVersion: gateway.networking.k8s.io/v1`, matching the Gateway API CRDs installed by Edgion.
 
 ## Related documents
 

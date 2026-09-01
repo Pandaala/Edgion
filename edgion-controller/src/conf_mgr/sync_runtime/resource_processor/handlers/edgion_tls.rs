@@ -440,6 +440,7 @@ mod tests {
                 }]),
                 addresses: None,
                 tls: None,
+                resolved_inbound_proxy_protocol: Default::default(),
             },
             status: None,
         }

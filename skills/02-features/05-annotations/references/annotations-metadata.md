@@ -31,17 +31,38 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway inline standard-DNS resolver for `ServiceExternalName` backends. **Data-plane only** (D3a): overrides the EGC default but not control-plane resolution. Mutually exclusive with `dns-resolver-ref`. |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway httpdns LinkSys resolver reference. Explicit namespace required (bare names rejected). **Data-plane only**. A cross-namespace ref is ReferenceGrant-gated (from-kind `Gateway`, to-kind `edgion.io/LinkSys`); a denied ref is reported via `ResolvedRefs=False` and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 
-| `edgion.io/accept-proxy-protocol` | `"true"` / `"false"` | disabled | **Inbound** PROXY protocol. Only case-insensitive `true` enables. Every listener of the Gateway then requires a PROXY header (v1 and v2 auto-detected) at the start of each connection, as sent by an L4 load balancer such as AWS NLB; the addresses it carries replace the peer address for the whole request path. Connections without a valid header are rejected (HAProxy `accept-proxy` semantics). Applies to HTTP, HTTPS, TCP, and TLS listeners — the header is consumed before the TLS handshake. Not applicable to UDP. Read once at listener-bind time, so changing it needs a gateway restart. Runtime path is in `listener_builder.rs`. |
-| `edgion.io/accept-proxy-protocol.<listener-name>` | `"true"` / `"false"` | inherits the Gateway-wide key | Overrides `accept-proxy-protocol` for the single listener with that `spec.listeners[].name`. Exists because a Gateway API `Listener` carries no annotations of its own. |
-| `edgion.io/proxy-protocol-trusted-cidrs` | IP/CIDR list (comma/space separated) | none | Restricts `accept-proxy-protocol` to these peers. A bare address is taken as /32 or /128. Peers outside the list are served as ordinary direct connections and their bytes are never parsed as a header — this is how one listener serves both load-balanced and direct traffic without letting a direct client forge a source address. Absent means every connection must carry a header. Separators are commas or any whitespace, so a YAML block scalar works. An unparseable entry or one matching every address falls back to requiring a header rather than building a partial or wide-open matcher; match-all is judged on the parsed prefix, so `0.0.0.0/00` and `0.0.0.0/+0` are refused too. A deliberate pair like `0.0.0.0/1, 128.0.0.0/1` still covers all of IPv4 and is accepted. **Gateway-wide only** — unlike `accept-proxy-protocol` there is no per-listener suffix. Deciding whether a trusted peer sent a header requires reading 12 bytes, so a trusted peer that connects silently is held until the handshake timeout: unsuitable for listeners fronting server-speaks-first protocols. |
+| `edgion.io/inbound-proxy-protocol` | strict tagged JSON; see below | disabled | Receives PROXY protocol v1/v2 on selected TCP-based Gateway listeners. The Controller resolves it once and the Gateway consumes only the typed result. Invalid input never falls back to a wider trust mode. |
 
 Important:
 
 - `metrics-test-*` keys are meant for integration testing and diagnostics, not normal production config.
 - `edgion.io/edgion-stream-plugins` is the current key used by the runtime path. Older docs used `edgion.io/stream-plugins`.
-- `edgion.io/accept-proxy-protocol` (inbound, on `Gateway`) and `edgion.io/proxy-protocol` (outbound, on `TLSRoute`) are opposite directions and unrelated. Do not confuse them.
-- A PROXY header is unauthenticated. Without `proxy-protocol-trusted-cidrs`, enable `accept-proxy-protocol` only where the listener is reachable exclusively through the trusted load balancer, enforced at the network layer, and never on a listener that also serves kubelet probes. With the CIDR list set, probes and other direct traffic are served normally.
-- In either mode the listener must only be reachable via a component that writes the header itself. A transparent L4 relay forwards the client's first bytes verbatim, so a client can author a header and the relay launders it into a trusted position — do not list such a gateway in `proxy-protocol-trusted-cidrs`.
+- `edgion.io/inbound-proxy-protocol` (inbound, on `Gateway`) and `edgion.io/proxy-protocol` (outbound, on `TLSRoute`) are opposite directions and unrelated.
+- Inline shapes are `{"source":"inline","listeners":[...],"config":{"mode":"required"}}` and `{"source":"inline","listeners":[...],"config":{"mode":"trustedSources","trustedCidrs":[...]}}`.
+- The reference shape is `{"source":"resourceRef","listeners":[...],"resourceRef":{"name":"NAME","namespace":"NAMESPACE"}}`. `listeners` and `namespace` are optional; every other field is strict.
+- Omitted `listeners` selects all TCP-based listeners and ignores UDP on a mixed Gateway. A supplied list contains 1–64 unique existing HTTP/HTTPS/TCP/TLS listener names. Explicit UDP selection and UDP-only Gateways are invalid.
+- `required` accepts a header from every peer and rejects missing headers. `trustedSources` parses a header only for a `DirectPeerIp` matching one of 1–256 canonical CIDRs; other peers remain direct connections. An accepted header supplies `RemoteIp` but never rewrites `DirectPeerIp`.
+- Bare trusted addresses normalize to `/32` or `/128`; invalid entries, normalized duplicates, and `/0` reject the complete policy. No partial matcher or trust-all fallback is built.
+- A referenced `EdgionConfigData` must be enabled, have no active overlay, use `data.type: ProxyProtocolTrust`, and contain the same policy schema. When EdgionConfigData reference validation is disabled, the reference is allowed. With validation enabled, same-namespace references are always allowed; a cross-namespace target with `visibility: Cluster` is allowed without a grant; a cross-namespace target with `visibility: Namespace` requires an exact `ReferenceGrant` from `gateway.networking.k8s.io/Gateway` to `edgion.io/EdgionConfigData`.
+
+  ```yaml
+  apiVersion: edgion.io/v1
+  kind: EdgionConfigData
+  metadata:
+    name: edge-load-balancers
+    namespace: networking
+  spec:
+    enable: true
+    visibility: Namespace
+    data:
+      type: ProxyProtocolTrust
+      config:
+        mode: trustedSources
+        trustedCidrs: [10.0.0.0/8, 192.168.1.5]
+  ```
+
+- Invalid JSON, policy, listener selection, reference, or shared physical-listener policy produces explicit invalid status and prevents Pingora startup. Any effective post-start socket-policy change trips a monotonic guard: readiness becomes 503, new TCP connections are rejected, and the Gateway exits non-zero for supervisor restart.
+- A PROXY header is unauthenticated. A trusted endpoint must generate it itself; a transparent relay can launder client-authored bytes and must not be trusted.
 - `edgion.io/edgion-stream-plugins` runs at accept time, **before** the PROXY header is parsed, so its IP rules match the load balancer rather than the real client. The gateway logs a warning when both are enabled on one listener.
 - Gateway-level StreamPlugins attachments are intentionally same-namespace. To reuse centrally managed lists or selectors across per-namespace policies, reference a shared `EdgionConfigData` from each local `EdgionStreamPlugins`; those cross-namespace data references use the existing `ReferenceGrant` and `visibility` controls.
 

@@ -7,7 +7,7 @@ metadata:
   name: chain-gw1
   namespace: edgion-test
   annotations:
-    edgion.io/accept-proxy-protocol: "true"
+    edgion.io/inbound-proxy-protocol: '{"source":"inline","listeners":["hop1"],"config":{"mode":"required"}}'
 spec:
   gatewayClassName: public-gateway
   listeners:

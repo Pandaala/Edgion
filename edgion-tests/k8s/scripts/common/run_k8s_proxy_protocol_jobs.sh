@@ -27,6 +27,7 @@ CURRENT_NAMESPACE=""
 CURRENT_RBAC_NAME=""
 CURRENT_GATEWAY_CLASS=""
 CURRENT_GATEWAY_CONFIG=""
+CURRENT_TRUST_NAMESPACE=""
 CURRENT_FAILED=0
 CURRENT_CLEANED=true
 RUN_FAILED=0
@@ -214,6 +215,11 @@ cleanup_current_namespace() {
     case "$CURRENT_GATEWAY_CONFIG" in edgion-proxy-isolated-*) ;; *) return 1 ;; esac
     "$KUBECTL_BIN" delete edgiongatewayclassconfig "$CURRENT_GATEWAY_CONFIG" \
       --ignore-not-found --wait=false >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  if [ -n "$CURRENT_TRUST_NAMESPACE" ]; then
+    case "$CURRENT_TRUST_NAMESPACE" in edgion-proxy-isolated-*-pp-trust) ;; *) return 1 ;; esac
+    "$KUBECTL_BIN" delete namespace "$CURRENT_TRUST_NAMESPACE" \
+      --wait=false >/dev/null 2>&1 || cleanup_failed=1
   fi
   "$KUBECTL_BIN" delete gatewayclass "$CURRENT_GATEWAY_CLASS" \
     --ignore-not-found --wait=false >/dev/null 2>&1 || cleanup_failed=1
@@ -421,6 +427,10 @@ run_scenario() {
   CURRENT_RBAC_NAME="$CURRENT_NAMESPACE"
   CURRENT_GATEWAY_CLASS="$CURRENT_NAMESPACE"
   CURRENT_GATEWAY_CONFIG=""
+  CURRENT_TRUST_NAMESPACE=""
+  if [ "$scenario_id" = proxy_protocol_inbound ]; then
+    CURRENT_TRUST_NAMESPACE="${CURRENT_NAMESPACE}-pp-trust"
+  fi
   if [ "$scenario_id" = proxy_protocol_chain ]; then
     CURRENT_GATEWAY_CONFIG="${CURRENT_NAMESPACE}-config"
   fi
@@ -433,9 +443,13 @@ run_scenario() {
   rendered_conf="${scenario_dir}/conf"
   rendered_controller_config="${scenario_dir}/controller.yaml"
   gateway_class_file="${scenario_dir}/gateway-class.yaml"
+  trust_rbac_file="${scenario_dir}/trust-rbac.yaml"
 
   echo "INFO: starting ${scenario_id} in ${CURRENT_NAMESPACE}"
   "$KUBECTL_BIN" create namespace "$CURRENT_NAMESPACE" >/dev/null || return 125
+  if [ -n "$CURRENT_TRUST_NAMESPACE" ]; then
+    "$KUBECTL_BIN" create namespace "$CURRENT_TRUST_NAMESPACE" >/dev/null || return 125
+  fi
   "$KUBECTL_BIN" label namespace "$CURRENT_NAMESPACE" \
     "edgion.io/test-run=${run_id}" \
     "app.kubernetes.io/managed-by=edgion-k8s-proxy-runner" >/dev/null || return 125
@@ -443,12 +457,59 @@ run_scenario() {
   render_common "$FOUNDATION_TEMPLATE" "$foundation_file" \
     "$CURRENT_NAMESPACE" "$run_id" "$test_server_port"
   "$KUBECTL_BIN" apply -f "$foundation_file" >/dev/null || return 125
+  if [ -n "$CURRENT_TRUST_NAMESPACE" ]; then
+    cat > "$trust_rbac_file" <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: edgion-proxy-controller-trust-reader
+  namespace: $CURRENT_TRUST_NAMESPACE
+  labels: {edgion.io/test-run: "$run_id"}
+rules:
+  # Multi-namespace mode starts the same namespaced informer set in every watched
+  # namespace, so each kind needs read access even when this fixture stores only
+  # EdgionConfigData and ReferenceGrant in the trust namespace.
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes", "tlsroutes", "referencegrants", "backendtlspolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["edgion.io"]
+    resources: ["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdatas", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["edgion.io"]
+    resources: ["edgionconfigdatas/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: edgion-proxy-controller-trust-reader
+  namespace: $CURRENT_TRUST_NAMESPACE
+  labels: {edgion.io/test-run: "$run_id"}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: edgion-proxy-controller-trust-reader
+subjects:
+  - kind: ServiceAccount
+    name: edgion-proxy-controller
+    namespace: $CURRENT_NAMESPACE
+EOF
+    "$KUBECTL_BIN" apply -f "$trust_rbac_file" >/dev/null || return 125
+  fi
   validate_bootstrap_job "$CURRENT_NAMESPACE" "$scenario_dir" "$deadline_epoch" || return 125
 
   mkdir -p "$rendered_conf"
   if [ "$scenario_id" = proxy_protocol_inbound ]; then
     for fixture_file in \
+      EdgionConfigData_edgion-test_ppin-loopback-trust.yaml \
       Gateway_edgion-test_ppin-gw.yaml \
+      Gateway_edgion-test_ppin-trusted-gw.yaml \
       HTTPRoute_edgion-test_ppin-route.yaml \
       Service_edgion-test_ppin-http.yaml; do
       cp "${fixture_source}/${fixture_file}" "${rendered_conf}/${fixture_file}"
@@ -530,6 +591,11 @@ run_scenario() {
     -e "s|__NAMESPACE__|${CURRENT_NAMESPACE}|g" \
     -e "s|__LEASE_NAME__|${CURRENT_NAMESPACE}|g" \
     "$CONTROLLER_CONFIG" > "$rendered_controller_config"
+  if [ -n "$CURRENT_TRUST_NAMESPACE" ]; then
+    sed "s|watch_namespaces: \[${CURRENT_NAMESPACE}\]|watch_namespaces: [${CURRENT_NAMESPACE}, ${CURRENT_TRUST_NAMESPACE}]|" \
+      "$rendered_controller_config" > "${rendered_controller_config}.tmp"
+    mv "${rendered_controller_config}.tmp" "$rendered_controller_config"
+  fi
   "$KUBECTL_BIN" create configmap edgion-proxy-controller-config -n "$CURRENT_NAMESPACE" \
     --from-file=controller.yaml="$rendered_controller_config" >/dev/null || return 125
   "$KUBECTL_BIN" create configmap edgion-proxy-gateway-config -n "$CURRENT_NAMESPACE" \
@@ -556,6 +622,11 @@ run_scenario() {
   "$KUBECTL_BIN" apply -f "$client_file" >/dev/null || return 125
   validate_client_result "$scenario_id" "$CURRENT_NAMESPACE" "$scenario_dir" "$deadline_epoch"
   [ "$RESULT_STATUS" = PASS ] || return "$RESULT_RC"
+  if [ "$scenario_id" = proxy_protocol_inbound ]; then
+    KUBECTL_BIN="$KUBECTL_BIN" \
+      "${SCRIPT_DIR}/test_proxy_protocol_conditions.sh" "$CURRENT_NAMESPACE" "$CURRENT_GATEWAY_CLASS" \
+      || return 125
+  fi
   return 0
 }
 
