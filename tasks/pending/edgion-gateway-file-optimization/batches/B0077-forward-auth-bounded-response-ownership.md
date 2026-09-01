@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `77a25855`
-- Pipeline state: implementation independently approved and fully verified; pending local commit
+- Pipeline state: committed and fully verified
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/forward_auth/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/forward_auth/plugin.rs`
@@ -61,4 +61,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change row, all verification complete
-- Commit: pending
+- Commit: `5ad0d07f`

@@ -27,8 +27,17 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{
     GeoDecision, GeoDimFacts, GeoIpLocationConfig, GeoRuleContext, GeoRuleSource,
 };
 
+const PLUGIN_NAME: &str = "GeoIpLocation";
+const DENY_BODY: &str = r#"{"message":"Access denied"}"#;
+
 fn default_status() -> u16 {
     403
+}
+
+#[derive(Clone, Copy)]
+enum RuntimeDecision {
+    DatabaseUnavailable,
+    Rule(GeoDecision),
 }
 
 /// Split a `GeoLookup` into matchable facts plus an "unavailable" flag. Both
@@ -53,7 +62,6 @@ fn dim_facts(info: &GeoInfo) -> GeoDimFacts<'_> {
 
 /// `GeoIpLocation` L7 plugin: geo resolution, plus an optional deny/allow decision.
 pub struct GeoIpLocation {
-    name: String,
     config: GeoIpLocationConfig,
     /// True when `validate_and_init` failed at construction (should not happen
     /// — the controller and this same code path both validate first via the
@@ -94,7 +102,6 @@ impl GeoIpLocation {
         let needs_remote_facts = parse_only || config.source_needs_geo_facts(GeoRuleSource::RemoteIp);
 
         Box::new(GeoIpLocation {
-            name: "GeoIpLocation".to_string(),
             config,
             init_failed,
             needs_remote_ip,
@@ -110,17 +117,11 @@ impl GeoIpLocation {
         addr.parse::<IpAddr>().ok()
     }
 
-    fn deny(
-        &self,
-        session: &mut dyn PluginSession,
-        plugin_log: &mut PluginLog,
-        log_reason: &str,
-    ) -> PluginRunningResult {
-        plugin_log.push(log_reason);
+    fn deny_response(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
         let _ = session.set_response_header("content-type", "application/json");
         PluginRunningResult::ErrResponse {
             status: default_status(),
-            body: Some(serde_json::json!({ "message": "Access denied" }).to_string()),
+            body: Some(DENY_BODY.to_owned()),
         }
     }
 }
@@ -128,69 +129,76 @@ impl GeoIpLocation {
 #[async_trait]
 impl RequestFilter for GeoIpLocation {
     fn name(&self) -> &str {
-        &self.name
+        PLUGIN_NAME
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         if self.init_failed {
-            return self.deny(session, plugin_log, "init fail: fail-closed");
+            plugin_log.push_err("init fail: fail-closed");
+            return self.deny_response(session);
         }
 
-        // Resolve only what this config actually needs. Parse-only mode
-        // forces both (its whole purpose is populating the access log);
-        // otherwise a CIDR-only rule set on a side needs no GeoIP database at
-        // all — see `needs_direct_facts`/`needs_remote_facts`.
-        let direct_lookup = if self.needs_direct_facts {
-            Some(session.ctx().direct_peer_geo().clone())
-        } else {
-            None
-        };
-        let remote_lookup = if self.needs_remote_facts {
-            Some(session.ctx().remote_geo().clone())
-        } else {
-            None
-        };
-
         if self.config.is_parse_only() {
+            // Parse-only mode intentionally initializes both lazy access-log
+            // slots but does not retain or clone either lookup.
+            let ctx = session.ctx();
+            let _ = ctx.direct_peer_geo();
+            let _ = ctx.remote_geo();
             plugin_log.push("parse:ok");
             return PluginRunningResult::GoodNext;
         }
 
-        let (direct_facts, direct_unavailable) = match &direct_lookup {
-            Some(l) => facts_of(l),
-            None => (GeoDimFacts::default(), false),
-        };
-        let (remote_facts, remote_unavailable) = match &remote_lookup {
-            Some(l) => facts_of(l),
-            None => (GeoDimFacts::default(), false),
-        };
+        // Resolve only what this config actually needs. The lookup borrows are
+        // kept inside this scope; only the copyable decision escapes it. A
+        // CIDR-only side therefore still performs no GeoIP database lookup.
+        let decision = {
+            let request_ctx = session.ctx();
+            let direct_lookup = self.needs_direct_facts.then(|| request_ctx.direct_peer_geo());
+            let remote_lookup = self.needs_remote_facts.then(|| request_ctx.remote_geo());
 
-        if direct_unavailable || remote_unavailable {
-            let fail_open = self.config.fail_open.unwrap_or(false);
-            if fail_open {
-                plugin_log.push("db:unavailable fail-open");
-                return PluginRunningResult::GoodNext;
-            }
-            return self.deny(session, plugin_log, "db:unavailable fail-closed");
-        }
+            let (direct_facts, direct_unavailable) = match direct_lookup {
+                Some(lookup) => facts_of(lookup),
+                None => (GeoDimFacts::default(), false),
+            };
+            let (remote_facts, remote_unavailable) = match remote_lookup {
+                Some(lookup) => facts_of(lookup),
+                None => (GeoDimFacts::default(), false),
+            };
 
-        let ctx = GeoRuleContext {
-            direct_peer_ip: Self::parse_ip(session.direct_peer_ip()),
-            direct_peer: direct_facts,
-            remote_ip: if self.needs_remote_ip {
-                Self::parse_ip(session.remote_ip())
+            if direct_unavailable || remote_unavailable {
+                RuntimeDecision::DatabaseUnavailable
             } else {
-                None
-            },
-            remote: remote_facts,
+                let ctx = GeoRuleContext {
+                    direct_peer_ip: Self::parse_ip(session.direct_peer_ip()),
+                    direct_peer: direct_facts,
+                    remote_ip: if self.needs_remote_ip {
+                        Self::parse_ip(session.remote_ip())
+                    } else {
+                        None
+                    },
+                    remote: remote_facts,
+                };
+                RuntimeDecision::Rule(self.config.decide(&ctx))
+            }
         };
 
-        match self.config.decide(&ctx) {
-            GeoDecision::Allow => {
+        match decision {
+            RuntimeDecision::DatabaseUnavailable if self.config.fail_open.unwrap_or(false) => {
+                plugin_log.push_err("db:unavailable fail-open");
+                PluginRunningResult::GoodNext
+            }
+            RuntimeDecision::DatabaseUnavailable => {
+                plugin_log.push_err("db:unavailable fail-closed");
+                self.deny_response(session)
+            }
+            RuntimeDecision::Rule(GeoDecision::Allow) => {
                 plugin_log.push("allow");
                 PluginRunningResult::GoodNext
             }
-            GeoDecision::Deny => self.deny(session, plugin_log, "deny"),
+            RuntimeDecision::Rule(GeoDecision::Deny) => {
+                plugin_log.push("deny");
+                self.deny_response(session)
+            }
         }
     }
 }
@@ -259,6 +267,16 @@ mod tests {
         s
     }
 
+    #[test]
+    fn name_is_static_across_instances() {
+        let first = GeoIpLocation::create(&parse_only_config());
+        let second = GeoIpLocation::create(&parse_only_config());
+
+        assert_eq!(first.name(), PLUGIN_NAME);
+        assert_eq!(second.name(), PLUGIN_NAME);
+        assert!(std::ptr::eq(first.name(), second.name()));
+    }
+
     #[tokio::test]
     async fn parse_only_mode_never_denies_and_needs_no_fail_open() {
         let _lock = crate::geoip::GEO_TEST_LOCK.lock();
@@ -268,7 +286,7 @@ mod tests {
         let mut log = PluginLog::new("GeoIpLocation");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("parse:ok"));
+        assert_eq!(log.render_for_test(), "parse:ok");
     }
 
     #[tokio::test]
@@ -290,7 +308,7 @@ mod tests {
                 body: Some(r#"{"message":"Access denied"}"#.to_string()),
             }
         );
-        assert!(log.contains("db:unavailable fail-closed"));
+        assert_eq!(log.render_for_test(), "err: db:unavailable fail-closed");
     }
 
     #[tokio::test]
@@ -302,7 +320,7 @@ mod tests {
         let mut log = PluginLog::new("GeoIpLocation");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("db:unavailable fail-open"));
+        assert_eq!(log.render_for_test(), "err: db:unavailable fail-open");
     }
 
     #[tokio::test]
@@ -324,6 +342,7 @@ mod tests {
         let mut log = PluginLog::new("GeoIpLocation");
         let allowed = plugin.run_request(&mut allowed_session, &mut log).await;
         assert_eq!(allowed, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "allow");
 
         let mut denied_session = session_with_ips("8.8.8.8", "8.8.8.8");
         denied_session.expect_set_response_header().returning(|name, value| {
@@ -339,6 +358,7 @@ mod tests {
                 body: Some(r#"{"message":"Access denied"}"#.to_string()),
             }
         );
+        assert_eq!(log2.render_for_test(), "deny");
     }
 
     #[tokio::test]
@@ -363,6 +383,6 @@ mod tests {
                 body: Some(r#"{"message":"Access denied"}"#.to_string()),
             }
         );
-        assert!(log.contains("init fail: fail-closed"));
+        assert_eq!(log.render_for_test(), "err: init fail: fail-closed");
     }
 }

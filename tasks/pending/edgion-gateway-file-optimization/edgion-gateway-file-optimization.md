@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 88 changed, 102 examined-no-change, 9 deferred, 333 non-terminal |
-| Active batch | B0077 ForwardAuth bounded response ownership and static diagnostics; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0077 completes its commit gate |
+| Coverage | 532 tracked files: 89 changed, 103 examined-no-change, 9 deferred, 331 non-terminal |
+| Active batch | B0078 GeoIP Location borrowed lookup evaluation and static failure diagnostics; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0078 completes its commit gate |
 
 ## AI guide summary
 
