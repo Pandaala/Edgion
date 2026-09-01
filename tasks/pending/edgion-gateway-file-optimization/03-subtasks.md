@@ -483,8 +483,8 @@
 | `edgion-gateway/src/plugins/http/region_route/plugin.rs` | `plugins-http-region-route` | source | changed | B0099 |
 | `edgion-gateway/src/plugins/http/request_access_policy/mod.rs` | `plugins-http-request-access-policy` | source | examined-no-change | B0100 |
 | `edgion-gateway/src/plugins/http/request_access_policy/plugin.rs` | `plugins-http-request-access-policy` | source | changed | B0100 |
-| `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | analysis-ready | B0101 |
-| `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | analysis-ready | B0101 |
+| `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
+| `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | pending | — |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | pending | — |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | pending | — |

@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0100 passed independent review and every commit gate |
-| Coverage | 532 tracked files: 119 changed, 136 examined-no-change, 10 deferred, 267 non-terminal |
-| Active batch | B0100 RequestAccessPolicy generation and hot-path ownership; exact local commit in progress |
-| Analysis queue | B0101 RequestBodyBuffer analyzed as examined-no-change and ready for promotion |
+| Campaign status | in-progress; B0101 no-change disposition passed independent review and every commit gate |
+| Coverage | 532 tracked files: 119 changed, 138 examined-no-change, 10 deferred, 265 non-terminal |
+| Active batch | B0101 RequestBodyBuffer no-change disposition; exact local commit in progress |
+| Analysis queue | B0102 RequestMirror read-only analysis in progress |
 
 ## AI guide summary
 

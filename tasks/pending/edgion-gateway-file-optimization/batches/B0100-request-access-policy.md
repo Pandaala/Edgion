@@ -25,4 +25,4 @@
 - Coverage: `plugin.rs` changed; `mod.rs` examined-no-change
 - Verification: 16 Gateway, 17 resources, and 22 Controller RequestAccessPolicy tests passed; format, locked workspace check/Clippy, Gateway binary build, agent-doc, SSA, metrics, Pingora source, no-tracing, English-only, diff, and frozen-path guards passed
 - Integration: the frozen `edgion-tests/**` tree remained unchanged; existing static/dynamic policy, Secret/HMAC/IP, active selector, access-log, and hot-reload coverage is sufficient, so no integration issue was created
-- Commit: pending
+- Commit: `3e450400`
