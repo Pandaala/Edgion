@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; OpenID Connect coverage is terminal and B0094 passed every commit gate |
-| Coverage | 532 tracked files: 113 changed, 129 examined-no-change, 10 deferred, 280 non-terminal |
-| Active batch | B0094 OpenID Connect validation/error/module boundary; exact commit gate in progress |
-| Analysis queue | Select the next pending Gateway anchor after B0094 commits |
+| Campaign status | in-progress; B0095 passed every commit gate |
+| Coverage | 532 tracked files: 114 changed, 130 examined-no-change, 10 deferred, 278 non-terminal |
+| Active batch | B0095 ProxyRewrite plugin boundary; exact commit in progress |
+| Analysis queue | B0096 RateLimit candidate is analyzed and awaits B0095 commit |
 
 ## AI guide summary
 

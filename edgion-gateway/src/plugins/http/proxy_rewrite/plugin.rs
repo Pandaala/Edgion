@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 
 use crate::link_sys::template::{evaluate_template_bounded, TemplateEvaluationError};
 use crate::plugins::http::common::{json_request_headers_are_supported, CappedWriter};
+use crate::plugins::runtime::body_gate::record_body_read_error_status;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -377,7 +378,7 @@ impl ProxyRewrite {
 
         let known_bodyless = session.declares_body() == Some(false);
         let body_len = session.request_body_available_len(known_bodyless).map_err(|error| {
-            Self::record_body_error(session, &error);
+            record_body_read_error_status(session, &error);
             plugin_log.push_err("body length unavailable");
             Self::reject(500, None)
         })?;
@@ -388,7 +389,7 @@ impl ProxyRewrite {
         }
 
         let body = session.read_request_body(None).await.map_err(|error| {
-            Self::record_body_error(session, &error);
+            record_body_read_error_status(session, &error);
             match error {
                 BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                     plugin_log.push("deny body too large");
@@ -471,7 +472,7 @@ impl ProxyRewrite {
             .overwrite_request_body(Bytes::from(body))
             .await
             .map_err(|error| {
-                Self::record_body_error(session, &error);
+                record_body_read_error_status(session, &error);
                 match error {
                     BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                         plugin_log.push("deny mutation size");
@@ -586,23 +587,6 @@ impl ProxyRewrite {
         PluginRunningResult::ErrResponse {
             status,
             body: body.map(str::to_owned),
-        }
-    }
-
-    fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
-        let status = match error {
-            BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                Some(EdgionErrorCode::BodyReadTooLarge)
-            }
-            BodyReadError::Timeout => Some(EdgionErrorCode::BodyReadTimeout),
-            BodyReadError::Incomplete => Some(EdgionErrorCode::BodyReadAborted),
-            BodyReadError::Unimplemented => Some(EdgionErrorCode::BodyReadUnimplemented),
-            BodyReadError::StorageFailure => Some(EdgionErrorCode::BodyCaptureStorageFailed),
-            BodyReadError::GenerationConflict => Some(EdgionErrorCode::BodyMutationConflict),
-            BodyReadError::NotBuffered => None,
-        };
-        if let Some(status) = status {
-            session.record_error(status);
         }
     }
 }
