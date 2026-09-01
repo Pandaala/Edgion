@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `7f69df81`
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed and fully verified
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/guardrail/{attached.rs,mod.rs,plugin.rs,protocol.rs,response.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/guardrail/plugin.rs`
@@ -55,4 +55,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 4 examined-no-change owned rows; supporting route file is not claimed
-- Commit: pending
+- Commit: `e6034b85`

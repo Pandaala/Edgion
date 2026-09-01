@@ -12,6 +12,11 @@ use pingora_core::tls::x509::X509Ref;
 pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
     let cert = ssl.peer_certificate()?;
 
+    Some(extract_client_cert_info_from_cert(&cert))
+}
+
+/// Extract client certificate information from an X.509 certificate.
+pub(crate) fn extract_client_cert_info_from_cert(cert: &X509Ref) -> ClientCertInfo {
     // Extract subject DN.
     let mut subject = String::with_capacity(128);
     let mut first = true;
@@ -37,19 +42,19 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
         .find(|entry| entry.object().nid().short_name().map(|s| s == "CN").unwrap_or(false))
         .and_then(|entry| entry.data().as_utf8().map(|s| s.to_string()).ok());
 
-    let sans = extract_sans(&cert);
+    let sans = extract_sans(cert);
 
     let fingerprint = cert
         .digest(pingora_core::tls::hash::MessageDigest::sha256())
         .map(|digest| encode_fingerprint(digest.as_ref()))
         .unwrap_or_else(|_| "unknown".to_string());
 
-    Some(ClientCertInfo {
+    ClientCertInfo {
         subject,
         sans,
         cn,
         fingerprint,
-    })
+    }
 }
 
 fn encode_fingerprint(bytes: &[u8]) -> String {
@@ -118,23 +123,73 @@ pub fn extract_sans_from_ssl(ssl: &SslRef) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_fingerprint, extract_sans};
+    use super::{encode_fingerprint, extract_client_cert_info_from_cert, extract_sans};
+    use pingora_core::tls::hash::MessageDigest;
     use pingora_core::tls::x509::X509;
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 
-    #[test]
-    fn extracts_dns_and_ip_subject_alt_names() {
-        let key = rcgen::KeyPair::generate().expect("test key generation must succeed");
-        let params = rcgen::CertificateParams::new(vec!["client.example".to_string(), "127.0.0.1".to_string()])
-            .expect("test SAN values must be valid");
+    fn canonical_client_cert() -> X509 {
+        let key = KeyPair::generate().expect("test key generation must succeed");
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("empty SAN list must be valid");
+        params.distinguished_name = DistinguishedName::new();
+        params.distinguished_name.push(DnType::CommonName, "client-cn");
+        params.subject_alt_names = vec![
+            SanType::DnsName("client.example".try_into().expect("test DNS SAN must be valid")),
+            SanType::IpAddress("127.0.0.1".parse().expect("test IP SAN must be valid")),
+        ];
         let pem = params
             .self_signed(&key)
             .expect("test certificate signing must succeed")
             .pem();
-        let cert = X509::from_pem(pem.as_bytes()).expect("generated certificate must parse");
+        X509::from_pem(pem.as_bytes()).expect("generated certificate must parse")
+    }
+
+    fn subject_only_cert() -> X509 {
+        let key = KeyPair::generate().expect("test key generation must succeed");
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("empty SAN list must be valid");
+        let mut distinguished_name = DistinguishedName::new();
+        distinguished_name.push(DnType::OrganizationName, "subject-only-org");
+        params.distinguished_name = distinguished_name;
+        let pem = params
+            .self_signed(&key)
+            .expect("test certificate signing must succeed")
+            .pem();
+        X509::from_pem(pem.as_bytes()).expect("generated certificate must parse")
+    }
+
+    #[test]
+    fn extracts_dns_and_ip_subject_alt_names() {
+        let cert = canonical_client_cert();
 
         let sans = extract_sans(&cert);
         assert!(sans.iter().any(|san| san == "client.example"));
         assert!(sans.iter().any(|san| san == "IP:127.0.0.1"));
+    }
+
+    #[test]
+    fn canonical_projection_extracts_cn_sans_and_sha256_fingerprint() {
+        let cert = canonical_client_cert();
+        let expected_fingerprint = encode_fingerprint(
+            cert.digest(MessageDigest::sha256())
+                .expect("generated certificate digest must succeed")
+                .as_ref(),
+        );
+
+        let info = extract_client_cert_info_from_cert(&cert);
+
+        assert_eq!(info.subject, "CN=client-cn");
+        assert_eq!(info.cn.as_deref(), Some("client-cn"));
+        assert_eq!(info.sans, ["client.example", "IP:127.0.0.1"]);
+        assert_eq!(info.fingerprint, expected_fingerprint);
+    }
+
+    #[test]
+    fn canonical_projection_does_not_invent_cn_or_san_from_subject() {
+        let info = extract_client_cert_info_from_cert(&subject_only_cert());
+
+        assert!(!info.subject.is_empty());
+        assert!(info.sans.is_empty());
+        assert!(info.cn.is_none());
     }
 
     #[test]

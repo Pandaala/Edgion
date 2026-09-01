@@ -8,14 +8,14 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use percent_encoding::percent_decode_str;
-use pingora_core::tls::hash::MessageDigest;
-use pingora_core::tls::x509::{X509Ref, X509};
+use pingora_core::tls::x509::X509;
 use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
 use crate::ctx::ClientCertInfo;
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info_from_cert;
 use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
@@ -121,16 +121,11 @@ impl HeaderCertAuth {
         certs
     }
 
-    fn get_identity(&self, cert_info: &ClientCertInfo) -> Option<String> {
+    fn get_identity<'a>(&self, cert_info: &'a ClientCertInfo) -> Option<&'a str> {
         match self.config.consumer_by {
-            ConsumerBy::SanOrCn => cert_info
-                .sans
-                .first()
-                .cloned()
-                .or_else(|| cert_info.cn.clone())
-                .or_else(|| Some(cert_info.subject.clone())),
-            ConsumerBy::Cn => cert_info.cn.clone().or_else(|| Some(cert_info.subject.clone())),
-            ConsumerBy::Fingerprint => Some(cert_info.fingerprint.clone()),
+            ConsumerBy::SanOrCn => cert_info.sans.first().map(String::as_str).or(cert_info.cn.as_deref()),
+            ConsumerBy::Cn => cert_info.cn.as_deref(),
+            ConsumerBy::Fingerprint => Some(cert_info.fingerprint.as_str()),
         }
     }
 
@@ -155,10 +150,10 @@ impl HeaderCertAuth {
             }
         } else {
             let identity = self.get_identity(cert_info).ok_or("identity-not-found")?;
-            if Self::contains_header_control_chars(&identity) {
+            if Self::contains_header_control_chars(identity) {
                 return Err("invalid-identity");
             }
-            let _ = session.set_request_header(&self.config.upstream_headers.consumer_header, &identity);
+            let _ = session.set_request_header(&self.config.upstream_headers.consumer_header, identity);
         }
 
         if !Self::contains_header_control_chars(&cert_info.fingerprint) {
@@ -247,80 +242,6 @@ impl HeaderCertAuth {
         Err("ca-verification-failed")
     }
 
-    fn extract_client_cert_info(cert: &X509Ref) -> ClientCertInfo {
-        let mut subject = String::with_capacity(128);
-        let mut first = true;
-        for entry in cert.subject_name().entries() {
-            if !first {
-                subject.push_str(", ");
-            }
-            first = false;
-            let key = entry.object().nid().short_name().unwrap_or("?");
-            subject.push_str(key);
-            subject.push('=');
-            match entry.data().as_utf8() {
-                Ok(s) => subject.push_str(&s),
-                Err(_) => subject.push('?'),
-            }
-        }
-
-        let cn = cert
-            .subject_name()
-            .entries()
-            .find(|entry| entry.object().nid().short_name().map(|s| s == "CN").unwrap_or(false))
-            .and_then(|entry| entry.data().as_utf8().map(|s| s.to_string()).ok());
-
-        let mut sans = Vec::new();
-        if let Some(san_ext) = cert.subject_alt_names() {
-            for san in san_ext {
-                if let Some(dns_name) = san.dnsname() {
-                    sans.push(dns_name.to_string());
-                }
-                if let Some(ip_bytes) = san.ipaddress() {
-                    match ip_bytes.len() {
-                        4 => sans.push(format!(
-                            "IP:{}.{}.{}.{}",
-                            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
-                        )),
-                        16 => {
-                            let octets: [u8; 16] = match ip_bytes.try_into() {
-                                Ok(arr) => arr,
-                                Err(_) => continue,
-                            };
-                            sans.push(format!("IP:{}", std::net::Ipv6Addr::from(octets)));
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(email) = san.email() {
-                    sans.push(format!("email:{}", email));
-                }
-                if let Some(uri) = san.uri() {
-                    sans.push(format!("uri:{}", uri));
-                }
-            }
-        }
-
-        let fingerprint = cert
-            .digest(MessageDigest::sha256())
-            .map(|digest| {
-                digest
-                    .as_ref()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join(":")
-            })
-            .unwrap_or_else(|_| "unknown".to_string());
-
-        ClientCertInfo {
-            subject,
-            sans,
-            cn,
-            fingerprint,
-        }
-    }
-
     fn extract_from_header(&self, session: &dyn PluginSession) -> Result<ClientCertInfo, &'static str> {
         let header_value = session
             .header_value(&self.config.certificate_header_name)
@@ -328,7 +249,7 @@ impl HeaderCertAuth {
         let cert_pem = self.decode_header_cert_to_pem(header_value.trim())?;
         self.verify_against_ca(&cert_pem)?;
         let cert = X509::from_pem(&cert_pem).map_err(|_| "invalid-cert-pem")?;
-        Ok(Self::extract_client_cert_info(&cert))
+        Ok(extract_client_cert_info_from_cert(&cert))
     }
 
     async fn reject(
@@ -420,6 +341,9 @@ impl RequestFilter for HeaderCertAuth {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use bytes::Bytes;
+    use mockall::Sequence;
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 
     fn sample_cert_info() -> ClientCertInfo {
         ClientCertInfo {
@@ -427,6 +351,161 @@ mod tests {
             sans: vec!["alice@example.com".to_string()],
             cn: Some("alice".to_string()),
             fingerprint: "aa:bb:cc".to_string(),
+        }
+    }
+
+    fn subject_only_cert_info() -> ClientCertInfo {
+        let key = KeyPair::generate().expect("test key generation must succeed");
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("empty SAN list must be valid");
+        let mut distinguished_name = DistinguishedName::new();
+        distinguished_name.push(DnType::OrganizationName, "subject-only-org");
+        params.distinguished_name = distinguished_name;
+        let pem = params
+            .self_signed(&key)
+            .expect("test certificate signing must succeed")
+            .pem();
+        let cert = X509::from_pem(pem.as_bytes()).expect("generated certificate must parse");
+        let info = extract_client_cert_info_from_cert(&cert);
+        assert!(!info.subject.is_empty());
+        assert!(info.sans.is_empty());
+        assert!(info.cn.is_none());
+        info
+    }
+
+    fn connection_plugin(consumer_by: ConsumerBy, allow_anonymous: bool) -> HeaderCertAuth {
+        let config = HeaderCertAuthConfig {
+            mode: CertSourceMode::Connection,
+            consumer_by,
+            allow_anonymous,
+            auth_failure_delay_ms: 0,
+            ..Default::default()
+        };
+        HeaderCertAuth::new(&config, "default".to_string())
+    }
+
+    #[test]
+    fn identity_selection_borrows_exact_configured_certificate_field() {
+        let mut info = sample_cert_info();
+        let plugin = connection_plugin(ConsumerBy::SanOrCn, false);
+        let identity = plugin.get_identity(&info).expect("SAN identity must exist");
+        assert_eq!(identity, "alice@example.com");
+        assert_eq!(identity.as_ptr(), info.sans[0].as_ptr());
+
+        info.sans.clear();
+        let identity = plugin.get_identity(&info).expect("CN fallback must exist");
+        assert_eq!(identity, "alice");
+        assert_eq!(
+            identity.as_ptr(),
+            info.cn.as_deref().expect("test CN must exist").as_ptr()
+        );
+
+        let plugin = connection_plugin(ConsumerBy::Cn, false);
+        let identity = plugin.get_identity(&info).expect("CN identity must exist");
+        assert_eq!(
+            identity.as_ptr(),
+            info.cn.as_deref().expect("test CN must exist").as_ptr()
+        );
+
+        let plugin = connection_plugin(ConsumerBy::Fingerprint, false);
+        let identity = plugin.get_identity(&info).expect("fingerprint identity must exist");
+        assert_eq!(identity, "aa:bb:cc");
+        assert_eq!(identity.as_ptr(), info.fingerprint.as_ptr());
+    }
+
+    #[test]
+    fn subject_is_not_an_identity_fallback() {
+        let info = subject_only_cert_info();
+
+        assert!(connection_plugin(ConsumerBy::SanOrCn, false)
+            .get_identity(&info)
+            .is_none());
+        assert!(connection_plugin(ConsumerBy::Cn, false).get_identity(&info).is_none());
+    }
+
+    #[tokio::test]
+    async fn subject_only_identity_strategies_fail_closed_with_exact_response() {
+        for consumer_by in [ConsumerBy::SanOrCn, ConsumerBy::Cn] {
+            let plugin = connection_plugin(consumer_by, false);
+            let mut session = MockPluginSession::new();
+            session
+                .expect_client_cert_info()
+                .times(1)
+                .return_const(Some(subject_only_cert_info()));
+
+            let mut sequence = Sequence::new();
+            session
+                .expect_write_response_header()
+                .withf(|response, end_of_stream| {
+                    !end_of_stream
+                        && response.status.as_u16() == 401
+                        && response
+                            .headers
+                            .get("content-type")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("text/plain")
+                        && response
+                            .headers
+                            .get("www-authenticate")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("TLSCert realm=\"edgion\"")
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            session
+                .expect_write_response_body()
+                .withf(|body, end_of_stream| {
+                    *end_of_stream
+                        && body.as_deref()
+                            == Some(Bytes::from_static(b"401 TLS certificate failed verification").as_ref())
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            session
+                .expect_shutdown()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|| {});
+
+            let mut log = PluginLog::new("HeaderCertAuth");
+            let result = plugin.run_request(&mut session, &mut log).await;
+
+            assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+            assert_eq!(log.render_for_test(), "err: identity-not-found");
+            assert!(!log.contains("cert verify:ok"));
+        }
+    }
+
+    #[tokio::test]
+    async fn subject_only_identity_strategies_allow_exact_anonymous_result() {
+        for consumer_by in [ConsumerBy::SanOrCn, ConsumerBy::Cn] {
+            let plugin = connection_plugin(consumer_by, true);
+            let mut session = MockPluginSession::new();
+            session
+                .expect_client_cert_info()
+                .times(1)
+                .return_const(Some(subject_only_cert_info()));
+
+            let mut sequence = Sequence::new();
+            session
+                .expect_set_request_header()
+                .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true")
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            session
+                .expect_set_request_header()
+                .withf(|name, value| name == "X-Consumer-Username" && value == "anonymous")
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+
+            let mut log = PluginLog::new("HeaderCertAuth");
+            let result = plugin.run_request(&mut session, &mut log).await;
+
+            assert_eq!(result, PluginRunningResult::GoodNext);
+            assert_eq!(log.render_for_test(), "Allow anonymous");
         }
     }
 

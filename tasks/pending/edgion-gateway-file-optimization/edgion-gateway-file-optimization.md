@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 90 changed, 107 examined-no-change, 9 deferred, 326 non-terminal |
-| Active batch | B0079 Guardrail canonical SSE content-type classification; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0079 completes its commit gate |
+| Coverage | 532 tracked files: 91 changed, 108 examined-no-change, 9 deferred, 324 non-terminal |
+| Active batch | B0080 HeaderCertAuth exact identity selection and canonical certificate projection; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0080 completes its commit gate |
 
 ## AI guide summary
 
