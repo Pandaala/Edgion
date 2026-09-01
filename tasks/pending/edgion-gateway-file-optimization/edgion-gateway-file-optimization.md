@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `0a95362a` was rebaselined |
-| Coverage | 532 tracked files: 106 changed, 125 examined-no-change, 9 deferred, 292 non-terminal |
-| Active batch | B0090 OpenID Connect borrowed JWK selection; independently approved and awaiting commit gate |
-| Analysis queue | B0091 OpenID Connect session and credential preparation pending freshness revalidation after B0090 |
+| Coverage | 532 tracked files: 109 changed, 125 examined-no-change, 9 deferred, 289 non-terminal |
+| Active batch | B0091 OpenID Connect prepared Secret generation; independently approved and awaiting commit gate |
+| Analysis queue | B0092 OpenID Connect discovery/JWKS refresh state pending fresh analysis after B0091 |
 
 ## AI guide summary
 

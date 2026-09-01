@@ -219,7 +219,28 @@ spec:
 
 - `clientSecretRef`：读取 `clientSecret` / `client_secret` / `secret`
 - `sessionSecretRef`：读取 `sessionSecret` / `session_secret` / `secret`
-- `sessionSecret` 建议至少 32 字节（用于 AES-256-GCM）
+- `sessionSecret` 必须至少 32 字节（用于 AES-256-GCM）
+
+Controller 通常会解析这两个引用，并将值随插件 generation 下发。Gateway 在构造该
+generation 时消费解析后的值；如果解析值缺失或为空，Gateway 仅在构造期执行一次旧式
+Secret store 回退，请求路径不会重新读取 Secret。Session secret 会立即派生为该
+generation 的 AES-256-GCM cipher，运行时插件配置不会保留原始 session-secret 字符串。
+OAuth client secret 则作为一个不透明的 generation 值保留，仅用于向 IdP 进行客户端认证。
+
+Secret 更新会在替换后的插件 generation 发布时生效；已开始的请求继续固定使用原有
+generation。轮换 `sessionSecretRef` 会使上一 generation 加密的 cookie 失效，因此应预期
+用户在 session secret 轮换后需要重新认证。
+
+仅当当前模式和请求路径确实需要某个 Secret 时，Secret 缺失、为空、不是有效 UTF-8，或
+session secret 少于 32 字节，才会在 `authFailureDelayMs` 延迟后返回相同的无细节
+`401 Unauthorized` 响应和已配置的 Bearer challenge。基础的 `bearerOnly: true` +
+`verificationMode: JwksOnly` 路径不需要 OAuth client secret；调用需要客户端认证的 IdP
+端点时才需要。访问日志只记录固定失败分类，不包含 Secret 身份或内容。
+
+IdP 传输、响应解码和请求期间的 TLS 失败属于独立的依赖故障，不受上述凭据 401 契约约束。
+其 wire 响应遵循各端点自己的错误映射；应检查访问日志中的失败分类，而不是依赖统一的状态码
+或响应体。已声明的 TLS CA 和 mTLS 材料由该 generation 的规范 outbound client 消费；
+未解析或格式错误的声明材料遵循前述构造期 fail-close 行为，不会走上述认证凭据回退逻辑。
 
 ## 安全默认值
 
@@ -234,8 +255,8 @@ spec:
 
 - `401 Unauthorized - Missing bearer token`
   - `bearerOnly=true` 且请求未带 `Authorization: Bearer ...`
-- `502 Failed to fetch OIDC discovery document`
-  - `discovery` 地址不可达或 TLS 验证失败
+- IdP 依赖故障
+  - 传输、响应解码和 outbound TLS 失败使用各端点自己的状态码及响应体映射；请检查访问日志中的失败分类
 - `Session cookie exceeds configured size limit`
   - 减少 claims/header 透传，或调低 session 内数据量
 

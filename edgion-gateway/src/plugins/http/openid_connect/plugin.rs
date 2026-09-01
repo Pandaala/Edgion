@@ -50,6 +50,20 @@ type OidcError = Box<dyn std::error::Error + Send + Sync>;
 type OidcResult<T> = Result<T, OidcError>;
 type VerifyResult<T> = Result<T, OidcVerifyError>;
 
+const PLUGIN_NAME: &str = "OpenidConnect";
+const CREDENTIAL_FAILURE_BODY: &str = "Unauthorized";
+const BAD_GATEWAY_BODY: &str = "Bad Gateway";
+
+enum PreparedValue<T> {
+    Ready(T),
+    Unavailable,
+}
+
+struct PreparedOidcSecrets {
+    client_secret: PreparedValue<String>,
+    session_cipher: PreparedValue<Aes256Gcm>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct DiscoveryDocument {
     pub(super) issuer: String,
@@ -242,11 +256,10 @@ impl LogicalWeight for IntrospectionCacheEntry {
 
 /// OpenID Connect request filter plugin.
 pub struct OpenidConnect {
-    name: String,
+    name: &'static str,
     config: OpenidConnectConfig,
     callback_path: String,
-    #[allow(dead_code)]
-    plugin_namespace: String,
+    prepared_secrets: PreparedOidcSecrets,
     /// Per-instance outbound HTTP client. Built at construction with the plugin's
     /// resolved TLS policy (custom CA, mTLS identity, verify gate). Construction
     /// fails closed if any declared TLS policy cannot be applied.
@@ -265,6 +278,8 @@ impl OpenidConnect {
     }
 
     pub fn try_new(config: &OpenidConnectConfig, plugin_namespace: String) -> Result<Self, String> {
+        #[cfg(not(test))]
+        let config_valid = config.get_validation_error().is_none();
         // Normalize request-path-matched config fields at construction time so that
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
@@ -292,6 +307,7 @@ impl OpenidConnect {
             "/.edgion/oidc/callback".to_string()
         };
         let callback_path = normalize_config_path(&raw_callback_path, path_cfg);
+        let prepared_secrets = Self::prepare_secrets(&mut config, &plugin_namespace);
 
         let introspection_limits = resolve_tiny_ufo_ttl_cache_limits(&config.introspection.tiny_ufo_ttl_cache)?;
         let (access_token_capacity, access_token_shards) = resolve_lru_cache_limits(&config.access_token.lru_cache)?;
@@ -304,8 +320,8 @@ impl OpenidConnect {
             let tls_for_client = TlsConfig {
                 enabled: true,
                 outbound: config.tls.clone(),
-                resolved_ca_certificates: config.resolved_ca_certificates.clone(),
-                resolved_client_certificate: config.resolved_client_certificate.clone(),
+                resolved_ca_certificates: config.resolved_ca_certificates.take(),
+                resolved_client_certificate: config.resolved_client_certificate.take(),
             };
 
             // Phase 2: if SAN pinning is configured (validation.subjectAltNames),
@@ -408,7 +424,7 @@ impl OpenidConnect {
         // plugin instance is dropped (e.g., on EdgionPlugins resync), bounding
         // worst-case task fan-out under repeated reconstruction.
         #[cfg(not(test))]
-        if config.get_validation_error().is_none() {
+        if config_valid {
             spawn_discovery_prewarm(
                 Arc::downgrade(&jwks_provider),
                 plugin_namespace.clone(),
@@ -417,10 +433,10 @@ impl OpenidConnect {
         }
 
         Ok(Self {
-            name: "OpenidConnect".to_string(),
+            name: PLUGIN_NAME,
             config,
             callback_path,
-            plugin_namespace,
+            prepared_secrets,
             client: outbound_client,
             jwks_provider,
             introspection_cache: TinyUfoTtlCache::new(introspection_limits).map_err(|e| e.to_string())?,

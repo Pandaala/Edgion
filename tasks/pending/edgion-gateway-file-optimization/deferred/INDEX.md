@@ -61,6 +61,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0055 — Use clone-cheap immutable local response bodies | needs-discussion | [campaign finding](D0055-clone-cheap-local-response-bodies.md) |
 | D0056 — Enforce OpenID Connect dial-time egress policy | needs-discussion | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
 | D0057 — Add OpenID Connect egress integration coverage | blocked | [campaign finding](D0057-openid-connect-egress-integration-coverage.md) |
+| D0058 — Redact OpenID Connect dependency error responses | needs-implementation | [campaign finding](D0058-openid-connect-dependency-error-redaction.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -113,3 +114,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Use clone-cheap immutable local response bodies | pending | [task](../../../todo/use-clone-cheap-local-response-bodies.md) |
 | Enforce OpenID Connect dial-time egress policy | pending | [task](../../../todo/openid-connect-dial-time-egress-policy.md) |
 | Add OpenID Connect egress integration coverage | blocked | [task](../../../todo/add-openid-connect-egress-integration-coverage.md) |
+| Redact OpenID Connect dependency error responses | pending | [task](../../../todo/redact-openid-connect-dependency-error-responses.md) |

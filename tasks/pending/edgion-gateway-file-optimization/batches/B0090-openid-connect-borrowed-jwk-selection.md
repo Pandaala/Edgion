@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `ea6c94ba`; all three target blobs were unchanged when the batch started
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned and exact implementation files: `edgion-gateway/src/plugins/http/openid_connect/{jwt_common.rs,token_verify.rs,tests.rs}`
 - Forbidden files: every other OpenID Connect file, resources, Controller, documentation, shared clients and runtime/session APIs, every existing `edgion-tests/**` path, and protected user paths
@@ -36,4 +36,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; all 3 owned rows changed
-- Commit: pending
+- Commit: `7b3480d1`

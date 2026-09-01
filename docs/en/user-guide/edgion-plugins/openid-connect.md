@@ -222,7 +222,38 @@ spec:
 
 - `clientSecretRef`: reads from `clientSecret` / `client_secret` / `secret`
 - `sessionSecretRef`: reads from `sessionSecret` / `session_secret` / `secret`
-- `sessionSecret` should be at least 32 bytes (used for AES-256-GCM)
+- `sessionSecret` must be at least 32 bytes (used for AES-256-GCM)
+
+The Controller normally resolves both references and ships their values with a
+plugin generation. The Gateway consumes those resolved values when it constructs
+that generation. If a resolved value is absent or empty, the Gateway performs its
+legacy Secret-store fallback once during construction; requests never reload a
+Secret. The session secret is immediately derived into the generation's
+AES-256-GCM cipher, and the raw session-secret string is not retained in the
+runtime plugin configuration. The OAuth client secret is retained as one opaque
+generation value for IdP client authentication.
+
+A Secret update becomes effective when the replacement plugin generation is
+published. Existing requests remain pinned to their current generation. Rotating
+`sessionSecretRef` invalidates cookies encrypted by the previous generation, so
+plan for users to authenticate again after a session-secret rotation.
+
+When a Secret is required by the active mode and request path, missing, empty, or
+non-UTF-8 material—or a session secret shorter than 32 bytes—fails with the same
+detail-free `401 Unauthorized` response and configured Bearer challenge, after
+`authFailureDelayMs`. The basic `bearerOnly: true` + `verificationMode: JwksOnly`
+path does not require an OAuth client secret; features that call a
+client-authenticated IdP endpoint do. The access log records only a fixed failure
+category and does not include Secret identity or content.
+
+IdP transport, response-decoding, and request-time TLS failures are independent
+dependency failures and are not governed by this credential-401 contract. Their
+wire response follows the endpoint-specific error mapping; inspect the access-log
+failure category rather than relying on one uniform status or body. Declared TLS
+CA and mTLS material is consumed by the generation's canonical outbound client;
+unresolved or malformed declared material follows the construction-time
+fail-closed behavior described above, never these authentication-credential
+fallback rules.
 
 ## Security Defaults
 
@@ -237,8 +268,8 @@ spec:
 
 - `401 Unauthorized - Missing bearer token`
   - `bearerOnly=true` and the request does not carry `Authorization: Bearer ...`
-- `502 Failed to fetch OIDC discovery document`
-  - `discovery` address is unreachable or TLS verification failed
+- IdP dependency failure
+  - Transport, response-decoding, and outbound TLS failures use endpoint-specific status/body mappings; inspect the access-log failure category
 - `Session cookie exceeds configured size limit`
   - Reduce claims/header pass-through, or reduce the data stored in the session
 

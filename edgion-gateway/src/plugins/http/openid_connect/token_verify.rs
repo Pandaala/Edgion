@@ -34,26 +34,24 @@ impl OpenidConnect {
             return Ok(cached_claims);
         }
 
-        let client_secret = self.resolve_client_secret().map_err(|e| OidcVerifyError::Other {
-            status: 401,
-            message: format!("Missing client secret for introspection: {}", e),
-        })?;
-
         let client = self.http_client();
         let base_request = client
             .post(&endpoint)
             .timeout(Duration::from_secs(self.config.timeout))
             .header("Accept", "application/json");
 
-        let request = match self.config.introspection_endpoint_auth_method {
-            EndpointAuthMethod::ClientSecretBasic => base_request
-                .basic_auth(self.config.client_id.as_str(), Some(client_secret))
-                .form(&[("token", token)]),
-            EndpointAuthMethod::ClientSecretPost => base_request.form(&[
-                ("token", token),
-                ("client_id", self.config.client_id.as_str()),
-                ("client_secret", client_secret.as_str()),
-            ]),
+        let request = {
+            let client_secret = self.client_secret().ok_or_else(Self::credential_failure)?;
+            match self.config.introspection_endpoint_auth_method {
+                EndpointAuthMethod::ClientSecretBasic => base_request
+                    .basic_auth(self.config.client_id.as_str(), Some(client_secret))
+                    .form(&[("token", token)]),
+                EndpointAuthMethod::ClientSecretPost => base_request.form(&[
+                    ("token", token),
+                    ("client_id", self.config.client_id.as_str()),
+                    ("client_secret", client_secret),
+                ]),
+            }
         };
 
         let resp = request.send().await.map_err(|e| {

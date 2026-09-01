@@ -24,6 +24,288 @@ fn base_config() -> OpenidConnectConfig {
     }
 }
 
+fn secret_ref(name: &str) -> edgion_resources::resources::common::SecretObjectReference {
+    edgion_resources::resources::common::SecretObjectReference {
+        group: None,
+        kind: None,
+        name: name.to_string(),
+        namespace: None,
+    }
+}
+
+fn oidc_secret(client_secret: &[u8], session_secret: &[u8]) -> k8s_openapi::api::core::v1::Secret {
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([
+            ("clientSecret".to_string(), ByteString(client_secret.to_vec())),
+            ("sessionSecret".to_string(), ByteString(session_secret.to_vec())),
+        ])),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn prepared_generation_clears_carriers_without_mutating_caller_and_uses_static_name() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    let identity =
+        rcgen::generate_simple_self_signed(vec!["client.example.com".to_string()]).expect("generate test identity");
+    let certificate = identity.cert.pem();
+    let private_key = identity.signing_key.serialize_pem();
+    let mut config = base_config();
+    config.resolved_oidc_client_secret = Some("client-generation-one".to_string());
+    config.resolved_session_secret = Some("session-generation-one-secret-32-bytes".to_string());
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            name: "idp-ca".to_string(),
+            namespace: None,
+        }]),
+        ..Default::default()
+    });
+    config.tls.client_certificate_ref = Some(secret_ref("idp-client"));
+    config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([(
+            "ca.crt".to_string(),
+            ByteString(certificate.as_bytes().to_vec()),
+        )])),
+        ..Default::default()
+    }]);
+    config.resolved_client_certificate = Some(k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([
+            ("tls.crt".to_string(), ByteString(certificate.into_bytes())),
+            ("tls.key".to_string(), ByteString(private_key.into_bytes())),
+        ])),
+        ..Default::default()
+    });
+
+    let first = OpenidConnect::new(&config, "default".to_string());
+    let second = OpenidConnect::new(&base_config(), "default".to_string());
+
+    assert_eq!(first.name(), "OpenidConnect");
+    assert_eq!(first.name().as_ptr(), second.name().as_ptr());
+    assert_eq!(first.client_secret(), Some("client-generation-one"));
+    assert!(first.session_cipher().is_some());
+    assert!(first.config.resolved_oidc_client_secret.is_none());
+    assert!(first.config.resolved_session_secret.is_none());
+    assert!(first.config.resolved_ca_certificates.is_none());
+    assert!(first.config.resolved_client_certificate.is_none());
+
+    assert_eq!(
+        config.resolved_oidc_client_secret.as_deref(),
+        Some("client-generation-one")
+    );
+    assert_eq!(
+        config.resolved_session_secret.as_deref(),
+        Some("session-generation-one-secret-32-bytes")
+    );
+    assert!(config.resolved_ca_certificates.is_some());
+    assert!(config.resolved_client_certificate.is_some());
+}
+
+#[test]
+fn legacy_secret_fallback_is_constructor_scoped_and_generation_isolated() {
+    const CHILD_ENV: &str = "EDGION_OIDC_SECRET_FALLBACK_CHILD";
+    const TEST_NAME: &str = "legacy_secret_fallback_is_constructor_scoped_and_generation_isolated";
+    const TEST_MODULE: &str = "plugins::http::openid_connect::plugin::tests";
+
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST_NAME) {
+        let exact_test_name = format!("{TEST_MODULE}::{TEST_NAME}");
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("the Rust test harness must have a current executable"),
+        )
+        .args(["--exact", exact_test_name.as_str(), "--nocapture"])
+        .env(CHILD_ENV, TEST_NAME)
+        .output()
+        .expect("the isolated OIDC Secret fallback test process must start");
+        assert!(
+            output.status.success(),
+            "isolated OIDC Secret fallback test failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    use edgion_common::secret::get_global_secret_store;
+
+    const CLIENT_K1: &str = "client-generation-one";
+    const CLIENT_K2: &str = "client-generation-two";
+    const SESSION_K1: &str = "session-generation-one-secret-32-bytes";
+    const SESSION_K2: &str = "session-generation-two-secret-32-bytes";
+
+    let store = get_global_secret_store();
+    store.replace_all(HashMap::from([(
+        "default/oidc-secret".to_string(),
+        oidc_secret(CLIENT_K1.as_bytes(), SESSION_K1.as_bytes()),
+    )]));
+
+    let mut fallback_config = base_config();
+    fallback_config.client_secret_ref = Some(secret_ref("oidc-secret"));
+    fallback_config.session_secret_ref = Some(secret_ref("oidc-secret"));
+    fallback_config.resolved_oidc_client_secret = Some(String::new());
+    fallback_config.resolved_session_secret = None;
+    let generation_one = OpenidConnect::new(&fallback_config, "default".to_string());
+    assert_eq!(generation_one.client_secret(), Some(CLIENT_K1));
+
+    store.replace_all(HashMap::from([(
+        "default/oidc-secret".to_string(),
+        oidc_secret(CLIENT_K2.as_bytes(), SESSION_K2.as_bytes()),
+    )]));
+
+    assert_eq!(generation_one.client_secret(), Some(CLIENT_K1));
+    let generation_two = OpenidConnect::new(&fallback_config, "default".to_string());
+    assert_eq!(generation_two.client_secret(), Some(CLIENT_K2));
+
+    let payload = super::AuthorizationStateCookie {
+        state: "generation-one".to_string(),
+        original_url: "/".to_string(),
+        code_verifier: None,
+        nonce: None,
+        created_at: 1,
+    };
+    let generation_one_cookie = OpenidConnect::encode_signed_cookie_payload(
+        &payload,
+        generation_one.session_cipher().expect("generation one cipher"),
+    )
+    .expect("generation one cookie");
+    assert!(
+        OpenidConnect::decode_signed_cookie_payload::<super::AuthorizationStateCookie>(
+            &generation_one_cookie,
+            generation_one.session_cipher().expect("generation one cipher")
+        )
+        .is_ok()
+    );
+    assert!(
+        OpenidConnect::decode_signed_cookie_payload::<super::AuthorizationStateCookie>(
+            &generation_one_cookie,
+            generation_two.session_cipher().expect("generation two cipher")
+        )
+        .is_err()
+    );
+
+    let mut authoritative_config = fallback_config.clone();
+    authoritative_config.resolved_oidc_client_secret = Some("resolved-client".to_string());
+    authoritative_config.resolved_session_secret = Some("resolved-session-secret-at-least-32-bytes".to_string());
+    let authoritative = OpenidConnect::new(&authoritative_config, "default".to_string());
+    assert_eq!(authoritative.client_secret(), Some("resolved-client"));
+    assert_eq!(
+        authoritative_config.resolved_oidc_client_secret.as_deref(),
+        Some("resolved-client")
+    );
+    assert!(authoritative_config.resolved_session_secret.is_some());
+
+    for (client_bytes, session_bytes) in [
+        (b"\xff".as_slice(), SESSION_K1.as_bytes()),
+        (b"".as_slice(), b"".as_slice()),
+        (CLIENT_K1.as_bytes(), b"short".as_slice()),
+    ] {
+        store.replace_all(HashMap::from([(
+            "default/oidc-secret".to_string(),
+            oidc_secret(client_bytes, session_bytes),
+        )]));
+        let unavailable = OpenidConnect::new(&fallback_config, "default".to_string());
+        assert_eq!(
+            unavailable.client_secret().is_some(),
+            !client_bytes.is_empty() && client_bytes.is_ascii()
+        );
+        assert_eq!(unavailable.session_cipher().is_some(), session_bytes.len() >= 32);
+        assert_eq!(OpenidConnect::credential_failure().http_status(), 401);
+        assert_eq!(OpenidConnect::credential_failure().user_message(), "Unauthorized");
+    }
+
+    store.replace_all(HashMap::new());
+    let missing = OpenidConnect::new(&fallback_config, "default".to_string());
+    assert!(missing.client_secret().is_none());
+    assert!(missing.session_cipher().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn unavailable_session_credential_returns_delayed_generic_401_with_static_log() {
+    use mockall::Sequence;
+
+    let mut config = base_config();
+    config.bearer_only = false;
+    config.unauth_action = UnauthAction::Auth;
+    config.auth_failure_delay_ms = 100;
+    config.resolved_oidc_client_secret = Some("client-secret-that-must-not-be-logged".to_string());
+    config.resolved_session_secret = Some("short".to_string());
+    let plugin = OpenidConnect::new(&config, "sensitive-namespace".to_string());
+
+    let start = tokio::time::Instant::now();
+    let mut sequence = Sequence::new();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_path()
+        .times(2)
+        .return_const("/.edgion/oidc/callback".to_string());
+    session.expect_get_query_param().times(2).returning(|name| match name {
+        "code" => Some("code".to_string()),
+        "state" => Some("state".to_string()),
+        _ => None,
+    });
+    session
+        .expect_write_response_header()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(move |response, end| {
+            assert_eq!(
+                tokio::time::Instant::now().duration_since(start),
+                Duration::from_millis(100)
+            );
+            assert!(!end);
+            assert_eq!(response.status.as_u16(), 401);
+            assert_eq!(
+                response
+                    .headers
+                    .get("Content-Type")
+                    .and_then(|value| value.to_str().ok()),
+                Some("text/plain")
+            );
+            assert_eq!(
+                response
+                    .headers
+                    .get("WWW-Authenticate")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer realm=\"edgion\"")
+            );
+            Ok(())
+        });
+    session
+        .expect_write_response_body()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(move |body, end| {
+            assert_eq!(
+                tokio::time::Instant::now().duration_since(start),
+                Duration::from_millis(100)
+            );
+            assert_eq!(body.as_deref(), Some(b"401 Unauthorized".as_slice()));
+            assert!(end);
+            Ok(())
+        });
+    session
+        .expect_shutdown()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|| {});
+
+    let mut log = PluginLog::new("OpenidConnect");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("err: session credential unavailable"));
+    assert!(!log.contains("sensitive-namespace"));
+    assert!(!log.contains("client-secret-that-must-not-be-logged"));
+}
+
 fn selection_jwks(keys: serde_json::Value) -> JwkSet {
     serde_json::from_value(json!({ "keys": keys })).expect("valid JWKS fixture")
 }
@@ -542,9 +824,11 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
         id_token: Some("id-token-hint".to_string()),
         refresh_token: None,
     };
-    let encoded_cookie = plugin
-        .encode_signed_cookie_payload(&session_cookie_payload, "dummy-session-secret-32-bytes-long!!")
-        .expect("encode session cookie");
+    let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
+        &session_cookie_payload,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("encode session cookie");
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -621,12 +905,16 @@ fn test_signed_cookie_roundtrip() {
         nonce: Some("nonce-value".to_string()),
         created_at: 123,
     };
-    let encoded = plugin
-        .encode_signed_cookie_payload(&payload, "dummy-session-secret-32-bytes-long!!")
-        .expect("encode");
-    let decoded: super::AuthorizationStateCookie = plugin
-        .decode_signed_cookie_payload(&encoded, "dummy-session-secret-32-bytes-long!!")
-        .expect("decode");
+    let encoded = OpenidConnect::encode_signed_cookie_payload(
+        &payload,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("encode");
+    let decoded: super::AuthorizationStateCookie = OpenidConnect::decode_signed_cookie_payload(
+        &encoded,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("decode");
     assert_eq!(decoded.state, "abc");
     assert_eq!(decoded.original_url, "/orders");
 }
@@ -668,9 +956,9 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
         .strip_prefix("edgion_oidc_session=")
         .and_then(|v| v.split(';').next())
         .unwrap_or("");
-    let decoded: OidcSessionCookie = plugin
-        .decode_signed_cookie_payload(encoded, "dummy-session-secret-32-bytes-long!!")
-        .expect("decode persisted cookie");
+    let decoded: OidcSessionCookie =
+        OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().expect("prepared session cipher"))
+            .expect("decode persisted cookie");
     assert!(decoded.access_token.is_empty());
     assert_eq!(decoded.session_ref, "session-ref");
     assert_eq!(
@@ -748,9 +1036,11 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
         id_token: None,
         refresh_token: None,
     };
-    let encoded_cookie = plugin
-        .encode_signed_cookie_payload(&session_cookie_payload, "dummy-session-secret-32-bytes-long!!")
-        .expect("encode session cookie");
+    let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
+        &session_cookie_payload,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("encode session cookie");
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -816,9 +1106,11 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
     };
-    let encoded_cookie = plugin
-        .encode_signed_cookie_payload(&session_cookie_payload, "dummy-session-secret-32-bytes-long!!")
-        .expect("encode session cookie");
+    let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
+        &session_cookie_payload,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("encode session cookie");
     let lock_key = OpenidConnect::refresh_lock_key(&encoded_cookie);
     plugin
         .put_refresh_result(

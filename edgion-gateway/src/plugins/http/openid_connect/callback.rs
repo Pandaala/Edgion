@@ -80,6 +80,7 @@ impl OpenidConnect {
         if err.http_status() == 502 {
             let _ = self.send_plain_error(session, 502, &err.user_message()).await;
         } else {
+            self.apply_auth_failure_delay().await;
             let _ = self.send_unauthorized(session, &err.user_message()).await;
         }
     }
@@ -176,15 +177,11 @@ impl OpenidConnect {
             nonce,
             created_at: Self::now_unix_secs(),
         };
-        let session_secret = self.resolve_session_secret().map_err(|e| OidcVerifyError::Other {
-            status: 401,
-            message: format!("Missing session secret for auth flow: {}", e),
-        })?;
-        let cookie_value = self
-            .encode_signed_cookie_payload(&cookie_payload, &session_secret)
-            .map_err(|e| OidcVerifyError::Other {
+        let cipher = self.session_cipher().ok_or_else(Self::credential_failure)?;
+        let cookie_value =
+            Self::encode_signed_cookie_payload(&cookie_payload, cipher).map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to encode OIDC state cookie: {}", e),
+                message: BAD_GATEWAY_BODY.to_string(),
             })?;
         let cookie_suffix = self.build_cookie_attr_suffix(session, 300, self.callback_path());
         let cookie = format!("{}={}{}", Self::state_cookie_name(), cookie_value, cookie_suffix);
@@ -199,15 +196,12 @@ impl OpenidConnect {
         code: &str,
         state_param: &str,
     ) -> PluginRunningResult {
-        let session_secret = match self.resolve_session_secret() {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = self
-                    .send_unauthorized(session, &format!("Unauthorized - Missing session secret: {}", e))
-                    .await;
-                return PluginRunningResult::ErrTerminateRequest;
-            }
-        };
+        if self.session_cipher().is_none() {
+            plugin_log.push_err("session credential unavailable");
+            let err = Self::credential_failure();
+            self.send_oidc_error(session, &err).await;
+            return PluginRunningResult::ErrTerminateRequest;
+        }
 
         let Some(raw_state_cookie) = session.get_cookie(Self::state_cookie_name()) else {
             let _ = self
@@ -215,14 +209,17 @@ impl OpenidConnect {
                 .await;
             return PluginRunningResult::ErrTerminateRequest;
         };
-        let state_cookie: AuthorizationStateCookie =
-            match self.decode_signed_cookie_payload(&raw_state_cookie, &session_secret) {
-                Ok(v) => v,
-                Err(err) => {
-                    self.send_oidc_error(session, &err).await;
-                    return PluginRunningResult::ErrTerminateRequest;
-                }
-            };
+        let decoded_state = match self.session_cipher() {
+            Some(cipher) => Self::decode_signed_cookie_payload(&raw_state_cookie, cipher),
+            None => Err(Self::credential_failure()),
+        };
+        let state_cookie: AuthorizationStateCookie = match decoded_state {
+            Ok(v) => v,
+            Err(err) => {
+                self.send_oidc_error(session, &err).await;
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+        };
 
         let now = Self::now_unix_secs();
         if now.saturating_sub(state_cookie.created_at) > 300 {
@@ -322,12 +319,23 @@ impl OpenidConnect {
         .await;
         session_cookie_payload.access_token.clear();
 
-        let session_cookie_value = match self.encode_signed_cookie_payload(&session_cookie_payload, &session_secret) {
+        let encoded_session = match self.session_cipher() {
+            Some(cipher) => Self::encode_signed_cookie_payload(&session_cookie_payload, cipher),
+            None => {
+                plugin_log.push_err("session credential unavailable");
+                Err(())
+            }
+        };
+        let session_cookie_value = match encoded_session {
             Ok(v) => v,
-            Err(e) => {
-                let _ = self
-                    .send_plain_error(session, 502, &format!("Failed to encode session cookie: {}", e))
-                    .await;
+            Err(()) if self.session_cipher().is_none() => {
+                let err = Self::credential_failure();
+                self.send_oidc_error(session, &err).await;
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+            Err(()) => {
+                plugin_log.push_err("session encode fail");
+                let _ = self.send_plain_error(session, 502, BAD_GATEWAY_BODY).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };

@@ -99,11 +99,11 @@ impl OpenidConnect {
             persisted_payload.access_token.clear();
         }
 
-        let session_secret = match self.resolve_session_secret() {
-            Ok(v) => v,
-            Err(_) => return,
+        let cipher = match self.session_cipher() {
+            Some(cipher) => cipher,
+            None => return,
         };
-        let value = match self.encode_signed_cookie_payload(&persisted_payload, &session_secret) {
+        let value = match Self::encode_signed_cookie_payload(&persisted_payload, cipher) {
             Ok(v) => v,
             Err(_) => return,
         };
@@ -138,11 +138,6 @@ impl OpenidConnect {
                     status: 502,
                     message: "OIDC discovery document missing token_endpoint".to_string(),
                 })?;
-        let client_secret = self.resolve_client_secret().map_err(|e| OidcVerifyError::Other {
-            status: 401,
-            message: format!("Missing client secret for token exchange: {}", e),
-        })?;
-
         let mut params: Vec<(&str, String)> = vec![
             ("grant_type", "authorization_code".to_string()),
             ("code", code.to_string()),
@@ -159,13 +154,16 @@ impl OpenidConnect {
             .timeout(Duration::from_secs(self.config.timeout))
             .header("Accept", "application/json");
 
-        let request = match self.config.token_endpoint_auth_method {
-            EndpointAuthMethod::ClientSecretBasic => base_request
-                .basic_auth(self.config.client_id.as_str(), Some(client_secret))
-                .form(&params),
-            EndpointAuthMethod::ClientSecretPost => {
-                params.push(("client_secret", client_secret));
-                base_request.form(&params)
+        let request = {
+            let client_secret = self.client_secret().ok_or_else(Self::credential_failure)?;
+            match self.config.token_endpoint_auth_method {
+                EndpointAuthMethod::ClientSecretBasic => base_request
+                    .basic_auth(self.config.client_id.as_str(), Some(client_secret))
+                    .form(&params),
+                EndpointAuthMethod::ClientSecretPost => {
+                    params.push(("client_secret", client_secret.to_string()));
+                    base_request.form(&params)
+                }
             }
         };
 
@@ -193,7 +191,6 @@ impl OpenidConnect {
     pub(super) async fn revoke_token(
         &self,
         endpoint: &str,
-        client_secret: &str,
         token: &str,
         token_type_hint: Option<&str>,
     ) -> OidcResult<()> {
@@ -203,26 +200,29 @@ impl OpenidConnect {
             .timeout(Duration::from_secs(self.config.timeout))
             .header("Accept", "application/json");
 
-        let request = match self.config.token_endpoint_auth_method {
-            EndpointAuthMethod::ClientSecretBasic => {
-                let mut form: Vec<(&str, String)> = vec![("token", token.to_string())];
-                if let Some(hint) = token_type_hint {
-                    form.push(("token_type_hint", hint.to_string()));
+        let request = {
+            let client_secret = self.client_secret().ok_or(CREDENTIAL_FAILURE_BODY)?;
+            match self.config.token_endpoint_auth_method {
+                EndpointAuthMethod::ClientSecretBasic => {
+                    let mut form: Vec<(&str, String)> = vec![("token", token.to_string())];
+                    if let Some(hint) = token_type_hint {
+                        form.push(("token_type_hint", hint.to_string()));
+                    }
+                    base_request
+                        .basic_auth(self.config.client_id.as_str(), Some(client_secret))
+                        .form(&form)
                 }
-                base_request
-                    .basic_auth(self.config.client_id.as_str(), Some(client_secret))
-                    .form(&form)
-            }
-            EndpointAuthMethod::ClientSecretPost => {
-                let mut form: Vec<(&str, String)> = vec![
-                    ("token", token.to_string()),
-                    ("client_id", self.config.client_id.clone()),
-                    ("client_secret", client_secret.to_string()),
-                ];
-                if let Some(hint) = token_type_hint {
-                    form.push(("token_type_hint", hint.to_string()));
+                EndpointAuthMethod::ClientSecretPost => {
+                    let mut form: Vec<(&str, String)> = vec![
+                        ("token", token.to_string()),
+                        ("client_id", self.config.client_id.clone()),
+                        ("client_secret", client_secret.to_string()),
+                    ];
+                    if let Some(hint) = token_type_hint {
+                        form.push(("token_type_hint", hint.to_string()));
+                    }
+                    base_request.form(&form)
                 }
-                base_request.form(&form)
             }
         };
 
@@ -261,25 +261,15 @@ impl OpenidConnect {
             return;
         };
 
-        let client_secret = match self.resolve_client_secret() {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-
         if let Some(token) = refresh_token {
             let _ = self
-                .revoke_token(
-                    revocation_endpoint,
-                    client_secret.as_str(),
-                    token,
-                    Some("refresh_token"),
-                )
+                .revoke_token(revocation_endpoint, token, Some("refresh_token"))
                 .await;
         }
 
         if let Some(token) = access_token {
             let _ = self
-                .revoke_token(revocation_endpoint, client_secret.as_str(), token, Some("access_token"))
+                .revoke_token(revocation_endpoint, token, Some("access_token"))
                 .await;
         }
     }
@@ -298,11 +288,6 @@ impl OpenidConnect {
                     status: 502,
                     message: "OIDC discovery document missing token_endpoint".to_string(),
                 })?;
-        let client_secret = self.resolve_client_secret().map_err(|e| OidcVerifyError::Other {
-            status: 401,
-            message: format!("Missing client secret for token refresh: {}", e),
-        })?;
-
         let mut params: Vec<(&str, String)> = vec![
             ("grant_type", "refresh_token".to_string()),
             ("refresh_token", refresh_token.to_string()),
@@ -315,13 +300,16 @@ impl OpenidConnect {
             .timeout(Duration::from_secs(self.config.timeout))
             .header("Accept", "application/json");
 
-        let request = match self.config.token_endpoint_auth_method {
-            EndpointAuthMethod::ClientSecretBasic => base_request
-                .basic_auth(self.config.client_id.as_str(), Some(client_secret))
-                .form(&params),
-            EndpointAuthMethod::ClientSecretPost => {
-                params.push(("client_secret", client_secret));
-                base_request.form(&params)
+        let request = {
+            let client_secret = self.client_secret().ok_or_else(Self::credential_failure)?;
+            match self.config.token_endpoint_auth_method {
+                EndpointAuthMethod::ClientSecretBasic => base_request
+                    .basic_auth(self.config.client_id.as_str(), Some(client_secret))
+                    .form(&params),
+                EndpointAuthMethod::ClientSecretPost => {
+                    params.push(("client_secret", client_secret.to_string()));
+                    base_request.form(&params)
+                }
             }
         };
 
