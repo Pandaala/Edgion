@@ -331,7 +331,6 @@ impl RuntimeProfile {
 }
 
 pub struct RequestAccessPolicy {
-    name: String,
     default_profile: String,
     profiles: HashMap<String, RuntimeProfile>,
     active_profile_ref_key: Option<String>,
@@ -354,7 +353,11 @@ impl RequestAccessPolicy {
                 .is_some_and(|reference| reference.ref_denied.is_some());
         let mut profiles = HashMap::new();
         if !init_failed {
-            for (name, profile) in config.runtime_profiles().clone() {
+            let prepared_profiles = config
+                .resolved_profiles
+                .take()
+                .unwrap_or_else(|| std::mem::take(&mut config.profiles));
+            for (name, profile) in prepared_profiles {
                 match RuntimeProfile::new(profile, body_requirement.clone()) {
                     Ok(profile) => {
                         profiles.insert(name, profile);
@@ -383,7 +386,6 @@ impl RequestAccessPolicy {
                 )
             });
         Box::new(Self {
-            name: "RequestAccessPolicy".to_string(),
             default_profile: config.default_profile,
             profiles,
             active_profile_ref_key,
@@ -394,16 +396,14 @@ impl RequestAccessPolicy {
     }
 
     fn active_profile<'a>(&'a self, log: &mut PluginLog) -> Option<&'a RuntimeProfile> {
-        let mut selected = self.default_profile.clone();
         if let Some(key) = &self.active_profile_ref_key {
             let store = get_global_edgion_config_data_store();
             let data = store.get_raw_by_key(key);
             match data.as_deref() {
                 Some(value) if value.spec.enable => match &value.spec.data {
                     ConfigEntry::Selector(selector) => {
-                        if let Some(active) = selector.active.as_deref() {
-                            selected = active.to_string();
-                        }
+                        let selected = selector.active.as_deref().unwrap_or(self.default_profile.as_str());
+                        return self.profiles.get(selected);
                     }
                     _ => {
                         log.push_err("selector type mismatch");
@@ -416,7 +416,7 @@ impl RequestAccessPolicy {
                 }
             }
         }
-        self.profiles.get(&selected)
+        self.profiles.get(self.default_profile.as_str())
     }
 
     fn deny(&self) -> PluginRunningResult {
@@ -430,7 +430,7 @@ impl RequestAccessPolicy {
 #[async_trait]
 impl RequestFilter for RequestAccessPolicy {
     fn name(&self) -> &str {
-        &self.name
+        "RequestAccessPolicy"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -472,6 +472,28 @@ mod tests {
 
     fn parse_config(yaml: &str) -> RequestAccessPolicyConfig {
         serde_yaml::from_str(yaml).expect("valid policy fixture")
+    }
+
+    #[test]
+    fn plugin_name_is_static_across_instances() {
+        let config = parse_config(
+            r#"
+defaultProfile: lockdown
+profiles:
+  lockdown:
+    requiredRuleGroups:
+      - name: client
+        anyOfRules:
+          - name: internal
+            type: remoteIp
+            config: { ips: [10.0.0.0/8] }
+"#,
+        );
+        let first = RequestAccessPolicy::create(&config, "default", None);
+        let second = RequestAccessPolicy::create(&config, "default", None);
+
+        assert!(std::ptr::eq(first.name(), second.name()));
+        assert_eq!(first.name(), "RequestAccessPolicy");
     }
 
     fn hmac_fallback_config(validate_request_body: bool) -> RequestAccessPolicyConfig {

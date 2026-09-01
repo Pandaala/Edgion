@@ -23,4 +23,4 @@
 - Coverage: `plugin.rs` changed; `log_consts.rs` and `mod.rs` examined-no-change
 - Verification: 10 resources RegionRoute tests, 23 Gateway RegionRoute tests, 1 PluginRuntime validation-parity test, and 18 Controller RegionRoute tests passed; targeted crate checks, format, locked workspace check/Clippy, Gateway build, agent-doc, SSA, metrics, Pingora source, no-tracing, English-only, diff, and frozen-path guards passed
 - Integration: the frozen `edgion-tests/**` tree remained unchanged; colocated validation and sealed-runtime coverage is sufficient, so no integration issue was created
-- Commit: pending
+- Commit: `c46fceab`

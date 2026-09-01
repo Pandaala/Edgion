@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0099 passed independent review and every commit gate |
-| Coverage | 532 tracked files: 118 changed, 135 examined-no-change, 10 deferred, 269 non-terminal |
-| Active batch | B0099 RegionRoute plugin boundary; exact local commit in progress |
-| Analysis queue | B0100 RequestAccessPolicy candidate analyzed; revalidate after B0099 commit |
+| Campaign status | in-progress; B0100 passed independent review and every commit gate |
+| Coverage | 532 tracked files: 119 changed, 136 examined-no-change, 10 deferred, 267 non-terminal |
+| Active batch | B0100 RequestAccessPolicy generation and hot-path ownership; exact local commit in progress |
+| Analysis queue | B0101 RequestBodyBuffer analyzed as examined-no-change and ready for promotion |
 
 ## AI guide summary
 
