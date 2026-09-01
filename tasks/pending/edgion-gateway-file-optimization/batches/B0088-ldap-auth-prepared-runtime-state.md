@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `cb0ff1c0`; all analyzed target blobs were unchanged from the queued report
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/ldap_auth/{mod.rs,plugin.rs}`
 - Exact implementation files: `plugin.rs` and the standalone English and Chinese LDAP Auth user guides
@@ -40,4 +40,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `86a02dd4`

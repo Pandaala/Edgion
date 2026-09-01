@@ -118,7 +118,7 @@
 | `plugins-http-jwt-auth` | 15 | 0 | 0 | 0 | pending |
 | `plugins-http-key-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-ldap-auth` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-mock` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-mock` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-openid-connect` | 16 | 1 | 0 | 0 | pending |
 | `plugins-http-proxy-rewrite` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-rate-limit` | 2 | 0 | 0 | 0 | pending |
@@ -450,8 +450,8 @@
 | `edgion-gateway/src/plugins/http/key_auth/plugin.rs` | `plugins-http-key-auth` | source | changed | B0087 |
 | `edgion-gateway/src/plugins/http/ldap_auth/mod.rs` | `plugins-http-ldap-auth` | source | examined-no-change | B0088 |
 | `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` | `plugins-http-ldap-auth` | source | changed | B0088 |
-| `edgion-gateway/src/plugins/http/mock/mod.rs` | `plugins-http-mock` | source | pending | — |
-| `edgion-gateway/src/plugins/http/mock/plugin.rs` | `plugins-http-mock` | source | pending | — |
+| `edgion-gateway/src/plugins/http/mock/mod.rs` | `plugins-http-mock` | source | examined-no-change | B0089 |
+| `edgion-gateway/src/plugins/http/mock/plugin.rs` | `plugins-http-mock` | source | changed | B0089 |
 | `edgion-gateway/src/plugins/http/mod.rs` | `plugins-http-framework` | source | examined-no-change | B0062 |
 | `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | pending | — |

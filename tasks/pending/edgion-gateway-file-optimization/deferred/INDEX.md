@@ -58,6 +58,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0052 — Canonicalize auth claim-to-header projection | needs-discussion | [campaign finding](D0052-auth-claim-header-projection-plan.md) |
 | D0053 — Enforce LDAP dial-time egress policy | needs-discussion | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
 | D0054 — Add LDAP egress and TLS integration coverage | blocked | [campaign finding](D0054-ldap-auth-egress-integration-coverage.md) |
+| D0055 — Use clone-cheap immutable local response bodies | needs-discussion | [campaign finding](D0055-clone-cheap-local-response-bodies.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -107,3 +108,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Canonicalize auth claim-to-header projection | pending | [task](../../../todo/canonicalize-auth-claim-header-projection.md) |
 | Enforce LDAP dial-time egress policy | pending | [task](../../../todo/ldap-auth-dial-time-egress-policy.md) |
 | Add LDAP egress and TLS integration coverage | blocked | [task](../../../todo/add-ldap-auth-egress-integration-coverage.md) |
+| Use clone-cheap immutable local response bodies | pending | [task](../../../todo/use-clone-cheap-local-response-bodies.md) |

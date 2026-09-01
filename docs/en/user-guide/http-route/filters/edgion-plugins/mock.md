@@ -43,15 +43,22 @@ spec:
 |-----------|------|---------|-------------|
 | `statusCode` | Integer | `200` | HTTP status code. Valid range: `100`–`599` |
 | `body` | String | none | Response body content (JSON, XML, plain text, etc.) |
-| `headers` | Object | none | Custom response headers as key-value pairs |
-| `contentType` | String | `"application/json"` | `Content-Type` header value |
+| `headers` | Object | none | Custom response headers as key-value pairs. Names and values must be valid HTTP header syntax |
+| `contentType` | String | `"application/json"` | Valid `Content-Type` header value |
 | `delay` | Integer | none | Delay in milliseconds before responding. Maximum: `30000` |
 | `terminate` | Boolean | `true` | Whether to terminate request processing after running |
 
 ### `terminate` behavior
 
 - `true` (default): returns the mock response directly; does not forward to upstream or run later plugins.
-- `false`: sets the response status and headers but continues to subsequent plugins and upstream forwarding.
+- `false`: queues the configured headers and `Content-Type`, then continues to subsequent plugins and upstream forwarding. `statusCode` and `body` do not create a local response in this mode.
+
+### Header constraints
+
+- Header names must be valid HTTP tokens and at most 256 bytes long. Header values, including `contentType`, must be valid HTTP header values.
+- Header names must be unique when compared case-insensitively.
+- Do not put `Content-Type`, `Content-Length`, or `Transfer-Encoding` in `headers`. Use `contentType` for `Content-Type`; the Gateway manages response framing headers.
+- The delay, when configured, completes before the plugin queues any response headers.
 
 ---
 
@@ -165,7 +172,7 @@ spec:
 
 ### Q3: My `delay` value seems to be ignored above 30 seconds?
 
-**A**: `delay` is validated against a 30000ms (30s) ceiling. A configuration with a larger value is rejected at parse time.
+**A**: `delay` is validated against a 30000ms (30s) ceiling. Plugin validation rejects a configuration with a larger value.
 
 ---
 

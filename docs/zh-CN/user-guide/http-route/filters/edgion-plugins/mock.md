@@ -43,15 +43,22 @@ spec:
 |------|------|--------|------|
 | `statusCode` | Integer | `200` | HTTP 状态码。有效范围：`100`–`599` |
 | `body` | String | 无 | 响应体内容（JSON、XML、纯文本等） |
-| `headers` | Object | 无 | 自定义响应头，以键值对形式表示 |
-| `contentType` | String | `"application/json"` | `Content-Type` 响应头的值 |
+| `headers` | Object | 无 | 自定义响应头，以键值对形式表示；名称和值必须符合 HTTP 响应头语法 |
+| `contentType` | String | `"application/json"` | 合法的 `Content-Type` 响应头值 |
 | `delay` | Integer | 无 | 响应前的延迟（毫秒）。最大值：`30000` |
 | `terminate` | Boolean | `true` | 是否在运行后终止请求处理 |
 
 ### `terminate` 行为
 
 - `true`（默认）：直接返回 Mock 响应，不转发到上游，也不执行后续插件。
-- `false`：设置响应状态和响应头，但继续执行后续插件和上游转发。
+- `false`：将配置的响应头和 `Content-Type` 加入待写入队列，然后继续执行后续插件和上游转发。此模式下，`statusCode` 和 `body` 不会生成本地响应。
+
+### 响应头约束
+
+- 响应头名称必须是合法的 HTTP token，且最长为 256 字节。响应头值（包括 `contentType`）必须是合法的 HTTP 响应头值。
+- 响应头名称按大小写不敏感比较时必须唯一。
+- 不得在 `headers` 中配置 `Content-Type`、`Content-Length` 或 `Transfer-Encoding`。请使用 `contentType` 设置 `Content-Type`；响应分帧头由 Gateway 管理。
+- 配置延迟时，插件会在延迟结束后才将响应头加入待写入队列。
 
 ---
 
@@ -165,7 +172,7 @@ spec:
 
 ### Q3：`delay` 超过 30 秒的值似乎被忽略了？
 
-**A**：`delay` 的上限为 30000ms（30 秒）。超出该值的配置在解析时会被拒绝。
+**A**：`delay` 的上限为 30000ms（30 秒）。插件验证会拒绝超出该值的配置。
 
 ---
 

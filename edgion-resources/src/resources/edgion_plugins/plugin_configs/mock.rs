@@ -1,6 +1,8 @@
+use crate::gwapi_types::{is_valid_header_token, HEADER_NAME_MAX_LEN};
+use http::HeaderValue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Mock plugin configuration
 ///
@@ -67,6 +69,16 @@ fn default_true() -> bool {
 
 const MAX_DELAY_MS: u64 = 30_000;
 
+const INVALID_CONTENT_TYPE: &str = "mock.contentType must be a valid HTTP header value";
+const INVALID_HEADER_NAME: &str = "mock.headers contains an invalid HTTP header name";
+const INVALID_HEADER_VALUE: &str = "mock.headers contains an invalid HTTP header value";
+const CONTENT_TYPE_IN_HEADERS: &str = "mock.headers must not contain Content-Type; use contentType instead";
+const CONTENT_LENGTH_IN_HEADERS: &str =
+    "mock.headers must not contain Content-Length; response framing is managed by the gateway";
+const TRANSFER_ENCODING_IN_HEADERS: &str =
+    "mock.headers must not contain Transfer-Encoding; response framing is managed by the gateway";
+const DUPLICATE_HEADER_NAME: &str = "mock.headers must not contain case-insensitive duplicate names";
+
 impl Default for MockConfig {
     fn default() -> Self {
         MockConfig {
@@ -94,6 +106,52 @@ impl MockConfig {
                 return Err(format!("delay must not exceed {}ms, got {}ms", MAX_DELAY_MS, delay));
             }
         }
+
+        if HeaderValue::try_from(self.content_type.as_str()).is_err() {
+            return Err(INVALID_CONTENT_TYPE.to_string());
+        }
+
+        let Some(headers) = self.headers.as_ref() else {
+            return Ok(());
+        };
+
+        if headers
+            .keys()
+            .any(|name| name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(name))
+        {
+            return Err(INVALID_HEADER_NAME.to_string());
+        }
+
+        if headers
+            .values()
+            .any(|value| HeaderValue::try_from(value.as_str()).is_err())
+        {
+            return Err(INVALID_HEADER_VALUE.to_string());
+        }
+
+        if headers.keys().any(|name| name.eq_ignore_ascii_case("content-type")) {
+            return Err(CONTENT_TYPE_IN_HEADERS.to_string());
+        }
+
+        if headers.keys().any(|name| name.eq_ignore_ascii_case("content-length")) {
+            return Err(CONTENT_LENGTH_IN_HEADERS.to_string());
+        }
+
+        if headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("transfer-encoding"))
+        {
+            return Err(TRANSFER_ENCODING_IN_HEADERS.to_string());
+        }
+
+        let mut normalized_names = HashSet::with_capacity(headers.len());
+        if headers
+            .keys()
+            .any(|name| !normalized_names.insert(name.to_ascii_lowercase()))
+        {
+            return Err(DUPLICATE_HEADER_NAME.to_string());
+        }
+
         Ok(())
     }
 
@@ -122,6 +180,15 @@ impl PluginValidation for MockConfig {
 mod tests {
     use super::*;
 
+    fn headers(entries: &[(&str, &str)]) -> Option<HashMap<String, String>> {
+        Some(
+            entries
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                .collect(),
+        )
+    }
+
     #[test]
     fn test_default_config() {
         let config = MockConfig::default();
@@ -141,7 +208,11 @@ mod tests {
 
     #[test]
     fn test_validate_success() {
-        let config = MockConfig::new(200, "OK".to_string());
+        let config = MockConfig {
+            headers: headers(&[("X-Mock", "yes"), ("Cache-Control", "no-cache")]),
+            content_type: "application/json; charset=utf-8".to_string(),
+            ..MockConfig::new(200, "OK".to_string())
+        };
         assert!(config.validate().is_ok());
     }
 
@@ -173,6 +244,109 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_header_names() {
+        for invalid_name in ["bad header".to_string(), "x".repeat(HEADER_NAME_MAX_LEN as usize + 1)] {
+            let config = MockConfig {
+                headers: Some(HashMap::from([(invalid_name, "value".to_string())])),
+                ..Default::default()
+            };
+            assert_eq!(config.validate().unwrap_err(), INVALID_HEADER_NAME);
+        }
+    }
+
+    #[test]
+    fn test_validate_header_values_without_echoing_input() {
+        let sentinel = "private-value";
+        let config = MockConfig {
+            headers: headers(&[("X-Mock", &format!("{sentinel}\r\ninjected: true"))]),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(error, INVALID_HEADER_VALUE);
+        assert!(!error.contains(sentinel));
+    }
+
+    #[test]
+    fn test_validate_content_type_without_echoing_input() {
+        let sentinel = "private-content-type";
+        let config = MockConfig {
+            content_type: format!("text/plain\r\n{sentinel}"),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(error, INVALID_CONTENT_TYPE);
+        assert!(!error.contains(sentinel));
+    }
+
+    #[test]
+    fn test_validate_reserved_headers_case_insensitively() {
+        for (name, expected) in [
+            ("cOnTeNt-TyPe", CONTENT_TYPE_IN_HEADERS),
+            ("CONTENT-length", CONTENT_LENGTH_IN_HEADERS),
+            ("Transfer-Encoding", TRANSFER_ENCODING_IN_HEADERS),
+        ] {
+            let config = MockConfig {
+                headers: headers(&[(name, "value")]),
+                ..Default::default()
+            };
+            assert_eq!(config.validate().unwrap_err(), expected);
+        }
+    }
+
+    #[test]
+    fn test_validate_duplicate_headers_case_insensitively() {
+        let config = MockConfig {
+            headers: headers(&[("X-Mock", "one"), ("x-mock", "two")]),
+            ..Default::default()
+        };
+        assert_eq!(config.validate().unwrap_err(), DUPLICATE_HEADER_NAME);
+    }
+
+    #[test]
+    fn test_validation_priority_is_deterministic() {
+        let mut config = MockConfig {
+            status_code: 99,
+            delay: Some(MAX_DELAY_MS + 1),
+            content_type: "bad\r\ncontent-type".to_string(),
+            headers: headers(&[("bad header", "bad\r\nvalue")]),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "Invalid status code: 99. Must be between 100 and 599"
+        );
+
+        config.status_code = 200;
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "delay must not exceed 30000ms, got 30001ms"
+        );
+
+        config.delay = None;
+        assert_eq!(config.validate().unwrap_err(), INVALID_CONTENT_TYPE);
+
+        config.content_type = default_content_type();
+        assert_eq!(config.validate().unwrap_err(), INVALID_HEADER_NAME);
+
+        config.headers = headers(&[("X-Mock", "bad\r\nvalue")]);
+        assert_eq!(config.validate().unwrap_err(), INVALID_HEADER_VALUE);
+
+        config.headers = headers(&[("Content-Type", "text/plain")]);
+        assert_eq!(config.validate().unwrap_err(), CONTENT_TYPE_IN_HEADERS);
+
+        config.headers = headers(&[("Content-Length", "1")]);
+        assert_eq!(config.validate().unwrap_err(), CONTENT_LENGTH_IN_HEADERS);
+
+        config.headers = headers(&[("Transfer-Encoding", "chunked")]);
+        assert_eq!(config.validate().unwrap_err(), TRANSFER_ENCODING_IN_HEADERS);
+
+        config.headers = headers(&[("X-Mock", "one"), ("x-mock", "two")]);
+        assert_eq!(config.validate().unwrap_err(), DUPLICATE_HEADER_NAME);
     }
 
     #[test]
