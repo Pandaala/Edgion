@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `b9e3223a`
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: all 15 tracked files under `edgion-gateway/src/plugins/http/jwt_auth/`
 - Exact implementation files: `credentials.rs`, `plugin.rs`, `verify.rs`, `tests/claim_validation.rs`, and `tests/failure_response.rs`
@@ -35,4 +35,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 5 changed and 10 examined-no-change owned rows
-- Commit: pending
+- Commit: `0248159d`

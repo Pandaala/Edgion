@@ -12,7 +12,7 @@ JWT Auth（JSON Web Token 认证）是一种基于令牌的认证机制，客户
 1. 客户端发送带有 JWT 的请求（通过 Header、Query 或 Cookie）
 2. 插件解码 JWT 的 `iss`（颁发者）声明，路由到对应的 issuer 组
 3. 验证 JWT 签名、过期时间等声明（使用该组的算法和密钥）
-4. 验证成功：允许访问，设置 `X-Consumer-Username` 头（值为 `sub` 声明），并记录访问日志 `OK group=<name> iss=<iss> u=<sub>`
+4. 验证成功：允许访问，并记录 access log `OK group=<name> iss=<iss> u=<sub>`；`sub` 会按照敏感数据日志策略进行掩码处理
 5. 验证失败：返回 401 状态码
 
 **与 BasicAuth 的区别**：
@@ -71,12 +71,14 @@ stringData:
 | `allowTokenInQuery` | Boolean | `false` | 是否允许从 URL query 参数读取 token。默认禁用，因为 URL 中的 bearer token 会泄漏到 access log、浏览器历史和 `Referer` 头（RFC 6750 §2.3/§5.3） |
 | `cookie` | String | `jwt` | Cookie 名称 |
 | `hideCredentials` | Boolean | `false` | 是否隐藏 Token，不传递给上游服务 |
-| `anonymous` | String | 无 | 匿名用户名。设置后，未认证请求也会被允许，并设置此用户名 |
+| `anonymous` | String | 无 | 匿名用户名。设置后，仅未携带 Token 的请求会被允许并写入匿名请求头；携带无效 Token 仍返回 401 |
 | `keyClaimName` | String | `key` | JWT payload 中用于选择密钥的 claim 名称 |
 | `lifetimeGracePeriod` | Integer | `0` | exp/nbf 时钟偏差容忍（秒） |
-| `base64Secret` | Boolean | `false` | HS* 密钥是否经过 base64 编码 |
+| `base64Secret` | Boolean | `false` | `false` 直接使用 Controller 提供的 UTF-8 `secret` 字节；`true` 在 Kubernetes 已解码 Secret `.data` 外层后，再把该字符串按 standard Base64 解码 |
 | `maximumExpiration` | Integer | `0` | 最大允许的 exp 时长（秒，从当前时间起）。`0` 表示不限制 |
-| `storeClaimsInCtx` | Boolean | `false` | 是否将解码后的 claims 存储到 ctx 变量 `jwt_claims`(供下游插件通过 `get_ctx_var` 读取;已从访问日志中排除,claims 不会被持久化) |
+| `authFailureDelayMs` | Integer | `0` | 返回认证失败响应前的延迟（毫秒），同时作用于缺少 Token 和 Token 无效的情况 |
+| `realm` | String | `jwt` | Bearer `WWW-Authenticate` challenge 使用的 realm |
+| `storeClaimsInCtx` | Boolean | `false` | 是否将已验证 claims 存储到 ctx 变量 `jwt_claims`（供下游插件通过 `get_ctx_var` 读取；该变量已从 access log 排除，claims 不会被持久化） |
 | `claimsToHeaders` | Object | 无 | 将 JWT claim 名映射到上游请求头名称 |
 
 **约束**：未设置 `anonymous` 时必须配置 `issuerGroups`。
@@ -198,6 +200,12 @@ spec:
 - `algorithm`：未设置时继承插件级默认；设置后覆盖插件级
 - `audiences`：未设置时继承插件级默认；设为 `[]` 表示明确关闭该组的 aud 检查
 
+**声明校验语义**：
+- `exp` 必须存在，并使用 `lifetimeGracePeriod` 校验
+- `nbf` 可选；存在时使用 `lifetimeGracePeriod` 校验
+- 生效的 `audiences` 非空时，Token 必须包含 `aud`，且至少有一个值匹配
+- 组级 `None` 会继承插件级值，不会关闭非空的插件级默认值。组级 `[]` 会显式覆盖任何插件级默认值并关闭校验。完成合并后，只有生效值为 `None`（两级都未设置）或空列表时才关闭校验
+
 ### 访问日志格式
 
 验证成功时，访问日志记录：
@@ -209,13 +217,13 @@ OK group=partner-a iss=https://partner-a.example.com u=user-123
 其中：
 - `group=<name>`：路由到的 issuer 组名
 - `iss=<iss>`：JWT 的颁发者声明值
-- `u=<sub>`：JWT 的 `sub`（subject）声明值
+- `u=<sub>`：JWT 的 `sub`（subject）声明值；该值按敏感日志数据处理，并由配置的策略进行掩码；`sub` 缺失或不是字符串时记录为 `(missing sub)`
 
 ### 失败分支的安全说明
 
 **验证失败时，访问日志不包含 `group=` / `iss=` 信息**（设计决定）。
 
-原因：未认证的攻击者不应能通过错误响应枚举已配置的 issuer、推断各颁发者使用的算法、或探测 kid 分布情况——这些信息组合起来可绘制出多租户拓扑图，存在安全风险。
+原因：未认证的攻击者不应能通过错误响应枚举已配置的 issuer、推断各颁发者使用的算法，或探测各组的 payload 凭证 key 分布——这些信息组合起来可绘制出多租户拓扑图，存在安全风险。
 
 失败分支示例：
 
@@ -223,9 +231,11 @@ OK group=partner-a iss=https://partner-a.example.com u=user-123
 - `Deny missing iss` — Token 缺少 `iss` 声明
 - `Deny unknown iss` — `iss` 不匹配任何已配置的组
 - `Deny bad algorithm` — Token 头部 `alg` 与组算法不匹配
-- `Deny missing key` — kid 不在路由组的凭证中
-- `Deny bad signature` — 签名验证失败
-- `Deny exp` / `Deny nbf` / `Deny bad aud` — 声明验证失败
+- `Deny missing key` — `keyClaimName` 指定的 payload 选择器声明缺失、不是字符串，或没有匹配路由组内的凭证 key
+- `Deny invalid signature` — 签名验证失败
+- `Deny token expired` / `Deny immature token` / `Deny invalid audience` — 声明验证失败
+
+所有认证失败都返回相同的通用 401 响应体。这些静态 access log 分类仅供运维诊断，不包含 Token、issuer、group、算法或密钥标识。
 
 ---
 
@@ -313,8 +323,9 @@ spec:
 ```
 
 **行为**：
-- 提供有效 Token：设置 `X-Consumer-Username: <sub>`
-- 未提供 Token 或 Token 无效：设置 `X-Consumer-Username: guest` 和 `X-Anonymous-Consumer: true`
+- 有效 Token：按正常流程验证。除非通过 `claimsToHeaders` 显式映射声明，否则不会添加消费者请求头
+- 未提供 Token：设置 `X-Consumer-Username: guest` 和 `X-Anonymous-Consumer: true`
+- 提供无效 Token：返回与其他认证失败相同的通用 401，不使用匿名回退
 
 ---
 
@@ -329,15 +340,17 @@ spec:
 | RS*/ES* | `key` | 标识符，与 JWT payload 中 `keyClaimName` 对应字段匹配 |
 | RS*/ES* | `publicKey` | PEM 格式公钥 |
 
+凭证选择仅使用 `keyClaimName` 指定的 JWT payload 声明（默认为 `key`）。JOSE header 中的 `kid` 或 `keyid` 不参与选钥。
+
+Kubernetes 总会先解码 Secret `.data` 的外层 Base64，之后 Controller 才读取 UTF-8 `secret` 值。`base64Secret: false` 直接把这些 UTF-8 字节作为 HMAC key。`base64Secret: true` 则要求该 UTF-8 字符串本身是 standard Base64，并再次解码得到实际的 HMAC key 字节。
+
 ---
 
 ## 响应头说明
 
 ### 认证成功
 
-| 头名称 | 说明 | 示例 |
-|--------|------|------|
-| `X-Consumer-Username` | JWT payload 中 `sub` 声明的值 | `user-123` |
+JwtAuth 默认不添加消费者请求头。要转发 `sub`，请显式配置声明映射，例如 `claimsToHeaders: {sub: X-Consumer-Username}`。映射后的请求头值受大小限制，并替换配置的目标请求头。
 
 ### 认证失败
 
@@ -350,6 +363,9 @@ Content-Type: text/plain
 401 Unauthorized - Invalid or missing JWT
 ```
 
+- 缺少 Token：`WWW-Authenticate: Bearer realm="<realm>"`。
+- Token 存在但无效：使用相同 realm，并添加 `error="invalid_token"` 和通用 `error_description="Unauthorized - Invalid or missing JWT"`。
+
 ---
 
 ## 客户端使用示例
@@ -361,9 +377,9 @@ Content-Type: text/plain
 const jwt = require('jsonwebtoken');
 
 const token = jwt.sign(
-  { sub: 'my-user', iss: 'https://my-idp.example.com', exp: Math.floor(Date.now() / 1000) + 3600 },
+  { sub: 'my-user', iss: 'https://my-idp.example.com', key: 'default-key', exp: Math.floor(Date.now() / 1000) + 3600 },
   'my-super-secret-key-at-least-32-chars!',
-  { algorithm: 'HS256', keyid: 'default-key' }
+  { algorithm: 'HS256' }
 );
 
 fetch('https://api.example.com/resource', {
@@ -381,11 +397,11 @@ token = jwt.encode(
     {
         'sub': 'my-user',
         'iss': 'https://my-idp.example.com',
+        'key': 'default-key',
         'exp': int(time.time()) + 3600
     },
     'my-super-secret-key-at-least-32-chars!',
-    algorithm='HS256',
-    headers={'kid': 'default-key'}
+    algorithm='HS256'
 )
 
 import requests
@@ -420,7 +436,7 @@ curl "https://api.example.com/resource?jwt=$TOKEN"
 
 3. **设置合理的过期时间**：
    ```json
-   {"sub": "user", "iss": "https://my-idp.example.com", "exp": 1735689600}
+   {"sub": "user", "iss": "https://my-idp.example.com", "key": "default-key", "exp": 1735689600}
    ```
 
 4. **隐藏凭证**：
@@ -464,6 +480,7 @@ kubectl get secret jwt-secret -o yaml
 - Token 已过期（检查 `exp` 声明）
 - 算法不匹配（Token 中声明的 alg 与 issuerGroup 配置不一致）
 - JWT 缺少 `iss` 声明
+- JWT payload 缺少 `keyClaimName` 配置的声明（默认为 `key`）；header 中的 `kid` 会被忽略
 
 **解决方案**：
 ```bash
@@ -564,7 +581,7 @@ spec:
 **测试**：
 ```bash
 # 生成 partner-a 的 Token（示例使用 Node.js）
-TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({sub:'user1',iss:'https://partner-a.example.com',exp:Math.floor(Date.now()/1000)+3600},'partner-a-secret-key-32-chars-long!!',{keyid:'partner-a-key'}))")
+TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({sub:'user1',iss:'https://partner-a.example.com',key:'partner-a-key',exp:Math.floor(Date.now()/1000)+3600},'partner-a-secret-key-32-chars-long!!',{algorithm:'HS256'}))")
 
 # 使用 Token 访问（访问日志将记录 OK group=partner-a iss=https://partner-a.example.com u=user1）
 curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
@@ -572,6 +589,8 @@ curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
 # 无 Token - 返回 401
 curl https://api.example.com/api/data
 ```
+
+JwtAuth 使用 Controller 解析后的 Kubernetes Secret，不获取 JWKS，也不执行 OIDC discovery。需要 OIDC/JWKS provider 行为时，请使用 OpenID Connect 插件。
 
 ---
 

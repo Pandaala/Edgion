@@ -12,7 +12,7 @@ JWT Auth (JSON Web Token Authentication) is a token-based authentication mechani
 1. The client sends a request with a JWT (via Header, Query, or Cookie)
 2. The plugin decodes the JWT `iss` (issuer) claim and routes to the matching issuer group
 3. The JWT signature, expiration, and other claims are verified using that group's algorithm and keys
-4. Verification succeeds: access is allowed, the `X-Consumer-Username` header is set to the `sub` claim, and the access log records `OK group=<name> iss=<iss> u=<sub>`
+4. Verification succeeds: access is allowed and the access log records `OK group=<name> iss=<iss> u=<sub>`; the `sub` value is masked according to the sensitive-data log policy
 5. Verification fails: a 401 status code is returned
 
 **Differences from BasicAuth**:
@@ -71,12 +71,14 @@ stringData:
 | `allowTokenInQuery` | Boolean | `false` | Allow reading the token from the URL query parameter. Disabled by default because bearer tokens in URLs leak into access logs, browser history, and `Referer` headers (RFC 6750 §2.3/§5.3) |
 | `cookie` | String | `jwt` | Cookie name for the token |
 | `hideCredentials` | Boolean | `false` | Whether to remove the token from the request before forwarding to upstream |
-| `anonymous` | String | none | Anonymous username. When set, unauthenticated requests are allowed and assigned this username |
+| `anonymous` | String | none | Anonymous username. When set, a request with no token is allowed and receives the anonymous headers; a present but invalid token still returns 401 |
 | `keyClaimName` | String | `key` | Claim name in the JWT payload used to select the credential key |
 | `lifetimeGracePeriod` | Integer | `0` | Clock skew tolerance for exp/nbf validation (seconds) |
-| `base64Secret` | Boolean | `false` | Whether the HS* secret value is base64-encoded |
+| `base64Secret` | Boolean | `false` | `false` uses the Controller-provided UTF-8 `secret` bytes directly; `true` decodes that string as standard Base64 after Kubernetes has already decoded the outer Secret `.data` layer |
 | `maximumExpiration` | Integer | `0` | Maximum allowed exp duration from now (seconds). `0` disables the check |
-| `storeClaimsInCtx` | Boolean | `false` | Store decoded claims in the ctx variable `jwt_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
+| `authFailureDelayMs` | Integer | `0` | Delay before a failed authentication response (milliseconds). Applies to missing and invalid tokens |
+| `realm` | String | `jwt` | Realm used in the Bearer `WWW-Authenticate` challenge |
+| `storeClaimsInCtx` | Boolean | `false` | Store verified claims in the ctx variable `jwt_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
 | `claimsToHeaders` | Object | none | Map JWT claim names to upstream request header names |
 
 **Constraint**: `issuerGroups` is required when `anonymous` is not set.
@@ -198,6 +200,12 @@ spec:
 - `algorithm`: when not set, inherits the plugin-level default; when set, overrides it
 - `audiences`: when not set, inherits the plugin-level default; set to `[]` to explicitly disable audience validation for this group
 
+**Claim validation semantics**:
+- `exp` is required and validated with `lifetimeGracePeriod`
+- `nbf` is optional; when present, it is validated with `lifetimeGracePeriod`
+- A non-empty effective `audiences` list requires an `aud` claim and at least one matching value
+- A group-level `None` inherits the plugin value; it does not disable a non-empty plugin default. A group-level `[]` explicitly overrides any plugin default and disables validation. After merging, validation is disabled only when the effective value is `None` (both levels unset) or empty
+
 ### Access Log Format
 
 On successful verification, the access log records:
@@ -209,13 +217,13 @@ OK group=partner-a iss=https://partner-a.example.com u=user-123
 Where:
 - `group=<name>`: the issuer group matched for this token
 - `iss=<iss>`: the raw issuer claim value from the JWT
-- `u=<sub>`: the `sub` (subject) claim value from the JWT
+- `u=<sub>`: the `sub` (subject) claim value from the JWT, handled as sensitive log data and masked by the configured policy; an absent or non-string `sub` is logged as `(missing sub)`
 
 ### Security Note: Failure Branches Omit group/iss
 
 **On verification failure, the access log does not include `group=` or `iss=` values** (by design).
 
-Rationale: an unauthenticated attacker must not be able to enumerate which issuers are configured, infer the algorithm used by a given issuer, or probe the kid distribution across groups by observing error responses — these pieces of information together can map the tenant topology.
+Rationale: an unauthenticated attacker must not be able to enumerate which issuers are configured, infer the algorithm used by a given issuer, or probe the payload credential-key distribution across groups by observing error responses — these pieces of information together can map the tenant topology.
 
 Failure branch examples:
 
@@ -223,9 +231,11 @@ Failure branch examples:
 - `Deny missing iss` — the token has no `iss` claim
 - `Deny unknown iss` — the `iss` does not match any configured group
 - `Deny bad algorithm` — the token header `alg` does not match the group's algorithm
-- `Deny missing key` — the kid is not in the routed group's credentials
-- `Deny bad signature` — signature verification failed
-- `Deny exp` / `Deny nbf` / `Deny bad aud` — claim validation failures
+- `Deny missing key` — the payload selector claim named by `keyClaimName` is missing, is not a string, or does not match a credential key in the routed group
+- `Deny invalid signature` — signature verification failed
+- `Deny token expired` / `Deny immature token` / `Deny invalid audience` — claim validation failures
+
+Every authentication failure returns the same generic 401 body. These static access-log classifications are operator diagnostics and never include the token, issuer, group, algorithm, or key identifier.
 
 ---
 
@@ -313,8 +323,9 @@ spec:
 ```
 
 **Behavior**:
-- Valid Token provided: sets `X-Consumer-Username: <sub>`
-- No Token or invalid Token: sets `X-Consumer-Username: guest` and `X-Anonymous-Consumer: true`
+- Valid token: verifies normally. No consumer header is added unless `claimsToHeaders` explicitly maps a claim to one
+- No token: sets `X-Consumer-Username: guest` and `X-Anonymous-Consumer: true`
+- Present but invalid token: returns the same generic 401 as any other authentication failure; anonymous fallback is not used
 
 ---
 
@@ -329,15 +340,17 @@ Each Secret referenced by an `issuerGroup` must contain the following fields:
 | RS*/ES* | `key` | Identifier matching the `keyClaimName` field in the JWT payload |
 | RS*/ES* | `publicKey` | PEM format public key |
 
+The credential selector comes only from the JWT payload claim named by `keyClaimName` (`key` by default). A JOSE header `kid` or `keyid` does not select a key.
+
+Kubernetes always decodes the outer Secret `.data` Base64 layer before the Controller reads the UTF-8 `secret` value. `base64Secret: false` uses those UTF-8 bytes directly as the HMAC key. `base64Secret: true` instead requires that UTF-8 string itself to contain standard Base64 and decodes it once more to obtain the actual HMAC key bytes.
+
 ---
 
 ## Response Header Details
 
 ### Authentication Success
 
-| Header Name | Description | Example |
-|-------------|-------------|---------|
-| `X-Consumer-Username` | Value of the `sub` claim in the JWT payload | `user-123` |
+JwtAuth adds no consumer header by default. To forward `sub`, configure an explicit claim mapping such as `claimsToHeaders: {sub: X-Consumer-Username}`. The mapping uses bounded header values and replaces the configured destination header.
 
 ### Authentication Failure
 
@@ -349,6 +362,9 @@ Content-Type: text/plain
 
 401 Unauthorized - Invalid or missing JWT
 ```
+
+- Missing token: `WWW-Authenticate: Bearer realm="<realm>"`.
+- Present invalid token: the same realm plus `error="invalid_token"` and the generic `error_description="Unauthorized - Invalid or missing JWT"`.
 
 ---
 
@@ -364,10 +380,11 @@ const token = jwt.sign(
   {
     sub: 'my-user',
     iss: 'https://my-idp.example.com',
+    key: 'default-key',
     exp: Math.floor(Date.now() / 1000) + 3600
   },
   'my-super-secret-key-at-least-32-chars!',
-  { algorithm: 'HS256', keyid: 'default-key' }
+  { algorithm: 'HS256' }
 );
 
 fetch('https://api.example.com/resource', {
@@ -385,11 +402,11 @@ token = jwt.encode(
     {
         'sub': 'my-user',
         'iss': 'https://my-idp.example.com',
+        'key': 'default-key',
         'exp': int(time.time()) + 3600
     },
     'my-super-secret-key-at-least-32-chars!',
-    algorithm='HS256',
-    headers={'kid': 'default-key'}
+    algorithm='HS256'
 )
 
 import requests
@@ -424,7 +441,7 @@ curl "https://api.example.com/resource?jwt=$TOKEN"
 
 3. **Set reasonable expiration times**:
    ```json
-   {"sub": "user", "iss": "https://my-idp.example.com", "exp": 1735689600}
+   {"sub": "user", "iss": "https://my-idp.example.com", "key": "default-key", "exp": 1735689600}
    ```
 
 4. **Hide credentials**:
@@ -468,6 +485,7 @@ kubectl get secret jwt-secret -o yaml
 - Token has expired (check the `exp` claim)
 - Algorithm mismatch (the alg in the token header does not match the issuerGroup's algorithm)
 - JWT is missing the `iss` claim
+- JWT payload is missing the configured `keyClaimName` claim (`key` by default); a header `kid` is ignored
 
 **Solution**:
 ```bash
@@ -568,7 +586,7 @@ spec:
 **Test**:
 ```bash
 # Generate a Token for partner-a (example using Node.js)
-TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({sub:'user1',iss:'https://partner-a.example.com',exp:Math.floor(Date.now()/1000)+3600},'partner-a-secret-key-32-chars-long!!',{keyid:'partner-a-key'}))")
+TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({sub:'user1',iss:'https://partner-a.example.com',key:'partner-a-key',exp:Math.floor(Date.now()/1000)+3600},'partner-a-secret-key-32-chars-long!!',{algorithm:'HS256'}))")
 
 # Access with Token (access log will record: OK group=partner-a iss=https://partner-a.example.com u=user1)
 curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
@@ -576,6 +594,8 @@ curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
 # No Token - returns 401
 curl https://api.example.com/api/data
 ```
+
+JwtAuth uses controller-resolved Kubernetes Secrets and does not fetch JWKS or perform OIDC discovery. Use the OpenID Connect plugin when you need OIDC/JWKS provider behavior.
 
 ---
 

@@ -14,10 +14,12 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtCredential {
-    /// Key identifier (kid) used to look up the credential within a group
+    /// Payload credential-key value used to look up the credential within a group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// Symmetric secret (for HS* algorithms), base64 encoded
+    /// Symmetric secret (for HS* algorithms), read as UTF-8 from the Secret.
+    /// After Kubernetes Secret decoding, when `base64_secret` is enabled, this
+    /// UTF-8 string itself wraps the actual key bytes in standard Base64.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
     /// Public key PEM (for RS*/ES* algorithms)
@@ -91,7 +93,7 @@ pub struct JwtIssuerGroup {
 }
 
 /// Snapshot-merged group (controller-populated). Always carries concrete
-/// `algorithm` and the per-kid credential map for this group.
+/// `algorithm` and the per-payload-credential-key map for this group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtIssuerGroup {
@@ -110,7 +112,8 @@ pub struct ResolvedJwtIssuerGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audiences: Option<Vec<String>>,
 
-    /// Credentials for this group, keyed by `kid` (Secret's `key` field).
+    /// Credentials for this group, keyed by the payload credential-key value
+    /// stored in the Secret's `key` field.
     pub credentials: HashMap<String, ResolvedJwtCredential>,
 }
 
@@ -145,7 +148,8 @@ pub struct JwtAuthConfig {
     #[serde(default)]
     pub hide_credentials: bool,
 
-    /// Anonymous consumer name; if set, requests without valid JWT are allowed and this name is set
+    /// Anonymous consumer name; if set, requests without a JWT are allowed and this name is set.
+    /// A present but invalid JWT is always rejected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anonymous: Option<String>,
 
@@ -166,7 +170,9 @@ pub struct JwtAuthConfig {
     #[serde(default = "default_realm")]
     pub realm: String,
 
-    /// If true, the secret is base64 encoded and needs to be decoded before use
+    /// If true, decode the Controller-provided UTF-8 secret string as standard
+    /// Base64 after Kubernetes has already decoded the outer Secret `.data` layer.
+    /// If false, use the UTF-8 bytes directly.
     #[serde(default)]
     pub base64_secret: bool,
 

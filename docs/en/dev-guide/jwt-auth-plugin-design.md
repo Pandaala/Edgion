@@ -1,170 +1,148 @@
-# JWT Auth Plugin Design and Configuration (Feature/Config Preparation)
+# JWT Auth Plugin Design
 
-This document corresponds to the **feature and configuration preparation** phase of the plugin development process: defining the plugin struct and configuration items, comparing implementations from APISIX/Kong/Traefik/Envoy, determining feature logic and configuration for review before implementing runtime logic and tests.
-
----
-
-## 1. Directory and Code Locations
-
-- **Plugin directory**: `src/core/gateway/plugins/http/jwt_auth/`
-  - `mod.rs`: Exports `JwtAuth`
-  - `plugin.rs`: Plugin implementation (currently a stub, runtime logic to be added after review)
-- **Configuration types**: `Edgion/edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs`
-  - `JwtAuthConfig`, `JwtAlgorithm`
-- **Registration**: `EdgionPlugin::JwtAuth(JwtAuthConfig)` is registered in `edgion_plugin.rs` and `runtime.rs`.
+This document describes the implemented JwtAuth configuration, Controller resolution, and Gateway request behavior. JwtAuth validates JWTs with Kubernetes Secret-backed issuer groups; it does not issue tokens, fetch JWKS, or perform OIDC discovery.
 
 ---
 
-## 2. Feature Comparison: Edgion Design vs Kong vs APISIX
+## 1. Code Locations
 
-The following table compares Edgion's current design with Kong JWT and APISIX jwt-auth by feature dimension, for review and future iteration.
-
-| Feature | APISIX jwt-auth | Kong JWT | Edgion Design | Notes |
-|---------|-----------------|----------|---------------|-------|
-| **Credential model** | Consumer + Credential (key/secret/public_key, etc.) | Consumer + JWT Credential (key/secret/rsa_public_key) | Route-level `secret_ref` (single key) or `secret_refs` (multi-key, K8s Secret) | Edgion has no independent Consumer resource; credentials come from K8s Secret references |
-| **Key storage** | etcd + optional APISIX Secret (env/vault) | DB + optional vault, etc. | K8s Secret only (secret_ref / secret_refs) | Edgion v1 does not support env/vault references |
-| **Token source** | header / query / cookie (configurable names) | Authorization / uri_param_names / cookie_names | header / query / cookie (configurable names) | All three are consistent |
-| **Token priority** | Header > Query > Cookie | Same | Header > Query > Cookie | Consistent |
-| **Algorithms** | HS256/HS512/RS256/ES256 | HS256/HS384/HS512/RS256/RS384/RS512/ES256/ES384/ES512 | HS256/HS384/HS512/RS256/ES256 | Edgion v1 lacks RS384/RS512/ES384/ES512 |
-| **Multi-key selection** | payload key_claim_name value selects Consumer credential | Same (key_claim_name) | key_claim_name selects from secret_refs | Same logic, different data source |
-| **hide_credentials** | Yes (don't forward token to upstream) | Yes | Yes | Consistent |
-| **Anonymous access** | anonymous_consumer (consumer name) | anonymous (consumer id) | anonymous (consumer name) | Consistent |
-| **key_claim_name** | Yes (default: key) | Yes | Yes (default: key) | Consistent |
-| **exp/nbf validation** | Yes | Yes | Yes (+ optional claims_to_verify) | Consistent |
-| **Clock skew** | lifetime_grace_period | - | lifetime_grace_period | Kong docs don't emphasize this; Edgion aligns with APISIX |
-| **base64_secret** | Yes (credential-level) | secret_is_base64 (credential-level) | Not in v1, can be added later | Can be addressed in implementation phase |
-| **Credential-level exp** | Yes (default token expiry in Consumer credential) | - | No | Edgion does not issue tokens, only validates |
-| **Token issuance** | Yes (Admin API creates JWT for Consumer) | No (validation only) | No | Edgion aligns with Kong, validation only |
-| **store_in_ctx** | Yes (store payload in ctx for downstream plugins) | - | No | Not in Edgion v1 |
-| **Headers forwarded to upstream** | X-Consumer-Username, X-Credential-Identifier, custom Consumer headers | Configurable claim_to_headers, etc. | X-Consumer-Username (aligned with BasicAuth) | Edgion v1 only username/identifier, claim_to_headers extensible later |
-| **JWKS / Remote public key** | No (credential is the key) | No | No | All three skip in v1; Edgion design reserves "JWKS extensibility" |
-| **iss/aud validation** | No | Optional | No | Not in Edgion v1 |
-| **Configuration level** | Consumer (credential) + Route/Service (behavior) | Consumer (credential) + Route/Service (behavior) | Route/Plugin level only (credentials via secret_ref(s)) | Edgion has no independent Consumer; configuration is flatter |
-
-**Summary of differences**
-
-- **Edgion has, aligned with APISIX/Kong**: Token source and priority, multi-key (key_claim_name), hide_credentials, anonymous, exp/nbf, lifetime_grace_period, algorithms (v1 subset).
-- **Edgion differs**: Credentials from K8s Secret (secret_ref / secret_refs), no Consumer resource, no Admin API token issuance.
-- **Edgion v1 deferred, iteratable later**: base64_secret, store_in_ctx, more algorithms (RS384/512, ES384/512), claim_to_headers, JWKS/iss/aud.
+- Gateway runtime: `edgion-gateway/src/plugins/http/jwt_auth/`
+- Resource schema: `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs`
+- Controller credential resolver: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwt.rs`
+- Plugin registration: `EdgionPlugin::JwtAuth(JwtAuthConfig)`
 
 ---
 
-## 3. Benchmarking: APISIX / Kong (Brief)
+## 2. Configuration Model
 
-### 3.1 APISIX jwt-auth
+`issuerGroups` is the operator-facing credential model. Each group contains:
 
-- **Consumer/Credential**: Each Consumer can configure jwt-auth credentials: `key` (required), `secret` (HS*), `public_key` (RS256/ES256), `algorithm`, `exp`, `base64_secret`, `lifetime_grace_period`, `key_claim_name`.
-- **Route/Service** (route-level): `header` (default: authorization), `query` (default: jwt), `cookie` (default: jwt), `hide_credentials`, `key_claim_name`, `anonymous_consumer`, `store_in_ctx`.
-- **Token source**: Header / Query / Cookie, priority generally Header > Query > Cookie.
-- **After validation**: Sets `X-Consumer-Username`, `X-Credential-Identifier`, etc. as request headers forwarded to upstream.
+- A unique group name.
+- One or more exact `iss` values.
+- One or more Kubernetes `secretRefs`.
+- Optional group-level `algorithm` and `audiences` overrides.
 
-### 3.2 Kong JWT
+Plugin-level `algorithm` and `audiences` provide defaults. The Controller snapshot-merges these defaults into each resolved group. A group-level `audiences: None` inherits the plugin value. A group-level `audiences: []` explicitly overrides even a non-empty plugin default and disables validation. Only an effective `None` (both levels unset) or empty list disables validation.
 
-- Similar to APISIX: JWT plugin validates signatures and claims, supports token extraction from Header/Query/Cookie, configurable anonymous consumer, hide credentials, etc.
+Each referenced Secret represents one credential:
 
----
+- `key`: identifier selected by the JWT payload claim named by `keyClaimName` (`key` by default).
+- `secret`: HMAC material for HS256, HS384, or HS512.
+- `publicKey`: PEM public key for RS256, RS384, RS512, ES256, or ES384.
 
-## 4. Benchmarking: Traefik / Envoy / Tyk (Differences and Trade-offs)
-
-| Capability | Traefik | Envoy | Edgion Design |
-|-----------|---------|-------|---------------|
-| Key source | signingSecret / publicKey / jwksFile / jwksUrl | local_jwks / remote_jwks (with issuer) | v1: secret_ref / secret_refs (K8s Secret), JWKS URL extensible later |
-| Multi-issuer | trustedIssuers + JWKS | Multiple Provider + rules | v1: Multiple credentials via secret_refs + key_claim_name |
-| Token location | Header / Form / Query | from_headers / from_params / from_cookies | header / query / cookie (aligned with APISIX) |
-| Claim validation | claims (custom rules) | exp, aud, iss, etc. | exp, nbf (optional claims_to_verify) + lifetime_grace_period |
-| Forward claims | forwardHeaders | claim_to_headers | v1: X-Consumer-Username, etc., aligned with BasicAuth |
-| Anonymous access | - | - | anonymous (aligned with BasicAuth) |
-
-**Edgion v1 trade-offs**:
-
-- **Not doing**: JWKS URL, iss/aud validation, custom claim rules (iteratable later).
-- **Doing**: Single key (secret_ref) or multi-key (secret_refs + key_claim_name), HS256/384/512 and RS256/384/512, ES256/384/512, Header/Query/Cookie token extraction, hide_credentials, anonymous, exp/nbf with clock skew.
-- **No Consumer**: Edgion has no independent Consumer resource; all credentials come from K8s Secrets (secret_ref / secret_refs), configuration is route/plugin-level only.
+A JOSE header `kid` or `keyid` is not a credential selector. The selector is read only from the configured payload claim.
 
 ---
 
-## 5. Feature Goals (Confirmed Logic)
+## 3. Configuration Fields
 
-1. **Token extraction** (priority: Header > Query > Cookie)  
-   - Header: Default `authorization`, supports `Bearer <token>` or bare token.  
-   - Query: Default parameter name `jwt`. Opt-in only — gated by `allow_token_in_query` (default `false`) because tokens in URLs leak into logs/history (RFC 6750 §2.3/§5.3).  
-   - Cookie: Default name `jwt`.
+| Field | Type | Default | Runtime meaning |
+|-------|------|---------|-----------------|
+| `issuerGroups` | Array | none | Named issuer and Secret groups; required unless `anonymous` is set |
+| `algorithm` | `JwtAlgorithm` | `HS256` | Plugin default, overridden by a group value |
+| `audiences` | Array | none | Plugin default audience allow-list, overridden by a group value |
+| `header` | String | `authorization` | First token source; supports `Bearer <token>` or a bare token |
+| `query` | String | `jwt` | Query parameter name |
+| `allowTokenInQuery` | Boolean | `false` | Enables the query source; disabled by default to avoid URL credential exposure |
+| `cookie` | String | `jwt` | Cookie token source |
+| `hideCredentials` | Boolean | `false` | Removes the selected token source before proxying |
+| `anonymous` | String | none | Allows only requests with no token and writes anonymous headers |
+| `keyClaimName` | String | `key` | Payload claim used to select a credential within the routed group |
+| `lifetimeGracePeriod` | Integer | `0` | Leeway in seconds for `exp` and present `nbf` claims |
+| `base64Secret` | Boolean | `false` | `false` uses the Controller-provided UTF-8 bytes; `true` decodes that string as standard Base64 after Kubernetes has decoded the outer Secret `.data` layer |
+| `maximumExpiration` | Integer | `0` | Maximum `exp` distance from the current time; `0` disables this additional cap |
+| `authFailureDelayMs` | Integer | `0` | Delay before missing-token and invalid-token 401 responses |
+| `realm` | String | `jwt` | Realm used in the Bearer `WWW-Authenticate` challenge |
+| `storeClaimsInCtx` | Boolean | `false` | Stores verified claims in `jwt_claims` for downstream plugins |
+| `claimsToHeaders` | Object | none | Explicitly maps verified claims to bounded upstream request headers |
 
-2. **Credential model**  
-   - **Single issuer**: `secret_ref` points to one Secret containing `secret` (HS*) or `publicKey` (RS*/ES*), without looking up by key in the payload.  
-   - **Multi-key**: `secret_refs` points to multiple Secrets, each containing `key` + `secret` or `key` + `publicKey`; uses the value of `key_claim_name` field in JWT payload to select the credential.
-
-3. **Algorithms**  
-   - Symmetric: HS256, HS384, HS512.  
-   - Asymmetric RSA: RS256, RS384, RS512.  
-   - Asymmetric ECDSA: ES256, ES384.  
-   - Note: ES512 (P-521) is not supported due to underlying library limitations.
-
-4. **Claims and time**  
-   - Validate `exp`, `nbf` (if present).  
-   - `lifetime_grace_period` (seconds) for clock skew.  
-   - Optional `claims_to_verify` to explicitly specify claims to validate (e.g., `["exp","nbf"]`).
-
-5. **Anonymous and upstream**  
-   - No token or validation failure: If `anonymous` is configured, allow and set anonymous consumer identifier (e.g., X-Consumer-Username); otherwise return 401.  
-   - Validation success: Set X-Consumer-Username (can be a claim from payload, e.g., `key` or future extensions), optionally hide credentials (`hide_credentials`).
-
-6. **Error responses**  
-   - No token / invalid token / signature or claim validation failure: 401 Unauthorized, can return JSON or plain text (aligned with BasicAuth style).
+Kubernetes always removes the outer `.data` Base64 encoding before the Controller reads a Secret value. With `base64Secret: false`, JwtAuth uses the resulting UTF-8 `secret` bytes directly. With `base64Secret: true`, that UTF-8 string must itself be standard Base64 and is decoded again into the actual HMAC key bytes.
 
 ---
 
-## 6. Configuration Items (Implemented JwtAuthConfig)
+## 4. Controller Resolution
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| secret_ref | SecretObjectReference? | - | Single key: Secret contains `secret` or `publicKey` |
-| secret_refs | []SecretObjectReference? | - | Multi-key: Each Secret contains `key` + `secret` or `key` + `publicKey` |
-| algorithm | JwtAlgorithm | HS256 | HS256/HS384/HS512/RS256/ES256 |
-| header | string | "authorization" | Header name for token extraction |
-| query | string | "jwt" | Query parameter name (only read when `allow_token_in_query` is true) |
-| allow_token_in_query | bool | false | Allow reading the token from the URL query parameter (RFC 6750 §2.3/§5.3 SHOULD NOT) |
-| cookie | string | "jwt" | Cookie name |
-| hide_credentials | bool | false | Whether to remove token before forwarding to upstream |
-| anonymous | string? | - | Anonymous consumer name, allows unauthenticated access |
-| key_claim_name | string | "key" | Claim name in payload used for credential selection |
-| lifetime_grace_period | u64 | 0 | exp/nbf clock skew (seconds) |
-| claims_to_verify | []string? | - | Optional, e.g., ["exp","nbf"] |
+For each configuration generation, the Controller:
 
-**Constraints** (can be validated in handler or at runtime):  
-- At least one of `secret_ref` or `secret_refs` must be configured.  
-- When using `secret_refs`, `key_claim_name` must be configured and algorithm must be consistent (HS* uses secret, RS*/ES* uses publicKey).
+1. Clears any previously resolved transport state.
+2. Resolves every `secretRefs` entry through the normal Secret and ReferenceGrant path.
+3. Reads `key` and either `secret` or `publicKey` from each usable Secret.
+4. Keeps the first credential when a group contains duplicate `key` values.
+5. Snapshot-merges group-level or plugin-level algorithm and audience policy.
+6. Indexes the resolved group by every configured exact issuer string.
+
+The resolved map is Controller-owned, redacted in configuration output, excluded from the CRD schema, and transported to the Gateway. A Secret change requeues the owning plugin resource and publishes a new plugin generation.
+
+At Gateway construction, JwtAuth consumes this resolved map, prepares immutable decoding keys and validation policies once, and removes the raw resolved map from its retained configuration. Request processing performs only read-only lookups in that generation.
 
 ---
 
-## 7. Secret Data Format (Convention)
+## 5. Request Flow
 
-- **secret_ref (single key)**  
-  - HS*: Secret contains key `secret` (raw or base64 to be determined during implementation).  
-  - RS*/ES*: Secret contains key `publicKey` (PEM).
+JwtAuth extracts one token with this priority:
 
-- **secret_refs (multi-key)**  
-  - Each Secret:  
-    - HS*: `key` (identifier) + `secret`.  
-    - RS*/ES*: `key` (identifier) + `publicKey` (PEM).
+1. Header.
+2. Query, only when `allowTokenInQuery` is `true`.
+3. Cookie.
 
----
+If no token is present, `anonymous` may allow the request and writes `X-Anonymous-Consumer: true` plus `X-Consumer-Username: <anonymous>`. Without `anonymous`, the plugin applies `authFailureDelayMs` and returns the fixed 401 response.
 
-## 8. Consistency with Existing Plugins
+If a token is present, JwtAuth always verifies it. A malformed, expired, immature, wrongly signed, wrongly scoped, or otherwise invalid token returns the fixed 401 even when `anonymous` is configured.
 
-- Aligned with **BasicAuth**: `hide_credentials`, `anonymous`, 401 and upstream headers (X-Consumer-Username).  
-- Consistent with **EdgionPlugins**: Registered through `RequestFilterEntry` and `PluginRuntime::add_from_request_filters`, supports conditional execution (conditions).
+Verification order is intentionally strict:
 
----
+1. Parse the JOSE header.
+2. Decode untrusted payload selectors without accepting them as authenticated output.
+3. Require a non-empty `iss` and route to its exact issuer group.
+4. Require `header.alg` to equal the resolved group algorithm.
+5. Read the configured payload key claim and look up that key only inside the routed group.
+6. Verify the signature and registered claims with the prepared group policy.
+7. Apply `maximumExpiration` when configured.
 
-## 9. Post-Review TODO (Not Implemented in This Document)
-
-- Implement plugin **runtime logic** (parse JWT, select key, validate signature and exp/nbf, set headers/anonymous/401).  
-- **Credential loading**: Parse secret_ref / secret_refs from K8s Secrets (if pulling in conf sync or request path, plan required).  
-- **Unit tests**: Mock session, cover with-token/no-token/bad-token/anonymous/hide_credentials.  
-- **Integration tests**: Scripts and config directories per "plugin development" docs (`run_integration.sh`, `EdgionPlugins/JwtAuth`, client suite).  
-- **User documentation**: `Edgion/docs/zh-CN/user-guide/edgion-plugins/jwt-auth.md` (or corresponding path).
+The unsigned selector values never enter a successful result. Claims become usable only after full verification.
 
 ---
 
-**Current status**: Directory created, configuration and stub integrated, awaiting review of **feature logic** and **configuration items**; after review approval, proceed to "post-review coding" and integration/user documentation phases.
+## 6. Claim Validation
+
+- `exp` is required and validated.
+- `nbf` is optional; when present, it is validated.
+- `lifetimeGracePeriod` is applied to both `exp` and `nbf` validation.
+- A non-empty effective `audiences` list requires `aud` and at least one matching audience.
+- Group `None` inherits the plugin value; group `[]` overrides even a non-empty plugin default. Validation is disabled only when the merged effective value is `None` (both levels unset) or empty.
+- `maximumExpiration` accepts the same JWT NumericDate integer/floating-point forms as the JWT library and applies its rounding semantics before enforcing the cap.
+
+The exact `iss` route, resolved algorithm, and group-scoped key lookup prevent issuer/key and algorithm-confusion crossover.
+
+---
+
+## 7. Success and Failure Behavior
+
+On success, JwtAuth:
+
+- Records `OK group=<name> iss=<iss> u=<sub>` in PluginLog; `sub` is handled as sensitive data and masked by the configured policy. An absent or non-string `sub` uses `(missing sub)`.
+- Writes only headers explicitly configured through `claimsToHeaders`.
+- Optionally stores verified claims in `jwt_claims`.
+- Optionally removes the credential source selected for this request.
+
+JwtAuth does not write `X-Consumer-Username` from `sub` by default.
+
+All authentication failures use one public shape:
+
+- Status: 401.
+- Content type: `text/plain`.
+- Body: `401 Unauthorized - Invalid or missing JWT`.
+- Missing token: `WWW-Authenticate: Bearer realm="<realm>"`.
+- Present invalid token: the same realm plus `error="invalid_token"` and generic `error_description="Unauthorized - Invalid or missing JWT"`.
+
+Failure PluginLog entries are static classifications. They never contain the token, issuer, group, algorithm, key identifier, key material, or claims.
+
+---
+
+## 8. Boundaries
+
+- JwtAuth uses Controller-resolved Kubernetes Secrets; it has no request-time Secret fetch.
+- JwtAuth has no JWKS fetch, OIDC discovery, token issuance, or Consumer resource.
+- Use the OpenID Connect plugin for OIDC/JWKS provider behavior.
+- Query tokens remain opt-in because URLs can expose bearer credentials through logs, browser history, and referrers.
+- Header projection is explicit and bounded; adding an implicit identity header is outside this plugin's current contract.
