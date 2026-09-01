@@ -106,36 +106,40 @@ impl OpenidConnect {
         validate_token_alg(token_alg, expected_alg, &allowed_algs)
             .map_err(|(status, message)| OidcVerifyError::Other { status, message })?;
 
-        let mut jwks = self
-            .get_or_fetch_jwks(session, false)
-            .await
-            .map_err(|e| OidcVerifyError::JwksFetch(e.to_string()))?;
+        let build_decoding_key = |jwk: &jsonwebtoken::jwk::Jwk| {
+            DecodingKey::from_jwk(jwk).map_err(|e| OidcVerifyError::Other {
+                status: 401,
+                message: format!("Failed to build decoding key: {}", e),
+            })
+        };
+        let decoding_key = {
+            let jwks = self
+                .get_or_fetch_jwks(session, false)
+                .await
+                .map_err(|e| OidcVerifyError::JwksFetch(e.to_string()))?;
 
-        let jwk = match select_jwk(&header, &jwks, token_alg) {
-            Ok(jwk) => jwk,
-            Err(JwkSelectError::KidNotFound) => {
-                // kid miss: force one refresh (singleflight + min refresh interval in cache layer)
-                jwks = self
-                    .get_or_fetch_jwks(session, true)
-                    .await
-                    .map_err(|e| OidcVerifyError::JwksFetch(format!("refresh on kid miss: {}", e)))?;
-                select_jwk(&header, &jwks, token_alg).map_err(|_| OidcVerifyError::Other {
-                    status: 401,
-                    message: "No matching JWK found for token kid".to_string(),
-                })?
-            }
-            Err(JwkSelectError::NoSuitableKey) => {
-                return Err(OidcVerifyError::Other {
-                    status: 401,
-                    message: "No suitable JWK for token algorithm".to_string(),
-                });
+            match select_jwk(&header, &jwks, token_alg) {
+                Ok(jwk) => build_decoding_key(jwk)?,
+                Err(JwkSelectError::KidNotFound) => {
+                    // kid miss: force one refresh (singleflight + min refresh interval in cache layer)
+                    let refreshed_jwks = self
+                        .get_or_fetch_jwks(session, true)
+                        .await
+                        .map_err(|e| OidcVerifyError::JwksFetch(format!("refresh on kid miss: {}", e)))?;
+                    let jwk = select_jwk(&header, &refreshed_jwks, token_alg).map_err(|_| OidcVerifyError::Other {
+                        status: 401,
+                        message: "No matching JWK found for token kid".to_string(),
+                    })?;
+                    build_decoding_key(jwk)?
+                }
+                Err(JwkSelectError::NoSuitableKey) => {
+                    return Err(OidcVerifyError::Other {
+                        status: 401,
+                        message: "No suitable JWK for token algorithm".to_string(),
+                    });
+                }
             }
         };
-
-        let decoding_key = DecodingKey::from_jwk(&jwk).map_err(|e| OidcVerifyError::Other {
-            status: 401,
-            message: format!("Failed to build decoding key: {}", e),
-        })?;
         let discovery = self
             .get_or_fetch_discovery()
             .await

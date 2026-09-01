@@ -125,13 +125,13 @@ pub fn jwk_matches_alg(jwk: &Jwk, alg: Algorithm) -> bool {
     }
 }
 
-pub fn select_jwk(header: &Header, jwks: &JwkSet, alg: Algorithm) -> Result<Jwk, JwkSelectError> {
+pub fn select_jwk<'a>(header: &Header, jwks: &'a JwkSet, alg: Algorithm) -> Result<&'a Jwk, JwkSelectError> {
     if let Some(kid) = header.kid.as_deref() {
         let Some(jwk) = jwks.find(kid) else {
             return Err(JwkSelectError::KidNotFound);
         };
         if jwk_matches_alg(jwk, alg) {
-            return Ok(jwk.clone());
+            return Ok(jwk);
         }
         return Err(JwkSelectError::NoSuitableKey);
     }
@@ -139,7 +139,6 @@ pub fn select_jwk(header: &Header, jwks: &JwkSet, alg: Algorithm) -> Result<Jwk,
     jwks.keys
         .iter()
         .find(|j| jwk_matches_alg(j, alg))
-        .cloned()
         .ok_or(JwkSelectError::NoSuitableKey)
 }
 

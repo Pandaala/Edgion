@@ -1,3 +1,4 @@
+use super::super::jwt_common::{select_jwk, JwkSelectError};
 use super::{DiscoveryDocument, IntrospectionCacheEntry, OidcSessionCookie, OpenidConnect};
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::DyeOutcome;
@@ -5,6 +6,8 @@ use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
+use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{Algorithm, Header};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
@@ -19,6 +22,72 @@ fn base_config() -> OpenidConnectConfig {
         verification_mode: VerificationMode::JwksOnly,
         ..Default::default()
     }
+}
+
+fn selection_jwks(keys: serde_json::Value) -> JwkSet {
+    serde_json::from_value(json!({ "keys": keys })).expect("valid JWKS fixture")
+}
+
+#[test]
+fn select_jwk_with_kid_borrows_the_exact_set_entry() {
+    let jwks = selection_jwks(json!([
+        {"kty":"oct","kid":"first","k":"Zmlyc3Q","alg":"HS256"},
+        {"kty":"oct","kid":"selected","k":"c2VsZWN0ZWQ","alg":"HS256"}
+    ]));
+    let header = Header {
+        kid: Some("selected".to_string()),
+        alg: Algorithm::HS256,
+        ..Header::default()
+    };
+
+    let selected = select_jwk(&header, &jwks, Algorithm::HS256).expect("select by kid");
+
+    assert!(std::ptr::eq(selected, &jwks.keys[1]));
+}
+
+#[test]
+fn select_jwk_without_kid_borrows_the_only_compatible_entry() {
+    let jwks = selection_jwks(json!([
+        {"kty":"oct","kid":"wrong-before","k":"YmVmb3Jl","alg":"HS512"},
+        {"kty":"oct","kid":"selected","k":"c2VsZWN0ZWQ","alg":"HS256"},
+        {"kty":"oct","kid":"wrong-after","k":"YWZ0ZXI","alg":"HS384"}
+    ]));
+    let header = Header::new(Algorithm::HS256);
+
+    let selected = select_jwk(&header, &jwks, Algorithm::HS256).expect("select compatible key");
+
+    assert!(std::ptr::eq(selected, &jwks.keys[1]));
+}
+
+#[test]
+fn select_jwk_without_kid_keeps_first_compatible_iteration_order() {
+    let jwks = selection_jwks(json!([
+        {"kty":"oct","kid":"first","k":"Zmlyc3Q","alg":"HS256"},
+        {"kty":"oct","kid":"second","k":"c2Vjb25k","alg":"HS256"}
+    ]));
+    let header = Header::new(Algorithm::HS256);
+
+    let selected = select_jwk(&header, &jwks, Algorithm::HS256).expect("select first compatible key");
+
+    assert!(std::ptr::eq(selected, &jwks.keys[0]));
+}
+
+#[test]
+fn select_jwk_kid_algorithm_mismatch_does_not_scan_later_duplicate_kid() {
+    let jwks = selection_jwks(json!([
+        {"kty":"oct","kid":"duplicate","k":"Zmlyc3Q","alg":"HS512"},
+        {"kty":"oct","kid":"duplicate","k":"c2Vjb25k","alg":"HS256"}
+    ]));
+    let header = Header {
+        kid: Some("duplicate".to_string()),
+        alg: Algorithm::HS256,
+        ..Header::default()
+    };
+
+    assert_eq!(
+        select_jwk(&header, &jwks, Algorithm::HS256),
+        Err(JwkSelectError::NoSuitableKey)
+    );
 }
 
 #[test]

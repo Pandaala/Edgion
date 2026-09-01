@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `86a02dd4`; all analyzed target blobs were unchanged when the batch started
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/mock/{mod.rs,plugin.rs}`
 - Exact implementation files: `plugin.rs`, the shared `MockConfig` resource definition, and the standalone English and Chinese Mock guides
@@ -41,4 +41,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `ea6c94ba`
