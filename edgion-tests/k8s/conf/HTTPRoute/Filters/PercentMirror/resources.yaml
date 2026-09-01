@@ -1,0 +1,116 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: percent-mirror-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31322
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: percent-mirror-test-server
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-sequence-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: percent-mirror-100
+  namespace: edgion-test
+  annotations:
+    edgion.io/mirror-connect-timeout-ms: "2000"
+    edgion.io/mirror-write-timeout-ms: "2000"
+    edgion.io/mirror-max-buffered-chunks: "8"
+    edgion.io/mirror-max-concurrent: "256"
+spec:
+  parentRefs:
+    - name: percent-mirror-gateway
+  hostnames: ["mirror-100.example.com"]
+  rules:
+    - filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: percent-mirror-test-server
+              port: 30001
+            percent: 100
+      backendRefs:
+        - name: percent-mirror-test-server
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: percent-mirror-0
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: percent-mirror-gateway
+  hostnames: ["mirror-0.example.com"]
+  rules:
+    - filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: percent-mirror-test-server
+              port: 30001
+            percent: 0
+      backendRefs:
+        - name: percent-mirror-test-server
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: percent-mirror-fraction50
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: percent-mirror-gateway
+  hostnames: ["mirror-frac50.example.com"]
+  rules:
+    - filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: percent-mirror-test-server
+              port: 30001
+            fraction:
+              numerator: 1
+              denominator: 2
+      backendRefs:
+        - name: percent-mirror-test-server
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: percent-mirror-20
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: percent-mirror-gateway
+  hostnames: ["mirror-20.example.com"]
+  rules:
+    - filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: percent-mirror-test-server
+              port: 30001
+            percent: 20
+      backendRefs:
+        - name: percent-mirror-test-server
+          port: 30001

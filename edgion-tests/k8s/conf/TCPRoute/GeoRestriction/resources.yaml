@@ -1,0 +1,62 @@
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-geo-esp
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-k8s-peer-country
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["US"]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-geo-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31951
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: tcp-geo-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tcp-geo-esp"
+spec:
+  parentRefs:
+    - name: tcp-geo-gw
+      namespace: edgion-test
+      sectionName: tcp
+      port: 31951
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-geo-bare-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tcp-geo-esp"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: bare
+      protocol: TCP
+      port: 31952

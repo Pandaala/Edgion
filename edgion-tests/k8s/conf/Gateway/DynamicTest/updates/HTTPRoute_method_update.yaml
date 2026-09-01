@@ -15,7 +15,8 @@ spec:
     - path:
         type: PathPrefix
         value: /api/v1
-      method: POST  #  GET  POST
+      method: POST
     backendRefs:
-    - name: test-backend
-      port: 8080
+    - name: test-http
+      namespace: edgion-test
+      port: 30001

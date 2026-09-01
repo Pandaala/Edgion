@@ -234,3 +234,35 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 15. Missing Deny ipRefs cannot be bypassed by entry-level conditions.skip
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/missing-ipref-deny-entry-skip
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-missing-ipref-deny-entry-skip
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 16. Missing Deny ipRefs cannot be bypassed by entry-level conditions.run
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/missing-ipref-deny-entry-run
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-missing-ipref-deny-entry-run
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

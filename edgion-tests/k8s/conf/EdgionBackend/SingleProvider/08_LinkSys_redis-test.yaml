@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-test
+  namespace: edgion-test
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "redis://dragonfly-redis-master.dragonfly-system.svc.cluster.local:6379"
+    db: 0
+    auth:
+      secretRef:
+        name: redis-test-auth
+    pool:
+      size: 4
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

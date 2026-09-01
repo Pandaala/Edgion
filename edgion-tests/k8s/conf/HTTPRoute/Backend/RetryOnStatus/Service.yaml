@@ -1,14 +1,12 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: test-http
+  name: test-http-retry
   namespace: edgion-test
 spec:
-  sessionAffinity: ClientIP
   ports:
   - port: 30001
     targetPort: 30001
     protocol: TCP
   selector:
-    app: edgion-test-server
-    edgion.io/sticky-single: "true"
+    app: edgion-sequence-test-server

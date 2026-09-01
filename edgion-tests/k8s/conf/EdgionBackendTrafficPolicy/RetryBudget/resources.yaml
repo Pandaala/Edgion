@@ -1,0 +1,66 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: rb-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31942
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rb-svc
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-sequence-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: rb-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: rb-svc
+  retryConstraint:
+    budget:
+      percent: 20
+      interval: 10s
+    minRetryRate:
+      count: 5
+      interval: 1s
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rb-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: rb-gateway
+  hostnames:
+    - retry-budget.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        attempts: 3
+        codes: [503]
+      timeouts:
+        request: 10s
+      backendRefs:
+        - name: rb-svc
+          port: 30001

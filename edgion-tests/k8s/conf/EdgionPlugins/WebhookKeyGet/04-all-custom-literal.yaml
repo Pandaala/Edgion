@@ -60,6 +60,10 @@ metadata:
   name: wh4-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh4_user_id
+      from: ctx
+      name: wh4_user_id
   requestPlugins:
     - enable: true
       type: WebhookKeyGet

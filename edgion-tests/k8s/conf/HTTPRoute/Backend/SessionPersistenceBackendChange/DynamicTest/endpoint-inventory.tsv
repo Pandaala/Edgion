@@ -1,0 +1,7 @@
+# phase	namespace	service	port	expected_count
+initial	edgion-default	backend-a	30001	nonempty
+initial	edgion-default	backend-b	30001	nonempty
+initial	edgion-default	backend-c	30001	nonempty
+final	edgion-default	backend-a	30001	0
+final	edgion-default	backend-b	30001	nonempty
+final	edgion-default	backend-c	30001	nonempty

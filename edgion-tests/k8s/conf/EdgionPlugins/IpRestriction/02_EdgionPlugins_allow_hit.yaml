@@ -9,9 +9,7 @@ spec:
     type: IpRestriction
     config:
       ipSource: RemoteIp
-      allow:
-      - name: loopback
-        cidrs:
-        - 10.0.0.0/8
+      allowRefs:
+      - name: k8s-test-client-peer
       status: 403
       message: IP not in allow list

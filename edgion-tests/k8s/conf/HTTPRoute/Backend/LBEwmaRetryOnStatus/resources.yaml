@@ -1,0 +1,66 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ewma-rs-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ewma-rs-service
+  loadBalancer:
+    type: Ewma
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-ewma-rs-service
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lb-ewma-rs-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31126
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-ewma-rs
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: lb-ewma-rs-gateway
+      namespace: edgion-test
+  hostnames:
+    - "lb-ewma-rs.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        attempts: 3
+        codes: [503]
+      timeouts:
+        request: 10s
+        backendRequest: 3s
+      backendRefs:
+        - name: lb-ewma-rs-service
+          port: 8080

@@ -1,0 +1,185 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-httpdns-local
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://dns-test-server.edgion-test.svc.cluster.local:30001/dns/resolve?host={domain}&ip=pod"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-httpdns-dead
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://dns-test-server.edgion-test.svc.cluster.local:65530/dns/resolve?host={domain}"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-test-server
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-sequence-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-per-request
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: per-request
+spec:
+  type: ExternalName
+  externalName: dns-test-server.edgion-test.svc.cluster.local
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-httpdns
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-local
+spec:
+  type: ExternalName
+  externalName: httpdns.dns.test
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-gateway-cached
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: gateway
+    edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-local
+spec:
+  type: ExternalName
+  externalName: gwcached.dns.test
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-httpdns-fallback
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-dead
+spec:
+  type: ExternalName
+  externalName: dns-test-server.edgion-test.svc.cluster.local
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: dns-res-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31360
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dns-per-request-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+  hostnames: ["per-request.dns.test"]
+  rules:
+    - backendRefs:
+        - name: dns-per-request
+          kind: ServiceExternalName
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dns-httpdns-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+  hostnames: ["httpdns.dns.test"]
+  rules:
+    - backendRefs:
+        - name: dns-httpdns
+          kind: ServiceExternalName
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dns-gateway-cached-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+  hostnames: ["gateway-cached.dns.test"]
+  rules:
+    - backendRefs:
+        - name: dns-gateway-cached
+          kind: ServiceExternalName
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dns-httpdns-fallback-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-res-gateway
+      namespace: edgion-test
+  hostnames: ["httpdns-fallback.dns.test"]
+  rules:
+    - backendRefs:
+        - name: dns-httpdns-fallback
+          kind: ServiceExternalName
+          port: 30001

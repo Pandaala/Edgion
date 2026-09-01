@@ -6,12 +6,12 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-  # Listener 1:  hostname ， hostname 
+  # Listener 1 restricts requests by hostname.
   - name: http-with-hostname
     port: 31250
     protocol: HTTP
     hostname: api.example.com
-  # Listener 2:  listener， HTTPRoute 
+  # Listener 2 accepts the method-test HTTPRoute.
   - name: http-general
     port: 31251
     protocol: HTTP

@@ -1,0 +1,21 @@
+# ExtProc streamed fail-open test: requestBodyMode STREAMED against a dead
+# processor port (nothing listens on 30099) with failureModeAllow=true. The
+# header phase fails, the plugin fails open, no handler drives the chunks, and
+# the original body reaches the backend unmodified.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-streamed-failopen
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30099"
+          timeoutMs: 500
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: STREAMED
+        failureModeAllow: true

@@ -10,7 +10,7 @@ use tokio::time::Instant;
 
 const ROUTE_NS: &str = "edgion-test";
 const BACKEND_NS: &str = "edgion-default";
-const SECRET_NS: &str = "edgion-lifecycle-secrets";
+const SECRET_NS: &str = "edgion-it";
 const BACKEND_A: &str = "lifecycle-ai-a";
 const BACKEND_B: &str = "lifecycle-ai-b";
 const SECRET: &str = "lifecycle-ai-key";
@@ -25,6 +25,19 @@ const SERVICE_POLICY: &str = "lifecycle-service-policy";
 const HOST: &str = "ai-backend-lifecycle.example.com";
 const AI_GATEWAY_PORT: u16 = 31945;
 
+fn provider_endpoint(path: &str) -> String {
+    provider_endpoint_for(std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true"), path)
+}
+
+fn provider_endpoint_for(k8s_mode: bool, path: &str) -> String {
+    let authority = if k8s_mode {
+        "edgion-test-server.edgion-test.svc.cluster.local:30001"
+    } else {
+        "127.0.0.1:30001"
+    };
+    format!("http://{authority}/ai/{path}")
+}
+
 fn secret_yaml() -> String {
     secret_yaml_named(SECRET, "lifecycle-test-key")
 }
@@ -36,8 +49,13 @@ fn secret_yaml_named(name: &str, value: &str) -> String {
 }
 
 fn service_yaml(name: &str) -> String {
+    service_yaml_for(std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true"), name)
+}
+
+fn service_yaml_for(k8s_mode: bool, name: &str) -> String {
+    let cluster_ip = if k8s_mode { "  clusterIP: None\n" } else { "" };
     format!(
-        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ports:\n    - port: 8080\n      protocol: TCP\n"
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n{cluster_ip}  ports:\n    - port: 8080\n      protocol: TCP\n"
     )
 }
 
@@ -55,14 +73,16 @@ fn backend_yaml_with_secrets(name: &str, secrets: &[&str]) -> String {
             )
         })
         .collect::<String>();
+    let endpoint = provider_endpoint("prefix");
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionBackend\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ai:\n    provider: OpenAICompatible\n    endpoint: http://127.0.0.1:30001/ai/prefix\n    allowInsecureHttp: true\n    credentialPool:\n      credentials:\n{credentials}    models:\n      - name: fixture-model\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionBackend\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ai:\n    provider: OpenAICompatible\n    endpoint: {endpoint}\n    allowInsecureHttp: true\n    credentialPool:\n      credentials:\n{credentials}    models:\n      - name: fixture-model\n"
     )
 }
 
 fn hot_backend_yaml(name: &str, endpoint_path: &str) -> String {
+    let endpoint = provider_endpoint(endpoint_path);
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionBackend\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ai:\n    provider: OpenAICompatible\n    endpoint: http://127.0.0.1:30001/ai/{endpoint_path}\n    allowInsecureHttp: true\n    credentialPool:\n      credentials:\n        - name: primary\n          secretRef:\n            name: {SECRET}\n            namespace: {SECRET_NS}\n    models:\n      - name: economy-model\n        aliases:\n          - fixture-model\n    defaults:\n      streaming: false\n      maxOutputTokens: 1234\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionBackend\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ai:\n    provider: OpenAICompatible\n    endpoint: {endpoint}\n    allowInsecureHttp: true\n    credentialPool:\n      credentials:\n        - name: primary\n          secretRef:\n            name: {SECRET}\n            namespace: {SECRET_NS}\n    models:\n      - name: economy-model\n        aliases:\n          - fixture-model\n    defaults:\n      streaming: false\n      maxOutputTokens: 1234\n"
     )
 }
 
@@ -315,15 +335,11 @@ async fn ai_request_model(ctx: &ScenarioCtx, model: &str) -> Result<reqwest::Res
 }
 
 async fn ai_request_model_with_header(ctx: &ScenarioCtx, model: &str, tier: Option<&str>) -> Result<reqwest::Response> {
-    let target = ctx
-        .test_ctx
-        .target_host
-        .parse::<std::net::IpAddr>()
-        .with_context(|| format!("test target {} is not an IP address", ctx.test_ctx.target_host))?;
+    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .no_proxy()
-        .resolve(HOST, std::net::SocketAddr::new(target, AI_GATEWAY_PORT))
+        .resolve(HOST, target)
         .build()
         .context("failed to build lifecycle request client")?;
     let mut request = client
@@ -336,15 +352,11 @@ async fn ai_request_model_with_header(ctx: &ScenarioCtx, model: &str, tier: Opti
 }
 
 async fn model_list(ctx: &ScenarioCtx) -> Result<Vec<String>> {
-    let target = ctx
-        .test_ctx
-        .target_host
-        .parse::<std::net::IpAddr>()
-        .with_context(|| format!("test target {} is not an IP address", ctx.test_ctx.target_host))?;
+    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .no_proxy()
-        .resolve(HOST, std::net::SocketAddr::new(target, AI_GATEWAY_PORT))
+        .resolve(HOST, target)
         .build()
         .context("failed to build model-list request client")?;
     let response = client
@@ -907,9 +919,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provider_endpoint_uses_the_k8s_service_only_in_k8s_mode() {
+        assert_eq!(
+            provider_endpoint_for(false, "prefix"),
+            "http://127.0.0.1:30001/ai/prefix"
+        );
+        assert_eq!(
+            provider_endpoint_for(true, "prefix"),
+            "http://edgion-test-server.edgion-test.svc.cluster.local:30001/ai/prefix"
+        );
+    }
+
+    #[test]
+    fn lifecycle_service_avoids_cluster_ip_allocation_only_in_k8s_mode() {
+        let filesystem: Value = serde_yaml::from_str(&service_yaml_for(false, BACKEND_A)).unwrap();
+        let kubernetes: Value = serde_yaml::from_str(&service_yaml_for(true, BACKEND_A)).unwrap();
+
+        assert!(filesystem.pointer("/spec/clusterIP").is_none());
+        assert_eq!(
+            kubernetes.pointer("/spec/clusterIP"),
+            Some(&Value::String("None".into()))
+        );
+    }
+
+    #[test]
     fn lifecycle_manifests_are_valid_yaml_and_keep_reference_namespaces_explicit() {
         for yaml in [
             secret_yaml(),
+            service_yaml_for(true, BACKEND_A),
             backend_yaml(BACKEND_A),
             backend_yaml(BACKEND_B),
             plugin_yaml(),
@@ -921,6 +958,7 @@ mod tests {
             policy_yaml(SIBLING_POLICY, BACKEND_B, 7),
             incompatible_policy_yaml(WINNER_POLICY),
             mixed_policy_yaml(WINNER_POLICY),
+            service_policy_yaml(SERVICE_POLICY, BACKEND_A),
         ] {
             serde_yaml::from_str::<Value>(&yaml)
                 .unwrap_or_else(|error| panic!("invalid lifecycle YAML: {error}\n{yaml}"));
@@ -935,5 +973,7 @@ mod tests {
             route.pointer("/spec/rules/0/backendRefs/0/namespace"),
             Some(&Value::String(BACKEND_NS.into()))
         );
+        let service: Value = serde_yaml::from_str(&service_yaml_for(true, BACKEND_A)).unwrap();
+        assert_eq!(service.pointer("/spec/clusterIP"), Some(&Value::String("None".into())));
     }
 }

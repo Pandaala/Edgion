@@ -1,0 +1,269 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: edgion-proxy-controller
+  namespace: "__NAMESPACE__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: edgion-proxy-controller
+  namespace: "__NAMESPACE__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes", "tlsroutes", "referencegrants", "backendtlspolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways/status", "httproutes/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["edgion.io"]
+    resources: ["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "edgionconfigdatas", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: edgion-proxy-controller
+  namespace: "__NAMESPACE__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: edgion-proxy-controller
+subjects:
+  - kind: ServiceAccount
+    name: edgion-proxy-controller
+    namespace: "__NAMESPACE__"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: "__RBAC_NAME__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gatewayclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gatewayclasses/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["edgion.io"]
+    resources: ["edgiongatewayclassconfigs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: "__RBAC_NAME__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: "__RBAC_NAME__"
+subjects:
+  - kind: ServiceAccount
+    name: edgion-proxy-controller
+    namespace: "__NAMESPACE__"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: edgion-proxy-certs
+  namespace: "__NAMESPACE__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 64Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: edgion-proxy-cert-bootstrap
+  namespace: "__NAMESPACE__"
+  labels:
+    edgion.io/test-run: "__RUN_ID__"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: edgion-proxy-cert-bootstrap
+        edgion.io/test-run: "__RUN_ID__"
+    spec:
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: cert-bootstrap
+          image: "__ISOLATED_IMAGE__"
+          imagePullPolicy: __ISOLATED_PULL_POLICY__
+          command:
+            - /usr/local/bin/run-edgion-proxy-component
+          args:
+            - cert-bootstrap
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: certs
+          persistentVolumeClaim:
+            claimName: edgion-proxy-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-controller
+  namespace: "__NAMESPACE__"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: edgion-proxy-controller
+  ports:
+    - name: grpc
+      port: 12151
+      targetPort: 12151
+    - name: admin
+      port: 12152
+      targetPort: 12152
+    - name: probe
+      port: 12153
+      targetPort: 12153
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-gateway
+  namespace: "__NAMESPACE__"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: edgion-proxy-gateway
+  ports:
+    - name: admin
+      port: 12160
+      targetPort: 12160
+    - name: probe
+      port: 12161
+      targetPort: 12161
+    - name: metrics
+      port: 12162
+      targetPort: 12162
+    - name: pp-inbound
+      port: 58430
+      targetPort: 58430
+    - name: plain
+      port: 58431
+      targetPort: 58431
+    - name: chain-hop1
+      port: 58530
+      targetPort: 58530
+    - name: chain-hop2
+      port: 58531
+      targetPort: 58531
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-test-server
+  namespace: "__NAMESPACE__"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: edgion-proxy-test-server
+  ports:
+    - name: http
+      port: __TEST_SERVER_PORT__
+      targetPort: __TEST_SERVER_PORT__
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-haproxy
+  namespace: "__NAMESPACE__"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: edgion-proxy-haproxy
+  ports:
+    - name: inbound-v2
+      port: 58440
+      targetPort: 58440
+    - name: inbound-v1
+      port: 58441
+      targetPort: 58441
+    - name: inbound-v2-wire
+      port: 58442
+      targetPort: 58442
+    - name: inbound-v1-wire
+      port: 58443
+      targetPort: 58443
+    - name: chain-v2
+      port: 58540
+      targetPort: 58540
+    - name: chain-v2-wire
+      port: 58542
+      targetPort: 58542
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-wire-dump
+  namespace: "__NAMESPACE__"
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: edgion-proxy-wire-dump
+  ports:
+    - name: api
+      port: 18080
+      targetPort: 18080
+    - name: v2
+      port: 58444
+      targetPort: 58444
+    - name: v1
+      port: 58445
+      targetPort: 58445

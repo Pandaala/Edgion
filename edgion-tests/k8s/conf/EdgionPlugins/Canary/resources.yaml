@@ -1,0 +1,615 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-app-v1
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-app-v2
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30002
+      targetPort: 30002
+      protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: canary-selector
+  namespace: edgion-default
+spec:
+  data:
+    type: Selector
+    config:
+      active: stable
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-switch
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        activeProfileRef:
+          name: canary-selector
+          namespace: edgion-default
+        onInvalid: reject
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-test.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+        - name: canary-app-v2
+          port: 30002
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-switch
+---
+# Canary profile resolves to a backend that is NOT present in the matching
+# HTTPRoute's backendRefs (07_HTTPRoute_default_canary-invalid-fallback-test.yaml
+# only lists canary-app-v1). onInvalid: fallback => fall through to the
+# route's own backendRefs selection instead of taking the route down.
+#
+# The response rule below makes the fallback branch directly observable:
+# it renders `canary:fallback:on-invalid` on the response (the design
+# spec's motivating example for the failure-dye vocabulary).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-invalid-fallback
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+        response:
+          - name: X-Canary-Outcome
+            "on": [fallback]
+      config:
+        enable: true
+        activeProfile: canary
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: fallback
+---
+# Canary profile resolves to a backend that is NOT present in the matching
+# HTTPRoute's backendRefs (07_HTTPRoute_default_canary-invalid-reject-test.yaml
+# only lists canary-app-v1). onInvalid: reject => 403.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-invalid-reject
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      config:
+        enable: true
+        activeProfile: canary
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: reject
+---
+# backendRefs deliberately omits canary-app-v2, so the canary-invalid-fallback
+# plugin's activeProfile ("canary" -> canary-app-v2) is a misconfigured
+# profile: found=false in run_request's backend-membership check.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-invalid-fallback-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-invalid-fallback.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-invalid-fallback
+---
+# backendRefs deliberately omits canary-app-v2, so the canary-invalid-reject
+# plugin's activeProfile ("canary" -> canary-app-v2) is a misconfigured
+# profile: found=false in run_request's backend-membership check.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-invalid-reject-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-invalid-reject.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-invalid-reject
+---
+# Behavior pin for the pending-op queue semantic: Canary selects successfully
+# and queues a RESPONSE dye header; the FaultInjection plugin listed after it
+# then aborts the request with a local 403 reply via the standard ErrResponse
+# termination path -- the path that drains queued response-header ops. The
+# queued dye header must still appear on that local reply (spec: response-dye
+# lifetime). Since Task 10's write_response_header drain amendment, this is no
+# longer FaultInjection-specific: every local reply drains the queue, whether
+# it goes through ErrResponse (as FaultInjection does here) or a plugin's own
+# direct write_response_header self-write -- both paths converge on the same
+# drain point. FaultInjection is kept here simply as the abort mechanism, not
+# because it is the only local-reply path that preserves the queued dye
+# header.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-dye-local-reply
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Served-By
+            value: edge-1
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+        onInvalid: reject
+    - enable: true
+      type: FaultInjection
+      config:
+        abort:
+          statusCode: 403
+          body: "fault abort"
+---
+# Canary selects successfully (activeProfile: stable -> canary-app-v1) and
+# queues a response dye header; FaultInjection then aborts the request with a
+# local 403 via ErrResponse. See 08_EdgionPlugins_default_canary-dye-local-reply.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-dye-local-reply-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-dye-local-reply.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-dye-local-reply
+---
+# Self-reject dye: RateLimitRedis fail-close self-writes its 429 reject
+# reply via the ErrTerminateRequest path (write_response_header +
+# write_response_body). The entry-level dye response rule on the
+# `fail-close` outcome must survive that self-write drain (Task 10's
+# `write_response_header` drain amendment) -- the outcome is recorded BEFORE
+# the plugin's own reject write, so the queued response-header op is drained
+# by that very write.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rlr-dye-fail-close
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimitRedis
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            "on": [fail-close]
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onKeyMiss: Allow
+        onRedisFailure: Deny
+        rejectStatus: 429
+        rejectMessage: "Redis unavailable (dye fail-close)"
+        showLimitHeaders: true
+        keyPrefix: "edgion:it:rlr:dye-fail-close:"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rlr-dye-fail-close-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "rlr-dye-fail-close.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rlr-dye-fail-close
+---
+# Fail-open dye: RateLimitRedis is Redis-unreachable + onRedisFailure: Allow,
+# so the request proceeds to a normal 200 upstream response, which must
+# carry the appended `fail-open` outcome header (queued during the request
+# stage, applied when the response headers are built).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rlr-dye-fail-open
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimitRedis
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            "on": [fail-open]
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onKeyMiss: Allow
+        onRedisFailure: Allow
+        rejectStatus: 429
+        rejectMessage: "Redis unavailable (dye fail-open)"
+        showLimitHeaders: true
+        keyPrefix: "edgion:it:rlr:dye-fail-open:"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rlr-dye-fail-open-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "rlr-dye-fail-open.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rlr-dye-fail-open
+---
+# Shared dye name: two independent plugin entries record to the SAME
+# response header name. Canary's profile resolves to canary-app-v2, which
+# 15_HTTPRoute_default_canary-shared-dye-name-test.yaml deliberately omits
+# from its backendRefs, so Canary takes its `fallback` branch and appends
+# the first value; RateLimitRedis then hits its (intentionally
+# unreachable) Redis and appends the second value under `fail-open`. Both
+# rules render into X-Edgion-Outcome, in execution (list) order.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-shared-dye-name
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            "on": [fallback]
+      config:
+        enable: true
+        activeProfile: canary
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: fallback
+    - enable: true
+      type: RateLimitRedis
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            "on": [fail-open]
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onKeyMiss: Allow
+        onRedisFailure: Allow
+        rejectStatus: 429
+        rejectMessage: "unused (fail-open)"
+        showLimitHeaders: false
+        keyPrefix: "edgion:it:rlr:shared-dye:"
+---
+# backendRefs deliberately omits canary-app-v2, so canary-shared-dye-name's
+# activeProfile ("canary" -> canary-app-v2) is a misconfigured profile and
+# the entry takes its onInvalid=fallback branch.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-shared-dye-name-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-shared-dye.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-shared-dye-name
+---
+# Conditions-gated dye: the response rule only renders when the request
+# carries X-Debug-Token (run condition, keyExist). The Canary selection
+# itself always succeeds (activeProfile "stable" -> canary-app-v1, present
+# in the route's backendRefs) -- only whether the debug outcome header
+# renders is gated.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-dye-conditions
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Debug-Outcome
+            conditions:
+              run:
+                allOf:
+                  - type: keyExist
+                    key:
+                      type: header
+                      name: X-Debug-Token
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: reject
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-dye-conditions-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-dye-conditions.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+        - name: canary-app-v2
+          port: 30002
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-dye-conditions
+---
+# Templated value: the response dye rule's `value` is an operator template
+# (`${header:X-Account-Id}`) rather than the omitted-value recorded-outcome
+# form. Rendered on the `fallback` outcome triggered by 19_HTTPRoute's
+# deliberately-missing canary-app-v2 backendRef, same setup as
+# 06_EdgionPlugins_default_canary-invalid-fallback.yaml.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-dye-template
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Fallback-Reason
+            "on": [fallback]
+            value: "fallback for ${header:X-Account-Id}"
+      config:
+        enable: true
+        activeProfile: canary
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: fallback
+---
+# backendRefs deliberately omits canary-app-v2, so canary-dye-template's
+# activeProfile ("canary" -> canary-app-v2) is a misconfigured profile and
+# the entry takes its onInvalid=fallback branch, triggering the templated
+# response dye rule.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-dye-template-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-dye-template.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-dye-template
+---
+# Strip hardening: Canary's own kill switch (config.enable: false) causes
+# run_request to return GoodNext before ever reaching the dye-recording
+# code paths (see plugin.rs "Kill switch." early return) -- but the
+# runtime-owned anti-spoof strip runs BEFORE the plugin's kill switch is
+# even checked, so a client-supplied X-Canary-Active must still be removed.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-kill-switch-strip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+      config:
+        enable: false
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+        onInvalid: reject
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-kill-switch-strip-test
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+      sectionName: http  # Port 31180
+  hostnames:
+    - "canary-kill-switch-strip.example.com"
+  rules:
+    - backendRefs:
+        - name: canary-app-v1
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: canary-kill-switch-strip

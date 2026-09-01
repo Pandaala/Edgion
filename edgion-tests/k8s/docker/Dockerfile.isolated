@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7
+
+ARG RUNTIME_BASE=debian:bookworm-slim
+FROM ${RUNTIME_BASE}
+
+ARG BINARY_PATH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        coreutils \
+        curl \
+        findutils \
+        gawk \
+        grep \
+        iproute2 \
+        libssl3 \
+        lsof \
+        netcat-openbsd \
+        openssl \
+        procps \
+        python3 \
+        sed \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 edgion-test \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /bin/bash edgion-test
+
+WORKDIR /workspace
+
+RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
+    install -m 0755 /tmp/binaries/edgion-controller /usr/local/bin/edgion-controller \
+    && install -m 0755 /tmp/binaries/edgion-gateway /usr/local/bin/edgion-gateway \
+    && install -m 0755 /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli \
+    && install -m 0755 /tmp/binaries/test_server /usr/local/bin/test_server \
+    && mkdir -p /workspace/target/debug \
+    && ln -s /usr/local/bin/edgion-controller /workspace/target/debug/edgion-controller \
+    && ln -s /usr/local/bin/edgion-gateway /workspace/target/debug/edgion-gateway \
+    && ln -s /usr/local/bin/edgion-cli /workspace/target/debug/edgion-cli \
+    && ln -s /usr/local/bin/test_server /workspace/target/debug/test_server
+
+RUN --mount=type=bind,source=config/crd,target=/tmp/crd \
+    mkdir -p /workspace/config \
+    && cp -R /tmp/crd /workspace/config/crd
+
+RUN --mount=type=bind,source=edgion-tests/integration/scripts,target=/tmp/scripts \
+    mkdir -p /workspace/edgion-tests/integration \
+    && cp -R /tmp/scripts /workspace/edgion-tests/integration/scripts
+
+RUN --mount=type=bind,source=edgion-tests/integration/conf/base,target=/tmp/conf-base \
+    --mount=type=bind,source=edgion-tests/integration/conf/PluginPolicy,target=/tmp/conf-plugin-policy \
+    mkdir -p /workspace/edgion-tests/integration/conf \
+    && cp -R /tmp/conf-base /workspace/edgion-tests/integration/conf/base \
+    && cp -R /tmp/conf-plugin-policy /workspace/edgion-tests/integration/conf/PluginPolicy
+
+RUN --mount=type=bind,source=edgion-tests/integration/fixtures/unknown-config-fields,target=/tmp/unknown-fields \
+    mkdir -p /workspace/edgion-tests/integration/fixtures \
+    && cp -R /tmp/unknown-fields /workspace/edgion-tests/integration/fixtures/unknown-config-fields
+
+RUN --mount=type=bind,source=edgion-tests/geoip,target=/tmp/geoip \
+    mkdir -p /workspace/edgion-tests \
+    && cp -R /tmp/geoip /workspace/edgion-tests/geoip
+
+COPY --chmod=0755 edgion-tests/k8s/docker/run-isolated-job.sh /usr/local/bin/run-edgion-isolated-job
+COPY --chmod=0755 edgion-tests/k8s/docker/run-proxy-component.sh /usr/local/bin/run-edgion-proxy-component
+COPY --chmod=0755 edgion-tests/k8s/docker/run-k8s-proxy-protocol-test.sh /usr/local/bin/run-k8s-proxy-protocol-test
+COPY --chmod=0755 edgion-tests/k8s/docker/proxy_wire_dump.py /usr/local/lib/edgion/proxy_wire_dump.py
+
+RUN mkdir -p /workspace/tmp/integration_testing \
+    && chown -R 10001:10001 /workspace /home/edgion-test
+
+USER 10001:10001
+ENV HOME=/home/edgion-test
+ENV RUST_BACKTRACE=1
+
+ENTRYPOINT ["/usr/local/bin/run-edgion-isolated-job"]

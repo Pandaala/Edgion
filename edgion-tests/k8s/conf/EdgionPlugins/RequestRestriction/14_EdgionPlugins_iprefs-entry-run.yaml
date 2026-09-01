@@ -1,5 +1,5 @@
 # S14: entry-level conditions.run ipRefs.
-# RequestHeaderModifier runs only when the peer is in rr-ipref-list, then
+# RequestHeaderModifier runs only for the current K8s test-client Pod, then
 # RequestRestriction denies /gated when that header is present.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -15,7 +15,7 @@ spec:
           allOf:
             - type: directPeerIpMatch
               ipRefs:
-                - name: rr-ipref-list
+                - name: k8s-test-client-peer
       config:
         set:
           - name: X-IpRef-Run

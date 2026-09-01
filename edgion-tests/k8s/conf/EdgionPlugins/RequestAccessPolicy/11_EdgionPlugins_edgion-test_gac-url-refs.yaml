@@ -1,0 +1,27 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gac-url-refs
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestAccessPolicy
+      config:
+        defaultProfile: lockdown
+        status: 403
+        message: "URL reference policy did not match"
+        profiles:
+          lockdown:
+            requiredRuleGroups:
+              - name: imported-url-candidates
+                anyOfRules:
+                  - name: imported
+                    type: url
+                    config:
+                      configRefs:
+                        - name: gac-url-list
+                          validate:
+                            maxUrlRules: 100
+                            maxIpRules: 100
+                        - name: gac-url-list-missing

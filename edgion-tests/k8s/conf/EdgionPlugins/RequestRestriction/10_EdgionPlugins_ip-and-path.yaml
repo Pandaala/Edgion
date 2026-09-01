@@ -1,5 +1,6 @@
 # 10. IP and path in one group: deny only when BOTH hold
-#     (directPeerIp in 127.0.0.1/::1) AND (path matches /admin/) => deny.
+#     (directPeerIp is the current K8s test-client Pod) AND
+#     (path matches /admin/) => deny.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -15,9 +16,8 @@ spec:
           anyOf:
             - allOf:
                 - type: directPeerIpMatch
-                  ips:
-                    - "127.0.0.1"
-                    - "::1"
+                  ipRefs:
+                    - name: k8s-test-client-peer
                 - type: keyMatch
                   key:
                     type: path

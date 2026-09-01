@@ -56,6 +56,10 @@ metadata:
   name: wh5-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh5_user_id
+      from: ctx
+      name: wh5_user_id
   requestPlugins:
     - enable: true
       type: WebhookKeyGet

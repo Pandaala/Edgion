@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: anthropic-ai-proxy
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted

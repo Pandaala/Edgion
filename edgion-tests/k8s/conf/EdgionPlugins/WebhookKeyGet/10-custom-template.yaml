@@ -54,6 +54,10 @@ metadata:
   name: wh10-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh10_result
+      from: ctx
+      name: wh10_result
   requestPlugins:
     # CtxSet MUST run first: webhook template reads ${ctx:trace}.
     - enable: true

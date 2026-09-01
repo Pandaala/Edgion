@@ -1,7 +1,7 @@
 //! Static end-to-end coverage for one OpenAI-compatible AI backend.
 
 use super::gateway_admin::{admin_base, authed, backend_uid, CREDENTIAL_RESERVATION_KEY_PREFIX};
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{test_backend_hosts, TestCase, TestContext, TestResult, TestSuite};
 use crate::metrics_helper::MetricsClient;
 use crate::transport::{RawH1Conn, RawH2Conn};
 use async_trait::async_trait;
@@ -35,6 +35,26 @@ const QUOTA_TERMINATE_GUARD_HOST: &str = "ai-quota-terminate-guard.example.com";
 const CREDENTIAL_TPM_HOST: &str = "ai-credential-tpm.example.com";
 const PATH: &str = "/v1/chat/completions";
 const QUOTA_WINDOW_MS: u128 = 60 * 60 * 1_000;
+
+fn is_k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true")
+}
+
+fn redis_name() -> &'static str {
+    if is_k8s_mode() {
+        "edgion-test_redis-test"
+    } else {
+        "default_redis-test"
+    }
+}
+
+fn primary_backend_name() -> &'static str {
+    if is_k8s_mode() {
+        "single-provider-fixture-provider"
+    } else {
+        "fixture-provider"
+    }
+}
 
 /// The SSE event a terminated stream must carry immediately before the
 /// gateway ends the response. Mirrors
@@ -208,8 +228,10 @@ fn quota_bucket_key(identity: &str, window_id: u64) -> Result<String, String> {
 async fn quota_bucket_used(ctx: &TestContext, key: &str) -> Result<Option<u64>, String> {
     let encoded_key = utf8_percent_encode(key, NON_ALPHANUMERIC);
     let url = format!(
-        "http://{}:12001/api/v1/testing/link-sys/redis/default_redis-test/hget/{}/used",
-        ctx.target_host, encoded_key
+        "http://{}:12001/api/v1/testing/link-sys/redis/{}/hget/{}/used",
+        ctx.target_host,
+        redis_name(),
+        encoded_key
     );
     let mut request = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -280,17 +302,42 @@ async fn terminate_quota_bucket_used_between(
 }
 
 async fn long_stream_observation(ctx: &TestContext, trace_id: &str) -> Result<Value, String> {
-    ctx.http_client
-        .get(format!(
-            "http://{}:30001/ai-long-stream/observation/{trace_id}",
-            ctx.target_host
-        ))
-        .send()
-        .await
-        .map_err(|error| format!("long-stream observation request failed: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("invalid long-stream observation response: {error}"))
+    let mut responses = Vec::new();
+    for host in test_backend_hosts(ctx) {
+        let response = ctx
+            .http_client
+            .get(format!("http://{host}:30001/ai-long-stream/observation/{trace_id}"))
+            .send()
+            .await
+            .map_err(|error| format!("long-stream observation request failed for {host}: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("long-stream observation request for {host} returned {status}"));
+        }
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("invalid long-stream observation response from {host}: {error}"))?;
+        responses.push(value);
+    }
+    select_long_stream_observation(trace_id, responses)
+}
+
+fn select_long_stream_observation(trace_id: &str, responses: Vec<Value>) -> Result<Value, String> {
+    let mut first_not_found = None;
+    let mut found = None;
+    for value in responses {
+        if value["found"] == true {
+            if found.replace(value).is_some() {
+                return Err(format!(
+                    "long-stream trace {trace_id} was observed by more than one test-server replica"
+                ));
+            }
+        } else if first_not_found.is_none() {
+            first_not_found = Some(value);
+        }
+    }
+    Ok(found.or(first_not_found).unwrap_or_else(|| json!({"found": false})))
 }
 
 fn mock(value: &Value) -> Result<&serde_json::Map<String, Value>, String> {
@@ -383,13 +430,13 @@ async fn assert_credential_generation(ctx: TestContext, expected: &str, check_ad
         let service = listed["data"].as_array().and_then(|items| {
             items.iter().find(|item| {
                 item.pointer("/metadata/namespace").and_then(Value::as_str) == Some("edgion-test")
-                    && item.pointer("/metadata/name").and_then(Value::as_str) == Some("fixture-provider")
+                    && item.pointer("/metadata/name").and_then(Value::as_str) == Some(primary_backend_name())
             })
         });
         let Some(service) = service else {
             return TestResult::failed(
                 start.elapsed(),
-                "fixture-provider missing from configclient list".to_string(),
+                format!("{} missing from configclient list", primary_backend_name()),
             );
         };
         let credentials = service
@@ -1292,7 +1339,7 @@ fn priority_retry_attempt_ledger(
             return TestResult::failed(start.elapsed(), format!("unexpected first attempt ledger: {first}"));
         }
         if second["number"] != 2
-            || second["backend"] != "edgion-test/fixture-provider"
+            || second["backend"] != format!("edgion-test/{}", primary_backend_name())
             || second["provider"] != "openai_compatible"
             || second["credential"] != "primary"
             || second["status"] != 200
@@ -1841,8 +1888,9 @@ fn check_malformed_quota_body(body: &[u8]) -> Option<String> {
 }
 
 #[cfg(test)]
-mod malformed_quota_body_tests {
-    use super::{check_malformed_quota_body, QUOTA_UNENFORCEABLE_SSE_EVENT};
+mod tests {
+    use super::{check_malformed_quota_body, select_long_stream_observation, QUOTA_UNENFORCEABLE_SSE_EVENT};
+    use serde_json::json;
 
     const UPSTREAM_PREFIX: &[u8] = b"data: \xff\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"valid-middle\"}}]}\n\ndata: \xfe\n\ndata: quota-malformed-boundary-probe";
 
@@ -1857,6 +1905,28 @@ mod malformed_quota_body_tests {
         assert!(
             check_malformed_quota_body(&missing_boundary).is_some_and(|error| error.contains("independently close"))
         );
+    }
+
+    #[test]
+    fn replica_observation_selects_the_only_matching_trace() {
+        let selected = select_long_stream_observation(
+            "trace-a",
+            vec![
+                json!({"found": false}),
+                json!({"found": true, "observation": {"provider_completed": true}}),
+                json!({"found": false}),
+            ],
+        )
+        .expect("one replica should own the trace");
+        assert_eq!(selected["found"], true);
+        assert_eq!(selected["observation"]["provider_completed"], true);
+    }
+
+    #[test]
+    fn replica_observation_rejects_duplicate_trace_owners() {
+        let error = select_long_stream_observation("trace-a", vec![json!({"found": true}), json!({"found": true})])
+            .expect_err("a trace cannot be owned by two replicas");
+        assert!(error.contains("more than one test-server replica"));
     }
 }
 
@@ -2613,8 +2683,9 @@ async fn credential_tpm_used(ctx: &TestContext, uid: &str, alias: &str, window: 
     .map_err(|error| format!("failed to derive the credential reservation bucket: {error}"))?;
     let encoded = utf8_percent_encode(&keys.bucket, NON_ALPHANUMERIC);
     let response = authed(ctx.http_client.get(format!(
-        "{}/api/v1/testing/link-sys/redis/default_redis-test/hgetall/{encoded}",
-        admin_base(ctx)
+        "{}/api/v1/testing/link-sys/redis/{}/hgetall/{encoded}",
+        admin_base(ctx),
+        redis_name()
     )))
     .send()
     .await

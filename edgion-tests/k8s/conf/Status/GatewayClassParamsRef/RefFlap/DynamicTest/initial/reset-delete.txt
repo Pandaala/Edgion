@@ -1,0 +1,2 @@
+# The initial phase requires the referenced parameters resource to be absent.
+edgiongatewayclassconfigs.edgion.io//params-flap-egc

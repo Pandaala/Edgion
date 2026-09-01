@@ -1,0 +1,192 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ua-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31936
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-svc-plain
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-svc-tls
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: https
+      port: 30028
+      targetPort: 30028
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: ua-backend-tls
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: ua-svc-tls
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: ConfigMap
+        group: ""
+    hostname: unused-placeholder.sandbox.internal
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ua-authority-plain-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ua-svc-plain
+  upstreamAuthority:
+    pattern: "*.sandbox.internal"
+    template: "${ctx:tenant}.sandbox.internal"
+    healthCheckHost: probe.sandbox.internal
+  healthCheck:
+    active:
+      type: http
+      path: /vhost-health
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses: [200]
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ua-authority-tls-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ua-svc-tls
+  upstreamAuthority:
+    pattern: "*.sandbox.internal"
+    template: "${ctx:tenant}.sandbox.internal"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ua-ctxset
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: tenant
+            from:
+              type: header
+              name: X-Tenant
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ua-ctxset-forwardauth
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: tenant
+            from:
+              type: header
+              name: X-Tenant
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: ua-svc-plain
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 3000
+        statusOnError: 503
+        request:
+          path:
+            template: /echo
+          method:
+            template: GET
+        decision:
+          upstreamHeaders: []
+          clientHeaders: []
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ua-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ua-gateway
+  hostnames:
+    - upstream-authority.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /tls
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ua-ctxset
+      backendRefs:
+        - name: ua-svc-tls
+          port: 30028
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /plain
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ua-ctxset
+      backendRefs:
+        - name: ua-svc-plain
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /outbound
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ua-ctxset-forwardauth
+      backendRefs:
+        - name: ua-svc-plain
+          port: 30001

@@ -200,6 +200,14 @@ impl LastKnownGoodInitialTestSuite {
                     match get_served_serial(&ctx.target_host, PORT, HOST) {
                         Ok(serial) => {
                             let path = stash_path(&ctx);
+                            if let Some(parent) = path.parent() {
+                                if let Err(e) = std::fs::create_dir_all(parent) {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("failed to create stash directory {}: {}", parent.display(), e),
+                                    );
+                                }
+                            }
                             if let Err(e) = std::fs::write(&path, &serial) {
                                 return TestResult::failed(
                                     start.elapsed(),

@@ -1,10 +1,28 @@
 // ScenarioCtx — context and combinators shared by all scenarios.
 
 use crate::framework::TestContext;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::error::Error;
+use std::fmt;
+use std::io::{BufRead, Write};
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::Duration;
 use tokio::time::Instant;
+
+const DEFAULT_K8S_PHASE_ACK_TIMEOUT: Duration = Duration::from_secs(600);
+
+#[derive(Debug)]
+struct K8sPhaseBarrierError(String);
+
+impl fmt::Display for K8sPhaseBarrierError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for K8sPhaseBarrierError {}
 
 /// Context provided to each scenario at execution time.
 /// Holds:
@@ -24,6 +42,56 @@ pub struct ScenarioCtx {
 }
 
 impl ScenarioCtx {
+    async fn acknowledge_k8s_phase(&self, scenario: &crate::dynamic::scenario::Scenario, phase: &str) -> Result<()> {
+        if std::env::var("EDGION_TEST_K8S_PHASE_BARRIER").as_deref() != Ok("true") {
+            return Ok(());
+        }
+
+        println!("@@DYNAMIC_PHASE {} {}", scenario.id, phase);
+        std::io::stdout()
+            .flush()
+            .map_err(|error| K8sPhaseBarrierError(format!("K8s phase barrier output failed: {error}")))?;
+
+        let expected = format!("@@DYNAMIC_PHASE_ACK {} {} OK", scenario.id, phase);
+        let acknowledgement_timeout = std::env::var("EDGION_TEST_K8S_PHASE_ACK_TIMEOUT_SECONDS").map_or(
+            Ok(DEFAULT_K8S_PHASE_ACK_TIMEOUT),
+            |value| {
+                value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|seconds| *seconds > 0)
+                    .map(Duration::from_secs)
+                    .ok_or_else(|| K8sPhaseBarrierError(format!("invalid K8s phase acknowledgement timeout: {value}")))
+            },
+        )?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = std::io::stdin().lock().read_line(&mut line).map(|_| line);
+            let _ = sender.send(result);
+        });
+        let acknowledgement = tokio::task::spawn_blocking(move || receiver.recv_timeout(acknowledgement_timeout))
+            .await
+            .map_err(|error| K8sPhaseBarrierError(format!("K8s phase barrier input task failed: {error}")))?
+            .map_err(|error| {
+                K8sPhaseBarrierError(format!(
+                    "K8s phase barrier acknowledgement timed out after {}s: {error}",
+                    acknowledgement_timeout.as_secs()
+                ))
+            })?
+            .map_err(|error| K8sPhaseBarrierError(format!("K8s phase barrier input failed: {error}")))?;
+        if acknowledgement.trim_end() != expected {
+            return Err(K8sPhaseBarrierError(format!(
+                "K8s phase barrier for scenario {} phase '{}' failed: {}",
+                scenario.id,
+                phase,
+                acknowledgement.trim_end()
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
     /// Returns the absolute path of the current scenario's full conf directory.
     pub fn scenario_dir(&self) -> PathBuf {
         self.conf_root.join(&self.conf_path)
@@ -37,6 +105,18 @@ impl ScenarioCtx {
     /// Thin wrapper around tokio sleep.
     pub async fn sleep(&self, dur: Duration) {
         tokio::time::sleep(dur).await;
+    }
+
+    /// Resolve the configured Gateway target for clients that override a logical host name.
+    pub async fn target_socket_addr(&self, port: u16) -> Result<SocketAddr> {
+        match self.test_ctx.target_host.parse() {
+            Ok(ip) => Ok(SocketAddr::new(ip, port)),
+            Err(_) => tokio::net::lookup_host((self.test_ctx.target_host.as_str(), port))
+                .await
+                .with_context(|| format!("failed to resolve test target {}", self.test_ctx.target_host))?
+                .next()
+                .with_context(|| format!("test target {} resolved to no addresses", self.test_ctx.target_host)),
+        }
     }
 }
 
@@ -85,7 +165,7 @@ impl ScenarioCtx {
         runner.add_suite(suite);
         let results = runner.run().await;
         if !results.has_failures() {
-            Ok(())
+            self.acknowledge_k8s_phase(scenario, phase).await
         } else {
             let mut failure_details = results.run_errors.clone();
             for sr in &results.suite_results {
@@ -140,6 +220,9 @@ impl ScenarioCtx {
                 Ok(()) => return Ok(()),
                 Err(e) => e,
             };
+            if err.downcast_ref::<K8sPhaseBarrierError>().is_some() {
+                return Err(err);
+            }
             if Instant::now() >= deadline {
                 return Err(anyhow::anyhow!(
                     "wait_phase('{}') for scenario '{}' timed out after {} attempt(s); last error: {:#}",

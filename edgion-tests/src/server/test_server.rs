@@ -2069,6 +2069,10 @@ async fn ai_credential_exhaustion_observations_handler(Path(trace_id): Path<Stri
 }
 
 const ANTHROPIC_PROVIDER_KEY: &str = "anthropic-provider-test-key";
+const ANTHROPIC_PROVIDER_EXPECTED_HOSTS: &[&str] = &[
+    "127.0.0.1:30001",
+    "edgion-test-server.edgion-test.svc.cluster.local:30001",
+];
 
 #[derive(Debug, serde::Serialize)]
 struct AnthropicProviderObservation {
@@ -2117,7 +2121,7 @@ fn anthropic_provider_observation(
         host_valid: headers
             .get(axum::http::header::HOST)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|host| host == "127.0.0.1:30001"),
+            .is_some_and(|host| ANTHROPIC_PROVIDER_EXPECTED_HOSTS.contains(&host)),
         path_valid: path == "prefix/v1/messages",
         query_absent: uri.query().is_none(),
         model_canonical: body.get("model").and_then(serde_json::Value::as_str) == Some("claude-fixture"),
@@ -2483,6 +2487,15 @@ fn parse_dns_query(query: &str) -> (String, Vec<String>) {
     (host, ips)
 }
 
+fn resolve_dns_answer_tokens(ips: Vec<String>, pod_ip: Option<&str>) -> Vec<String> {
+    ips.into_iter()
+        .map(|ip| match (ip.as_str(), pod_ip) {
+            ("pod", Some(value)) => value.to_string(),
+            _ => ip,
+        })
+        .collect()
+}
+
 /// `/dns/resolve?host=<domain>[&ip=<ip>...]` — the fake HTTP DNS endpoint.
 ///
 /// Returns the generic httpdns response body `{"ips":[...]}` (matching the
@@ -2495,6 +2508,8 @@ async fn dns_resolve_handler(axum::extract::RawQuery(query): axum::extract::RawQ
 
     let raw = query.unwrap_or_default();
     let (host, ips) = parse_dns_query(&raw);
+    let pod_ip = std::env::var("POD_IP").ok();
+    let ips = resolve_dns_answer_tokens(ips, pod_ip.as_deref());
 
     {
         let mut store = DNS_RESOLVE_COUNTER.lock();
@@ -4178,6 +4193,15 @@ mod tests {
     }
 
     #[test]
+    fn dns_query_resolves_pod_token_from_explicit_input() {
+        let (_, ips) = parse_dns_query("host=k8s.test&ip=pod");
+        assert_eq!(
+            resolve_dns_answer_tokens(ips, Some("10.0.0.42")),
+            vec!["10.0.0.42".to_string()]
+        );
+    }
+
+    #[test]
     fn ai_provider_observation_never_contains_credential_material() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
@@ -4222,6 +4246,27 @@ mod tests {
         assert!(ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body).host_is_expected);
         headers.insert(axum::http::header::HOST, "unexpected.example.com".parse().unwrap());
         assert!(!ai_provider_observation("prefix/v1/chat/completions", &query, &headers, body).host_is_expected);
+    }
+
+    #[test]
+    fn anthropic_provider_observation_accepts_kubernetes_service_authority() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            "edgion-test-server.edgion-test.svc.cluster.local:30001"
+                .parse()
+                .unwrap(),
+        );
+        let uri = "/prefix/v1/messages".parse().unwrap();
+        let body = serde_json::json!({
+            "model": "claude-fixture",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "fixture"}]
+        });
+        assert!(anthropic_provider_observation("prefix/v1/messages", &uri, &headers, &body).host_valid);
+
+        headers.insert(axum::http::header::HOST, "unexpected.example.com".parse().unwrap());
+        assert!(!anthropic_provider_observation("prefix/v1/messages", &uri, &headers, &body).host_valid);
     }
 
     #[test]

@@ -55,10 +55,23 @@ const PARSEONLY_HOST: &str = "geo-parseonly.example.com";
 const RR_NAME: &str = "geo-rr";
 const RR_NS: &str = "edgion-default";
 
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 /// A reqwest client whose outbound TCP connection is bound to `src` — the
 /// exemplary, source-bound technique (see module doc). `src` must be one of
 /// the loopback aliases the harness provisions.
 fn client_from(src: &str) -> Client {
+    if k8s_mode() {
+        return Client::builder()
+            .timeout(Duration::from_secs(5))
+            .no_proxy()
+            .build()
+            .expect("failed to build Kubernetes test client");
+    }
     let ip: IpAddr = src.parse().expect("valid loopback alias");
     Client::builder()
         .timeout(Duration::from_secs(5))
@@ -202,8 +215,11 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-ru\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"RU\"]\n";
-                    if let Err(e) = apply_geo_rr(&ctx, config).await {
+                    let country = if k8s_mode() { "US" } else { "RU" };
+                    let config = format!(
+                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-country\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"{country}\"]\n"
+                    );
+                    if let Err(e) = apply_geo_rr(&ctx, &config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let client = client_from("127.0.0.5");
@@ -252,7 +268,12 @@ impl GeoRestrictionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = client_from("127.0.0.7");
-                    for (key, value) in [("continent", "AS"), ("city", "Kowloon"), ("subdivision", "KOW")] {
+                    let dimensions = if k8s_mode() {
+                        [("continent", "NA"), ("city", "Cambridge"), ("subdivision", "MA")]
+                    } else {
+                        [("continent", "AS"), ("city", "Kowloon"), ("subdivision", "KOW")]
+                    };
+                    for (key, value) in dimensions {
                         let config = format!(
                             "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: dim-{key}\n              rules:\n                - source: DirectPeerIp\n                  key: {key}\n                  values: [\"{value}\"]\n"
                         );
@@ -283,13 +304,23 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: hk-kowloon-and\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"HK\", \"US\"]\n                - source: DirectPeerIp\n                  key: city\n                  values: [\"Kowloon\"]\n";
+                    let config = if k8s_mode() {
+                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: us-cambridge-and\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"US\"]\n                - source: DirectPeerIp\n                  key: city\n                  values: [\"Cambridge\"]\n"
+                    } else {
+                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: hk-kowloon-and\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"HK\", \"US\"]\n                - source: DirectPeerIp\n                  key: city\n                  values: [\"Kowloon\"]\n"
+                    };
                     if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let hk_client = client_from("127.0.0.7");
                     if let Err(e) = expect_status(&hk_client, &ctx, RR_HOST, None, 403).await {
                         return TestResult::failed(start.elapsed(), format!("HK/Kowloon: {e}"));
+                    }
+                    if k8s_mode() {
+                        let partial = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: partial-match\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"US\"]\n                - source: DirectPeerIp\n                  key: city\n                  values: [\"Kowloon\"]\n";
+                        if let Err(e) = apply_geo_rr(&ctx, partial).await {
+                            return TestResult::failed(start.elapsed(), format!("apply partial-match: {e}"));
+                        }
                     }
                     let us_client = client_from("127.0.0.6");
                     match expect_status(&us_client, &ctx, RR_HOST, None, 200).await {
@@ -317,8 +348,11 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: direct-cn-and-remote-ru\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"CN\"]\n                - source: RemoteIp\n                  key: country\n                  values: [\"RU\"]\n";
-                    if let Err(e) = apply_geo_rr(&ctx, config).await {
+                    let direct_country = if k8s_mode() { "US" } else { "CN" };
+                    let config = format!(
+                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: direct-and-remote\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"{direct_country}\"]\n                - source: RemoteIp\n                  key: country\n                  values: [\"RU\"]\n"
+                    );
+                    if let Err(e) = apply_geo_rr(&ctx, &config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let client = client_from("127.0.0.1");
@@ -354,13 +388,22 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let config = "          defaultAction: allow\n          failOpen: false\n          allowRuleGroups:\n            - name: cn-only\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"CN\"]\n";
-                    if let Err(e) = apply_geo_rr(&ctx, config).await {
+                    let allowed_country = if k8s_mode() { "US" } else { "CN" };
+                    let config = format!(
+                        "          defaultAction: allow\n          failOpen: false\n          allowRuleGroups:\n            - name: country-only\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"{allowed_country}\"]\n"
+                    );
+                    if let Err(e) = apply_geo_rr(&ctx, &config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let cn_client = client_from("127.0.0.1");
                     if let Err(e) = expect_status(&cn_client, &ctx, RR_HOST, None, 200).await {
                         return TestResult::failed(start.elapsed(), format!("CN allow hit: {e}"));
+                    }
+                    if k8s_mode() {
+                        let miss = "          defaultAction: allow\n          failOpen: false\n          allowRuleGroups:\n            - name: cn-only\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"CN\"]\n";
+                        if let Err(e) = apply_geo_rr(&ctx, miss).await {
+                            return TestResult::failed(start.elapsed(), format!("apply miss: {e}"));
+                        }
                     }
                     let unmapped_client = client_from("127.0.0.2");
                     match expect_status(&unmapped_client, &ctx, RR_HOST, None, 403).await {
@@ -385,13 +428,22 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-ru-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  values: [\"127.0.0.5/32\"]\n";
-                    if let Err(e) = apply_geo_rr(&ctx, config).await {
+                    let denied_cidr = if k8s_mode() { "192.168.0.0/16" } else { "127.0.0.5/32" };
+                    let config = format!(
+                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  values: [\"{denied_cidr}\"]\n"
+                    );
+                    if let Err(e) = apply_geo_rr(&ctx, &config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let denied_client = client_from("127.0.0.5");
                     if let Err(e) = expect_status(&denied_client, &ctx, RR_HOST, None, 403).await {
                         return TestResult::failed(start.elapsed(), format!("in-CIDR: {e}"));
+                    }
+                    if k8s_mode() {
+                        let out_of_cidr = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-other-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  values: [\"10.0.0.0/8\"]\n";
+                        if let Err(e) = apply_geo_rr(&ctx, out_of_cidr).await {
+                            return TestResult::failed(start.elapsed(), format!("apply out-of-CIDR: {e}"));
+                        }
                     }
                     let allowed_client = client_from("127.0.0.1");
                     match expect_status(&allowed_client, &ctx, RR_HOST, None, 200).await {
@@ -464,14 +516,29 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    let expected_country = if k8s_mode() { "US" } else { "HK" };
+                    // Establish a discriminating precondition before switching
+                    // to the allow case. A 200-only propagation wait can pass
+                    // against an earlier allow configuration and then capture
+                    // an access log before this generation reaches the runtime.
+                    let blocking_config = format!(
+                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: matches-peer\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"{expected_country}\"]\n"
+                    );
+                    if let Err(e) = apply_geo_rr(&ctx, &blocking_config).await {
+                        return TestResult::failed(start.elapsed(), format!("apply blocking precondition: {e}"));
+                    }
+                    let client = client_from("127.0.0.7");
+                    if let Err(e) = expect_status(&client, &ctx, RR_HOST, None, 403).await {
+                        return TestResult::failed(start.elapsed(), format!("blocking propagation wait: {e}"));
+                    }
                     // Deny on an unrelated value so the request is ALLOWED (200) and
                     // reliably reaches the access-log write path with the direct_peer slot resolved.
                     let config = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: never-matches\n              rules:\n                - source: DirectPeerIp\n                  key: country\n                  values: [\"ZZ\"]\n";
                     if let Err(e) = apply_geo_rr(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
-                    let client = client_from("127.0.0.7");
-                    // Wait for conf_sync propagation (a 200 baseline) before firing the
+                    // Wait for conf_sync propagation (the transition from the
+                    // 403 precondition to 200) before firing the
                     // traced request that actually gets asserted below.
                     if let Err(e) = expect_status(&client, &ctx, RR_HOST, None, 200).await {
                         return TestResult::failed(start.elapsed(), format!("baseline propagation wait: {e}"));
@@ -486,10 +553,10 @@ impl GeoRestrictionTestSuite {
                     };
                     let direct_peer_country = entry.get_nested_str("geo.direct_peer.country");
                     let remote_country = entry.get_nested_str("geo.remote.country");
-                    if direct_peer_country != Some("HK") {
+                    if direct_peer_country != Some(expected_country) {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("geo.direct_peer.country expected HK, got {direct_peer_country:?}"),
+                            format!("geo.direct_peer.country expected {expected_country}, got {direct_peer_country:?}"),
                         );
                     }
                     // The rule under test only consults DirectPeerIp, so nothing ever
@@ -513,7 +580,7 @@ impl GeoRestrictionTestSuite {
                     }
                     TestResult::passed_with_message(
                         start.elapsed(),
-                        "geo.direct_peer.country=GB present, geo.remote absent".to_string(),
+                        format!("geo.direct_peer.country={expected_country} present, geo.remote absent"),
                     )
                 })
             },
@@ -546,17 +613,18 @@ impl GeoRestrictionTestSuite {
                     };
                     let direct_peer_country = entry.get_nested_str("geo.direct_peer.country");
                     let remote_country = entry.get_nested_str("geo.remote.country");
-                    if direct_peer_country != Some("CN") {
+                    let expected_country = if k8s_mode() { "US" } else { "CN" };
+                    if direct_peer_country != Some(expected_country) {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("geo.direct_peer.country expected CN, got {direct_peer_country:?}"),
+                            format!("geo.direct_peer.country expected {expected_country}, got {direct_peer_country:?}"),
                         );
                     }
-                    if remote_country != Some("CN") {
+                    if remote_country != Some(expected_country) {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "geo.remote.country expected CN (parse-only resolves both slots), got {remote_country:?}"
+                                "geo.remote.country expected {expected_country} (parse-only resolves both slots), got {remote_country:?}"
                             ),
                         );
                     }
@@ -579,7 +647,8 @@ impl GeoRestrictionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = client_from("127.0.0.6");
-                    match expect_status(&client, &ctx, CHAIN_HOST, None, 403).await {
+                    let xff = k8s_mode().then_some("127.0.0.6");
+                    match expect_status(&client, &ctx, CHAIN_HOST, xff, 403).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "IpRestriction correctly denied a non-geo-matching source".to_string(),
@@ -601,7 +670,8 @@ impl GeoRestrictionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = client_from("127.0.0.5");
-                    match expect_status(&client, &ctx, CHAIN_HOST, None, 403).await {
+                    let xff = k8s_mode().then_some("127.0.0.5");
+                    match expect_status(&client, &ctx, CHAIN_HOST, xff, 403).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "GeoIpLocation correctly denied an RU source".to_string(),
@@ -622,7 +692,8 @@ impl GeoRestrictionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = client_from("127.0.0.1");
-                    match expect_status(&client, &ctx, CHAIN_HOST, None, 200).await {
+                    let xff = k8s_mode().then_some("127.0.0.1");
+                    match expect_status(&client, &ctx, CHAIN_HOST, xff, 200).await {
                         Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "a source matching neither stage was correctly allowed".to_string(),

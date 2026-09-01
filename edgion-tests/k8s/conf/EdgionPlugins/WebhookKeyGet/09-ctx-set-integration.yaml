@@ -51,6 +51,10 @@ metadata:
   name: wh9-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh9_result
+      from: ctx
+      name: wh9_result
   requestPlugins:
     # CtxSet MUST run first: webhook templates read ${ctx:action} / ${ctx:user_id}.
     - enable: true

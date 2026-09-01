@@ -1,0 +1,40 @@
+work_dir: /work
+
+server:
+  grpc_listen: "0.0.0.0:12151"
+  admin_listen: "0.0.0.0:12152"
+  probe_listen: "0.0.0.0:12153"
+
+logging:
+  log_dir: /work/logs
+  log_prefix: edgion-controller
+  log_level: info
+  json_format: false
+  console: true
+
+conf_center:
+  type: kubernetes
+  gateway_class: __GATEWAY_CLASS__
+  controller_name: edgion.io/gateway-controller
+  watch_namespaces: [__NAMESPACE__]
+  ha_mode: leader-only
+  leader_election:
+    lease_name: __LEASE_NAME__
+    lease_namespace: __NAMESPACE__
+    lease_duration_secs: 15
+    renew_deadline_secs: 10
+    retry_period_secs: 2
+  metadata_filter:
+    blocked_annotations:
+      - kubectl.kubernetes.io/last-applied-configuration
+    remove_managed_fields: true
+
+conf_sync:
+  no_sync_kinds: [ReferenceGrant, Secret]
+  default_capacity: 200
+
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt
+    key: certs/grpc/primary/server.key
+    ca: certs/grpc/primary/ca.crt

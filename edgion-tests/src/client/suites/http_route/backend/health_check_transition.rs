@@ -85,6 +85,11 @@ impl HealthCheckTransitionTestSuite {
             .http_client
             .put(&admin_url)
             .header("Content-Type", "application/json")
+            // Status updates may advance the Kubernetes resourceVersion after
+            // this suite's GET. This transition intentionally requests the
+            // Admin API's last-writer-wins update contract; the policy must
+            // still exist, but its status is not an operator precondition.
+            .header("If-Match", "*")
             .body(serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated policy JSON: {}", e))?);
         if let Some(ref token) = ctx.admin_token {
             put_req = put_req.header("Authorization", format!("Bearer {}", token));

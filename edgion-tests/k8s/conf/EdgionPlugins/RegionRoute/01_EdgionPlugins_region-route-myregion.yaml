@@ -6,6 +6,9 @@ metadata:
 spec:
   requestPlugins:
   - type: RegionRoute
+    dye:
+      request:
+      - name: X-Region
     config:
       myRegion: virginia
       keyGet:

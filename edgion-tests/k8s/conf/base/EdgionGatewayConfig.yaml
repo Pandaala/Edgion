@@ -7,6 +7,7 @@ spec:
   server:
     threads: 4
     workStealing: true
+    enableCompression: true
     gracePeriodSeconds: 30
     gracefulShutdownTimeoutS: 10
     upstreamKeepalivePoolSize: 128
@@ -25,6 +26,7 @@ spec:
 
   # 
   securityProtect:
+    allowLoopbackUpstream: true
     xForwardedForLimit: 200
     requireSniHostMatch: true
     fallbackSni: "default.example.com"
@@ -42,3 +44,16 @@ spec:
 
   tcpTimeout:
     idleTimeout: 2s
+
+  # The full canonical fixture tree overlays this same cluster-scoped config
+  # for GlobalPluginsSnapshot. K8s fixture ownership keeps one authoritative
+  # object, so the equivalent global references live in the base object.
+  globalPluginsRef:
+    # AccessLogExtern declarations are inert outside requests that supply
+    # their configured sources, so sharing this Tier 1 reference is safe.
+    - name: als-global
+      namespace: edgion-default
+    - name: gp-resp-header-modifier
+      namespace: edgion-default
+    - name: ghost
+      namespace: edgion-default

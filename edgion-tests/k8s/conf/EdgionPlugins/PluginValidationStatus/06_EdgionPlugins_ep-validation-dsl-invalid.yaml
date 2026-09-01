@@ -1,0 +1,19 @@
+# Scenario: Dsl plugin with an uncompilable inline source
+# Expect: Accepted=False/Invalid, message contains "DSL compile errors"
+#
+# DslConfig::validation_error() now runs the full data-plane validation path
+# (DslPlugin::validate_config → resolve_script → compile_dsl_source). An
+# uncompilable `source` therefore surfaces at preparse as
+# "DSL compile errors: ..." in the EdgionPlugins Accepted condition.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-dsl-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: dsl-invalid
+        source: "this is not valid dsl @@@"

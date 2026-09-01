@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: btlsp-flap-svc
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - port: 8080
+      targetPort: 30001
+      protocol: TCP

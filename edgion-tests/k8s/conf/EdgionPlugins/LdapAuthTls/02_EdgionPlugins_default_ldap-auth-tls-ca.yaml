@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ldap-auth-tls-ca-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: LdapAuth
+      config:
+        ldapHost: "edgion-test-openldap-tls.edgion-test.svc.cluster.local"
+        ldapPort: 33636
+        ldaps: true
+        baseDn: "ou=people,dc=example,dc=org"
+        attribute: "uid"
+        headerType: "ldap"
+        realm: "LDAP TLS Test"
+        timeout: 5000
+        tls:
+          validation:
+            caCertificateRefs:
+              - kind: Secret
+                name: ldap-ca-bundle

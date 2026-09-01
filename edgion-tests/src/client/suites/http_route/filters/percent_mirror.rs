@@ -12,7 +12,7 @@
 //   mirror-frac50.example.com  — fraction: {numerator: 1, denominator: 2} (50%)
 //   mirror-20.example.com      — percent: 20
 
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{env_host_or, TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Instant;
@@ -25,6 +25,10 @@ const HOST_20: &str = "mirror-20.example.com";
 
 pub struct PercentMirrorTestSuite;
 
+fn mirror_server_host(ctx: &TestContext) -> String {
+    env_host_or("EDGION_TEST_MIRROR_SERVER_HOST", &ctx.target_host)
+}
+
 fn gen_trace_id(label: &str) -> String {
     format!("pct-mirror-{}-{}", label, uuid::Uuid::new_v4())
 }
@@ -35,7 +39,7 @@ async fn poll_mirror_received(
     retries: u32,
     interval_ms: u64,
 ) -> Result<Vec<Value>, String> {
-    let direct_url = format!("http://{}:30001/mirror/query/{}", ctx.target_host, trace_id);
+    let direct_url = format!("http://{}:30001/mirror/query/{}", mirror_server_host(ctx), trace_id);
     let client = &ctx.http_client;
 
     for attempt in 0..=retries {
@@ -67,7 +71,7 @@ async fn poll_mirror_received(
 }
 
 async fn reset_mirror_store(ctx: &TestContext) {
-    let url = format!("http://{}:30001/mirror/reset", ctx.target_host);
+    let url = format!("http://{}:30001/mirror/reset", mirror_server_host(ctx));
     let _ = ctx.http_client.get(&url).send().await;
 }
 
@@ -176,7 +180,7 @@ impl PercentMirrorTestSuite {
 
                     sleep(Duration::from_millis(800)).await;
 
-                    let direct_url = format!("http://{}:30001/mirror/query/{}", ctx.target_host, trace_id);
+                    let direct_url = format!("http://{}:30001/mirror/query/{}", mirror_server_host(&ctx), trace_id);
                     match ctx.http_client.get(&direct_url).send().await {
                         Ok(resp) => match resp.json::<Value>().await {
                             Ok(body) => {
@@ -233,7 +237,7 @@ impl PercentMirrorTestSuite {
 
                     let mut received = 0u32;
                     for tid in &trace_ids {
-                        let direct = format!("http://{}:30001/mirror/query/{}", ctx.target_host, tid);
+                        let direct = format!("http://{}:30001/mirror/query/{}", mirror_server_host(&ctx), tid);
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {
                                 if body["found"].as_bool().unwrap_or(false) {
@@ -297,7 +301,7 @@ impl PercentMirrorTestSuite {
 
                     let mut received = 0u32;
                     for tid in &trace_ids {
-                        let direct = format!("http://{}:30001/mirror/query/{}", ctx.target_host, tid);
+                        let direct = format!("http://{}:30001/mirror/query/{}", mirror_server_host(&ctx), tid);
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {
                                 if body["found"].as_bool().unwrap_or(false) {

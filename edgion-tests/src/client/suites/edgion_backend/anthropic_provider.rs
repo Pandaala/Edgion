@@ -1,6 +1,6 @@
 //! End-to-end coverage for native Anthropic Messages translation.
 
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{test_backend_hosts, TestCase, TestContext, TestResult, TestSuite};
 use crate::metrics_helper::MetricsClient;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -460,17 +460,31 @@ fn usage_access_log_metric(
 }
 
 async fn provider_count(ctx: &TestContext) -> Result<u64, String> {
-    ctx.http_client
-        .get(format!("http://{}:30001/anthropic-fixture/count", ctx.target_host))
-        .send()
-        .await
-        .map_err(|error| format!("count request failed: {error}"))?
-        .json::<Value>()
-        .await
-        .map_err(|error| format!("invalid count response: {error}"))?
-        .get("count")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "count response omitted count".to_string())
+    let mut total = 0_u64;
+    for host in test_backend_hosts(ctx) {
+        let response = ctx
+            .http_client
+            .get(format!("http://{host}:30001/anthropic-fixture/count"))
+            .send()
+            .await
+            .map_err(|error| format!("count request failed for {host}: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("count request for {host} returned {status}"));
+        }
+        let value = response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("invalid count response from {host}: {error}"))?;
+        let count = value
+            .get("count")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("count response from {host} omitted count"))?;
+        total = total
+            .checked_add(count)
+            .ok_or_else(|| "aggregate provider count overflowed u64".to_string())?;
+    }
+    Ok(total)
 }
 
 fn fixed_errors_and_local_reject(

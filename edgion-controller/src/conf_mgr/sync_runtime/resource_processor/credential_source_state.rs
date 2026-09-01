@@ -214,20 +214,32 @@ impl CredentialSourceRegistry {
             .collect()
     }
 
-    /// Signal that the desired publication is absent or invalid. Repeated
-    /// handler retries are coalesced until a healthy Secret is observed.
-    pub fn request_consumer_reconcile(&self, logical_key: &str, observed_revision: String) {
+    /// Signal that the desired publication is absent or invalid, but only if
+    /// the caller's snapshot is still the current consumer generation.
+    ///
+    /// The compare and the bookkeeping update deliberately share one write
+    /// lock. An asynchronous credential job may outlive a deleted or replaced
+    /// consumer; allowing that stale job to write after `forget_consumer`
+    /// would resurrect orphan pending/epoch/observation entries.
+    pub fn request_consumer_reconcile_if_current(
+        &self,
+        expected: &DesiredCredentialConsumer,
+        observed_revision: String,
+    ) -> bool {
         let mut state = self.inner.write();
-        let changed = state.reconcile_observations.get(logical_key) != Some(&observed_revision);
-        state.reconcile_pending.insert(logical_key.to_string());
+        let logical_key = expected.logical_key();
+        if state.consumers.get(&logical_key) != Some(expected) {
+            return false;
+        }
+        let changed = state.reconcile_observations.get(&logical_key) != Some(&observed_revision);
+        state.reconcile_pending.insert(logical_key.clone());
         if changed {
             state.next_reconcile_epoch = state.next_reconcile_epoch.wrapping_add(1).max(1);
             let epoch = state.next_reconcile_epoch;
-            state.reconcile_epochs.insert(logical_key.to_string(), epoch);
-            state
-                .reconcile_observations
-                .insert(logical_key.to_string(), observed_revision);
+            state.reconcile_epochs.insert(logical_key.clone(), epoch);
+            state.reconcile_observations.insert(logical_key, observed_revision);
         }
+        true
     }
 
     pub fn clear_consumer_reconcile(&self, logical_key: &str) {
@@ -351,19 +363,53 @@ mod tests {
     #[test]
     fn publication_reconcile_requests_coalesce_until_health_is_observed() {
         let registry = CredentialSourceRegistry::new();
-        registry.replace_consumer(consumer("ops/source"));
+        let current = consumer("ops/source");
+        registry.replace_consumer(current.clone());
 
-        registry.request_consumer_reconcile("apps/provider", "missing".to_string());
+        assert!(registry.request_consumer_reconcile_if_current(&current, "missing".to_string()));
         let first = registry.reconcile_epoch_for_source("ops/source");
         assert_ne!(first, 0);
-        registry.request_consumer_reconcile("apps/provider", "missing".to_string());
+        assert!(registry.request_consumer_reconcile_if_current(&current, "missing".to_string()));
         assert_eq!(registry.reconcile_epoch_for_source("ops/source"), first);
 
         registry.clear_consumer_reconcile("apps/provider");
-        registry.request_consumer_reconcile("apps/provider", "missing".to_string());
+        assert!(registry.request_consumer_reconcile_if_current(&current, "missing".to_string()));
         assert!(registry.reconcile_epoch_for_source("ops/source") > first);
         let second = registry.reconcile_epoch_for_source("ops/source");
-        registry.request_consumer_reconcile("apps/provider", "uid:43".to_string());
+        assert!(registry.request_consumer_reconcile_if_current(&current, "uid:43".to_string()));
         assert!(registry.reconcile_epoch_for_source("ops/source") > second);
+    }
+
+    #[test]
+    fn stale_consumer_cannot_resurrect_reconcile_bookkeeping_after_delete() {
+        let registry = CredentialSourceRegistry::new();
+        let stale = consumer("ops/source");
+        registry.replace_consumer(stale.clone());
+        registry.forget_consumer("apps/provider");
+
+        assert!(!registry.request_consumer_reconcile_if_current(&stale, "late".to_string()));
+        assert_eq!(registry.stats(), CredentialSourceRegistryStats::default());
+
+        let current = consumer("ops/source");
+        registry.replace_consumer(current.clone());
+        assert!(registry.request_consumer_reconcile_if_current(&current, "current".to_string()));
+        assert_eq!(registry.reconcile_epoch_for_source("ops/source"), 1);
+    }
+
+    #[test]
+    fn replaced_consumer_rejects_notifications_from_the_previous_identity() {
+        let registry = CredentialSourceRegistry::new();
+        let stale = consumer("ops/source");
+        registry.replace_consumer(stale.clone());
+
+        let mut current = stale.clone();
+        current.uid = "replacement-uid".to_string();
+        current.generation += 1;
+        registry.replace_consumer(current.clone());
+
+        assert!(!registry.request_consumer_reconcile_if_current(&stale, "late".to_string()));
+        assert_eq!(registry.stats().reconcile_pending_count, 0);
+        assert!(registry.request_consumer_reconcile_if_current(&current, "current".to_string()));
+        assert_eq!(registry.stats().reconcile_pending_count, 1);
     }
 }

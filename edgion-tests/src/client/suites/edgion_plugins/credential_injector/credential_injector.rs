@@ -137,6 +137,7 @@ async fn reset_mirror_store(ctx: &TestContext) {
 async fn poll_main_and_mirror_captures(ctx: &TestContext, trace_id: &str) -> Result<Vec<Value>, String> {
     let hosts = mirror_backend_hosts(ctx);
     for attempt in 0..=20 {
+        let mut all_captures = Vec::new();
         for host in &hosts {
             let response = ctx
                 .http_client
@@ -145,18 +146,18 @@ async fn poll_main_and_mirror_captures(ctx: &TestContext, trace_id: &str) -> Res
                 .await;
             if let Ok(response) = response {
                 if let Ok(body) = response.json::<Value>().await {
-                    let captures = body["captures"].as_array().cloned().unwrap_or_default();
-                    let has_main = captures
-                        .iter()
-                        .any(|capture| capture["headers"]["x-mirror"].as_str() != Some("true"));
-                    let has_mirror = captures
-                        .iter()
-                        .any(|capture| capture["headers"]["x-mirror"].as_str() == Some("true"));
-                    if has_main && has_mirror {
-                        return Ok(captures);
-                    }
+                    all_captures.extend(body["captures"].as_array().cloned().unwrap_or_default());
                 }
             }
+        }
+        let has_main = all_captures
+            .iter()
+            .any(|capture| capture["headers"]["x-mirror"].as_str() != Some("true"));
+        let has_mirror = all_captures
+            .iter()
+            .any(|capture| capture["headers"]["x-mirror"].as_str() == Some("true"));
+        if has_main && has_mirror {
+            return Ok(all_captures);
         }
         if attempt < 20 {
             sleep(Duration::from_millis(100)).await;

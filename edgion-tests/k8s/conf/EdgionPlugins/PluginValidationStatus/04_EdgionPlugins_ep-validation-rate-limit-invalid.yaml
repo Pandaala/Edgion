@@ -1,0 +1,14 @@
+# Scenario: RateLimit plugin with rate=0
+# Expect: Accepted=False/Invalid, message contains "rate"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-rate-limit-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimit
+      config:
+        rate: 0
+        interval: "1s"

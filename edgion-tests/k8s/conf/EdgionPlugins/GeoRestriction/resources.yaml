@@ -1,0 +1,202 @@
+# Dedicated Gateway for the EdgionPlugins GeoRestriction suite (port 31950,
+# see ports.json "EdgionPlugins/GeoRestriction"). ClientGeo needs real_ip
+# configured with a trusted-proxy set; the shared base EdgionGatewayConfig
+# ("example-gateway", which every "public-gateway"-class Gateway uses)
+# already carries `realIp.trustedIps: [... "127.0.0.0/8" ...]`
+# (edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml), which covers
+# every loopback source address this suite uses — no private EdgionGatewayConfig
+# override is needed here.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: geo-restriction-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31950
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+# Baseline GeoIpLocation config for the HTTP GeoRestriction suite. Individual
+# test cases hot-swap this resource's content via ctx.apply_yaml(...) before
+# each request (same "one flexible resource, re-applied per case" pattern the
+# L4 GCIR suites use for their Selector). This file's content is only the
+# starting state loaded by prepare / --no-prepare reruns.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-rr
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: direct-country-gb
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["GB"]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: geo-restriction-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: geo-restriction-gw
+      namespace: edgion-test
+  hostnames:
+    - "geo-restriction.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: geo-rr
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# Two-plugin chain, static (never hot-swapped): `IpRestriction` (non-geo, an
+# ordinary CIDR deny) THEN `GeoIpLocation` (geo-only). This is the intended
+# shape post-refactor -- GeoIpLocation only owns geo, and any other
+# restriction the request needs stays in its own plugin, executed in order on
+# the same chain (first `ErrTerminateRequest` wins, exactly like every other
+# multi-plugin HTTPRoute in this suite tree). See
+# edgion-gateway/src/plugins/runtime/plugin_runtime.rs.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        deny:
+          - name: block-us-source
+            cidrs:
+              - "127.0.0.6/32"
+    - enable: true
+      type: GeoIpLocation
+      config:
+        defaultAction: allow
+        failOpen: false
+        denyRuleGroups:
+          - name: block-ru
+            rules:
+              - source: RemoteIp
+                key: country
+                values: ["RU"]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: geo-chain-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: geo-restriction-gw
+      namespace: edgion-test
+  hostnames:
+    - "geo-chain.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: geo-chain
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# Ingest-rejection case: a GeoIpLocation plugin with a deny rule group but no
+# `failOpen` is structurally invalid
+# (GeoIpLocationConfig::check_fields -- edgion-resources/src/resources/edgion_plugins/plugin_configs/geoip_location.rs)
+# -> Accepted=False/Invalid. `failOpen` is required whenever
+# denyRuleGroups/allowRuleGroups is non-empty; parse-only mode (`config: {}`)
+# needs none. Never referenced by a route; applied and polled directly via
+# the configserver API, same pattern as
+# suites/edgion_plugins/global_connection_ip_restriction and
+# suites/edgion_plugins/plugin_validation_status.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-rr-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: GeoIpLocation
+      config:
+        denyRuleGroups:
+          - name: missing-fail-open
+            rules:
+              - source: DirectPeerIp
+                key: country
+                values: ["CN"]
+        # failOpen intentionally omitted -> rejected at ingest.
+---
+# Parse-only mode (`config: {}`): GeoIpLocation makes no allow/deny decision
+# at all -- it only resolves geo for the request so the access log's `geo`
+# block gets populated. No `failOpen` needed (see 06's ingest-rejection
+# counterpart, which requires it only once a rule group is configured).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-parseonly
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: GeoIpLocation
+      config: {}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: geo-parseonly-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: geo-restriction-gw
+      namespace: edgion-test
+  hostnames:
+    - "geo-parseonly.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: geo-parseonly
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

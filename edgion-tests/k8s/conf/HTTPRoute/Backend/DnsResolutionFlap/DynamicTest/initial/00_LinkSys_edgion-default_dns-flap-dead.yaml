@@ -1,0 +1,17 @@
+# Down httpdns resolver (nothing listens on 127.0.0.1:65531) with NO fallback:
+# per-request resolution fails outright, so the backend returns 5xx. This is the
+# scenario's initial (failing) state.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-flap-dead
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:65531/dns/resolve?host={domain}"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: none

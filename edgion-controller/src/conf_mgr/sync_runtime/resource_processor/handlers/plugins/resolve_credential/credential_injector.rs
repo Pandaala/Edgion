@@ -187,10 +187,12 @@ async fn resolve_link_sys(
         ),
     };
     let binding_revision = consumer.binding_revision();
-    ctx.runtime().credential_source_registry.replace_consumer(consumer);
+    ctx.runtime()
+        .credential_source_registry
+        .replace_consumer(consumer.clone());
 
     if !source.persist {
-        return resolve_from_memory(config, resource_ref, ctx, &source);
+        return resolve_from_memory(config, resource_ref, ctx, &source, &consumer);
     }
 
     let output_ref = SecretObjectReference {
@@ -205,7 +207,7 @@ async fn resolve_link_sys(
     let secret = match result {
         Ok(secret) => secret,
         Err(error) => {
-            request_publication_reconcile(ctx, resource_ref);
+            request_publication_reconcile(ctx, &consumer);
             return Err(error);
         }
     };
@@ -219,14 +221,14 @@ async fn resolve_link_sys(
     ) {
         Ok(valid_until) => valid_until,
         Err(error) => {
-            request_publication_reconcile(ctx, resource_ref);
+            request_publication_reconcile(ctx, &consumer);
             return Err(error);
         }
     };
     let data = match secret.data.as_ref() {
         Some(data) => data,
         None => {
-            request_publication_reconcile(ctx, resource_ref);
+            request_publication_reconcile(ctx, &consumer);
             return Err(ResolvedRefsError::MissingKeys {
                 keys: vec!["bearerToken"],
             });
@@ -235,12 +237,12 @@ async fn resolve_link_sys(
     let material = match BearerResolver.parse(data).map_err(map_resolve_error) {
         Ok(material) => material,
         Err(error) => {
-            request_publication_reconcile(ctx, resource_ref);
+            request_publication_reconcile(ctx, &consumer);
             return Err(error);
         }
     };
     if !final_value_fits(config.target.value_prefix().len(), material.token.len()) {
-        request_publication_reconcile(ctx, resource_ref);
+        request_publication_reconcile(ctx, &consumer);
         return Err(managed_secret_error(
             "final injected header value exceeds the configured hard limit",
         ));
@@ -260,6 +262,7 @@ fn resolve_from_memory(
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
     source: &DesiredCredentialSource,
+    consumer: &DesiredCredentialConsumer,
 ) -> Result<(), ResolvedRefsError> {
     match memory_material(ctx, source, config.target.value_prefix().len()) {
         Ok((value, valid_until)) => {
@@ -273,7 +276,7 @@ fn resolve_from_memory(
             Ok(())
         }
         Err(error) => {
-            request_publication_reconcile(ctx, resource_ref);
+            request_publication_reconcile(ctx, consumer);
             Err(error)
         }
     }
@@ -302,12 +305,12 @@ fn memory_material(
     Ok((material.token, entry.valid_until.clone()))
 }
 
-fn request_publication_reconcile(ctx: &HandlerContext, resource_ref: &ResourceRef) {
-    let namespace = resource_ref.namespace.as_deref().unwrap_or("default");
+fn request_publication_reconcile(ctx: &HandlerContext, consumer: &DesiredCredentialConsumer) {
+    let namespace = consumer.resource.namespace.as_deref().unwrap_or("default");
     let observation = ctx
         .runtime()
         .secret_store
-        .get(Some(namespace), &resource_ref.name)
+        .get(Some(namespace), &consumer.resource.name)
         .map(|secret| {
             format!(
                 "{}:{}",
@@ -318,7 +321,7 @@ fn request_publication_reconcile(ctx: &HandlerContext, resource_ref: &ResourceRe
         .unwrap_or_else(|| "missing".to_string());
     ctx.runtime()
         .credential_source_registry
-        .request_consumer_reconcile(&resource_ref.resource_key(), observation);
+        .request_consumer_reconcile_if_current(consumer, observation);
 }
 
 fn outcome_to_secret(outcome: ResolveOutcome<Secret>) -> Result<Secret, ResolvedRefsError> {

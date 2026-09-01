@@ -3,12 +3,21 @@ use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::future::poll_fn;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
 
 pub struct BodyPluginsTestSuite;
+
+fn gateway_addr(ctx: &TestContext, port: u16) -> Result<SocketAddr, String> {
+    (ctx.target_host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("Gateway address resolution failed: {error}"))?
+        .next()
+        .ok_or_else(|| format!("Gateway host {} resolved to no addresses", ctx.target_host))
+}
 
 fn echo_body(text: &str) -> Option<&str> {
     text.split_once("Echo: ").map(|(_, body)| body)
@@ -1177,10 +1186,10 @@ impl BodyPluginsTestSuite {
                     let start = Instant::now();
                     let payload = "x".repeat(64);
                     let expected = serde_json::to_vec(&serde_json::json!({"payload": payload})).unwrap();
-                    let gateway = match format!("{}:31180", ctx.target_host).parse() {
+                    let gateway = match gateway_addr(&ctx, 31180) {
                         Ok(address) => address,
                         Err(error) => {
-                            return TestResult::failed(start.elapsed(), format!("Gateway address invalid: {error}"));
+                            return TestResult::failed(start.elapsed(), error);
                         }
                     };
                     let client = match reqwest::Client::builder()

@@ -13,7 +13,7 @@
 #   ./fast_build.sh --rebuild        # Force cargo clean + full rebuild
 #   ./fast_build.sh --compile-only   # Only compile, don't build images
 #   ./fast_build.sh --images-only    # Only build images (binaries must exist)
-#   ./fast_build.sh --bins gateway controller  # Only build specific binaries
+#   ./fast_build.sh --bins gateway controller  # Only build specific product binaries
 #
 # After build, run tests with:
 #   ../run_k8s_integration.sh --skip-deploy -r GRPCRoute
@@ -40,9 +40,10 @@ COMPILE_ONLY=false
 IMAGES_ONLY=false
 BUILD_BINS=()  # empty = all
 BUILD_EXAMPLES=()  # empty = all
+BUILT_ISOLATED_IMAGE=false
 
 # Binaries and examples to build
-ALL_BINS=(gateway controller ctl)
+ALL_BINS=(gateway controller)
 ALL_EXAMPLES=(test_server test_client)
 
 # Runtime base images per component (functions to avoid bash 3.x associative array issues)
@@ -82,7 +83,7 @@ Options:
   --rebuild           Force cargo clean before compile
   --compile-only      Only cross-compile, skip Docker image build
   --images-only       Only build Docker images (binaries must already exist)
-  --bins <names...>   Only build specified bins (gateway, controller, ctl)
+  --bins <names...>   Only build specified product bins (gateway, controller)
   --examples <names...> Only build specified examples (test_server, test_client)
   --arch <arm64|amd64>  Target arch (default: auto-detect from host)
   --version <tag>     Image version tag (default: dev)
@@ -172,15 +173,11 @@ ensure_builder() {
 cross_compile() {
   local builder_tag="${BUILDER_IMAGE}:${PLATFORM//\//-}"
 
-  # Build cargo command for bins. The `ctl` alias maps to the real bin name
-  # `edgion-cli` (there is no `edgion-ctl` target); all other bins are `edgion-<name>`.
-  local cargo_bin_args=""
+  # Every product runtime image includes edgion-cli for diagnostics. Build it
+  # once as an auxiliary binary, but do not invent a separate `ctl` image.
+  local cargo_bin_args=" --bin edgion-cli"
   for b in "${BUILD_BINS[@]}"; do
-    if [[ "${b}" == "ctl" ]]; then
-      cargo_bin_args+=" --bin edgion-cli"
-    else
-      cargo_bin_args+=" --bin edgion-${b}"
-    fi
+    cargo_bin_args+=" --bin edgion-${b}"
   done
 
   # The harness binaries (test_server/test_client) are [[bin]] targets of the
@@ -191,6 +188,9 @@ cross_compile() {
   for e in "${BUILD_EXAMPLES[@]}"; do
     cargo_testbin_args+=" --bin ${e}"
   done
+  if [[ " ${BUILD_EXAMPLES[*]} " == *" test_client "* ]]; then
+    cargo_testbin_args+=" --bin cache_residue"
+  fi
 
   local features="${FEATURES:-default}"
   local cmd=""
@@ -271,6 +271,12 @@ build_one_image() {
   local image_tag="$3"
   local runtime_base="${4:-ubuntu:24.04}"
   local extra_packages="${5:-}"
+  local auxiliary_binaries="${6:-}"
+  local include_test_wasm="false"
+
+  if [[ "${name}" == "gateway" ]]; then
+    include_test_wasm="true"
+  fi
 
   # For bin type, binary name is edgion-<name>, for example it's just <name>
   local binary_name="${name}"
@@ -287,6 +293,8 @@ build_one_image() {
     --build-arg "BINARY_PATH=${BIN_PATH}" \
     --build-arg "RUNTIME_BASE=${runtime_base}" \
     --build-arg "EXTRA_PACKAGES=${extra_packages}" \
+    --build-arg "AUXILIARY_BINARIES=${auxiliary_binaries}" \
+    --build-arg "INCLUDE_TEST_WASM=${include_test_wasm}" \
     --platform "${PLATFORM}" \
     -t "${image_tag}" \
     "${PROJECT_ROOT}" \
@@ -295,11 +303,56 @@ build_one_image() {
   log_ok "  ${image_tag}"
 }
 
+selection_contains() {
+  local wanted="$1"
+  shift
+  local selected
+  for selected in "$@"; do
+    if [[ "${selected}" == "${wanted}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+build_isolated_image_if_complete() {
+  local image_tag binary
+  if ! selection_contains gateway "${BUILD_BINS[@]}" \
+    || ! selection_contains controller "${BUILD_BINS[@]}" \
+    || ! selection_contains test_server "${BUILD_EXAMPLES[@]}"; then
+    log_warn "Skipping the isolated-test image because this is a partial component build"
+    return 0
+  fi
+
+  for binary in edgion-controller edgion-gateway edgion-cli test_server; do
+    if [[ ! -f "${PROJECT_ROOT}/${BIN_PATH}/${binary}" ]]; then
+      log_error "Isolated-test binary not found: ${PROJECT_ROOT}/${BIN_PATH}/${binary}"
+      exit 1
+    fi
+  done
+
+  image_tag="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-isolated-test:${VERSION}_${SUFFIX}"
+  log_info "Building image: ${image_tag}"
+  DOCKER_BUILDKIT=1 docker build \
+    --file "${PROJECT_ROOT}/edgion-tests/k8s/docker/Dockerfile.isolated" \
+    --build-arg "BINARY_PATH=${BIN_PATH}" \
+    --platform "${PLATFORM}" \
+    --tag "${image_tag}" \
+    "${PROJECT_ROOT}" \
+    --quiet
+  BUILT_ISOLATED_IMAGE=true
+  log_ok "  ${image_tag}"
+}
+
 build_images() {
   log_info "Building Docker images..."
   local start_time=$SECONDS
 
   # Verify binaries exist
+  if [[ ! -f "${PROJECT_ROOT}/${BIN_PATH}/edgion-cli" ]]; then
+    log_error "Auxiliary binary not found: ${PROJECT_ROOT}/${BIN_PATH}/edgion-cli"
+    exit 1
+  fi
   for b in "${BUILD_BINS[@]}"; do
     local bin_file="${PROJECT_ROOT}/${BIN_PATH}/edgion-${b}"
     if [[ ! -f "${bin_file}" ]]; then
@@ -329,8 +382,18 @@ build_images() {
     local image_tag="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${VERSION}_${SUFFIX}"
     local runtime_base; runtime_base="$(get_runtime_base "${e}")"
     local extra; extra="$(get_extra_pkgs "${e}")"
-    build_one_image "${e}" "example" "${image_tag}" "${runtime_base}" "${extra}"
+    local auxiliary_binaries=""
+    if [[ "${e}" == "test_client" ]]; then
+      auxiliary_binaries="cache_residue"
+      if [[ ! -f "${PROJECT_ROOT}/${BIN_PATH}/cache_residue" ]]; then
+        log_error "Test-client auxiliary binary not found: ${PROJECT_ROOT}/${BIN_PATH}/cache_residue"
+        exit 1
+      fi
+    fi
+    build_one_image "${e}" "example" "${image_tag}" "${runtime_base}" "${extra}" "${auxiliary_binaries}"
   done
+
+  build_isolated_image_if_complete
 
   local elapsed=$(( SECONDS - start_time ))
   log_ok "All images built in ${elapsed}s"
@@ -346,6 +409,7 @@ write_config() {
   local gw_image="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-gateway:${VERSION}_${SUFFIX}"
   local client_image="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-client:${VERSION}_${SUFFIX}"
   local server_image="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-test-server:${VERSION}_${SUFFIX}"
+  local isolated_image="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-isolated-test:${VERSION}_${SUFFIX}"
 
   cat > "${WRITE_CONFIG}" <<EOF
 IMAGE_REGISTRY=${IMAGE_REGISTRY}
@@ -357,6 +421,10 @@ GATEWAY_IMAGE=${gw_image}
 TEST_CLIENT_IMAGE=${client_image}
 TEST_SERVER_IMAGE=${server_image}
 EOF
+
+  if [[ "${BUILT_ISOLATED_IMAGE}" == "true" ]]; then
+    printf 'ISOLATED_JOB_IMAGE=%s\n' "${isolated_image}" >> "${WRITE_CONFIG}"
+  fi
 
   log_ok "Config written: ${WRITE_CONFIG}"
   echo

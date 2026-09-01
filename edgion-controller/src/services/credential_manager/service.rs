@@ -900,9 +900,12 @@ async fn notify_consumers(
     observed_revision: String,
 ) {
     for consumer in consumers {
-        runtime
+        if !runtime
             .credential_source_registry
-            .request_consumer_reconcile(&consumer.logical_key(), observed_revision.clone());
+            .request_consumer_reconcile_if_current(consumer, observed_revision.clone())
+        {
+            continue;
+        }
         if let Some(processor) = runtime.processor_registry.get("EdgionPlugins") {
             processor.requeue(consumer.logical_key()).await;
         }

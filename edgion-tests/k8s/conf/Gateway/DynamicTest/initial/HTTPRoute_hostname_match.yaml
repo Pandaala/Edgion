@@ -16,5 +16,6 @@ spec:
         type: PathPrefix
         value: /match
     backendRefs:
-    - name: test-backend
-      port: 8080
+    - name: test-http
+      namespace: edgion-test
+      port: 30001

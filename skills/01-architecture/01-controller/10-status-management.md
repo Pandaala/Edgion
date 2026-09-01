@@ -333,11 +333,11 @@ state is unchanged.
 
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
-| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
+| **Condition-only** | GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
 | **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
 | **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
-| **Hybrid (lifecycle + conditions)** | EdgionAcme | Direct `Value` equality | All fields compared verbatim — conditions and lifecycle fields together |
+| **Hybrid (lifecycle + conditions)** | EdgionAcme, LinkSys | `conditions_and_fields_status_equal` | Semantic conditions plus structural comparison of all lifecycle fields |
 | **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |
 
 #### Key scenarios this optimizes

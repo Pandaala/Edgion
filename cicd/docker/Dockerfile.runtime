@@ -23,6 +23,8 @@ ARG BINARY=gateway
 ARG BUILD_TYPE=bin
 ARG BINARY_PATH
 ARG EXTRA_PACKAGES=""
+ARG INCLUDE_TEST_WASM=false
+ARG AUXILIARY_BINARIES=""
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -52,6 +54,19 @@ RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
       cp /tmp/binaries/edgion-${BINARY} /usr/local/bin/edgion-${BINARY} && \
       cp /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli && \
       chmod +x /usr/local/bin/edgion-${BINARY} /usr/local/bin/edgion-cli; \
+    fi && \
+    for auxiliary_binary in ${AUXILIARY_BINARIES}; do \
+      cp "/tmp/binaries/${auxiliary_binary}" "/usr/local/bin/${auxiliary_binary}" && \
+      chmod +x "/usr/local/bin/${auxiliary_binary}"; \
+    done
+
+# K8s integration images may opt into the committed Proxy-Wasm guest. Product
+# images keep the default false and contain no test artifact.
+RUN --mount=type=bind,source=edgion-tests/wasm/artifacts,target=/tmp/wasm-artifacts \
+    if [ "${INCLUDE_TEST_WASM}" = "true" ]; then \
+      mkdir -p /usr/local/edgion/test-assets && \
+      cp /tmp/wasm-artifacts/header_demo.wasm /usr/local/edgion/test-assets/header_demo.wasm && \
+      chown -R edgion:edgion /usr/local/edgion/test-assets; \
     fi
 
 # Ensure the config directory exists as the mount point. Config is always provided at

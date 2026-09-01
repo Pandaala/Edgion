@@ -302,6 +302,12 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_backend_occ_conflict_maps_to_409() {
+        let status = map_writer_error(ConfWriterError::Conflict("object keeps changing".to_string()));
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[test]
     fn if_match_precedes_payload_resource_version() {
         let mut headers = HeaderMap::new();
         headers.insert(IF_MATCH, r#""header-rv""#.parse().unwrap());
@@ -319,5 +325,19 @@ mod tests {
             expected_resource_version(&HeaderMap::new(), body).unwrap().as_deref(),
             Some("payload-rv")
         );
+    }
+
+    #[test]
+    fn if_match_star_overrides_payload_resource_version() {
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_MATCH, "*".parse().unwrap());
+        let body = r#"metadata: {resourceVersion: payload-rv}"#;
+        assert_eq!(expected_resource_version(&headers, body).unwrap(), None);
+    }
+
+    #[test]
+    fn absent_update_precondition_remains_unconditional() {
+        let body = r#"metadata: {name: route-a}"#;
+        assert_eq!(expected_resource_version(&HeaderMap::new(), body).unwrap(), None);
     }
 }

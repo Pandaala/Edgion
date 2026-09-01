@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-condition-set-empty
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config: {}
+      conditions:
+        run:
+          allOf: []

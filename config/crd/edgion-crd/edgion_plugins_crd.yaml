@@ -28,7 +28,6 @@ spec:
                   type: object
                   description: "One native WAF configuration spanning all supported transaction phases"
                   required: [rules]
-                  additionalProperties: false
                   properties:
                     rules:
                       type: string
@@ -37,8 +36,8 @@ spec:
                     mode:
                       type: string
                       description: "Whether disruptive WAF actions are enforced or only reported"
-                      enum: [on, detectionOnly]
-                      default: on
+                      enum: ["on", detectionOnly]
+                      default: "on"
                     priority:
                       type: integer
                       format: int32
@@ -275,16 +274,13 @@ spec:
                                   oneOf:
                                     - required: [type]
                                       not:
-                                        required: [allOf]
+                                        anyOf:
+                                          - required: [allOf]
+                                          - required: [name]
                                     - &allOfGroupSchema
                                       required: [allOf]
                                       not:
                                         required: [type]
-                                  x-kubernetes-validations:
-                                    - rule: "has(self.type) != has(self.allOf)"
-                                      message: "an anyOf clause must contain exactly one of type or allOf"
-                                    - rule: "!has(self.name) || has(self.allOf)"
-                                      message: "name is only valid on an allOf group"
                             # Structural schema: properties stay outside oneOf;
                             # branches only select the required operator.
                             oneOf:
@@ -294,9 +290,6 @@ spec:
                               - required: [anyOf]
                                 not:
                                   required: [allOf]
-                            x-kubernetes-validations:
-                              - rule: "has(self.allOf) != has(self.anyOf)"
-                                message: "a condition set must contain exactly one of allOf or anyOf"
                           run: *conditionSetSchema
                       # --- dye: define anchor here, reuse below ---
                       dye: &dyeSchema
@@ -314,7 +307,7 @@ spec:
                               properties:
                                 name:
                                   type: string
-                                on:
+                                "on":
                                   type: array
                                   items:
                                     type: string

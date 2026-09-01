@@ -1,0 +1,198 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-refgrant-blocklist
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - 127.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-refgrant-cluster-data
+  namespace: edgion-default
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - 127.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-same-ns-data
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - 127.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-deny-refs-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        defaultAction: allow
+        denyRefs:
+          - name: ecd-refgrant-blocklist
+            namespace: edgion-default
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-allow-refs-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        defaultAction: allow
+        deny:
+          - name: blocked-ranges
+            cidrs:
+              - 10.0.0.0/8
+        allowRefs:
+          - name: ecd-refgrant-blocklist
+            namespace: edgion-default
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-cluster-ref-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        defaultAction: allow
+        denyRefs:
+          - name: ecd-refgrant-cluster-data
+            namespace: edgion-default
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-same-ns-ref
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        defaultAction: allow
+        denyRefs:
+          - name: ecd-same-ns-data
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-region-override
+  namespace: edgion-default
+spec:
+  data:
+    type: RegionRouteOverride
+    config:
+      regions:
+        - name: us
+          hashRange: [0, 999]
+          backendEndpoint: us-backend:8080
+          tls: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-active-selector
+  namespace: edgion-default
+spec:
+  data:
+    type: Selector
+    config:
+      active: lockdown
+      description: cross-ns activeProfileRef target for reference-grant integration test
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-override-ref-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RegionRoute
+      config:
+        myRegion: us
+        regions:
+          - name: us
+            hashRange: [0, 999]
+            backendEndpoint: us-backend:8080
+            tls: false
+        routeRules: []
+        overrideRef:
+          name: ecd-region-override
+          namespace: edgion-default
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-active-profile-ref-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestAccessPolicy
+      config:
+        defaultProfile: normal
+        profiles:
+          normal:
+            requiredRuleGroups:
+              - name: source
+                anyOfRules:
+                  - name: internal
+                    type: directPeerIp
+                    config:
+                      ips:
+                        - 10.0.0.0/8
+        activeProfileRef:
+          name: ecd-active-selector
+          namespace: edgion-default
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-missing-ref
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        defaultAction: allow
+        allowRefs:
+          - name: ecd-does-not-exist
+            namespace: edgion-test

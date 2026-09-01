@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: cb-retry-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: cb-retry
+  outlierDetection:
+    consecutiveErrors: 100
+    consecutiveGatewayErrors: 2
+    ejectionTime: 3s
+    maxEjectionTime: 3s
+    maxEjectionPercent: 0

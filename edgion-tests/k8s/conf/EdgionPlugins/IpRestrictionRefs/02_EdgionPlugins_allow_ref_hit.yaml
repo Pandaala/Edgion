@@ -1,0 +1,17 @@
+# IpRestriction plugin using allowRefs to reference the central ipref-allowlist.
+# The test client's IP (OrbStack test-client Pod IP) is covered by 192.168.0.0/16 → expect 200.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-allow-ref-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        allowRefs:
+          - name: ipref-allowlist
+        status: 403
+        message: "IP not in referenced allow list"

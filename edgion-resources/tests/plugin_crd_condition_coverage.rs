@@ -93,6 +93,15 @@ fn crd_any_of_clause_properties() -> Map<String, Value> {
         .clone()
 }
 
+fn crd_dye_rule_properties() -> Map<String, Value> {
+    let doc = plugins_crd_doc();
+    doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["requestPlugins"]
+        ["items"]["properties"]["dye"]["properties"]["response"]["items"]["properties"]
+        .as_object()
+        .expect("plugin CRD dye.response.items.properties must be an object")
+        .clone()
+}
+
 fn follow_def<'a>(r: &str, defs: &'a Map<String, Value>) -> Option<&'a Value> {
     let name = r.strip_prefix("#/$defs/")?;
     defs.get(name)
@@ -291,6 +300,19 @@ fn condition_schema_matches_crd_both_directions() {
 }
 
 #[test]
+fn dye_rule_uses_literal_on_field_name() {
+    let properties = crd_dye_rule_properties();
+    assert!(
+        properties.contains_key("on"),
+        "dye rule schema must declare the literal `on` field"
+    );
+    assert!(
+        !properties.contains_key("true"),
+        "unquoted YAML 1.1 `on` was coerced into the boolean key `true`"
+    );
+}
+
+#[test]
 fn key_get_type_enum_matches_crd_both_directions() {
     let rust = rust_key_get_types();
     let crd = crd_key_get_types();
@@ -325,21 +347,6 @@ fn required_set(node: &Value, label: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn validation_rules(node: &Value, label: &str) -> BTreeSet<String> {
-    node.get("x-kubernetes-validations")
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("{label}.x-kubernetes-validations must be an array"))
-        .iter()
-        .map(|entry| {
-            entry
-                .get("rule")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("{label} validation is missing a string rule: {entry}"))
-                .to_string()
-        })
-        .collect()
-}
-
 #[test]
 fn condition_set_crd_is_fixed_depth_and_structural() {
     let conditions = crd_conditions_node();
@@ -358,7 +365,7 @@ fn condition_set_crd_is_fixed_depth_and_structural() {
         .cloned()
         .collect();
     assert_eq!(set_fields, BTreeSet::from(["allOf".to_string(), "anyOf".to_string()]));
-    assert!(validation_rules(skip, "ConditionSet").contains("has(self.allOf) != has(self.anyOf)"));
+    assert!(skip.get("x-kubernetes-validations").is_none());
     assert_eq!(skip["oneOf"].as_array().map(Vec::len), Some(2));
     assert_eq!(
         required_set(&skip["oneOf"][0], "ConditionSet.oneOf[0]"),
@@ -391,9 +398,15 @@ fn condition_set_crd_is_fixed_depth_and_structural() {
         required_set(&clause["oneOf"][0], "AnyOfClause.oneOf[0]"),
         BTreeSet::from(["type".to_string()])
     );
+    let forbidden_direct_fields: BTreeSet<String> = clause["oneOf"][0]["not"]["anyOf"]
+        .as_array()
+        .expect("AnyOfClause direct branch must structurally forbid group-only fields")
+        .iter()
+        .flat_map(|node| required_set(node, "AnyOfClause.oneOf[0].not.anyOf"))
+        .collect();
     assert_eq!(
-        required_set(&clause["oneOf"][0]["not"], "AnyOfClause.oneOf[0].not"),
-        BTreeSet::from(["allOf".to_string()])
+        forbidden_direct_fields,
+        BTreeSet::from(["allOf".to_string(), "name".to_string()])
     );
     assert_eq!(
         required_set(&clause["oneOf"][1], "AnyOfClause.oneOf[1]"),
@@ -403,9 +416,7 @@ fn condition_set_crd_is_fixed_depth_and_structural() {
         required_set(&clause["oneOf"][1]["not"], "AnyOfClause.oneOf[1].not"),
         BTreeSet::from(["type".to_string()])
     );
-    let rules = validation_rules(clause, "AnyOfClause");
-    assert!(rules.contains("has(self.type) != has(self.allOf)"));
-    assert!(rules.contains("!has(self.name) || has(self.allOf)"));
+    assert!(clause.get("x-kubernetes-validations").is_none());
     assert!(
         clause["properties"].get("anyOf").is_none(),
         "AnyOfClause must not recurse"

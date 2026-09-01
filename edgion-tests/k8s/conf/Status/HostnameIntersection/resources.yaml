@@ -1,0 +1,120 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: hostname-intersection
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: listener-1
+      protocol: HTTP
+      port: 31315
+      hostname: very.specific.com
+    - name: listener-2
+      protocol: HTTP
+      port: 31316
+      hostname: "*.wildcard.io"
+    - name: listener-3
+      protocol: HTTP
+      port: 31317
+      hostname: "*.anotherwildcard.io"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: specific-matches-specific
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-intersection
+      namespace: edgion-test
+  hostnames:
+    - very.specific.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /s1
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: specific-matches-wildcard
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-intersection
+      namespace: edgion-test
+  hostnames:
+    - foo.wildcard.io
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /s2
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wildcard-matches-specific
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-intersection
+      namespace: edgion-test
+  hostnames:
+    - "*.specific.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /s3
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wildcard-matches-wildcard
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-intersection
+      namespace: edgion-test
+  hostnames:
+    - "*.anotherwildcard.io"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /s4
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: no-intersecting-hosts
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: hostname-intersection
+      namespace: edgion-test
+  hostnames:
+    - specific.but.wrong.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /s5
+      backendRefs:
+        - name: test-http
+          port: 30001

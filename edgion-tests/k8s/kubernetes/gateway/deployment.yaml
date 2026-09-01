@@ -100,6 +100,9 @@ spec:
         - name: conf-sync-certs
           mountPath: /etc/edgion/conf-sync-certs
           readOnly: true
+        - name: geoip-test-fixture
+          mountPath: /usr/local/edgion/test-assets/geoip
+          readOnly: true
       volumes:
       - name: config
         configMap:
@@ -113,3 +116,6 @@ spec:
           # start before it exists; the conf_sync client connects lazily and retries until
           # the cert appears.
           optional: true
+      - name: geoip-test-fixture
+        configMap:
+          name: edgion-geoip-test-fixture

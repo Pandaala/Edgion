@@ -38,6 +38,7 @@ BINARIES="gateway controller"
 # (formerly under examples/, now moved into edgion-tests). Built only via the
 # dedicated --test-images mode, never alongside the standard images.
 TEST_BINARIES="test_server test_client"
+TEST_CLIENT_AUXILIARY_BINARIES="cache_residue"
 
 # =============================================================================
 # Internal variables  (no need to change unless you know what you're doing)
@@ -470,6 +471,9 @@ compile_test_binaries() {
     for testbin in ${TEST_BINARIES}; do
         testbin_args+=" --bin ${testbin}"
     done
+    for auxiliary_bin in ${TEST_CLIENT_AUXILIARY_BINARIES}; do
+        testbin_args+=" --bin ${auxiliary_bin}"
+    done
 
     local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
@@ -577,10 +581,12 @@ build_test_images() {
         local image_tag="${image_base}:${version}_${suffix}"
         local runtime_base="debian:bookworm-slim"
         local extra_packages=""
+        local auxiliary_binaries=""
 
         # test_client image should include debug/test tools.
         if [[ "${testbin}" == "test_client" ]]; then
             extra_packages="curl bash"
+            auxiliary_binaries="${TEST_CLIENT_AUXILIARY_BINARIES}"
         fi
 
         log_info "Building ${testbin} image for ${arch}..."
@@ -598,6 +604,7 @@ build_test_images() {
             --build-arg "BINARY_PATH=${bin_path}"
             --build-arg "RUNTIME_BASE=${runtime_base}"
             --build-arg "EXTRA_PACKAGES=${extra_packages}"
+            --build-arg "AUXILIARY_BINARIES=${auxiliary_binaries}"
             --platform "${platform}"
             --tag "${image_tag}"
         )

@@ -1,0 +1,16 @@
+# RFC 6125 wildcard selection must match exactly one DNS label.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: wc-single-tls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: wc-single-gateway
+      namespace: edgion-test
+      sectionName: https-wc-single
+  hosts:
+    - "*.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

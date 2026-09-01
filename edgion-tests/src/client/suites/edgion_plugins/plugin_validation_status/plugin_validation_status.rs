@@ -29,6 +29,19 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
 const NS: &str = "default";
+const K8S_NS: &str = "edgion-default";
+
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true")
+}
+
+fn test_namespace() -> &'static str {
+    if k8s_mode() {
+        K8S_NS
+    } else {
+        NS
+    }
+}
 
 pub struct PluginValidationStatusTestSuite;
 
@@ -60,7 +73,7 @@ async fn assert_accepted_false(ctx: &TestContext, name: &str, keyword: &str) -> 
         let mut req = ctx.http_client.get(format!(
             "{}/configserver/EdgionPlugins?namespace={}&name={}",
             ctx.admin_api_url(),
-            NS,
+            test_namespace(),
             name
         ));
         if let Some(ref token) = ctx.admin_token {
@@ -276,6 +289,20 @@ impl PluginValidationStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if k8s_mode() {
+                        if std::env::var("EDGION_TEST_K8S_ADMISSION_VERIFIED").as_deref()
+                            == Ok("PluginValidationStatus")
+                        {
+                            return TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Kubernetes server dry-run rejected all malformed ConditionSet shapes".to_string(),
+                            );
+                        }
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "Kubernetes admission verification flag is missing".to_string(),
+                        );
+                    }
                     let cases = [
                         (
                             "both-operators",
@@ -294,7 +321,7 @@ impl PluginValidationStatusTestSuite {
                     for (suffix, condition_set) in cases {
                         let name = format!("ep-validation-condition-set-{suffix}");
                         let yaml = format!(
-                            "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {name}\n  namespace: default\nspec:\n  requestPlugins:\n    - enable: true\n      type: Cors\n      config: {{}}\n      conditions:\n        run:\n          {condition_set}\n"
+                            "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {name}\n  namespace: {NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: Cors\n      config: {{}}\n      conditions:\n        run:\n          {condition_set}\n"
                         );
                         if ctx.apply_yaml(&yaml).await.is_ok() {
                             let _ = ctx.delete_resource("EdgionPlugins", NS, &name).await;
@@ -337,14 +364,18 @@ spec:
 "#;
 
                     let start = Instant::now();
-                    if let Err(error) = ctx.apply_yaml(YAML).await {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Failed to apply empty ConditionSet: {error}"),
-                        );
+                    if !k8s_mode() {
+                        if let Err(error) = ctx.apply_yaml(YAML).await {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Failed to apply empty ConditionSet: {error}"),
+                            );
+                        }
                     }
                     let result = assert_accepted_false(&ctx, NAME, "allOf must be non-empty").await;
-                    let _ = ctx.delete_resource("EdgionPlugins", NS, NAME).await;
+                    if !k8s_mode() {
+                        let _ = ctx.delete_resource("EdgionPlugins", NS, NAME).await;
+                    }
                     result
                 })
             },

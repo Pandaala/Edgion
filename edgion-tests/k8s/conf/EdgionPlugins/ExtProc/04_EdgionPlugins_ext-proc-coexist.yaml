@@ -1,13 +1,19 @@
-# auth-svc Service (k8s flavor: selector-based; control-plane populates EndpointSlice).
-# Inlined here so the ExtProc suite is self-contained when loaded in isolation.
+# ExtProc + ForwardAuth coexistence: both external-call plugins on the same
+# request chain, in order. ForwardAuth (auth server 30040) validates first; then
+# ext_proc (30041) adds its request header. Proves the two plugins coexist and
+# both apply (backend should see X-User-ID from ForwardAuth AND x-ext-proc-req
+# from ExtProc).
+#
+# This scenario owns a dedicated selector-backed Service so it does not depend
+# on or conflict with the ForwardAuth suite's shared auth-svc resource.
 apiVersion: v1
 kind: Service
 metadata:
-  name: auth-svc
+  name: ext-proc-auth-svc
   namespace: edgion-default
 spec:
   selector:
-    app: auth-svc
+    app: edgion-test-server
   ports:
     - name: http
       port: 30040
@@ -21,24 +27,24 @@ metadata:
   namespace: edgion-default
 spec:
   requestPlugins:
-  - enable: true
-    type: ForwardAuth
-    config:
-      target: { name: auth-svc, namespace: edgion-default, port: 30040 }
-      timeoutMs: 5000
-      request:
-        path:   { template: "/verify" }
-        method: { template: "GET" }
-        headers:
-          forwardAll: true
-      decision:
-        upstreamHeaders: [X-User-ID]
-  - enable: true
-    type: ExtProc
-    config:
-      grpcService:
-        target: edgion-test-server.edgion-test.svc.cluster.local:30041
-        timeoutMs: 2000
-      processingMode:
-        requestHeaderMode: SEND
-      failureModeAllow: false
+    - enable: true
+      type: ForwardAuth
+      config:
+        target: { name: ext-proc-auth-svc, namespace: edgion-default, port: 30040 }
+        timeoutMs: 5000
+        request:
+          path:   { template: "/verify" }
+          method: { template: "GET" }
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders: [X-User-ID]
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "edgion-test-server.edgion-test.svc.cluster.local:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+        failureModeAllow: false

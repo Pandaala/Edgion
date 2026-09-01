@@ -1,0 +1,33 @@
+# Scenario 17: url-origin-only-rejected
+# ---------------------------------------------------------------------------
+# `target.url` must be origin-only (`scheme://host[:port]`); a path/query/
+# fragment is rejected at the schema-validation layer
+# (`validate_origin_url` in edgion-resources/src/resources/common/
+# external_http.rs). This LinkSys is deliberately invalid — `https://
+# example.com/v1` carries a path — so the controller must reject it and
+# surface `Accepted=False` with a message containing "origin-only"
+# (`LinkSys::validate_config` prefixes the schema error with "Webhook
+# configuration error: ", so the substring survives).
+#
+# No WebhookKeyGet/HTTPRoute/traffic is involved: this is asserted purely against
+# the controller's own status output (`/configserver/LinkSys?namespace=
+# edgion-default&name=wh17-origin-only`), not the gateway.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh17-origin-only
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      url: "https://example.com/v1"
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+    timeoutMs: 5000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096

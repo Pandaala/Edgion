@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{env_host_or, TestCase, TestContext, TestResult, TestSuite};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -162,19 +162,41 @@ async fn request_anthropic_mode(
         .map_err(|error| format!("Anthropic Guardrail request failed: {error}"))
 }
 
-fn fixture_url(ctx: &TestContext, path: &str) -> String {
-    format!("http://{}:30001{path}", ctx.target_host)
+fn fixture_hosts(ctx: &TestContext) -> Vec<String> {
+    if std::env::var("EDGION_TEST_K8S_MODE")
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+    {
+        if let Ok(ips) = std::env::var("EDGION_TEST_BACKEND_ENDPOINT_IPS") {
+            let hosts = ips
+                .split(',')
+                .map(str::trim)
+                .filter(|host| !host.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if !hosts.is_empty() {
+                return hosts;
+            }
+        }
+    }
+    vec![env_host_or("EDGION_TEST_GUARDRAIL_FIXTURE_HOST", &ctx.target_host)]
+}
+
+fn fixture_url(host: &str, path: &str) -> String {
+    format!("http://{host}:30001{path}")
 }
 
 async fn reset_observations(ctx: &TestContext) -> Result<(), String> {
-    let response = ctx
-        .http_client
-        .post(fixture_url(ctx, "/guardrail/reset"))
-        .send()
-        .await
-        .map_err(|error| format!("failed to reset Guardrail observations: {error}"))?;
-    if response.status() != reqwest::StatusCode::NO_CONTENT {
-        return Err(format!("Guardrail reset returned {}", response.status()));
+    for host in fixture_hosts(ctx) {
+        let response = ctx
+            .http_client
+            .post(fixture_url(&host, "/guardrail/reset"))
+            .send()
+            .await
+            .map_err(|error| format!("failed to reset Guardrail observations on {host}: {error}"))?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(format!("Guardrail reset on {host} returned {}", response.status()));
+        }
     }
     Ok(())
 }
@@ -183,26 +205,57 @@ async fn assert_one_canonical_call(ctx: &TestContext, action: &str) -> Result<()
     assert_canonical_calls(ctx, action, 1).await
 }
 
+async fn observed_calls(ctx: &TestContext, action: &str) -> Result<u64, String> {
+    let mut calls = 0;
+    for host in fixture_hosts(ctx) {
+        let response = ctx
+            .http_client
+            .get(fixture_url(&host, &format!("/guardrail/observation/{action}")))
+            .send()
+            .await
+            .map_err(|error| format!("failed to query Guardrail observation on {host}: {error}"))?;
+        let observation: GuardrailObservation = response
+            .json()
+            .await
+            .map_err(|error| format!("invalid Guardrail observation from {host}: {error}"))?;
+        calls += observation.calls;
+    }
+    Ok(calls)
+}
+
 async fn assert_canonical_calls(ctx: &TestContext, action: &str, expected_calls: u64) -> Result<(), String> {
-    let response = ctx
-        .http_client
-        .get(fixture_url(ctx, &format!("/guardrail/observation/{action}")))
-        .send()
-        .await
-        .map_err(|error| format!("failed to query Guardrail observation: {error}"))?;
-    let observation: GuardrailObservation = response
-        .json()
-        .await
-        .map_err(|error| format!("invalid Guardrail observation: {error}"))?;
-    if observation.calls != expected_calls
-        || observation.total_windows != expected_calls
-        || observation.last_window_count != 1
-        || !observation.version_v1
-        || !observation.minimal_envelope
-        || !observation.sorted_unique_keys
-        || !observation.canonical_content_window
-    {
-        return Err(format!("unexpected Guardrail observation: {observation:?}"));
+    let mut observations = Vec::new();
+    for host in fixture_hosts(ctx) {
+        let response = ctx
+            .http_client
+            .get(fixture_url(&host, &format!("/guardrail/observation/{action}")))
+            .send()
+            .await
+            .map_err(|error| format!("failed to query Guardrail observation on {host}: {error}"))?;
+        let observation: GuardrailObservation = response
+            .json()
+            .await
+            .map_err(|error| format!("invalid Guardrail observation from {host}: {error}"))?;
+        observations.push(observation);
+    }
+
+    let calls = observations.iter().map(|observation| observation.calls).sum::<u64>();
+    let windows = observations
+        .iter()
+        .map(|observation| observation.total_windows)
+        .sum::<u64>();
+    let active_are_canonical = observations
+        .iter()
+        .filter(|observation| observation.calls > 0)
+        .all(|observation| {
+            observation.last_window_count == 1
+                && observation.version_v1
+                && observation.minimal_envelope
+                && observation.sorted_unique_keys
+                && observation.canonical_content_window
+        });
+    if calls != expected_calls || windows != expected_calls || !active_are_canonical {
+        return Err(format!("unexpected Guardrail observations: {observations:?}"));
     }
     Ok(())
 }
@@ -551,7 +604,52 @@ impl GuardrailTestSuite {
                         if let Err(error) = reset_observations(&ctx).await {
                             return TestResult::failed(start.elapsed(), error);
                         }
+<<<<<<< Updated upstream
                         let response = match request_openai_protocol(&ctx, REJECT_EXT_PROC_HOST, h2).await {
+=======
+                        let response = if h2 {
+                            let address =
+                                match tokio::net::lookup_host(format!("{}:{}", ctx.target_host, ctx.http_port)).await {
+                                    Ok(mut addresses) => match addresses.next() {
+                                        Some(address) => address,
+                                        None => {
+                                            return TestResult::failed(
+                                                start.elapsed(),
+                                                "test address resolved to no endpoints".to_string(),
+                                            )
+                                        }
+                                    },
+                                    Err(error) => {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            format!("failed to resolve test address: {error}"),
+                                        )
+                                    }
+                                };
+                            let client = match reqwest::Client::builder()
+                                .no_proxy()
+                                .http2_prior_knowledge()
+                                .resolve(REJECT_EXT_PROC_HOST, address)
+                                .build()
+                            {
+                                Ok(client) => client,
+                                Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
+                            };
+                            client
+                                .post(format!("http://{REJECT_EXT_PROC_HOST}:{}{PATH}", ctx.http_port))
+                                .json(&json!({
+                                    "model": "fixture-model",
+                                    "stream": true,
+                                    "messages": [{"role": "user", "content": "fixture prompt"}]
+                                }))
+                                .send()
+                                .await
+                                .map_err(|error| error.to_string())
+                        } else {
+                            request(&ctx, REJECT_EXT_PROC_HOST).await
+                        };
+                        let response = match response {
+>>>>>>> Stashed changes
                             Ok(response) => response,
                             Err(error) => return TestResult::failed(start.elapsed(), error),
                         };
@@ -650,34 +748,11 @@ impl GuardrailTestSuite {
                             ),
                         );
                     }
-                    let observation = match ctx
-                        .http_client
-                        .get(fixture_url(&ctx, "/guardrail/observation/pass"))
-                        .send()
-                        .await
-                    {
-                        Ok(response) => {
-                            response
-                                .json::<GuardrailObservation>()
-                                .await
-                                .unwrap_or_else(|_| GuardrailObservation {
-                                    calls: u64::MAX,
-                                    total_windows: 0,
-                                    last_window_count: 0,
-                                    version_v1: false,
-                                    minimal_envelope: false,
-                                    sorted_unique_keys: false,
-                                    canonical_content_window: false,
-                                })
-                        }
-                        Err(_) => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                "failed to query translation competition".to_string(),
-                            )
-                        }
+                    let calls = match observed_calls(&ctx, "pass").await {
+                        Ok(calls) => calls,
+                        Err(error) => return TestResult::failed(start.elapsed(), error),
                     };
-                    if observation.calls != 0 {
+                    if calls != 0 {
                         return TestResult::failed(
                             start.elapsed(),
                             "Guardrail ran after translation failure".to_string(),

@@ -34,3 +34,39 @@ metadata:
     name: edgion-backend
     app.kubernetes.io/name: edgion
     app.kubernetes.io/component: test
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dragonfly-system
+  labels:
+    name: dragonfly-system
+    app.kubernetes.io/name: edgion
+    app.kubernetes.io/component: test-dependency
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-it
+  labels:
+    name: edgion-it
+    app.kubernetes.io/name: edgion
+    app.kubernetes.io/component: test
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-deleg-dyn
+  labels:
+    name: edgion-deleg-dyn
+    app.kubernetes.io/name: edgion
+    app.kubernetes.io/component: test
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-grpc-deleg-dyn
+  labels:
+    name: edgion-grpc-deleg-dyn
+    app.kubernetes.io/name: edgion
+    app.kubernetes.io/component: test

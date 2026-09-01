@@ -1,0 +1,39 @@
+# Path Normalization - preserve_path_parameters opt-out scenario
+#
+# Verifies that with preservePathParameters enabled, ;param is preserved literally;
+# also verifies the §14.4 path-parameter bypass commitment degradation (operator explicitly accepts the side effect).
+#
+# Configuration requirement:
+#   This scenario requires the gateway to start with preserve_path_parameters: true (gateway YAML config).
+#   The default integration tests use strip mode (false); ;param is stripped and ..;/ bypass is blocked.
+#
+# Behavior (when preserve_path_parameters = true):
+#   - /api/users;v=1/data               -> upstream sees the literal ;v=1, not stripped
+#   - /admin/..;jsessionid=x/secret     -> NOT normalized to /secret
+#                                          ACL path deny "/secret" does not match -> 200
+#                                          (operator explicitly accepts this bypass risk)
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: path-norm-preserve-param
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Deny
+        conditions:
+          anyOf:
+            - allOf:
+                # path key: compared against the current path after normalization.
+                # When preserve_path_parameters = false (default):
+                #   /admin/..;jsessionid=x/secret -> normalized to /secret -> matches -> 403
+                # When preserve_path_parameters = true (opt-out):
+                #   /admin/..;jsessionid=x/secret kept as-is -> /secret does not match -> 200
+                - type: keyMatch
+                  key:
+                    type: path
+                  values:
+                    - "/secret"
+        status: 403

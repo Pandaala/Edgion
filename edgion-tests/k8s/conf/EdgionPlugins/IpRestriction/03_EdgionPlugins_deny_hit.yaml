@@ -10,9 +10,7 @@ spec:
     config:
       ipSource: RemoteIp
       defaultAction: allow
-      deny:
-      - name: blocked
-        cidrs:
-        - 10.0.0.0/8
+      denyRefs:
+      - name: k8s-test-client-peer
       status: 403
       message: IP is blocked

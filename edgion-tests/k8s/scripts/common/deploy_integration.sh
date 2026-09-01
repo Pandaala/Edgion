@@ -195,6 +195,8 @@ if [[ "${SKIP_TEST}" != "true" ]]; then
     echo "Override test-server image: ${TEST_SERVER_IMAGE}"
     kubectl set image deployment/edgion-test-server -n edgion-test test-server="${TEST_SERVER_IMAGE}"
     kubectl set image deployment/edgion-test-server -n edgion-default test-server="${TEST_SERVER_IMAGE}"
+    kubectl set image deployment/edgion-test-server -n edgion-deleg-dyn test-server="${TEST_SERVER_IMAGE}"
+    kubectl set image deployment/edgion-test-server -n edgion-grpc-deleg-dyn test-server="${TEST_SERVER_IMAGE}"
     kubectl set image deployment/edgion-test-server -n "${BACKEND_TEST_NAMESPACE}" test-server="${TEST_SERVER_IMAGE}" || true
   fi
 
@@ -237,6 +239,8 @@ if [[ -n "${PULL_POLICY_OVERRIDE}" ]]; then
   if [[ "${SKIP_TEST}" != "true" ]]; then
     set_pull_policy_if_exists "edgion-test" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
     set_pull_policy_if_exists "edgion-default" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
+    set_pull_policy_if_exists "edgion-deleg-dyn" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
+    set_pull_policy_if_exists "edgion-grpc-deleg-dyn" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
     set_pull_policy_if_exists "${BACKEND_TEST_NAMESPACE}" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
   fi
 fi
@@ -254,6 +258,12 @@ if [[ "${WAIT_READY}" == "true" ]]; then
 
     echo "Waiting test-server rollout (edgion-default)..."
     rollout_if_exists "edgion-default" "edgion-test-server" "300s"
+
+    echo "Waiting test-server rollout (edgion-deleg-dyn)..."
+    rollout_if_exists "edgion-deleg-dyn" "edgion-test-server" "300s"
+
+    echo "Waiting test-server rollout (edgion-grpc-deleg-dyn)..."
+    rollout_if_exists "edgion-grpc-deleg-dyn" "edgion-test-server" "300s"
 
     echo "Waiting test-server rollout (${BACKEND_TEST_NAMESPACE})..."
     rollout_if_exists "${BACKEND_TEST_NAMESPACE}" "edgion-test-server" "300s"

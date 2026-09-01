@@ -6,12 +6,11 @@ metadata:
 spec:
   gatewayClassName: public-gateway
   listeners:
-  # Listener 1:  hostname 
+  # Listener 1 no longer restricts requests by hostname.
   - name: http-with-hostname
     port: 31250
     protocol: HTTP
-    # hostname ， hostname
-  # Listener 2: 
+  # Listener 2 remains unchanged.
   - name: http-general
     port: 31251
     protocol: HTTP

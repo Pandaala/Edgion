@@ -5,7 +5,7 @@
 // gateway picks up the change without a restart:
 //   - failing: resolver-ref → a DOWN httpdns LinkSys with `fallback: none`, so
 //     per-request resolution fails and the backend returns 5xx.
-//   - working: resolver-ref → a live httpdns LinkSys returning 127.0.0.1, so the
+//   - working: resolver-ref → a live httpdns LinkSys returning the backend Pod IP, so the
 //     backend resolves and serves 200.
 //
 // Both phases target the flap scenario's own Gateway (port 31361); the request
@@ -16,19 +16,37 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 
-const FLAP_GATEWAY: &str = "http://127.0.0.1:31361";
+const FLAP_GATEWAY_PORT: u16 = 31361;
 const FLAP_HOST: &str = "flap.dns.test";
 /// The ExternalName of the flap Service (the `{domain}` the httpdns endpoint
 /// counts resolutions for).
 const FLAP_EXTERNAL_NAME: &str = "flapbackend.test";
 /// Local test backend serving the fake HTTP DNS endpoint (`/dns/hits`).
-const BACKEND_BASE: &str = "http://127.0.0.1:30001";
+fn backend_base() -> String {
+    let k8s_mode = std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true");
+    let default_host = if k8s_mode {
+        "edgion-test-server.edgion-test.svc.cluster.local"
+    } else {
+        "127.0.0.1"
+    };
+    let host_env = if k8s_mode {
+        "EDGION_TEST_DNS_FLAP_SERVER_HOST"
+    } else {
+        "TEST_SERVER_HOST"
+    };
+    let host = std::env::var(host_env).unwrap_or_else(|_| default_host.to_string());
+    let port = std::env::var("TEST_HTTP_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(30001);
+    format!("http://{host}:{port}")
+}
 
 /// GET the flap route and return the HTTP status.
 async fn flap_status(ctx: &TestContext) -> Result<u16, String> {
     let resp = ctx
         .http_client
-        .get(format!("{FLAP_GATEWAY}/echo"))
+        .get(format!("http://{}:{FLAP_GATEWAY_PORT}/echo", ctx.target_host))
         .timeout(Duration::from_secs(10))
         .header("Host", FLAP_HOST)
         .send()
@@ -41,7 +59,7 @@ async fn flap_status(ctx: &TestContext) -> Result<u16, String> {
 async fn live_resolver_hits(ctx: &TestContext) -> Result<u64, String> {
     let resp = ctx
         .http_client
-        .get(format!("{BACKEND_BASE}/dns/hits/{FLAP_EXTERNAL_NAME}"))
+        .get(format!("{}/dns/hits/{FLAP_EXTERNAL_NAME}", backend_base()))
         .timeout(Duration::from_secs(5))
         .send()
         .await

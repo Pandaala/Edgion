@@ -658,32 +658,41 @@ impl WebhookKeyGetTestSuite {
     fn test_custom_secret() -> TestCase {
         TestCase::new(
             "custom_secret",
-            "Secret-sourced custom header injected with prefix (Authorization: Bearer <token>)",
+            "Secret-sourced custom header is verified by KeyAuth without exposing it in access logs",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    run_case(
-                        &ctx,
-                        "wh11.example.com",
-                        "/test/wh11",
-                        &[],
-                        "wh11",
-                        start,
-                        true,
-                        |log| {
-                            // wh11 extracts data.echo_headers.authorization. The controller
-                            // resolves Secret wh11-token (token=test-secret-key-12345) and the
-                            // gateway injects it with prefix "Bearer ".
-                            if log_has(log, "wh11_result", "Bearer test-secret-key-12345") {
-                                Ok("Secret resolved and injected as 'Bearer <token>' into outbound header".into())
-                            } else {
-                                Err("expected wh11_result='Bearer test-secret-key-12345' \
-                                     (controller-resolved secretRef injected as 'Bearer <token>')"
-                                    .into())
-                            }
-                        },
+                    let trace_id = format!("wh11-{}", uuid::Uuid::new_v4());
+                    let response = match send_gw(&ctx, "wh11.example.com", "/test/wh11", &[], &trace_id).await {
+                        Ok(response) => response,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    if response.status().as_u16() != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "KeyAuth did not verify the Secret-sourced webhook value: status {}",
+                                response.status()
+                            ),
+                        );
+                    }
+
+                    let log = match fetch_log(&ctx, &trace_id).await {
+                        Ok(log) => log,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    if log.contains("test-secret-key-12345") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "access log leaked the Secret-sourced webhook credential".to_string(),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "KeyAuth verified the full Secret-sourced webhook value; access log remained redacted"
+                            .to_string(),
                     )
-                    .await
                 })
             },
         )
@@ -755,23 +764,30 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // (a) test_server observed the real token.
+                    // (a) KeyAuth verifies the exact value echoed by test_server
+                    // without exporting that value through accessLogExtern.
                     let trace_id = format!("wh14-{}", uuid::Uuid::new_v4());
-                    if let Err(e) = send_gw(&ctx, "wh14.example.com", "/test/wh14", &[], &trace_id).await {
-                        return TestResult::failed(start.elapsed(), e);
+                    let response = match send_gw(&ctx, "wh14.example.com", "/test/wh14", &[], &trace_id).await {
+                        Ok(response) => response,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    if response.status().as_u16() != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "KeyAuth did not verify the Secret-sourced URL-target value: status {}",
+                                response.status()
+                            ),
+                        );
                     }
                     let log = match fetch_log(&ctx, &trace_id).await {
                         Ok(l) => l,
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
-                    if !log_has(&log, "wh14_result", "Bearer integration-test-secret-77") {
+                    if log.contains("integration-test-secret-77") {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "expected wh14_result='Bearer integration-test-secret-77' \
-                                 (real token reached the URL target) | access-log: {}",
-                                log
-                            ),
+                            "access log leaked the Secret-sourced URL-target credential".to_string(),
                         );
                     }
 
@@ -784,7 +800,7 @@ impl WebhookKeyGetTestSuite {
                     if resource_str.contains("integration-test-secret-77") {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("controller admin output leaked the real secret value: {}", resource_str),
+                            "controller admin output leaked the real secret value".to_string(),
                         );
                     }
                     let resolved_secrets = &resource["spec"]["config"]["resolvedSecrets"];
@@ -792,15 +808,16 @@ impl WebhookKeyGetTestSuite {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "expected spec.config.resolvedSecrets == \"[redacted]\", got: {} | full: {}",
-                                resolved_secrets, resource_str
+                                "expected spec.config.resolvedSecrets == \"[redacted]\", got: {}",
+                                resolved_secrets
                             ),
                         );
                     }
 
                     TestResult::passed_with_message(
                         start.elapsed(),
-                        "real token reached the URL target; controller admin output renders \"[redacted]\"".to_string(),
+                        "KeyAuth verified the full URL-target token; access log and controller output remained redacted"
+                            .to_string(),
                     )
                 })
             },
@@ -815,23 +832,6 @@ impl WebhookKeyGetTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    // The fixture's LinkSys target path is a static template
-                    // ("/retry-sequence/wh15-retry-seq/503,503,200") with no
-                    // per-request variables, so `test_id` is a fixed literal
-                    // ("wh15-retry-seq") rather than a fresh UUID. test_server's
-                    // `/retry-sequence/{test_id}/{status_list}` handler keeps a
-                    // cumulative, process-wide counter per `test_id` that never
-                    // wraps once its status_list is exhausted — so without a
-                    // reset, a rerun in the same test_server process would reuse
-                    // the counter from the previous run and never retry. Reset it
-                    // before driving traffic (safe: only this case uses
-                    // `wh15-retry-seq` within this suite, and cases run
-                    // sequentially).
-                    let reset_url = format!("http://{}:30001/retry-sequence-reset", ctx.target_host);
-                    if let Err(e) = ctx.http_client.get(&reset_url).send().await {
-                        return TestResult::failed(start.elapsed(), format!("retry-sequence-reset failed: {}", e));
-                    }
 
                     run_case(
                         &ctx,
@@ -1049,6 +1049,16 @@ impl WebhookKeyGetTestSuite {
                             format!("valid key expected 200, got {}", status_ok),
                         );
                     }
+                    let log_ok = match fetch_log(&ctx, &trace_ok).await {
+                        Ok(log) => log,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    if log_ok.contains("test-key-wh19-valid") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "access log leaked the webhook-derived API key".to_string(),
+                        );
+                    }
 
                     let trace_missing = format!("wh19-missing-{}", uuid::Uuid::new_v4());
                     let resp_missing = match send_gw(&ctx, "wh19.example.com", "/test/wh19", &[], &trace_missing).await
@@ -1087,7 +1097,7 @@ impl WebhookKeyGetTestSuite {
 
                     TestResult::passed_with_message(
                         start.elapsed(),
-                        "WebhookKeyGet then KeyAuth: valid key 200; missing/wrong key 401. \
+                        "WebhookKeyGet then KeyAuth: valid key 200 without access-log leakage; missing/wrong key 401. \
                          Misordered list (KeyAuth first) is a silent auth bypass — W-1 declined \
                          a cross-plugin ordering check."
                             .to_string(),

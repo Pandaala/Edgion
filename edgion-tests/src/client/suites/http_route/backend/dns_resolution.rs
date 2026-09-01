@@ -28,19 +28,21 @@
 //   - 03_HTTPRoute_*                          # hostname → backend Service
 // Requires securityProtect.allowLoopbackUpstream=true (base EdgionGatewayConfig).
 
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{env_host_or, TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
-
-/// Local test backend that also serves the fake HTTP DNS endpoint.
-const BACKEND_BASE: &str = "http://127.0.0.1:30001";
 
 pub struct DnsResolutionTestSuite;
 
 impl DnsResolutionTestSuite {
+    fn dns_server_base() -> String {
+        let host = env_host_or("EDGION_TEST_DNS_SERVER_HOST", "127.0.0.1");
+        format!("http://{host}:30001")
+    }
+
     /// Read the httpdns resolve hit-count for `host` from the test server.
     async fn dns_hits(client: &reqwest::Client, host: &str) -> Result<u64, String> {
-        let url = format!("{BACKEND_BASE}/dns/hits/{host}");
+        let url = format!("{}/dns/hits/{host}", Self::dns_server_base());
         let resp = client
             .get(&url)
             .timeout(std::time::Duration::from_secs(5))

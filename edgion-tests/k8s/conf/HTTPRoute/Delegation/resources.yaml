@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-edgion-deleg-routes-to-test-http
+  namespace: edgion-test
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: edgion-deleg
+  to:
+    - group: ""
+      kind: Service
+      name: test-http
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: delegation-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31932
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: delegation-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: delegation-gateway
+  hostnames:
+    - "delegation.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /plain
+      backendRefs:
+        - name: test-http
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-parent-filter
+                value: "on"
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: HTTPRoute
+          name: "*"
+          namespace: edgion-deleg
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: billing-child
+  namespace: edgion-deleg
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing/pay
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /evil
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

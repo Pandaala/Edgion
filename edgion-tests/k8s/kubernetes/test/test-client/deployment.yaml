@@ -67,12 +67,8 @@ spec:
             cpu: 500m
             memory: 512Mi
         volumeMounts:
-        - name: test-conf
-          mountPath: /usr/local/edgion/conf
-          readOnly: true
         - name: test-ports
-          mountPath: /usr/local/edgion/conf/ports.json
-          subPath: ports.json
+          mountPath: /usr/local/edgion/conf
           readOnly: true
         - name: test-certs
           mountPath: /usr/local/edgion/edgion-tests/certs
@@ -81,9 +77,6 @@ spec:
           mountPath: /usr/local/edgion/edgion-tests/certs/mtls
           readOnly: true
       volumes:
-      - name: test-conf
-        configMap:
-          name: edgion-test-config
       - name: test-ports
         configMap:
           name: edgion-test-ports

@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-transform-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: jsonToForm

@@ -1,0 +1,18 @@
+# Create the RSA-backed resource first so Kubernetes assigns the older timestamp.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  # The a/b prefix also preserves the intended winner if both API-server
+  # creation timestamps have identical display precision.
+  name: edgiontls-sni-collision-a-older
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-sni-collision-gateway
+      namespace: edgion-test
+      sectionName: https
+  hosts:
+    - gateway-tls.test.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

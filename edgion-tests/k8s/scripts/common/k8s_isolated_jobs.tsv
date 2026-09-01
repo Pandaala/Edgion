@@ -1,0 +1,7 @@
+# scenario_id	canonical_script	timeout_seconds
+controller_auth	edgion-tests/integration/scripts/integration/test_controller_no_auth.sh	240
+gateway_admin_auth	edgion-tests/integration/scripts/integration/test_gateway_admin_auth.sh	300
+fips_policy	edgion-tests/integration/scripts/integration/test_fips_policy.sh	300
+geoip_db_states	edgion-tests/integration/scripts/integration/test_geoip_db_states.sh	600
+plugin_policy	edgion-tests/integration/scripts/integration/test_plugin_policy.sh	480
+unknown_config_fields	edgion-tests/integration/scripts/integration/test_unknown_config_fields.sh	360

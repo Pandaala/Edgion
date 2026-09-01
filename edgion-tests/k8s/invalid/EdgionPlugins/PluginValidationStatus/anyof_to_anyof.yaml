@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-condition-set-anyof-to-anyof
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config: {}
+      conditions:
+        run:
+          anyOf:
+            - anyOf:
+                - type: probability
+                  ratio: 1.0

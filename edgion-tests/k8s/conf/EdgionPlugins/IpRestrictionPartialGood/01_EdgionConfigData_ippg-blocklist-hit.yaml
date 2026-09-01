@@ -1,0 +1,23 @@
+# IpList EdgionConfigData — partial-good block-list whose good CIDR COVERS the
+# test client's TCP peer (OrbStack test-client Pod IP).
+#
+# The group mixes one VALID CIDR (192.168.0.0/16) with one INVALID entry
+# ("not-a-cidr"). Tasks 1-8 made IpList compilation partial-good: the invalid
+# entry is skipped (logged + surfaced as PartiallyInvalid on the resource
+# status) instead of failing the whole list. This fixture proves on the data
+# plane that the good entry is still compiled and enforced — a request from an
+# IP inside 192.168.0.0/16 is blocked even though a sibling entry is garbage.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ippg-blocklist-hit
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: mixed-good-and-bad
+          cidrs:
+            - "192.168.0.0/16" # good — covers the client peer (OrbStack test-client Pod IP)
+            - "not-a-cidr"  # bad  — skipped (partial-good), not fatal

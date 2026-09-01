@@ -1,0 +1,81 @@
+# Scenario 12: url-target-happy-path
+# ---------------------------------------------------------------------------
+# Webhook target is an external URL (`target.url`), not a Kubernetes Service.
+# The test-server Service DNS name is a hostname (not an IP literal), so the
+# gateway's outbound client resolves it through `EgressResolver` (real DNS
+# resolution + address classification) rather than the IP-literal `dial_url`
+# guard. This exercises the hostname path through `EgressResolver` end to end.
+#
+# No Service/EndpointSlice fixture is needed: a URL target dials the URL
+# directly, bypassing Kubernetes backend resolution entirely.
+#
+# Flow: HTTPRoute -> EdgionPlugins(WebhookKeyGet) -> LinkSys webhook
+#       -> test-server Service DNS /webhook/resolve
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh12-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      url: "http://edgion-test-server.edgion-test.svc.cluster.local:30001"
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+    timeoutMs: 5000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh12-ctx-set
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: wh12_user_id
+      from: ctx
+      name: wh12_user_id
+  requestPlugins:
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh12_user_id
+            webhookRef: "edgion-default/wh12-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
+            default: "fallback-user"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh12-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh12.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh12
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh12-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

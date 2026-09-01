@@ -1,0 +1,163 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ebtp-anc-gw-a
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31940
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ebtp-anc-gw-b
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31941
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebtp-anc-svc-a-only
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebtp-anc-svc-b-only
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebtp-anc-svc-multi
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ebtp-anc-route-a
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ebtp-anc-gw-a
+      namespace: edgion-test
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /multi
+      backendRefs:
+        - name: ebtp-anc-svc-multi
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /a-only
+      backendRefs:
+        - name: ebtp-anc-svc-a-only
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ebtp-anc-route-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ebtp-anc-gw-b
+      namespace: edgion-test
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /multi
+      backendRefs:
+        - name: ebtp-anc-svc-multi
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /b-only
+      backendRefs:
+        - name: ebtp-anc-svc-b-only
+          port: 8080
+---
+# Apply winners before the contending loser so Kubernetes creation timestamps
+# preserve the canonical oldest-wins status contract.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ebtp-anc-a-win-multi
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ebtp-anc-svc-multi
+  loadBalancer:
+    type: LeastConn
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ebtp-anc-b-win-bonly
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ebtp-anc-svc-b-only
+  loadBalancer:
+    type: LeastConn
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ebtp-anc-z-loser
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ebtp-anc-svc-a-only
+    - kind: Service
+      name: ebtp-anc-svc-b-only
+  loadBalancer:
+    type: LeastConn

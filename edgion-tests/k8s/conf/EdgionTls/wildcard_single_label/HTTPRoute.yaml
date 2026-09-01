@@ -1,0 +1,22 @@
+# Route wildcard requests to the selector-backed shared HTTP Service.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wc-single-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: wc-single-gateway
+      namespace: edgion-test
+      sectionName: https-wc-single
+  hostnames:
+    - "*.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

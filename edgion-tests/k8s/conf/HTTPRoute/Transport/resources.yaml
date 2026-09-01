@@ -1,0 +1,175 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: transport-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31944
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-transport-h1
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-sequence-test-server
+  ports:
+    - name: transport-h1
+      port: 30030
+      targetPort: 30030
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-transport-h2
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-sequence-test-server
+  ports:
+    - name: transport-h2
+      port: 30031
+      targetPort: 30031
+      protocol: TCP
+      appProtocol: kubernetes.io/h2c
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transport-recorder
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-sequence-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+    - name: ext-proc
+      port: 30041
+      targetPort: 30041
+      protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: transport-streamed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: transport-recorder.edgion-test.svc.cluster.local:30041
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: STREAMED
+        failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-h1
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames: ["transport-h1.example.com"]
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /timeout
+      timeouts:
+        backendRequest: 2s
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+    - backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-h2
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames: ["transport-h2.example.com"]
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /timeout
+      timeouts:
+        backendRequest: 2s
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+    - backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-streamed-h1
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames: ["transport-streamed-h1.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: transport-streamed
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-streamed-h2
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames: ["transport-streamed-h2.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: transport-streamed
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031

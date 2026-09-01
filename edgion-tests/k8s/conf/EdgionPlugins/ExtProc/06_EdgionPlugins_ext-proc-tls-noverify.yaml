@@ -1,0 +1,29 @@
+# ExtProc over TLS (P0#1, Scenario B): verify=false against the self-signed
+# (publicly-untrusted) ext_proc TLS server.
+#
+# Same TLS endpoint (127.0.0.1:30042) with NO CA and verify: false. ext_proc uses
+# the hand-built rustls connector (provider_can_disable=true), so after M-A1 the
+# resolver honors verify=false (AcceptAll verifier) with no env gate — the bidi
+# stream still establishes and mutates headers, proving the skip-verify path.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-tls-noverify
+  namespace: edgion-default
+spec:
+  # Both phases: verify=false AcceptAll path establishes the TLS+h2 stream and
+  # mutates a header on request and upstream-response stages.
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "edgion-test-server.edgion-test.svc.cluster.local:30042"
+          timeoutMs: 2000
+          tls:
+            enabled: true
+            verify: false
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false

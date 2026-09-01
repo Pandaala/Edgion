@@ -1,5 +1,5 @@
 # S14: ipRefs inside a RequestRestriction anyOf group.
-# Deny when the peer is in rr-ipref-list AND the path matches /admin/.
+# Deny when the peer is the current K8s test-client Pod AND the path matches /admin/.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -16,7 +16,7 @@ spec:
             - allOf:
                 - type: directPeerIpMatch
                   ipRefs:
-                    - name: rr-ipref-list
+                    - name: k8s-test-client-peer
                 - type: keyMatch
                   key:
                     type: path

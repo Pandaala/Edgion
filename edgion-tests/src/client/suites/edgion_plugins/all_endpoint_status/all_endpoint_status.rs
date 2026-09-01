@@ -492,11 +492,31 @@ impl AllEndpointStatusTestSuite {
                     let start = Instant::now();
                     let url = format!("{}/status", ctx.http_url());
 
+                    // AllEndpointStatus local responses deliberately carry
+                    // `Connection: close`. Keep this rate-limit assertion about
+                    // process-wide request timing, not a race where the shared
+                    // client pool briefly reuses a socket while the close is
+                    // propagating.
+                    let client = match reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(5))
+                        .pool_max_idle_per_host(0)
+                        .no_proxy()
+                        .build()
+                    {
+                        Ok(client) => client,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Failed to build non-reusing HTTP client: {}", e),
+                            );
+                        }
+                    };
+
                     // Wait to clear any previous rate limit
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
                     // First request should succeed
-                    let resp1 = match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
+                    let resp1 = match client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => {
                             return TestResult::failed(start.elapsed(), format!("First request failed: {}", e));
@@ -514,7 +534,7 @@ impl AllEndpointStatusTestSuite {
                     }
 
                     // Second request immediately should be rate-limited
-                    let resp2 = match ctx.http_client.get(&url).header("host", TEST_HOST).send().await {
+                    let resp2 = match client.get(&url).header("host", TEST_HOST).send().await {
                         Ok(r) => r,
                         Err(e) => {
                             return TestResult::failed(start.elapsed(), format!("Second request failed: {}", e));

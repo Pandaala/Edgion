@@ -1,0 +1,5 @@
+# phase	namespace	service	port	expected_count
+initial	edgion-test	canary-hotswap-v1	30001	nonempty
+initial	edgion-test	canary-hotswap-v2	30002	nonempty
+final	edgion-test	canary-hotswap-v1	30001	nonempty
+final	edgion-test	canary-hotswap-v2	30002	nonempty

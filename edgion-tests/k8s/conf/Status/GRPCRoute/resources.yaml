@@ -1,0 +1,91 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: grpc-status-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: grpc
+      protocol: HTTP
+      port: 31335
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-status-svc
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 30021
+      protocol: TCP
+      appProtocol: kubernetes.io/h2c
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-basic-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: grpc-status-gateway
+      namespace: edgion-test
+  hostnames:
+    - grpc-status.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: grpc-status-svc
+          port: 50051
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-invalid-kind
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: grpc-status-gateway
+      namespace: edgion-test
+  hostnames:
+    - grpc-status-invalid.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: grpc-status-svc
+          group: example.com
+          kind: Foo
+          port: 50051
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-nonexistent-backend
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: grpc-status-gateway
+      namespace: edgion-test
+  hostnames:
+    - grpc-status-missing.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - name: does-not-exist
+          port: 50051

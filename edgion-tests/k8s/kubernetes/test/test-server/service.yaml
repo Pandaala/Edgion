@@ -53,6 +53,14 @@ spec:
     port: 30041
     targetPort: 30041
     protocol: TCP
+  - name: ext-proc-tls
+    port: 30042
+    targetPort: 30042
+    protocol: TCP
+  - name: ext-proc-mtls
+    port: 30043
+    targetPort: 30043
+    protocol: TCP
   # TLS provider endpoints used by the AI backend policy dynamic scenario.
   - name: https-backend
     port: 30051

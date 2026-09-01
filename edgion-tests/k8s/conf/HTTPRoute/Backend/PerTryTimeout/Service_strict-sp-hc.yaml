@@ -4,11 +4,9 @@ metadata:
   name: strict-sp-hc
   namespace: edgion-test
 spec:
-  sessionAffinity: ClientIP
   ports:
   - port: 30001
     targetPort: 30001
     protocol: TCP
   selector:
-    app: edgion-test-server
-    edgion.io/sticky-single: 'true'
+    app: edgion-sequence-test-server

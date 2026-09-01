@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-hotswap-switch
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-hotswap-v1
+            namespace: edgion-test
+          canary:
+            name: canary-hotswap-v2
+            namespace: edgion-test
+        activeProfileRef:
+          name: canary-hotswap-selector
+          namespace: edgion-default
+        onInvalid: reject

@@ -1,0 +1,38 @@
+# Shared AI Gateway fixture for the AiGuard and Guardrail plugin suites. The
+# K8s controller watches one configured GatewayClass; the authoritative base
+# EdgionGatewayConfig already enables response compression.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ai-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31945
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: fixture-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAICompatible
+    endpoint: http://edgion-test-server.edgion-test.svc.cluster.local:30001/ai/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: ai-provider-credential
+    models:
+      - name: fixture-model
+        aliases:
+          - fixture-alias
+      - name: premium-model
+      - name: economy-model
+    defaults:
+      streaming: true

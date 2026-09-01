@@ -1,0 +1,110 @@
+# Scenario 15: url-retry-on-5xx
+# ---------------------------------------------------------------------------
+# `retry: {maxRetries: 2, retryOnStatus: [503]}` on a URL target. test_server's
+# `/retry-sequence/{test_id}/{status_list}` handler returns status codes from
+# `status_list` in order per `test_id` (503, then 503, then 200), tracked by a
+# process-wide in-memory counter keyed by `test_id`; each response's
+# `x-attempt-history` header lists every status returned so far for that
+# `test_id`. Because `success.statusCodes: [200]` accepts the 3rd attempt and
+# `retryOnStatus: [503]` covers the first two, the gateway must retry exactly
+# twice (3 total attempts) before extracting the key.
+#
+# The webhook extracts `x-attempt-history` from the *final* (successful)
+# response: after 3 calls to the same `test_id` its value is "503,503,200",
+# which is only possible if the gateway made exactly 3 inbound requests to
+# this path in this exact sequence — a stronger and more direct assertion
+# than a bare request counter.
+#
+# The target path derives `test_id` from the request's unique X-Trace-Id. The
+# Service uses ClientIP affinity so all retries for one gateway request reach
+# the same test-server replica and share its in-memory attempt counter.
+#
+# Flow: HTTPRoute -> EdgionPlugins(WebhookKeyGet) -> LinkSys webhook
+#       -> wh15-svc/retry-sequence/<trace-id>/503,503,200
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh15-svc
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  sessionAffinity: ClientIP
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh15-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      url: "http://wh15-svc.edgion-default.svc.cluster.local:30001"
+    request:
+      path:
+        template: "/retry-sequence/${header:X-Trace-Id}/503,503,200"
+      method:
+        template: "GET"
+    timeoutMs: 5000
+    retry:
+      maxRetries: 2
+      retryDelayMs: 50
+      retryOnStatus: [503]
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh15-ctx-set
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: wh15_result
+      from: ctx
+      name: wh15_result
+  requestPlugins:
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh15_result
+            webhookRef: "edgion-default/wh15-resolver"
+            extract:
+              source: header
+              name: "x-attempt-history"
+            default: "fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh15-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh15.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh15
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh15-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

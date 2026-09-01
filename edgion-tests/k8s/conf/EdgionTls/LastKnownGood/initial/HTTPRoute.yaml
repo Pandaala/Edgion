@@ -1,0 +1,25 @@
+# tls-06 last-known-good HTTPRoute.
+# Routes lkg.example.com to the shared echo backend so the listener has a
+# non-empty route table. The test asserts on the TLS handshake + served cert
+# serial, not on the proxied response, so the backend identity is incidental.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lkg-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: lkg-gateway
+      namespace: edgion-test
+      sectionName: https-lkg
+  hostnames:
+    - lkg.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

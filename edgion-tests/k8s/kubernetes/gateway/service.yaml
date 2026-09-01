@@ -451,6 +451,10 @@ spec:
     port: 31342
     targetPort: 31342
     protocol: TCP
+  - name: p31360
+    port: 31360
+    targetPort: 31360
+    protocol: TCP
   - name: p31381
     port: 31381
     targetPort: 31381
@@ -503,6 +507,10 @@ spec:
     port: 31394
     targetPort: 31394
     protocol: UDP
+  - name: p31395
+    port: 31395
+    targetPort: 31395
+    protocol: TCP
   - name: p31930
     port: 31930
     targetPort: 31930
@@ -511,7 +519,91 @@ spec:
     port: 31931
     targetPort: 31931
     protocol: TCP
+  - name: p31932
+    port: 31932
+    targetPort: 31932
+    protocol: TCP
+  - name: p31934
+    port: 31934
+    targetPort: 31934
+    protocol: TCP
+  - name: p31937
+    port: 31937
+    targetPort: 31937
+    protocol: TCP
+  - name: p31938
+    port: 31938
+    targetPort: 31938
+    protocol: TCP
+  - name: p31944
+    port: 31944
+    targetPort: 31944
+    protocol: TCP
   - name: p31945
     port: 31945
     targetPort: 31945
+    protocol: TCP
+  - name: p31946
+    port: 31946
+    targetPort: 31946
+    protocol: TCP
+  - name: p31947
+    port: 31947
+    targetPort: 31947
+    protocol: TCP
+  - name: p31948
+    port: 31948
+    targetPort: 31948
+    protocol: TCP
+  - name: p31949
+    port: 31949
+    targetPort: 31949
+    protocol: TCP
+  - name: p31201
+    port: 31201
+    targetPort: 31201
+    protocol: TCP
+  - name: p31361
+    port: 31361
+    targetPort: 31361
+    protocol: TCP
+  - name: p31933
+    port: 31933
+    targetPort: 31933
+    protocol: TCP
+  - name: p31935
+    port: 31935
+    targetPort: 31935
+    protocol: TCP
+  - name: p31936
+    port: 31936
+    targetPort: 31936
+    protocol: TCP
+  - name: p31939
+    port: 31939
+    targetPort: 31939
+    protocol: TCP
+  - name: p31942
+    port: 31942
+    targetPort: 31942
+    protocol: TCP
+  - name: p31943
+    port: 31943
+    targetPort: 31943
+    protocol: TCP
+  - name: p31950
+    port: 31950
+    targetPort: 31950
+    protocol: TCP
+  - name: p31951
+    port: 31951
+    targetPort: 31951
+    protocol: TCP
+  - name: p31952
+    port: 31952
+    targetPort: 31952
+    protocol: TCP
+  - name: p31953
+    port: 31953
+    targetPort: 31953
     protocol: TCP

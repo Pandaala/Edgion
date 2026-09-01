@@ -1,0 +1,53 @@
+# Advanced Wasm scenarios (same reference guest header_demo.wasm) exercising the
+# v2 capabilities end-to-end: HTTP callout + Pause/resume and on_tick + shared data.
+#
+# Guest behavior selected by request headers (see edgion-tests/wasm/README.md):
+#   x-wasm-callout-url: <origin>  -> dispatch GET <origin>/verify forwarding
+#                                    Authorization, Pause; callout 200 -> resume,
+#                                    else -> local 403 "callout denied".
+#   x-wasm-read-ticks: 1          -> request header x-wasm-ticks = shared "ticks".
+#   x-wasm-read-body: 1           -> request header x-wasm-bodybytes = shared count.
+#   x-wasm-read-callout: 1        -> request header x-wasm-calloutticks = shared
+#                                    "calloutticks" (bumped by tick-phase callouts).
+# on_tick increments shared "ticks" every 1s and — because
+# pluginConfig carries a callout origin — dispatches GET <origin>/verify with
+# "Bearer valid-token" each tick; the 200 callback bumps shared "calloutticks".
+#
+# calloutAllowlist authorizes the fake auth server the integration harness runs
+# at 127.0.0.1:30040 (start_all.sh --auth-port 30040); its /verify returns 200
+# for "Bearer valid-token" and 401 otherwise.
+#
+# pluginConfig is set identically on all three stages: they share one module
+# cache entry (same source file), whose vm/plugin config is taken from
+# whichever plugin loads first. Only the request stage carries the
+# calloutAllowlist — the other stages' empty lists carry no opinion for the
+# tick-callout decision (no conflict).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-advanced
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: /usr/local/edgion/test-assets/header_demo.wasm
+        pluginConfig:
+          string: "http://wasm-auth-server.edgion-test.svc.cluster.local:30040"
+        failOpen: false
+        timeoutMs: 1000
+        calloutAllowlist:
+          - "http://wasm-auth-server.edgion-test.svc.cluster.local:30040"
+        calloutTimeoutMs: 3000
+  upstreamResponseFilterPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: /usr/local/edgion/test-assets/header_demo.wasm
+        pluginConfig:
+          string: "http://wasm-auth-server.edgion-test.svc.cluster.local:30040"
+        failOpen: false
+        timeoutMs: 1000

@@ -18,6 +18,6 @@ spec:
       request: 10s
       backendRequest: 1s
     backendRefs:
-    - name: test-http
+    - name: test-http-per-try
       namespace: edgion-test
       port: 30001

@@ -1,0 +1,18 @@
+# Scenario: DirectEndpoint plugin with an invalid regex in extract
+# Expect: Accepted=False/Invalid, message contains "regex"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-direct-endpoint-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: DirectEndpoint
+      config:
+        from:
+          type: header
+          name: x-target-ip
+        extract:
+          regex: "(?P<unclosed"
+          group: 1

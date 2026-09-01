@@ -35,6 +35,10 @@ const ADV_HOST: &str = "wasm-adv.example.com";
 /// a callout to `<origin>/verify`. It is in the plugin's `calloutAllowlist`.
 const CALLOUT_ORIGIN: &str = "http://127.0.0.1:30040";
 
+fn callout_origin() -> String {
+    std::env::var("EDGION_TEST_WASM_CALLOUT_ORIGIN").unwrap_or_else(|_| CALLOUT_ORIGIN.to_string())
+}
+
 pub struct WasmPluginTestSuite;
 
 impl WasmPluginTestSuite {
@@ -353,7 +357,7 @@ impl WasmPluginTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", ADV_HOST)
-                        .header("x-wasm-callout-url", CALLOUT_ORIGIN)
+                        .header("x-wasm-callout-url", callout_origin())
                         .header("authorization", "Bearer valid-token")
                         .send()
                         .await;
@@ -398,7 +402,7 @@ impl WasmPluginTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", ADV_HOST)
-                        .header("x-wasm-callout-url", CALLOUT_ORIGIN)
+                        .header("x-wasm-callout-url", callout_origin())
                         .header("authorization", "Bearer wrong-token")
                         .send()
                         .await;

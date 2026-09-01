@@ -1,0 +1,170 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-pass
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rules:
+          - name: tripwire
+            match:
+              type: regex
+              pattern: "never-present-in-this-prompt"
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-reject-error
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rejectionMode: error
+        rules:
+          - name: tripwire
+            match:
+              type: regex
+              pattern: "forbidden-token"
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-reject-content-filter
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rejectionMode: contentFilter
+        rules:
+          - name: tripwire
+            match:
+              type: pii
+              detector: awsAccessKeyId
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-mask
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      config:
+        rules:
+          - name: redact-emails
+            match:
+              type: pii
+              detector: email
+            action: mask
+            replacement: "[redacted]"
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-guard-pass
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-guard-pass.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-guard-pass
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-guard-reject-error
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-guard-reject-error.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-guard-reject-error
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-guard-reject-content-filter
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-guard-content-filter.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-guard-reject-content-filter
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ai-guard-mask
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - ai-guard-mask.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ai-guard-mask
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider

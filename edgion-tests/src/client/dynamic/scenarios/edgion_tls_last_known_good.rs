@@ -35,7 +35,12 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let scenario = SCENARIO;
         ctx.assert_phase(scenario, "initial").await?;
-        ctx.apply_dir("updates_garbage/").await?;
+        let update_path = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+            "DynamicTest/updates/garbage"
+        } else {
+            "updates_garbage"
+        };
+        ctx.apply_dir(update_path).await?;
         ctx.wait_phase(scenario, "fallback", Duration::from_secs(15)).await?;
         Ok(())
     })

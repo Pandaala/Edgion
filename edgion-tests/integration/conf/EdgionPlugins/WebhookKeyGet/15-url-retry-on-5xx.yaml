@@ -15,16 +15,11 @@
 # this path in this exact sequence — a stronger and more direct assertion
 # than a bare request counter.
 #
-# `test_id` is fixed per fixture (not derived from the client's own
-# `x-trace-id`) because the webhook target path is a static template with no
-# per-request variables. Because the counter is process-wide and cumulative
-# (never wraps once its status_list is exhausted), the test resets it via
-# `/retry-sequence-reset` before driving traffic; without that reset, a rerun
-# in the same `test_server` process would reuse the previous run's counter and
-# the retry path would silently stop being exercised.
+# `test_id` comes from the client's unique X-Trace-Id, so reruns never reuse a
+# process-wide attempt counter and no out-of-band reset is needed.
 #
 # Flow: HTTPRoute -> EdgionPlugins(WebhookKeyGet) -> LinkSys webhook
-#       -> http://localhost:30001/retry-sequence/wh15-retry-seq/503,503,200
+#       -> http://localhost:30001/retry-sequence/<trace-id>/503,503,200
 apiVersion: edgion.io/v1
 kind: LinkSys
 metadata:
@@ -37,7 +32,7 @@ spec:
       url: "http://localhost:30001"
     request:
       path:
-        template: "/retry-sequence/wh15-retry-seq/503,503,200"
+        template: "/retry-sequence/${header:X-Trace-Id}/503,503,200"
       method:
         template: "GET"
     timeoutMs: 5000

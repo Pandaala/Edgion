@@ -1,6 +1,6 @@
 //! AI retry and committed-stream resilience integration coverage.
 
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{test_backend_hosts, TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{json, Value};
@@ -78,57 +78,93 @@ async fn post_in_fixture(
 }
 
 async fn set_half_open_mode(ctx: &TestContext, fixture_id: &str, mode: &str) -> Result<(), String> {
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .no_proxy()
         .build()
-        .map_err(|error| format!("failed to build fixture control client: {error}"))?
-        .post(format!(
-            "http://{}:30001/ai-resilience/mode/{fixture_id}/half-open-primary/{mode}",
-            ctx.target_host
-        ))
-        .send()
-        .await
-        .map_err(|error| format!("half-open fixture control failed: {error}"))?;
-    if response.status() != reqwest::StatusCode::NO_CONTENT {
-        return Err(format!("half-open fixture control returned {}", response.status()));
+        .map_err(|error| format!("failed to build fixture control client: {error}"))?;
+    for host in test_backend_hosts(ctx) {
+        let response = client
+            .post(format!(
+                "http://{host}:30001/ai-resilience/mode/{fixture_id}/half-open-primary/{mode}"
+            ))
+            .send()
+            .await
+            .map_err(|error| format!("half-open fixture control failed for {host}: {error}"))?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(format!(
+                "half-open fixture control for {host} returned {}",
+                response.status()
+            ));
+        }
     }
     Ok(())
 }
 
 async fn half_open_counts(ctx: &TestContext, fixture_id: &str) -> Result<Value, String> {
-    reqwest::Client::builder()
+    aggregate_counts(ctx, &format!("counts/{fixture_id}")).await
+}
+
+async fn aggregate_counts(ctx: &TestContext, path: &str) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .no_proxy()
         .build()
-        .map_err(|error| format!("failed to build fixture count client: {error}"))?
-        .get(format!(
-            "http://{}:30001/ai-resilience/counts/{fixture_id}",
-            ctx.target_host
-        ))
-        .send()
-        .await
-        .map_err(|error| format!("half-open fixture count failed: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("invalid half-open fixture count response: {error}"))
+        .map_err(|error| format!("failed to build fixture count client: {error}"))?;
+    let mut totals = [0_u64; 6];
+    for host in test_backend_hosts(ctx) {
+        let value: Value = client
+            .get(format!("http://{host}:30001/ai-resilience/{path}"))
+            .send()
+            .await
+            .map_err(|error| format!("resilience count request failed for {host}: {error}"))?
+            .json()
+            .await
+            .map_err(|error| format!("invalid resilience count response from {host}: {error}"))?;
+        for (index, field) in [
+            "rate_limited",
+            "healthy",
+            "stream_primary",
+            "stream_fallback",
+            "half_open_primary",
+            "half_open_fallback",
+        ]
+        .iter()
+        .enumerate()
+        {
+            totals[index] = totals[index].saturating_add(value[*field].as_u64().unwrap_or(0));
+        }
+    }
+    Ok(json!({
+        "rate_limited": totals[0],
+        "healthy": totals[1],
+        "stream_primary": totals[2],
+        "stream_fallback": totals[3],
+        "half_open_primary": totals[4],
+        "half_open_fallback": totals[5],
+    }))
 }
 
 async fn release_half_open_probe(ctx: &TestContext, fixture_id: &str) -> Result<(), String> {
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .no_proxy()
         .build()
-        .map_err(|error| format!("failed to build fixture release client: {error}"))?
-        .post(format!(
-            "http://{}:30001/ai-resilience/release/{fixture_id}/half-open-primary",
-            ctx.target_host
-        ))
-        .send()
-        .await
-        .map_err(|error| format!("half-open fixture release failed: {error}"))?;
-    if response.status() != reqwest::StatusCode::NO_CONTENT {
-        return Err(format!("half-open fixture release returned {}", response.status()));
+        .map_err(|error| format!("failed to build fixture release client: {error}"))?;
+    for host in test_backend_hosts(ctx) {
+        let response = client
+            .post(format!(
+                "http://{host}:30001/ai-resilience/release/{fixture_id}/half-open-primary"
+            ))
+            .send()
+            .await
+            .map_err(|error| format!("half-open fixture release failed for {host}: {error}"))?;
+        if response.status() != reqwest::StatusCode::NO_CONTENT {
+            return Err(format!(
+                "half-open fixture release for {host} returned {}",
+                response.status()
+            ));
+        }
     }
     Ok(())
 }
@@ -147,18 +183,7 @@ async fn complete_request(ctx: &TestContext, trace: &str, fixture_id: &str) -> R
 }
 
 async fn counts(ctx: &TestContext, trace: &str) -> Result<Value, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .no_proxy()
-        .build()
-        .map_err(|error| format!("failed to build count client: {error}"))?
-        .get(format!("http://{}:30001/ai-resilience/count/{trace}", ctx.target_host))
-        .send()
-        .await
-        .map_err(|error| format!("resilience count request failed: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("invalid resilience count response: {error}"))
+    aggregate_counts(ctx, &format!("count/{trace}")).await
 }
 
 fn safe_attempts(genai: &Value) -> Result<&Vec<Value>, String> {

@@ -1,0 +1,28 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-sp-cookie
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-sp-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - grpc-sp-cookie.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      sessionPersistence:
+        sessionName: edgion-grpc-sp
+        type: Cookie
+        absoluteTimeout: 1h
+        cookieConfig:
+          lifetimeType: Permanent
+      backendRefs:
+        - name: grpc-sp-a
+          port: 8080
+        - name: grpc-sp-b
+          port: 8080

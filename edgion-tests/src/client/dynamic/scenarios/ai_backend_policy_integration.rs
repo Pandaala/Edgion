@@ -450,14 +450,7 @@ async fn request_client(ctx: &ScenarioCtx) -> Result<reqwest::Client> {
 }
 
 async fn request_client_with_timeout(ctx: &ScenarioCtx, timeout: Duration) -> Result<reqwest::Client> {
-    let target = match ctx.test_ctx.target_host.parse::<std::net::IpAddr>() {
-        Ok(ip) => std::net::SocketAddr::new(ip, AI_GATEWAY_PORT),
-        Err(_) => tokio::net::lookup_host((ctx.test_ctx.target_host.as_str(), AI_GATEWAY_PORT))
-            .await
-            .with_context(|| format!("failed to resolve test target {}", ctx.test_ctx.target_host))?
-            .next()
-            .with_context(|| format!("test target {} resolved to no addresses", ctx.test_ctx.target_host))?,
-    };
+    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
     reqwest::Client::builder()
         .timeout(timeout)
         .no_proxy()

@@ -1,0 +1,30 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gac-hmac-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestAccessPolicy
+      config:
+        defaultProfile: lockdown
+        profiles:
+          lockdown:
+            requiredRuleGroups:
+              - name: signed
+                anyOfRules:
+                  - name: hmac
+                    type: url
+                    config:
+                      configRefs: [{name: gac-hmac-dynamic-urls}]
+                  - name: explicit-fallback
+                    type: directPeerIp
+                    config:
+                      # The K8s test client is a separate Pod, so its direct
+                      # peer is not loopback as it is in the local runner.
+                      ips: ["0.0.0.0/0"]
+                      conditions:
+                        allOf:
+                          - type: keyMatch
+                            key: {type: header, name: X-Hmac-Fallback}
+                            values: ["allow"]

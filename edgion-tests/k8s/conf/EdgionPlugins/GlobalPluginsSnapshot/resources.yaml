@@ -1,0 +1,42 @@
+# Global EdgionPlugins for unified plugin snapshot integration test.
+# Adds a response header via ResponseHeaderModifier in the
+# upstreamResponseFilterPlugins stage. This is the D3-A path that was
+# previously silently dropped before the unified plugin snapshot fix.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gp-resp-header-modifier
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Global-Plugin"
+            value: "yes"
+---
+# HTTPRoute for the GlobalPluginsSnapshot integration test.
+# No route-level filters: the test isolates the *global* plugins snapshot
+# behavior. Requests with hostname "global-plugins-snapshot.example.com"
+# matching path /headers proxy to the shared test_server.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: global-plugins-snapshot-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "global-plugins-snapshot.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/headers"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

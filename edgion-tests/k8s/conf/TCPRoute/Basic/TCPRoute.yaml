@@ -3,6 +3,10 @@ kind: TCPRoute
 metadata:
   name: test-tcp
   namespace: edgion-test
+  annotations:
+    edgion.io/tcp-keepalive-time: "60"
+    edgion.io/tcp-keepalive-interval: "10"
+    edgion.io/tcp-keepalive-probes: "4"
 spec:
   parentRefs:
     - name: tcp-test-gateway
@@ -14,4 +18,3 @@ spec:
         - name: test-tcp
           port: 30010
           weight: 100
-

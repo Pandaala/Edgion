@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-proxy-quota-terminate
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+        tokenQuota:
+          redisRef: edgion-test/redis-test
+          key:
+            - type: header
+              name: x-quota-user
+          limits:
+            - scope: identity
+              tokens: 2
+              window: 1h
+          onExceeded:
+            type: Reject
+          flushTokens: 1
+          flushInterval: 10ms
+          requestTimeout: 2s

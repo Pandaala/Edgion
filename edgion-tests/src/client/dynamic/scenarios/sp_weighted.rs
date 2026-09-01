@@ -7,7 +7,7 @@
 //          name, and stores the spw-b cookie for later phases.
 // Update1: weights -> 100/0. New sessions all go to spw-a; the established
 //          spw-b session must NOT migrate (weight 0 does not move sessions).
-// Update2: clears spw-b's EndpointSlice endpoints. The stale session falls
+// Update2: selects no spw-b endpoints. The stale session falls
 //          back to spw-a and the response carries a refreshed token.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};

@@ -1,0 +1,23 @@
+# Scenario: FaultInjection plugin with multiple violations
+# Expect: Accepted=False/Invalid, message references field path
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-fault-injection-invalid
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: FaultInjection
+      config:
+        delay:
+          ratio: 2.0          # rule 5: out of [0.0, 1.0]
+          fixedMs: 100
+          minMs: 50           # rule 2: fixedMs and minMs both set
+          maxMs: 200
+        abort:
+          ratio: 0.5
+          statusCode: 600     # rule 7: out of [100, 599]
+          headers:
+            - name: Content-Length   # rule 9: forbidden
+              value: "10"

@@ -1,7 +1,7 @@
 //! Credential-first scheduling, RPM exhaustion, and TPM reconciliation.
 
 use super::gateway_admin::{admin_base, authed, backend_uid, CREDENTIAL_RESERVATION_KEY_PREFIX as KEY_PREFIX};
-use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::framework::{test_backend_hosts, TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use edgion_gateway::plugins::common::redis_rate_limiter::build_credential_reservation_keys;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -13,7 +13,8 @@ pub struct CredentialExhaustionTestSuite;
 
 const HOST: &str = "ai-credential-exhaustion.example.com";
 const PATH: &str = "/v1/chat/completions";
-const REDIS_NAME: &str = "default_credential-exhaustion-redis";
+const LOCAL_REDIS_NAME: &str = "default_credential-exhaustion-redis";
+const K8S_REDIS_NAME: &str = "edgion-test_credential-exhaustion-redis";
 const MIN_QUOTA_WINDOW_REMAINING: Duration = Duration::from_secs(25);
 const SAFE_ATTEMPT_FIELDS: [&str; 12] = [
     "number",
@@ -34,6 +35,14 @@ struct CredentialBucket {
     backend: &'static str,
     alias: &'static str,
     keys: Vec<String>,
+}
+
+fn redis_name() -> &'static str {
+    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        K8S_REDIS_NAME
+    } else {
+        LOCAL_REDIS_NAME
+    }
 }
 
 fn gateway_client(ctx: &TestContext) -> Result<reqwest::Client, String> {
@@ -65,17 +74,43 @@ fn even_trace_id() -> String {
 }
 
 async fn provider_observations(ctx: &TestContext, trace: &str) -> Result<Value, String> {
-    ctx.http_client
-        .get(format!(
-            "http://{}:30001/ai-credential-exhaustion/observations/{trace}",
-            ctx.target_host
-        ))
-        .send()
-        .await
-        .map_err(|error| format!("provider observation request failed: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("invalid provider observation response: {error}"))
+    let hosts = test_backend_hosts(ctx);
+    let aggregate = hosts.len() > 1;
+    let mut observations = Vec::new();
+    for host in hosts {
+        let response = ctx
+            .http_client
+            .get(format!(
+                "http://{host}:30001/ai-credential-exhaustion/observations/{trace}"
+            ))
+            .send()
+            .await
+            .map_err(|error| format!("provider observation request failed for {host}: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("provider observation request for {host} returned {status}"));
+        }
+        let value = response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("invalid provider observation response from {host}: {error}"))?;
+        let Some(items) = value["observations"].as_array() else {
+            return Err(format!(
+                "provider observation response from {host} has no observations array: {value}"
+            ));
+        };
+        observations.extend(items.iter().cloned());
+    }
+    if aggregate {
+        observations.sort_by(|left, right| {
+            left["backend"].as_str().cmp(&right["backend"].as_str()).then_with(|| {
+                left["credential_generation"]
+                    .as_str()
+                    .cmp(&right["credential_generation"].as_str())
+            })
+        });
+    }
+    Ok(json!({"observations": observations}))
 }
 
 async fn prepare_buckets(ctx: &TestContext) -> Result<Vec<CredentialBucket>, String> {
@@ -127,8 +162,9 @@ async fn prepare_buckets(ctx: &TestContext) -> Result<Vec<CredentialBucket>, Str
     let response = authed(
         ctx.http_client
             .post(format!(
-                "{}/api/v1/testing/link-sys/redis/{REDIS_NAME}/del",
-                admin_base(ctx)
+                "{}/api/v1/testing/link-sys/redis/{}/del",
+                admin_base(ctx),
+                redis_name()
             ))
             .json(&json!({ "keys": all_keys })),
     )
@@ -162,8 +198,9 @@ async fn bucket_usage(ctx: &TestContext, bucket: &CredentialBucket) -> Result<(u
     for key in &bucket.keys {
         let encoded = utf8_percent_encode(key, NON_ALPHANUMERIC);
         let response = authed(ctx.http_client.get(format!(
-            "{}/api/v1/testing/link-sys/redis/{REDIS_NAME}/hgetall/{encoded}",
-            admin_base(ctx)
+            "{}/api/v1/testing/link-sys/redis/{}/hgetall/{encoded}",
+            admin_base(ctx),
+            redis_name()
         )))
         .send()
         .await

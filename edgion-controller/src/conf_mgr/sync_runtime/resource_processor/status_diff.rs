@@ -39,9 +39,9 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
         }
         "Gateway" => !gateway_status_equal(&old, &new),
         "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => !ancestors_status_equal(&old, &new),
-        "EdgionAcme" => !acme_status_equal(&old, &new),
+        "EdgionAcme" | "LinkSys" => !conditions_and_fields_status_equal(&old, &new),
         // Simple condition-only resources:
-        // GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
+        // GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
         _ => !conditions_only_status_equal(&old, &new),
     }
 }
@@ -101,7 +101,7 @@ fn condition_fields_equal(a: &Value, b: &Value) -> bool {
 }
 
 // ============================================================================
-// Simple condition-only status (GatewayClass, EdgionGatewayConfig, LinkSys,
+// Simple condition-only status (GatewayClass, EdgionGatewayConfig,
 // EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, etc.)
 // ============================================================================
 
@@ -112,15 +112,14 @@ fn conditions_only_status_equal(old: &Value, new: &Value) -> bool {
 }
 
 // ============================================================================
-// EdgionAcme status (conditions + ACME-specific fields: phase, order state,
-// certificate/renewal timestamps)
+// Hybrid status (semantic conditions + structurally compared lifecycle fields)
 // ============================================================================
 
 /// Conditions are compared semantically (ignoring `lastTransitionTime`);
 /// every other status field is compared structurally. A raw whole-blob
 /// comparison would include condition `lastTransitionTime` and turn every
 /// reconcile into a "changed" status write under FileSystem/Etcd backends.
-fn acme_status_equal(old: &Value, new: &Value) -> bool {
+fn conditions_and_fields_status_equal(old: &Value, new: &Value) -> bool {
     let old_conds = old.get("conditions").unwrap_or(&Value::Null);
     let new_conds = new.get("conditions").unwrap_or(&Value::Null);
     if !conditions_equal(old_conds, new_conds) {
@@ -334,6 +333,36 @@ mod tests {
         let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
         let new = acme_status("2026-01-01T00:00:00Z", "True", "Renewing");
         assert!(status_semantically_changed("EdgionAcme", &old, &new));
+    }
+
+    #[test]
+    fn link_sys_ltt_only_change_is_not_a_status_change() {
+        let old = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}],"credentialState":"Valid","publishedGeneration":"generation-1"}"#;
+        let new = old.replace("2026-01-01", "2026-02-02");
+        assert!(
+            !status_semantically_changed("LinkSys", old, &new),
+            "a lastTransitionTime-only difference must not trigger a status write"
+        );
+    }
+
+    #[test]
+    fn link_sys_credential_field_change_is_a_status_change() {
+        let old = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}]}"#;
+        let new = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}],"credentialState":"Valid","publishedGeneration":"generation-1","desiredConsumerCount":1,"publishedConsumerCount":1,"conflictedConsumerCount":0}"#;
+        assert!(
+            status_semantically_changed("LinkSys", old, new),
+            "credential lifecycle fields must trigger a status write"
+        );
+    }
+
+    #[test]
+    fn link_sys_credential_field_clear_is_a_status_change() {
+        let old = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}],"credentialState":"Valid","publishedGeneration":"generation-1"}"#;
+        let new = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}]}"#;
+        assert!(
+            status_semantically_changed("LinkSys", old, new),
+            "clearing stale credential lifecycle fields must trigger a status write"
+        );
     }
 
     /// `EdgionBackendTrafficPolicy` (GEP-2648 `status.ancestors[]`, like

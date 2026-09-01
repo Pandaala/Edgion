@@ -1,0 +1,165 @@
+# Scenario 16: url-block-private
+# ---------------------------------------------------------------------------
+# `blockPrivate: true` on a URL target whose host is an RFC1918 IP literal
+# (`10.255.255.1`, unroutable in this test environment — nothing listens
+# there). Because it is an IP literal (not a hostname), the address never
+# reaches `EgressResolver`; it is rejected by the IP-literal guard in
+# `ManagedOutboundClient::dial_url` (edgion-gateway/src/plugins/http/common/
+# outbound/client.rs) *before any TCP connection is attempted*, incrementing
+# `edgion_outbound_egress_blocked_total{reason="private"}` on the gateway's
+# `/metrics`.
+#
+# wh16-resolver: blockPrivate: true -> rejected pre-connect (fast, deterministic).
+# wh16ctrl-resolver (negative control): identical target, blockPrivate absent
+# (inherits the gateway-local default, which this test environment leaves at
+# its default `false`) -> the guard does NOT reject the IP literal, so the
+# gateway actually attempts a TCP connection, which then times out against
+# `timeoutMs` (bounded here so the fixture stays fast) because nothing
+# listens at 10.255.255.1. Without this control, the "blockPrivate rejects"
+# assertion below could pass even if `blockPrivate` were a no-op, since a
+# private address on this host also fails to connect on its own.
+#
+# Both resources need to be invoked through the gateway's request pipeline to
+# actually trigger the webhook call, so each gets its own WebhookKeyGet + HTTPRoute
+# like every other scenario in this suite. `statusOnError` is not wired into
+# WebhookKeyGet (documented gap in scenario 5/7 of this suite), so both
+# requests still complete 200 with the ctx var falling back to `default`.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh16-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      url: "http://10.255.255.1:30001"
+      blockPrivate: true
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+    timeoutMs: 2000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh16-ctx-set
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: wh16_result
+      from: ctx
+      name: wh16_result
+  requestPlugins:
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh16_result
+            webhookRef: "edgion-default/wh16-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
+            default: "blocked-fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh16-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh16.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh16
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh16-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# Negative control: same unroutable RFC1918 target, but blockPrivate absent.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh16ctrl-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      url: "http://10.255.255.1:30001"
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+    timeoutMs: 2000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh16ctrl-ctx-set
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: wh16ctrl_result
+      from: ctx
+      name: wh16ctrl_result
+  requestPlugins:
+    - enable: true
+      type: WebhookKeyGet
+      config:
+        vars:
+          - name: wh16ctrl_result
+            webhookRef: "edgion-default/wh16ctrl-resolver"
+            extract:
+              source: body
+              path: "data.user_id"
+            default: "connect-failed-fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh16ctrl-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh16ctrl.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh16ctrl
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh16ctrl-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

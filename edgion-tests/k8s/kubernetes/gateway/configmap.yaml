@@ -19,6 +19,8 @@ data:
       # Production defaults remain loopback-only unless explicitly configured.
       admin_listen: "0.0.0.0:12001"
       # Probe endpoints listen on 0.0.0.0:12000.
+      geoip:
+        db_path: /usr/local/edgion/test-assets/geoip/edgion-test-city.mmdb
 
     logging:
       log_dir: logs
@@ -55,6 +57,8 @@ data:
       backend_requests:
         labels:
           backend: true
+      genai_tokens:
+        enabled: true
 
     ssl_log:
       enabled: true

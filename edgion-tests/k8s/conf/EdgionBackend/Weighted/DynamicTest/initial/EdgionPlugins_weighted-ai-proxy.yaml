@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: weighted-ai-proxy
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted

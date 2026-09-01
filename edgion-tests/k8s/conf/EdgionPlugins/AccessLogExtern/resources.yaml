@@ -1,0 +1,557 @@
+# Dedicated Gateway for this suite. K8s watches one configured GatewayClass,
+# so its Tier 1 declaration is merged into the authoritative public-gateway
+# EdgionGatewayConfig while this Gateway keeps the Tier 2 annotation.
+#
+# Port 31395 is dedicated to this suite (see edgion-tests/integration/conf/
+# ports.json, suite key "EdgionPlugins/AccessLogExtern") — distinct from the
+# shared edgion-plugins-gateway's port 31180.
+#
+# Tier 2's declared field (`collide`, sourced from the `x-gateway-val`
+# header — see 04_EdgionPlugins_als-gateway-tier.yaml) only ever fires for
+# this suite's own routes, since nothing else runs through this Gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: als-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-plugins: "edgion-default/als-gateway-tier"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31395
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+# Tier 1 (GatewayClass-global) AccessLogExtern declarations, referenced by
+# the authoritative K8s base EdgionGatewayConfig's globalPluginsRef.
+#
+# Declaration-only: no requestPlugins/filters here, so this resource never
+# runs anything on the request path — it only supplies fields to the
+# logging()-time collector. Each field backs a distinct case:
+#   global_tenant -> ext_present_on_404 (global tier survives a 404, where
+#                    ctx.route_unit/ctx.gateway_info are never populated)
+#   tenant        -> global_ctx_reads_route_stage_ctxset (global tier reads a
+#                    ctx var written by a ROUTE-stage CtxSet plugin — proves
+#                    collection reads final per-request ctx state, not a
+#                    tier-ordered execution snapshot)
+#   collide       -> three_tier_collision_route_wins (same `key` as the
+#                    gateway- and route-tier declarations; the route tier
+#                    must win since it applies last in collect()'s tier loop)
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-global
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: global_tenant
+      from: header
+      name: x-tenant
+    - key: tenant
+      from: ctx
+      name: tenant_id
+    - key: collide
+      from: header
+      name: x-global-val
+---
+# Tier 2 (gateway-annotation) AccessLogExtern declaration, referenced by
+# 02_Gateway_edgion-test_als-gateway.yaml's `edgion.io/edgion-plugins`
+# annotation. Used only by three_tier_collision_route_wins.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-gateway-tier
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: collide
+      from: header
+      name: x-gateway-val
+---
+# ext_present_when_deny_terminates: a KeyAuth entry with no secretGroups/
+# anonymous, so any request without a key is unconditionally denied
+# (401 — KeyAuth's `unauthorized()` path). `run_request_plugins` breaks the
+# plugin loop on the resulting Deny, but the route was already matched before
+# Step 2 runs, so ctx.route_unit is populated and the route-tier
+# accessLogExtern declaration below still resolves at logging().
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-deny-terminates
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        realm: "AccessLogExtern Deny Test"
+        keyField: "key"
+  accessLogExtern:
+    - key: deny_field
+      from: routeAnnotation
+      name: owner
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-deny-terminates-route
+  namespace: edgion-default
+  annotations:
+    owner: "deny-team"
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-deny.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-deny-terminates
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# ext_present_on_cors_preflight: the global preflight handler short-circuits
+# an OPTIONS request (Origin + Access-Control-Request-Method) before Step 2
+# plugin execution — but route matching already ran, so the route-tier
+# accessLogExtern declaration below still resolves at logging().
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-cors-preflight
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowOrigins: "https://preflight-client.example.com"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
+  accessLogExtern:
+    - key: preflight_field
+      from: routeLabel
+      name: tier
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-cors-preflight-route
+  namespace: edgion-default
+  labels:
+    tier: gold
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-cors.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-cors-preflight
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# global_ctx_reads_route_stage_ctxset: this route-tier resource only runs a
+# CtxSet plugin (writes ctx var `tenant_id`); the AccessLogExtern declaration
+# that reads it (`from: ctx name: tenant_id`, key `tenant`) lives on the
+# GLOBAL tier (03_EdgionPlugins_als-global.yaml). Collection happens once, at
+# logging() time, after every stage has run — so the global tier's collector
+# call sees the final ctx state regardless of which tier's plugin wrote it.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-route-ctxset
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: tenant_id
+            template: "acme-tenant-42"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-route-ctxset-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-globalctx.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-route-ctxset
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# sources_resolve: one accessLogExtern field per `from` source.
+#   routeLabel      -> HTTPRoute metadata.labels.sl
+#   routeAnnotation -> HTTPRoute metadata.annotations.sa
+#   header          -> request header x-src-header
+#   query           -> request query param srcq
+#   cookie          -> request cookie srccookie
+#   respHeader      -> X-Src-Resp, set by the ResponseHeaderModifier below
+#   ctx             -> ctx var src_ctx, set by the CtxSet below
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-sources
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: src_ctx
+            template: "ctx-value"
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Src-Resp"
+            value: "resp-value"
+  accessLogExtern:
+    - key: src_label
+      from: routeLabel
+      name: sl
+    - key: src_annotation
+      from: routeAnnotation
+      name: sa
+    - key: src_header
+      from: header
+      name: x-src-header
+    - key: src_query
+      from: query
+      name: srcq
+    - key: src_cookie
+      from: cookie
+      name: srccookie
+    - key: src_resp_header
+      from: respHeader
+      name: X-Src-Resp
+    - key: src_ctx
+      from: ctx
+      name: src_ctx
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-sources-route
+  namespace: edgion-default
+  labels:
+    sl: label-value
+  annotations:
+    sa: annotation-value
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-sources.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-sources
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# query_source_reads_entry_not_rewritten_uri: `from: query` must resolve
+# against the entry-time raw query (`ctx.request_info.entry_raw_query`), never
+# a post-rewrite re-parse of the live session query.
+#
+# ProxyRewrite injects a brand-new query param (`rewritten_only`) that the
+# client never sent — it appears only in the upstream-bound URI, after
+# ProxyRewrite runs. The client's own `orig_param` survives untouched
+# (ProxyRewrite always preserves + appends the original query verbatim).
+#
+#   - `orig_param` is present at entry -> its accessLogExtern field
+#     (src_orig_q) must be present in `ext` with the client's value.
+#   - `rewritten_only` does NOT exist at entry (only after the rewrite) -> its
+#     accessLogExtern field (src_rewritten_q) must be ABSENT from `ext`. If a
+#     future change swapped `entry_raw_query` for a post-rewrite re-parse,
+#     this field would suddenly appear — that's the regression this guards.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-query-rewrite
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        uri: "/rewritten-target?rewritten_only=rewritten-value"
+  accessLogExtern:
+    - key: src_orig_q
+      from: query
+      name: orig_param
+    - key: src_rewritten_q
+      from: query
+      name: rewritten_only
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-query-rewrite-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-queryrewrite.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-query-rewrite
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# resp_header_absent_on_upstream_timeout: the route's rule sets a 1s
+# `timeouts.request` (see HTTPRoute below); requests to /delay/2 exceed it, so
+# the gateway returns 504 before the backend ever responds.
+#
+#   - req_field (header, request-side) must still be present: it depends only
+#     on the inbound request, never reaching the backend.
+#   - resp_field (respHeader) must be absent: `session.response_written()`
+#     never sees the backend's response (ResponseHeaderModifier — an
+#     upstream-response-stage filter — never runs either).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-timeout
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Resp-Marker"
+            value: "resp-marker-value"
+  accessLogExtern:
+    - key: req_field
+      from: header
+      name: x-req-marker
+    - key: resp_field
+      from: respHeader
+      name: X-Resp-Marker
+---
+# 1s request timeout vs. the test server's /delay/2 endpoint (2s delay) ->
+# 504 before the backend responds. Same pattern as
+# HTTPRoute/Backend/Timeout/HTTPRoute_default_timeout-request.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-timeout-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-timeout.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      timeouts:
+        request: "1s"
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-timeout
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# three_tier_collision_route_wins: route tier (Tier 3) declares the same
+# `key` ("collide") as the global tier (03_EdgionPlugins_als-global.yaml) and
+# the gateway tier (04_EdgionPlugins_als-gateway-tier.yaml), each sourced from
+# a distinct header so the three values are distinguishable. collect()
+# applies tiers in order global -> gateway -> route, and LogExt::insert
+# overwrites an existing key in place — so the route tier's value must win.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-collision-route
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: collide
+      from: header
+      name: x-route-val
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-collision-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-collision.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-collision-route
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# value_truncated_at_cap: a 400-byte header value must be truncated to
+# LOG_LABEL_MAX_VALUE_LEN (256 bytes) in `ext` — see LogExt::insert.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-truncate
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: big_field
+      from: header
+      name: x-big-header
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-truncate-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-truncate.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-truncate
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# attacker_header_cannot_forge_fields: `ext` is serialized through serde
+# (never a hand-built string), so an attacker-controlled header value
+# containing quotes/braces cannot break out of its JSON string and forge a
+# sibling field (e.g. a fake "status":999).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-forge
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: ua_field
+      from: header
+      name: user-agent
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: als-forge-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: als-gateway
+      namespace: edgion-test
+  hostnames:
+    - "accesslogextern-forge.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: als-forge
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

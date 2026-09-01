@@ -1,0 +1,84 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: backend-tls-gw-cert
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31321
+  tls:
+    backend:
+      clientCertificateRef:
+        name: backend-client-cert
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-backend-gw-cert
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: https
+      port: 30052
+      targetPort: 30052
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-backend-gw-cert-plaintext
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: backend-gw-cert-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: test-backend-gw-cert
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: ConfigMap
+        group: ""
+    hostname: backend.example.com
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: backend-gw-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: backend-tls-gw-cert
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /backend-gw-cert/
+      backendRefs:
+        - name: test-backend-gw-cert
+          port: 30052
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /backend-gw-cert-plaintext/
+      backendRefs:
+        - name: test-backend-gw-cert-plaintext
+          port: 30001

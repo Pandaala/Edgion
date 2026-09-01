@@ -1,0 +1,45 @@
+# HTTPRoute for the IpRestrictionRefs scenario.
+# Two PathPrefix rules exercise allowRefs and denyRefs via central IpList EdgionConfigData.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ipref-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ipref.example.com"
+  rules:
+    # 1. allowRefs hit — client IP (OrbStack test-client Pod IP) is in the central allow-list → 200
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/allow-ref-hit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-allow-ref-hit
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. denyRefs hit — client IP (OrbStack test-client Pod IP) is in the central block-list → 403
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/deny-ref-hit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-deny-ref-hit
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

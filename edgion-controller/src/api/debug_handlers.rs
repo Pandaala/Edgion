@@ -35,6 +35,8 @@ impl From<RefManagerStats> for SecretRefManagerStats {
 pub struct ControllerStoreStats {
     pub conf_center_storage: BTreeMap<String, usize>,
     pub secret_store: usize,
+    /// Stable-sorted Secret identities only; never includes Secret values.
+    pub secret_store_keys: Vec<String>,
     pub secret_ref_manager: SecretRefManagerStats,
     pub credential_source_registry: CredentialSourceRegistryStats,
     /// LinkSys identities with an in-memory generated-secret slot. Counts only.
@@ -60,7 +62,8 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
     let conf_center_storage = collect_conf_center_counts(&state).await;
 
     let runtime = state.conf_mgr.runtime();
-    let secret_store = runtime.secret_store.count();
+    let secret_store_keys = runtime.secret_store.keys();
+    let secret_store = secret_store_keys.len();
     let secret_ref_manager = SecretRefManagerStats::from(runtime.secret_ref_manager.stats());
     let credential_source_registry = runtime.credential_source_registry.stats();
     let credential_memory_sources = runtime.credential_memory.source_count();
@@ -77,6 +80,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
     Json(ApiResponse::ok_body(ControllerStoreStats {
         conf_center_storage,
         secret_store,
+        secret_store_keys,
         secret_ref_manager,
         credential_source_registry,
         credential_memory_sources,
@@ -148,6 +152,7 @@ mod tests {
         let resp = ControllerStoreStats {
             conf_center_storage: BTreeMap::from_iter([("HTTPRoute".to_string(), 0)]),
             secret_store: 0,
+            secret_store_keys: Vec::new(),
             secret_ref_manager: SecretRefManagerStats {
                 source_count: 0,
                 value_count: 0,
@@ -164,6 +169,7 @@ mod tests {
         let v = serde_json::to_value(&resp).unwrap();
         assert!(v.get("conf_center_storage").is_some());
         assert_eq!(v.get("secret_store").unwrap().as_u64(), Some(0));
+        assert_eq!(v.get("secret_store_keys").unwrap().as_array().unwrap().len(), 0);
         assert!(v.get("secret_ref_manager").is_some());
         assert!(v.get("credential_source_registry").is_some());
         assert_eq!(v.get("credential_memory_sources").unwrap().as_u64(), Some(0));

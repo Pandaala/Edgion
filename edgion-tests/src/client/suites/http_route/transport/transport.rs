@@ -59,7 +59,7 @@
 //! scripts only, not into `edgion-tests/k8s/**`. See
 //! `tasks/todo/transport-coverage-observability-gaps.md`.
 
-use crate::framework::{TestCase, TestContext, TestFuture, TestResult, TestSuite};
+use crate::framework::{env_host_or, TestCase, TestContext, TestFuture, TestResult, TestSuite};
 use crate::transport::{
     h2_await_reset, h2_reset, h2_send_trailers, probe_err, render_h1_head, RawH1Conn, RawH2Conn, TransportEvent,
     TransportProbe, TransportSnapshot, KIND_CONN_ACCEPTED, KIND_PEER_HALF_CLOSE, KIND_PEER_RESET, KIND_REQ_DATA,
@@ -530,7 +530,8 @@ impl TestSuite for TransportTestSuite {
 async fn run_transport_case(ctx: TestContext, shape: &'static ShapeDef, combo: Combo) -> TestResult {
     let start = Instant::now();
     let label = format!("{}-{}", shape.name, combo.suffix());
-    let probe = match TransportProbe::start(&ctx.target_host, RECORDER_PORT, &label).await {
+    let recorder_host = env_host_or("EDGION_TEST_TRANSPORT_RECORDER_HOST", &ctx.target_host);
+    let probe = match TransportProbe::start(&recorder_host, RECORDER_PORT, &label).await {
         Ok(probe) => Arc::new(probe),
         Err(e) => return TestResult::failed(start.elapsed(), probe_err("transport probe could not start", e)),
     };

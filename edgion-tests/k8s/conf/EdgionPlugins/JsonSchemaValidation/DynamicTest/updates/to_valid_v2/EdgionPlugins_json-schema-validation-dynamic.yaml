@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-schema-validation-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JsonSchemaValidation
+      config:
+        schema:
+          type: object
+          required: [version]
+          properties:
+            version:
+              const: v2
+          additionalProperties: false

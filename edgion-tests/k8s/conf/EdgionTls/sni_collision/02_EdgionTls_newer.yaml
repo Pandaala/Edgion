@@ -1,0 +1,16 @@
+# Create the ECDSA-backed resource second so it loses the SNI collision.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-sni-collision-b-newer
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgiontls-sni-collision-gateway
+      namespace: edgion-test
+      sectionName: https
+  hosts:
+    - gateway-tls.test.com
+  secretRef:
+    name: edge-tls-ecdsa
+    namespace: edgion-test

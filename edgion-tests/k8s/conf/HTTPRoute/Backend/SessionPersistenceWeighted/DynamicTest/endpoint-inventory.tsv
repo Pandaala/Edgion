@@ -1,0 +1,7 @@
+# phase	namespace	service	port	expected_count
+initial	edgion-default	spw-a	30001	nonempty
+initial	edgion-default	spw-b	30002	nonempty
+zero_weight	edgion-default	spw-a	30001	nonempty
+zero_weight	edgion-default	spw-b	30002	nonempty
+final	edgion-default	spw-a	30001	nonempty
+final	edgion-default	spw-b	30002	0

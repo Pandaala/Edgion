@@ -1,0 +1,532 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-pass
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/pass
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-replace
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/replace
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-reject
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        # This is intentionally true: a policy Reject must never be softened.
+        failOpen: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-malformed-fail-open
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/malformed
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-timeout-fail-close
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 50
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/timeout
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-ext-proc
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/replace
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+    - type: ExtProc
+      config:
+        grpcService:
+          target: edgion-test-server.edgion-test.svc.cluster.local:30041
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+          responseBodyMode: STREAMED
+        failureModeAllow: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-reject-ext-proc
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+    - type: ExtProc
+      config:
+        grpcService:
+          target: edgion-test-server.edgion-test.svc.cluster.local:30041
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+          responseBodyMode: STREAMED
+        failureModeAllow: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: guardrail-anthropic-credential
+  namespace: edgion-test
+type: Opaque
+stringData:
+  api-key: anthropic-provider-test-key
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: guardrail-anthropic-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: Anthropic
+    endpoint: http://edgion-test-server.edgion-test.svc.cluster.local:30001/anthropic/prefix
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: guardrail-anthropic-credential
+    models:
+      - name: claude-fixture
+        aliases:
+          - claude-alias
+    defaults:
+      streaming: true
+      maxOutputTokens: 64
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-anthropic-pass
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/pass
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-anthropic-replace
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/replace
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-anthropic-reject
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        failOpen: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-pass
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-pass.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-pass
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-replace
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-replace.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-replace
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-reject
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-reject.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-reject
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-malformed-fail-open
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-malformed.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-malformed-fail-open
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-timeout-fail-close
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-timeout.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-timeout-fail-close
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-ext-proc
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-ext-proc.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-ext-proc
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-anthropic-pass
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-anthropic-pass.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-anthropic-pass
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: guardrail-anthropic-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-reject-ext-proc
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-reject-ext-proc.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-reject-ext-proc
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-anthropic-replace
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-anthropic-replace.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-anthropic-replace
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: guardrail-anthropic-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-anthropic-reject
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-anthropic-reject.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-anthropic-reject
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: guardrail-anthropic-provider

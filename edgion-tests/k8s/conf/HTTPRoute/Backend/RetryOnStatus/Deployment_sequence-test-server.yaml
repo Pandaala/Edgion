@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lb-multi-test-server
+  namespace: edgion-test
+  labels:
+    app: edgion-sequence-test-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edgion-sequence-test-server
+  template:
+    metadata:
+      labels:
+        app: edgion-sequence-test-server
+    spec:
+      containers:
+        - name: test-server
+          image: docker.io/pandaala/edgion-test-server:v0.1.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/test_server
+          args:
+            - --http-ports=30001
+            - --ext-proc-port=30041
+            - --transport-h1-port=30030
+            - --transport-h2-port=30031
+            - --log-level=info
+          ports:
+            - name: http
+              containerPort: 30001
+              protocol: TCP
+            - name: transport-h1
+              containerPort: 30030
+              protocol: TCP
+            - name: transport-h2
+              containerPort: 30031
+              protocol: TCP
+            - name: ext-proc
+              containerPort: 30041
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 30001
+            initialDelaySeconds: 1
+            periodSeconds: 2

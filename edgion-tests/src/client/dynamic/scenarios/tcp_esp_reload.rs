@@ -1,7 +1,7 @@
 // TcpEspReload dynamic scenario.
 //
 // Hot-reloads the EdgionStreamPlugins allow-list on a single TCPRoute listener:
-//   initial : ESP allows 127.0.0.0/8 -> TCP echo succeeds
+//   initial : ESP allows the Kubernetes client -> TCP echo succeeds
 //   deny    : allow-list removed      -> connection denied
 //   restored: allow-list restored     -> TCP echo succeeds again
 

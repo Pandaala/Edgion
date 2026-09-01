@@ -5,6 +5,7 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use sha2::{Digest, Sha256};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -14,6 +15,14 @@ const DIGEST_CACHE_BODY_SIZE: usize = 1024 * 1024;
 const BODY_SHA256: &str = "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310fbdb7e914e9";
 
 pub struct DslBodyTestSuite;
+
+fn gateway_addr(ctx: &TestContext, port: u16) -> Result<SocketAddr, String> {
+    (ctx.target_host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("Gateway address resolution failed: {error}"))?
+        .next()
+        .ok_or_else(|| format!("Gateway host {} resolved to no addresses", ctx.target_host))
+}
 
 impl DslBodyTestSuite {
     async fn post_echo(ctx: &TestContext, mode: &str, body: Vec<u8>) -> Result<(u16, String), String> {
@@ -794,10 +803,10 @@ impl DslBodyTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let request_body = vec![b'x'; BODY_SIZE];
-                    let gateway = match format!("{}:31180", ctx.target_host).parse() {
+                    let gateway = match gateway_addr(&ctx, 31180) {
                         Ok(address) => address,
                         Err(error) => {
-                            return TestResult::failed(start.elapsed(), format!("Gateway address invalid: {error}"));
+                            return TestResult::failed(start.elapsed(), error);
                         }
                     };
                     let client = match reqwest::Client::builder()
@@ -944,10 +953,10 @@ impl DslBodyTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let gateway = match format!("{}:31180", ctx.target_host).parse() {
+                    let gateway = match gateway_addr(&ctx, 31180) {
                         Ok(address) => address,
                         Err(error) => {
-                            return TestResult::failed(start.elapsed(), format!("Gateway address invalid: {error}"));
+                            return TestResult::failed(start.elapsed(), error);
                         }
                     };
                     let client = match reqwest::Client::builder()

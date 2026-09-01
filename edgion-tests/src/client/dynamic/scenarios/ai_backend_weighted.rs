@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 const ROUTE_NS: &str = "edgion-test";
-const BACKEND_NS: &str = "edgion-weighted-backends";
+const BACKEND_NS: &str = "edgion-backend";
 const ROUTE: &str = "weighted-ai-route";
 const CHILD_ROUTE: &str = "weighted-ai-child";
 const PLUGIN: &str = "weighted-ai-proxy";
@@ -22,6 +22,22 @@ const ROUTE_GRANT: &str = "allow-weighted-ai-route";
 const HOST: &str = "ai-backend-weighted.example.com";
 const AI_GATEWAY_PORT: u16 = 31945;
 const SAMPLE_SIZE: u128 = 32;
+
+fn provider_endpoint(endpoint_path: &str) -> String {
+    provider_endpoint_for(
+        std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true"),
+        endpoint_path,
+    )
+}
+
+fn provider_endpoint_for(k8s_mode: bool, endpoint_path: &str) -> String {
+    let authority = if k8s_mode {
+        "edgion-test-server.edgion-test.svc.cluster.local:30001"
+    } else {
+        "127.0.0.1:30001"
+    };
+    format!("http://{authority}/ai/{endpoint_path}")
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct TrafficSample {
@@ -37,8 +53,9 @@ fn secret_yaml(name: &str) -> String {
 }
 
 fn backend_yaml(name: &str, secret: &str, endpoint_path: &str) -> String {
+    let endpoint = provider_endpoint(endpoint_path);
     format!(
-        "apiVersion: edgion.io/v1\nkind: EdgionBackend\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ai:\n    provider: OpenAICompatible\n    endpoint: http://127.0.0.1:30001/ai/{endpoint_path}\n    allowInsecureHttp: true\n    credentialPool:\n      credentials:\n        - name: primary\n          secretRef:\n            name: {secret}\n    models:\n      - name: fixture-model\n"
+        "apiVersion: edgion.io/v1\nkind: EdgionBackend\nmetadata:\n  name: {name}\n  namespace: {BACKEND_NS}\nspec:\n  ai:\n    provider: OpenAICompatible\n    endpoint: {endpoint}\n    allowInsecureHttp: true\n    credentialPool:\n      credentials:\n        - name: primary\n          secretRef:\n            name: {secret}\n    models:\n      - name: fixture-model\n"
     )
 }
 
@@ -170,15 +187,11 @@ async fn apply(ctx: &ScenarioCtx, yaml: String) -> Result<()> {
 }
 
 async fn request(ctx: &ScenarioCtx, entropy: u128) -> Result<(reqwest::StatusCode, Option<bool>)> {
-    let target = ctx
-        .test_ctx
-        .target_host
-        .parse::<std::net::IpAddr>()
-        .with_context(|| format!("test target {} is not an IP address", ctx.test_ctx.target_host))?;
+    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .no_proxy()
-        .resolve(HOST, std::net::SocketAddr::new(target, AI_GATEWAY_PORT))
+        .resolve(HOST, target)
         .build()
         .context("failed to build weighted AI request client")?;
     let response = client
@@ -346,6 +359,18 @@ pub static SCENARIO: &Scenario = &Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_endpoint_uses_the_k8s_service_only_in_k8s_mode() {
+        assert_eq!(
+            provider_endpoint_for(false, "weighted-b"),
+            "http://127.0.0.1:30001/ai/weighted-b"
+        );
+        assert_eq!(
+            provider_endpoint_for(true, "weighted-b"),
+            "http://edgion-test-server.edgion-test.svc.cluster.local:30001/ai/weighted-b"
+        );
+    }
 
     #[test]
     fn manifests_are_valid_and_preserve_weighted_slot_shape() {

@@ -1,0 +1,41 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-schema-validation
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JsonSchemaValidation
+      body:
+        maxBodySize: 512KiB
+      config:
+        schema:
+          $schema: https://json-schema.org/draft/2020-12/schema
+          type: object
+          required: [name, payload]
+          properties:
+            name:
+              type: string
+              minLength: 1
+            payload:
+              type: string
+          additionalProperties: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-schema-validation-default-limit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JsonSchemaValidation
+      config:
+        schema:
+          type: object
+          required: [payload]
+          properties:
+            payload:
+              type: string
+          additionalProperties: false

@@ -10,10 +10,12 @@
 // resource, hot-swapped via `ctx.apply_yaml` before each test case (its flat
 // config has no per-profile Selector envelope to switch instead).
 //
-// Every source address is the client's OWN bound source address (client-side
-// source binding), never a spoofed header — L4 has no XFF at all, so
-// `GeoIpLocation` accepts only `DirectPeerIp`-sourced rules here (enforced at
-// validation). The fixture's authored address map
+// Local-mode source addresses are the client's OWN bound loopback aliases,
+// never spoofed headers — L4 has no XFF at all, so `GeoIpLocation` accepts
+// only `DirectPeerIp`-sourced rules here (enforced at validation). In K8s the
+// pod cannot bind synthetic loopback sources across the network, so each row
+// uses its real pod peer and hot-swaps an equivalent rule around the K8s-only
+// GeoIP mapping. The fixture's local authored address map
 // (edgion-tests/geoip/README.md): 127.0.0.1 CN, 127.0.0.5 RU, 127.0.0.6 US.
 //
 // A geo denial at L4 is never logged and carries no client address — the
@@ -33,7 +35,7 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpSocket;
+use tokio::net::{TcpSocket, TcpStream};
 
 pub struct TcpGeoRestrictionTestSuite;
 
@@ -43,6 +45,20 @@ pub struct TcpGeoRestrictionTestSuite;
 /// way other suites hardcode the fixed metrics port 12090.
 const BARE_PORT: u16 = 31952;
 
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+fn test_source(local_source: &'static str) -> &'static str {
+    if k8s_mode() {
+        "k8s-pod-peer"
+    } else {
+        local_source
+    }
+}
+
 enum TcpEchoProbe {
     Echoed(usize),
     Closed(String),
@@ -50,9 +66,18 @@ enum TcpEchoProbe {
 }
 
 /// Connect FROM `src` (a loopback alias mapped to a synthetic country by the
-/// GeoIP test fixture) TO `addr`. The gateway's peer address — and therefore
-/// its geo lookup — is exactly the address this test bound.
+/// local GeoIP test fixture) TO `addr`. K8s mode deliberately skips source
+/// binding and uses the pod's real peer address and the K8s-only GeoIP map.
 async fn probe_from(src: &str, addr: &str, test_data: &[u8]) -> TcpEchoProbe {
+    if k8s_mode() {
+        let mut stream = match tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => return TcpEchoProbe::Inconclusive(format!("connect failed: {e}")),
+            Err(_) => return TcpEchoProbe::Inconclusive("connect timed out".to_string()),
+        };
+        return probe_stream(&mut stream, test_data).await;
+    }
+
     let sock = match TcpSocket::new_v4() {
         Ok(s) => s,
         Err(e) => return TcpEchoProbe::Inconclusive(format!("socket() failed: {e}")),
@@ -76,6 +101,10 @@ async fn probe_from(src: &str, addr: &str, test_data: &[u8]) -> TcpEchoProbe {
         Err(_) => return TcpEchoProbe::Inconclusive("connect timed out".to_string()),
     };
 
+    probe_stream(&mut stream, test_data).await
+}
+
+async fn probe_stream(stream: &mut TcpStream, test_data: &[u8]) -> TcpEchoProbe {
     if let Err(e) = stream.write_all(test_data).await {
         return TcpEchoProbe::Closed(format!("write failed: {e}"));
     }
@@ -320,15 +349,29 @@ async fn conn_ip_restriction_denied_total(ctx: &TestContext) -> f64 {
 
 const GEO_DENY_RU: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
 
+const GEO_DENY_K8S_PEER: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-k8s-peer-country\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"US\"]\n";
+
 const GEO_ALLOW_CN: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        allowRuleGroups:\n          - name: cn-only\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"CN\"]\n";
 
+const GEO_ALLOW_K8S_PEER: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        allowRuleGroups:\n          - name: k8s-peer-only\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"US\"]\n";
+
 const GEO_DENY_CIDR_RU: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru-cidr\n            rules:\n              - source: DirectPeerIp\n                key: cidr\n                values: [\"127.0.0.5/32\"]\n";
+
+const GEO_DENY_K8S_CIDR: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-k8s-cidr\n            rules:\n              - source: DirectPeerIp\n                key: cidr\n                values: [\"192.168.0.0/16\"]\n";
+
+const GEO_DENY_OTHER_CIDR: &str = "    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-other-cidr\n            rules:\n              - source: DirectPeerIp\n                key: cidr\n                values: [\"10.0.0.0/8\"]\n";
 
 const GEO_PARSE_ONLY: &str = "    - type: GeoIpLocation\n      config: {}\n";
 
 const CHAIN_IP_DENY_THEN_GEO: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-ru-source\n                cidrs:\n                  - \"127.0.0.5/32\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
 
+const CHAIN_IP_DENY_THEN_GEO_K8S: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-k8s-source\n                cidrs:\n                  - \"192.168.0.0/16\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-k8s-peer-country\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"US\"]\n";
+
+const CHAIN_ALLOW_K8S: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-other-source\n                cidrs:\n                  - \"10.0.0.0/8\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
+
 const GCIR_ONLY_LOOPBACK_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allow:\n              - name: loopback\n                cidrs:\n                  - \"127.0.0.0/8\"\n";
+
+const GCIR_ONLY_K8S_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allow:\n              - name: k8s-pod-network\n                cidrs:\n                  - \"192.168.0.0/16\"\n";
 
 impl TcpGeoRestrictionTestSuite {
     /// A bare `denyRuleGroups`/country hit denies at the "tcp" layer, and
@@ -340,11 +383,14 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, GEO_DENY_RU).await {
+                    let config = if k8s_mode() { GEO_DENY_K8S_PEER } else { GEO_DENY_RU };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_geo_denial(&ctx, "127.0.0.5", &addr, b"deny", "tcp", "deny_country").await {
+                    match wait_for_geo_denial(&ctx, test_source("127.0.0.5"), &addr, b"deny", "tcp", "deny_country")
+                        .await
+                    {
                         Ok((reason, bumped)) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("denied ({reason}), metric={bumped}"),
@@ -364,11 +410,12 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, GEO_ALLOW_CN).await {
+                    let config = if k8s_mode() { GEO_ALLOW_K8S_PEER } else { GEO_ALLOW_CN };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_echo("127.0.0.1", &addr, b"allow-hit").await {
+                    match wait_for_echo(test_source("127.0.0.1"), &addr, b"allow-hit").await {
                         Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -390,7 +437,16 @@ impl TcpGeoRestrictionTestSuite {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_geo_denial(&ctx, "127.0.0.6", &addr, b"allow-miss", "tcp", "allow_miss").await {
+                    match wait_for_geo_denial(
+                        &ctx,
+                        test_source("127.0.0.6"),
+                        &addr,
+                        b"allow-miss",
+                        "tcp",
+                        "allow_miss",
+                    )
+                    .await
+                    {
                         Ok((reason, bumped)) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("denied ({reason}), metric={bumped}"),
@@ -410,16 +466,33 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, GEO_DENY_CIDR_RU).await {
+                    let config = if k8s_mode() {
+                        GEO_DENY_K8S_CIDR
+                    } else {
+                        GEO_DENY_CIDR_RU
+                    };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    if let Err(e) =
-                        wait_for_geo_denial(&ctx, "127.0.0.5", &addr, b"cidr-hit", "tcp", "deny_country").await
+                    if let Err(e) = wait_for_geo_denial(
+                        &ctx,
+                        test_source("127.0.0.5"),
+                        &addr,
+                        b"cidr-hit",
+                        "tcp",
+                        "deny_country",
+                    )
+                    .await
                     {
                         return TestResult::failed(start.elapsed(), format!("in-CIDR: {e}"));
                     }
-                    match wait_for_echo("127.0.0.1", &addr, b"cidr-miss").await {
+                    if k8s_mode() {
+                        if let Err(e) = apply_esp(&ctx, GEO_DENY_OTHER_CIDR).await {
+                            return TestResult::failed(start.elapsed(), format!("apply out-of-CIDR config: {e}"));
+                        }
+                    }
+                    match wait_for_echo(test_source("127.0.0.1"), &addr, b"cidr-miss").await {
                         Ok(n) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("out-of-CIDR source allowed, echoed {n} bytes"),
@@ -480,11 +553,16 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, CHAIN_IP_DENY_THEN_GEO).await {
+                    let config = if k8s_mode() {
+                        CHAIN_IP_DENY_THEN_GEO_K8S
+                    } else {
+                        CHAIN_IP_DENY_THEN_GEO
+                    };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    match wait_for_non_geo_denial(&ctx, "127.0.0.5", &addr, b"chain-ip-deny").await {
+                    match wait_for_non_geo_denial(&ctx, test_source("127.0.0.5"), &addr, b"chain-ip-deny").await {
                         Ok(msg) => TestResult::passed_with_message(start.elapsed(), format!("denied ({msg})")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -501,16 +579,22 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, CHAIN_IP_DENY_THEN_GEO).await {
+                    let config = if k8s_mode() {
+                        CHAIN_ALLOW_K8S
+                    } else {
+                        CHAIN_IP_DENY_THEN_GEO
+                    };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    let result = match wait_for_echo("127.0.0.1", &addr, b"chain-allow").await {
+                    let result = match wait_for_echo(test_source("127.0.0.1"), &addr, b"chain-allow").await {
                         Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     };
                     // Restore a known-good baseline for whatever runs next.
-                    let _ = apply_esp(&ctx, GEO_DENY_RU).await;
+                    let baseline = if k8s_mode() { GEO_DENY_K8S_PEER } else { GEO_DENY_RU };
+                    let _ = apply_esp(&ctx, baseline).await;
                     result
                 })
             },
@@ -526,16 +610,22 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, GCIR_ONLY_LOOPBACK_ALLOW).await {
+                    let config = if k8s_mode() {
+                        GCIR_ONLY_K8S_ALLOW
+                    } else {
+                        GCIR_ONLY_LOOPBACK_ALLOW
+                    };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = ctx.tcp_addr();
-                    let result = match wait_for_echo("127.0.0.1", &addr, b"no-geo").await {
+                    let result = match wait_for_echo(test_source("127.0.0.1"), &addr, b"no-geo").await {
                         Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     };
                     // Restore a known-good baseline for whatever runs next.
-                    let _ = apply_esp(&ctx, GEO_DENY_RU).await;
+                    let baseline = if k8s_mode() { GEO_DENY_K8S_PEER } else { GEO_DENY_RU };
+                    let _ = apply_esp(&ctx, baseline).await;
                     result
                 })
             },
@@ -553,7 +643,8 @@ impl TcpGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_esp(&ctx, GEO_DENY_RU).await {
+                    let config = if k8s_mode() { GEO_DENY_K8S_PEER } else { GEO_DENY_RU };
+                    if let Err(e) = apply_esp(&ctx, config).await {
                         return TestResult::failed(start.elapsed(), format!("apply: {e}"));
                     }
                     let addr = format!("{}:{}", ctx.target_host, BARE_PORT);
@@ -561,7 +652,9 @@ impl TcpGeoRestrictionTestSuite {
                     // accept time is observed as connect-then-immediate-EOF (no
                     // route ever gets a chance to proxy), same shape as a Stage-2
                     // denial.
-                    match wait_for_geo_denial(&ctx, "127.0.0.5", &addr, b"bare", "stage1", "deny_country").await {
+                    match wait_for_geo_denial(&ctx, test_source("127.0.0.5"), &addr, b"bare", "stage1", "deny_country")
+                        .await
+                    {
                         Ok((reason, bumped)) => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("denied ({reason}), metric={bumped}"),

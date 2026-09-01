@@ -6,11 +6,36 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/edgion-tests/k8s/kubernetes}"
 CRD_ROOT="${CRD_ROOT:-$PROJECT_ROOT/config/crd}"
 CONF_ROOT="${CONF_ROOT:-$PROJECT_ROOT/edgion-tests/k8s/conf}"
+GENERATED_DIR="$PROJECT_ROOT/edgion-tests/k8s/generated"
 
 WITH_CRDS=false
 WITH_IMAGES=false
+SKIP_GENERATED_ARTIFACTS=false
+OWNERSHIP_FILE=""
+GENERATED_OWNERSHIP_FILE=""
+CLEANUP_NAMESPACES=()
+OWNED_CLUSTER_LOCATORS=()
+OWNED_CLUSTER_NAMES=()
+CLEANUP_NAMESPACE_COUNT=0
+OWNED_CLUSTER_COUNT=0
 NS_TIMEOUT_SECONDS=300
-NAMESPACES=("edgion-system" "edgion-default" "edgion-test" "edgion-backend")
+NAMESPACES=(
+  "app"
+  "app2"
+  "backend"
+  "cert-store"
+  "dragonfly-system"
+  "edgion-backend"
+  "edgion-default"
+  "edgion-deleg"
+  "edgion-deleg-dyn"
+  "edgion-grpc-deleg"
+  "edgion-grpc-deleg-dyn"
+  "edgion-it"
+  "edgion-system"
+  "edgion-test"
+  "other"
+)
 
 show_help() {
   cat <<EOF_HELP
@@ -19,13 +44,15 @@ Usage: $0 [options]
 Options:
   --with-crds                    Also delete CRDs from ${CRD_ROOT}
   --with-images                  Also clean old local test images
+  --skip-generated-artifacts    Preserve generated test artifacts
+  --ownership-file <path>       Use the run's exact namespace/cluster ownership inventory
   --ns-timeout <seconds>         Wait timeout for namespace deletion (default: ${NS_TIMEOUT_SECONDS})
   -h, --help                     Show this help
 
 Behavior:
-  1) Delete all manifests under edgion-tests/k8s/conf (cluster-scoped + namespaced)
-  2) Delete workloads from edgion-tests/k8s/kubernetes (test/controller/gateway + namespaces)
-  3) Wait namespaces fully deleted
+  1) Delete exact cluster-scoped objects from the ownership inventory
+  2) Delete all integration namespaces in one bounded operation
+  3) Wait for namespaces to be fully deleted
   4) Optional: delete CRDs from config/crd
   5) Optional: clean old Edgion test images
 EOF_HELP
@@ -40,6 +67,18 @@ while [[ $# -gt 0 ]]; do
     --with-images)
       WITH_IMAGES=true
       shift
+      ;;
+    --skip-generated-artifacts)
+      SKIP_GENERATED_ARTIFACTS=true
+      shift
+      ;;
+    --ownership-file)
+      OWNERSHIP_FILE="${2:-}"
+      if [[ -z "${OWNERSHIP_FILE}" || ! -f "${OWNERSHIP_FILE}" ]]; then
+        echo "invalid --ownership-file: ${OWNERSHIP_FILE:-<empty>}"
+        exit 1
+      fi
+      shift 2
       ;;
     --ns-timeout)
       NS_TIMEOUT_SECONDS="${2:-}"
@@ -71,84 +110,179 @@ if [[ ! -f "$K8S_DEPLOY_ROOT/namespace.yaml" ]]; then
   exit 1
 fi
 
-delete_k8stest_conf_resources() {
-  if [[ ! -d "${CONF_ROOT}" ]]; then
-    echo "[skip] k8stest conf dir not found: ${CONF_ROOT}"
-    return 0
-  fi
-
-  echo "[cleanup] delete resources from ${CONF_ROOT}"
-  local deleted_any=false
-  while IFS= read -r -d '' f; do
-    deleted_any=true
-    kubectl delete -f "${f}" --ignore-not-found=true >/dev/null 2>&1 || true
-  done < <(find "${CONF_ROOT}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0)
-
-  if [[ "${deleted_any}" == "false" ]]; then
-    echo "[cleanup] no yaml found under ${CONF_ROOT}"
-  fi
-}
-
-delete_legacy_default_namespace_resources() {
-  if [[ ! -d "${CONF_ROOT}" ]]; then
-    return 0
-  fi
-
-  echo "[cleanup] delete legacy default-namespace resources mirrored from edgion-default manifests"
-  local deleted_any=false
-  local file
-
-  while IFS= read -r -d '' file; do
-    if ! grep -Eq '^[[:space:]]*namespace:[[:space:]]*edgion-default([[:space:]]|$)' "${file}"; then
-      continue
-    fi
-
-    deleted_any=true
-    python3 - "${file}" <<'PY' | kubectl delete -f - --ignore-not-found=true >/dev/null 2>&1 || true
+write_cleanup_inventory() {
+  python3 - "${CONF_ROOT}" "${K8S_DEPLOY_ROOT}" <<'PY'
 import pathlib
 import sys
 
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-sys.stdout.write(text.replace("namespace: edgion-default", "namespace: default"))
-PY
-  done < <(find "${CONF_ROOT}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0)
+import yaml
 
-  if [[ "${deleted_any}" == "false" ]]; then
-    echo "[cleanup] no legacy edgion-default manifests found"
-  fi
+cluster_kinds = {"ClusterRole", "ClusterRoleBinding", "EdgionGatewayConfig", "GatewayClass"}
+keys = set()
+for raw_root in sys.argv[1:]:
+    root = pathlib.Path(raw_root)
+    if not root.exists():
+        continue
+    for path in sorted(set(root.rglob("*.yaml")) | set(root.rglob("*.yml"))):
+        if path.name.endswith(".template.yaml"):
+            continue
+        for document in yaml.safe_load_all(path.read_text()):
+            if not isinstance(document, dict):
+                continue
+            api_version = document.get("apiVersion")
+            kind = document.get("kind")
+            metadata = document.get("metadata") or {}
+            name = metadata.get("name")
+            namespace = metadata.get("namespace")
+            group = api_version.split("/", 1)[0] if isinstance(api_version, str) and "/" in api_version else ""
+            locator = f"{kind}.{group}" if group else kind
+            if namespace:
+                keys.add(("namespace", "Namespace", "Namespace", namespace))
+            if kind == "Namespace" and name:
+                keys.add(("namespace", "Namespace", "Namespace", name))
+            elif kind in cluster_kinds and name:
+                keys.add(("cluster", kind, locator, name))
+
+for key in sorted(keys):
+    print("\t".join(key))
+PY
 }
 
-delete_deploy_manifests() {
-  echo "[cleanup] delete test workloads"
-  kubectl delete -k "${K8S_DEPLOY_ROOT}/test/" --ignore-not-found=true >/dev/null 2>&1 || true
+prepare_ownership_inventory() {
+  if [[ -n "${OWNERSHIP_FILE}" ]]; then
+    return 0
+  fi
+  GENERATED_OWNERSHIP_FILE="$(mktemp /tmp/edgion-k8s-cleanup-ownership.XXXXXX)"
+  write_cleanup_inventory > "${GENERATED_OWNERSHIP_FILE}"
+  OWNERSHIP_FILE="${GENERATED_OWNERSHIP_FILE}"
+}
 
-  echo "[cleanup] delete gateway/controller workloads"
-  kubectl delete -f "${K8S_DEPLOY_ROOT}/gateway/" --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl delete -f "${K8S_DEPLOY_ROOT}/controller/" --ignore-not-found=true >/dev/null 2>&1 || true
+is_allowed_namespace() {
+  local candidate="$1" allowed
+  for allowed in "${NAMESPACES[@]}"; do
+    [[ "${candidate}" == "${allowed}" ]] && return 0
+  done
+  return 1
+}
 
-  echo "[cleanup] delete integration namespaces"
-  kubectl delete namespace app --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl delete namespace other --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl delete namespace edgion-test --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl delete namespace edgion-default --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl delete namespace edgion-system --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl delete namespace edgion-backend --ignore-not-found=true >/dev/null 2>&1 || true
+validate_ownership_inventory() {
+  local scope kind locator name extra
+  local existing index duplicate entry
+  local canonical_inventory
+  canonical_inventory="$(write_cleanup_inventory)"
+
+  while IFS=$'\t' read -r scope kind locator name extra; do
+    if [[ -z "${scope}${kind}${locator}${name}${extra}" ]]; then
+      continue
+    fi
+    if [[ -n "${extra}" || -z "${scope}" || -z "${kind}" || -z "${locator}" || -z "${name}" ]]; then
+      echo "invalid ownership inventory row: expected exactly four non-empty tab-separated fields" >&2
+      return 1
+    fi
+    if [[ ! "${name}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
+      echo "invalid ownership name: ${name}" >&2
+      return 1
+    fi
+    entry="${scope}"$'\t'"${kind}"$'\t'"${locator}"$'\t'"${name}"
+    if ! grep -Fqx -- "${entry}" <<< "${canonical_inventory}"; then
+      echo "ownership entry is not present in the current integration manifests: ${kind}/${name}" >&2
+      return 1
+    fi
+
+    if [[ "${scope}" == "namespace" ]]; then
+      if [[ "${kind}|${locator}" != "Namespace|Namespace" ]] || ! is_allowed_namespace "${name}"; then
+        echo "unapproved namespace ownership entry: ${kind}/${locator}/${name}" >&2
+        return 1
+      fi
+      duplicate=false
+      for ((index = 0; index < CLEANUP_NAMESPACE_COUNT; index++)); do
+        existing="${CLEANUP_NAMESPACES[${index}]}"
+        [[ "${existing}" == "${name}" ]] && duplicate=true
+      done
+      if [[ "${duplicate}" == "false" ]]; then
+        CLEANUP_NAMESPACES[${CLEANUP_NAMESPACE_COUNT}]="${name}"
+        CLEANUP_NAMESPACE_COUNT=$((CLEANUP_NAMESPACE_COUNT + 1))
+      fi
+      continue
+    fi
+
+    if [[ "${scope}" != "cluster" ]]; then
+      echo "unapproved ownership scope: ${scope}" >&2
+      return 1
+    fi
+    case "${kind}|${locator}" in
+      'ClusterRole|ClusterRole.rbac.authorization.k8s.io' \
+      |'ClusterRoleBinding|ClusterRoleBinding.rbac.authorization.k8s.io' \
+      |'EdgionGatewayConfig|EdgionGatewayConfig.edgion.io' \
+      |'GatewayClass|GatewayClass.gateway.networking.k8s.io') ;;
+      *)
+        echo "unapproved cluster-scoped ownership entry: ${kind}/${locator}/${name}" >&2
+        return 1
+        ;;
+    esac
+    duplicate=false
+    for ((index = 0; index < OWNED_CLUSTER_COUNT; index++)); do
+      if [[ "${OWNED_CLUSTER_LOCATORS[${index}]}" == "${locator}" \
+        && "${OWNED_CLUSTER_NAMES[${index}]}" == "${name}" ]]; then
+        duplicate=true
+      fi
+    done
+    if [[ "${duplicate}" == "false" ]]; then
+      OWNED_CLUSTER_LOCATORS[${OWNED_CLUSTER_COUNT}]="${locator}"
+      OWNED_CLUSTER_NAMES[${OWNED_CLUSTER_COUNT}]="${name}"
+      OWNED_CLUSTER_COUNT=$((OWNED_CLUSTER_COUNT + 1))
+    fi
+  done < "${OWNERSHIP_FILE}"
+}
+
+delete_owned_cluster_resources() {
+  local index failed=0
+  echo "[cleanup] delete exact cluster-scoped integration resources"
+  for ((index = 0; index < OWNED_CLUSTER_COUNT; index++)); do
+    if ! kubectl delete "${OWNED_CLUSTER_LOCATORS[${index}]}" "${OWNED_CLUSTER_NAMES[${index}]}" \
+      --ignore-not-found=true --wait=false >/dev/null; then
+      echo "failed to delete ${OWNED_CLUSTER_LOCATORS[${index}]}/${OWNED_CLUSTER_NAMES[${index}]}" >&2
+      failed=1
+    fi
+  done
+  return "${failed}"
+}
+
+delete_integration_namespaces() {
+  local failed=0
+  if [[ "${CLEANUP_NAMESPACE_COUNT}" -gt 0 ]]; then
+    echo "[cleanup] delete ${CLEANUP_NAMESPACE_COUNT} integration namespaces"
+    if ! kubectl delete namespace "${CLEANUP_NAMESPACES[@]}" \
+      --ignore-not-found=true --wait=false >/dev/null; then
+      echo "failed to request integration namespace deletion" >&2
+      failed=1
+    fi
+  fi
 
   if [[ "${WITH_CRDS}" == "true" ]]; then
     echo "[cleanup] delete CRDs from ${CRD_ROOT}"
-    kubectl delete -f "${CRD_ROOT}/edgion-crd/" --ignore-not-found=true >/dev/null 2>&1 || true
-    kubectl delete -f "${CRD_ROOT}/gateway-api/" --ignore-not-found=true >/dev/null 2>&1 || true
+    if ! kubectl delete -f "${CRD_ROOT}/edgion-crd/" --ignore-not-found=true >/dev/null; then
+      echo "failed to delete Edgion CRDs" >&2
+      failed=1
+    fi
+    if ! kubectl delete -f "${CRD_ROOT}/gateway-api/" --ignore-not-found=true >/dev/null; then
+      echo "failed to delete Gateway API CRDs" >&2
+      failed=1
+    fi
   else
     echo "[cleanup] skip CRD deletion (use --with-crds to enable)"
   fi
+  return "${failed}"
 }
 
 delete_generated_artifacts() {
-  local generated_dir="${PROJECT_ROOT}/edgion-tests/k8s/generated"
-  if [[ -d "${generated_dir}" ]]; then
-    echo "[cleanup] remove generated artifacts: ${generated_dir}"
-    rm -rf "${generated_dir}"
+  if [[ "${SKIP_GENERATED_ARTIFACTS}" == "true" ]]; then
+    echo "[cleanup] preserve generated artifacts"
+    return 0
+  fi
+  if [[ -d "${GENERATED_DIR}" ]]; then
+    echo "[cleanup] remove generated artifacts: ${GENERATED_DIR}"
+    rm -rf "${GENERATED_DIR}"
   fi
 }
 
@@ -158,15 +292,46 @@ wait_namespace_gone() {
   local start
   start="$(date +%s)"
 
-  while kubectl get namespace "${ns}" >/dev/null 2>&1; do
+  local output rc
+  while true; do
+    output="$(kubectl get namespace "${ns}" --ignore-not-found -o name 2>&1)" && rc=0 || rc=$?
+    if [[ "${rc}" -eq 0 && -z "${output}" ]]; then
+      echo "[ok] namespace ${ns} deleted"
+      return 0
+    fi
     if (( $(date +%s) - start > timeout )); then
-      echo "[warn] namespace ${ns} still exists after ${timeout}s"
-      kubectl get namespace "${ns}" -o wide || true
+      if [[ "${rc}" -ne 0 ]]; then
+        echo "[warn] namespace ${ns} deletion could not be verified after ${timeout}s: ${output}"
+      else
+        echo "[warn] namespace ${ns} still exists after ${timeout}s"
+        kubectl get namespace "${ns}" -o wide || true
+      fi
       return 1
     fi
     sleep 2
   done
-  echo "[ok] namespace ${ns} deleted"
+}
+
+wait_cluster_resource_gone() {
+  local locator="$1" name="$2" timeout="$3"
+  local start output rc
+  start="$(date +%s)"
+  while true; do
+    output="$(kubectl get "${locator}" "${name}" --ignore-not-found -o name 2>&1)" && rc=0 || rc=$?
+    if [[ "${rc}" -eq 0 && -z "${output}" ]]; then
+      echo "[ok] ${locator}/${name} deleted"
+      return 0
+    fi
+    if (( $(date +%s) - start > timeout )); then
+      if [[ "${rc}" -ne 0 ]]; then
+        echo "${locator}/${name} deletion could not be verified after ${timeout}s: ${output}" >&2
+      else
+        echo "${locator}/${name} still exists after ${timeout}s" >&2
+      fi
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 cleanup_old_test_images() {
@@ -228,21 +393,31 @@ cleanup_old_test_images() {
   echo "[ok] image cleanup done"
 }
 
-echo "[cleanup] delete prepare state ConfigMap"
-kubectl -n edgion-system delete configmap edgion-k8s-integration-state --ignore-not-found=true >/dev/null 2>&1 || true
-
-delete_k8stest_conf_resources
-delete_legacy_default_namespace_resources
+prepare_ownership_inventory
+validate_ownership_inventory
 delete_generated_artifacts
-delete_deploy_manifests
+cleanup_failed=0
+delete_owned_cluster_resources || cleanup_failed=1
+delete_integration_namespaces || cleanup_failed=1
+
+echo "[cleanup] wait cluster-scoped resources deleted"
+for ((index = 0; index < OWNED_CLUSTER_COUNT; index++)); do
+  wait_cluster_resource_gone "${OWNED_CLUSTER_LOCATORS[${index}]}" \
+    "${OWNED_CLUSTER_NAMES[${index}]}" "${NS_TIMEOUT_SECONDS}" || cleanup_failed=1
+done
 
 echo "[cleanup] wait namespaces deleted"
-for ns in "${NAMESPACES[@]}"; do
-  wait_namespace_gone "${ns}" "${NS_TIMEOUT_SECONDS}" || true
+for ((index = 0; index < CLEANUP_NAMESPACE_COUNT; index++)); do
+  wait_namespace_gone "${CLEANUP_NAMESPACES[${index}]}" "${NS_TIMEOUT_SECONDS}" || cleanup_failed=1
 done
 
 if [[ "${WITH_IMAGES}" == "true" ]]; then
   cleanup_old_test_images
 fi
 
+if [[ -n "${GENERATED_OWNERSHIP_FILE}" ]]; then
+  rm -f "${GENERATED_OWNERSHIP_FILE}"
+fi
+
 echo "Cleanup completed."
+exit "${cleanup_failed}"

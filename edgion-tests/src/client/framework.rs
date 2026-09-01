@@ -10,6 +10,41 @@ use std::time::{Duration, Instant};
 
 use crate::port_config::{PortKind, SuitePorts};
 
+fn configured_host_or(value: Option<String>, fallback: &str) -> String {
+    value
+        .filter(|host| !host.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+pub fn env_host_or(name: &str, fallback: &str) -> String {
+    configured_host_or(std::env::var(name).ok(), fallback)
+}
+
+/// Hosts for querying state held by test-server processes.
+///
+/// Kubernetes test servers have multiple replicas, so in-memory observations
+/// must be read from every live Pod endpoint instead of through the Service.
+pub fn test_backend_hosts(ctx: &TestContext) -> Vec<String> {
+    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        let hosts = std::env::var("EDGION_TEST_BACKEND_ENDPOINT_IPS")
+            .ok()
+            .into_iter()
+            .flat_map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|host| !host.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if !hosts.is_empty() {
+            return hosts;
+        }
+    }
+    vec![env_host_or("TEST_SERVER_HOST", &ctx.target_host)]
+}
+
 /// Test context - contains all configuration information needed for testing
 #[derive(Clone)]
 pub struct TestContext {
@@ -921,5 +956,15 @@ mod tests {
         let results = runner.run().await;
         assert!(!results.has_failures());
         assert_eq!(results.total_passed(), 1);
+    }
+
+    #[test]
+    fn configured_host_uses_nonblank_override_or_fallback() {
+        assert_eq!(
+            configured_host_or(Some("fixture.edgion-test.svc.cluster.local".to_string()), "127.0.0.1"),
+            "fixture.edgion-test.svc.cluster.local"
+        );
+        assert_eq!(configured_host_or(Some("  ".to_string()), "127.0.0.1"), "127.0.0.1");
+        assert_eq!(configured_host_or(None, "127.0.0.1"), "127.0.0.1");
     }
 }

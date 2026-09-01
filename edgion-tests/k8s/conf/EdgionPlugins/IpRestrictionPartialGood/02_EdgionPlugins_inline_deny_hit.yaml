@@ -1,0 +1,25 @@
+# IpRestriction plugin: INLINE deny group (NOT a denyRef) whose good CIDR covers
+# the client (192.168.0.0/16). The sibling inline entry is invalid ("not-a-cidr"),
+# but partial-good compilation keeps the good CIDR, so the client peer
+# (OrbStack test-client Pod IP) is a deny-list hit -> 403. This proves the inline deny path is
+# partial-good: a bad inline CIDR does not fail the plugin (no init_failed /
+# deny-all collapse), and the valid sibling entry still enforces.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-inline-deny-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: RemoteIp
+        defaultAction: allow
+        deny:
+          - name: mixed-good-and-bad
+            cidrs:
+              - "192.168.0.0/16" # good — covers the client peer (OrbStack test-client Pod IP)
+              - "not-a-cidr"  # bad  — skipped (partial-good), not fatal
+        status: 403
+        message: "IP is in inline partial-good block list"

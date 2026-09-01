@@ -1,0 +1,17 @@
+# IpList EdgionConfigData — central block-list for IpRestrictionRefs tests.
+# Contains the loopback range (192.168.0.0/16) so the test client's TCP peer
+# address (OrbStack test-client Pod IP) resolves as "in-list" (i.e. blocked) when referenced
+# via denyRefs.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ipref-blocklist
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: blocked
+          cidrs:
+            - "192.168.0.0/16"

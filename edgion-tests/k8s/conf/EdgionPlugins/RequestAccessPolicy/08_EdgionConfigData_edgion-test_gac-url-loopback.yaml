@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gac-url-loopback
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs: ["192.168.0.0/16"]

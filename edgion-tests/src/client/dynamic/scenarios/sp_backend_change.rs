@@ -2,7 +2,7 @@
 //
 // Initial: HTTPRoute weights=100/0/0, SessionPersistence Cookie mode.
 //          Pins SP cookie to backend-a, stores cookie for final phase.
-// Update:  Clears backend-a EndpointSlice endpoints + shifts weights to 0/50/50.
+// Update:  Selects no backend-a endpoints + shifts weights to 0/50/50.
 // Final:   Same cookie must route to backend-b or backend-c (not 503, not backend-a).
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};

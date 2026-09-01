@@ -90,10 +90,6 @@ metadata:
   name: wh19-webhook-key-auth
   namespace: edgion-default
 spec:
-  accessLogExtern:
-    - key: wh19_key
-      from: ctx
-      name: wh19_key
   requestPlugins:
     - enable: true
       type: WebhookKeyGet
@@ -110,7 +106,7 @@ spec:
         keySources:
           - type: ctx
             name: wh19_key
-        hideCredentials: false
+        hideCredentials: true
         realm: "Wh19 API"
         keyField: "key"
         secretGroups:

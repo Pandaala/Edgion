@@ -8,7 +8,7 @@ spec:
     - enable: true
       type: RateLimitRedis
       config:
-        redisRef: "default/redis-not-found"
+        redisRef: "edgion-default/redis-not-found"
         policies:
           - rate: 3
             interval: "10s"

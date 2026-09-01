@@ -295,6 +295,27 @@ openssl x509 -req \
   -extfile "${TMP_DIR}/backend-server.ext" \
   >/dev/null 2>&1
 
+openssl req -newkey rsa:2048 -nodes \
+  -keyout "${TMP_DIR}/backend-server-wildcard.key" \
+  -out "${TMP_DIR}/backend-server-wildcard.csr" \
+  -subj "/CN=*.sandbox.internal/O=Edgion Testing/OU=Backend" \
+  >/dev/null 2>&1
+
+cat > "${TMP_DIR}/backend-server-wildcard.ext" <<EOF
+subjectAltName=DNS:*.sandbox.internal
+extendedKeyUsage=serverAuth
+EOF
+
+openssl x509 -req \
+  -in "${TMP_DIR}/backend-server-wildcard.csr" \
+  -CA "${TMP_DIR}/backend-ca.crt" \
+  -CAkey "${TMP_DIR}/backend-ca.key" \
+  -CAcreateserial \
+  -out "${TMP_DIR}/backend-server-wildcard.crt" \
+  -days 365 \
+  -extfile "${TMP_DIR}/backend-server-wildcard.ext" \
+  >/dev/null 2>&1
+
 for suffix in a b; do
   hostname="hostname-${suffix}.example.com"
   openssl req -newkey rsa:2048 -nodes \
@@ -374,6 +395,11 @@ write_opaque_ca_secret \
   "backend-ca" "edgion-test" \
   "${TMP_DIR}/backend-ca.crt"
 
+write_opaque_ca_secret \
+  "${SECRETS_DIR}/Secret_default_backend-ca.yaml" \
+  "backend-ca" "edgion-default" \
+  "${TMP_DIR}/backend-ca.crt"
+
 write_ca_configmap \
   "${SECRETS_DIR}/ConfigMap_backend-ca.yaml" \
   "backend-ca" "edgion-test" \
@@ -383,6 +409,11 @@ write_tls_secret \
   "${SECRETS_DIR}/Secret_backend-server-tls.yaml" \
   "backend-server-tls" "edgion-test" \
   "${TMP_DIR}/backend-server.crt" "${TMP_DIR}/backend-server.key"
+
+write_tls_secret \
+  "${SECRETS_DIR}/Secret_backend-server-wildcard-tls.yaml" \
+  "backend-server-wildcard-tls" "edgion-test" \
+  "${TMP_DIR}/backend-server-wildcard.crt" "${TMP_DIR}/backend-server-wildcard.key"
 
 write_tls_secret \
   "${SECRETS_DIR}/Secret_backend-server-sni-a-tls.yaml" \
@@ -399,6 +430,11 @@ write_tls_secret \
   "backend-client-cert" "edgion-test" \
   "${TMP_DIR}/valid-client.crt" "${TMP_DIR}/valid-client.key"
 
+write_tls_secret \
+  "${SECRETS_DIR}/Secret_default_ext-proc-client.yaml" \
+  "ext-proc-client" "edgion-default" \
+  "${TMP_DIR}/valid-client.crt" "${TMP_DIR}/valid-client.key"
+
 cp "${TMP_DIR}/edge-tls.crt" "${CERTS_DIR}/edge-tls.crt"
 cp "${TMP_DIR}/client-ca.crt" "${CERTS_DIR}/client-ca.crt"
 cp "${TMP_DIR}/ca-chain.crt" "${CERTS_DIR}/ca-chain.crt"
@@ -408,6 +444,8 @@ cp "${TMP_DIR}/fv-server.key" "${CERTS_DIR}/fv-server.key"
 cp "${TMP_DIR}/backend-ca.crt" "${CERTS_DIR}/backend-ca.crt"
 cp "${TMP_DIR}/backend-server.crt" "${CERTS_DIR}/backend-server.crt"
 cp "${TMP_DIR}/backend-server.key" "${CERTS_DIR}/backend-server.key"
+cp "${TMP_DIR}/backend-server-wildcard.crt" "${CERTS_DIR}/backend-server-wildcard.crt"
+cp "${TMP_DIR}/backend-server-wildcard.key" "${CERTS_DIR}/backend-server-wildcard.key"
 cp "${TMP_DIR}/backend-server-a.crt" "${CERTS_DIR}/backend-server-a.crt"
 cp "${TMP_DIR}/backend-server-a.key" "${CERTS_DIR}/backend-server-a.key"
 cp "${TMP_DIR}/backend-server-b.crt" "${CERTS_DIR}/backend-server-b.crt"

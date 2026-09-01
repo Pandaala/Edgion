@@ -12,16 +12,12 @@ spec:
       profiles:
         allow-local:
           defaultAction: deny
-          allow:
-          - name: loopback
-            cidrs:
-            - 10.0.0.0/8
+          allowRefs:
+          - name: k8s-test-client-peer
         block-local:
           defaultAction: allow
-          deny:
-          - name: loopback-block
-            cidrs:
-            - 10.0.0.0/8
+          denyRefs:
+          - name: k8s-test-client-peer
       activeProfileRef:
         namespace: edgion-test
         name: gcir-enforce-test

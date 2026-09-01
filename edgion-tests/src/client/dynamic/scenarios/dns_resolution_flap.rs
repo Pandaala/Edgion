@@ -5,7 +5,7 @@
 // without a restart.
 //
 //   initial:  resolver-ref → dns-flap-dead (down httpdns, fallback: none) → 5xx
-//   working:  resolver-ref → dns-flap-local (live httpdns → 127.0.0.1)      → 200
+//   working:  resolver-ref → dns-flap-local (live httpdns → backend IP)     → 200
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};
 use crate::dynamic::ScenarioCtx;

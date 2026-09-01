@@ -1,0 +1,35 @@
+# ForwardAuth success.statusCodes test: custom list [200, 204] accepts 204 as success.
+#
+# The auth server returns 204 No Content for "Bearer valid-204-token".
+# With success.statusCodes: [200, 204] the gateway treats 204 as success and
+# forwards the request to the backend. The client sees 200 from the backend,
+# proving the full chain completed.
+#
+# Reuses the shared auth-svc Service declared in 01_EdgionPlugins_forward-auth-basic.yaml.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-204
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        success:
+          statusCodes: [200, 204]
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders:
+            - X-User-ID

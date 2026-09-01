@@ -58,6 +58,12 @@ fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
 fn validate_capability_registry(contents: &str) -> Result<()> {
     let mut entries = HashSet::new();
     let conf_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("integration/conf");
+    // Runtime images intentionally contain the test binary, not the local
+    // source tree used to compile it. Keep the directory cross-check when the
+    // source tree is present (developer and CI runs); the registry syntax,
+    // capability names, duplicates, and dynamic ids remain validated in every
+    // environment.
+    let validate_suite_directories = conf_root.is_dir();
     for (index, raw_line) in contents.lines().enumerate() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -87,7 +93,7 @@ fn validate_capability_registry(contents: &str) -> Result<()> {
             anyhow::bail!("capability registry contains duplicate {kind} id `{id}`");
         }
         match kind {
-            "suite" if !conf_root.join(id).is_dir() => {
+            "suite" if validate_suite_directories && !conf_root.join(id).is_dir() => {
                 anyhow::bail!(
                     "capability registry suite `{id}` does not exist under {}",
                     conf_root.display()
@@ -465,7 +471,8 @@ mod capability_tests {
 
         assert!(!deployment.contains("ports.json: |"));
         assert!(deployment.contains("name: test-ports"));
-        assert!(deployment.contains("mountPath: /usr/local/edgion/conf/ports.json"));
+        assert!(deployment.contains("mountPath: /usr/local/edgion/conf"));
+        assert!(!deployment.contains("subPath: ports.json"));
         assert!(deploy_script.contains("edgion-tests/integration/conf/ports.json"));
         assert!(deploy_script.contains("create configmap edgion-test-ports"));
         assert!(deploy_script.contains("rollout restart deployment/edgion-test-client"));

@@ -75,6 +75,13 @@ metadata:
   name: wh8-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh8_overridden
+      from: ctx
+      name: wh8_overridden
+    - key: wh8_ignored
+      from: ctx
+      name: wh8_ignored
   requestPlugins:
     - enable: true
       type: WebhookKeyGet

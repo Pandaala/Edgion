@@ -103,7 +103,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # Rule 7: HTTP Method （ /echo  POST）
+    # Rule 7: HTTP method (POST /echo).
     - matches:
         - path:
             type: Exact
@@ -114,7 +114,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # Rule 8: （ /echo， POST）
+    # Rule 8: Combined POST /echo match.
     - matches:
         - path:
             type: Exact
@@ -136,3 +136,14 @@ spec:
           namespace: edgion-test
           port: 30001
 
+    # Rule 10: header-only match with `path` deliberately omitted.
+    # Kubernetes admission defaults the omitted path to `PathPrefix /`.
+    - matches:
+        - headers:
+            - type: Exact
+              name: X-No-Path-Match
+              value: "yes"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

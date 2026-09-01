@@ -653,6 +653,20 @@ where
             seed_existing_status(&mut obj, json);
         }
 
+        // Capture the persisted status before any handler hook can mutate it.
+        // In Kubernetes mode parse() may resolve references and update a
+        // condition directly (for example LinkSys ResolvedRefs). Capturing
+        // after parse() would compare the new status with itself and suppress
+        // the required status write.
+        let old_status = match existing_status_json.as_deref() {
+            Some(json) => StatusExtractResult::Present(json.to_string()),
+            None => extract_status_json(&obj),
+        };
+
+        if matches!(old_status, StatusExtractResult::SerializationError) {
+            tracing::warn!("Failed to serialize old status for comparison");
+        }
+
         // 4. Validate (log warnings but continue)
         let mut all_errors = self.handler.validate(&obj, ctx);
         for error in &all_errors {
@@ -669,24 +683,11 @@ where
         // 6. Parse/preprocess
         match self.handler.parse(obj, ctx).await {
             ProcessResult::Continue(mut parsed_obj) => {
-                // 7. Determine old status for comparison
-                // - If existing_status_json provided (FileSystem/Etcd mode): use it
-                //   (already seeded into the object at step 3.5)
-                // - Otherwise: extract from object (K8s mode - status is already in obj)
-                let old_status = match existing_status_json {
-                    Some(json) => StatusExtractResult::Present(json),
-                    None => extract_status_json(&parsed_obj),
-                };
-
-                // Log serialization errors
-                if matches!(old_status, StatusExtractResult::SerializationError) {
-                    tracing::warn!("Failed to serialize old status for comparison");
-                }
-
+                // 7. Report whether the pre-handler status snapshot exists.
                 tracing::debug!(
                     kind = self.kind,
                     old_status_present = matches!(old_status, StatusExtractResult::Present(_)),
-                    "Status comparison: old_status captured before update_status()"
+                    "Status comparison: old_status captured before handler mutation"
                 );
 
                 // 8. Update status (handler sets Gateway API conditions)
@@ -913,6 +914,8 @@ mod tests {
     struct TestResource {
         metadata: ObjectMeta,
         spec: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<serde_json::Value>,
     }
 
     impl ResourceMeta for TestResource {
@@ -1048,6 +1051,7 @@ mod tests {
                 ..Default::default()
             },
             spec: "test spec".to_string(),
+            status: None,
         };
 
         processor.on_init();
@@ -1092,6 +1096,7 @@ mod tests {
                 ..Default::default()
             },
             spec: "test spec".to_string(),
+            status: None,
         };
 
         processor.on_init();
@@ -1159,6 +1164,65 @@ mod tests {
 
         let changed = status_has_changed("GatewayClass", &old_status, &new_status);
         assert!(changed, "Status should have changed after update_status");
+    }
+
+    struct ParseStatusHandler;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<TestResource> for ParseStatusHandler {
+        async fn parse(&self, mut obj: TestResource, _ctx: &HandlerContext) -> ProcessResult<TestResource> {
+            obj.status = Some(serde_json::json!({
+                "conditions": [{
+                    "type": "ResolvedRefs",
+                    "status": "True",
+                    "reason": "ResolvedRefs",
+                    "message": "All references resolved",
+                    "observedGeneration": 1
+                }]
+            }));
+            ProcessResult::Continue(obj)
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_status_change_is_compared_against_persisted_status() {
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            Arc::new(ParseStatusHandler),
+            Arc::new(ControllerRuntime::default()),
+        );
+        let resource = TestResource {
+            metadata: ObjectMeta {
+                name: Some("status-change".to_string()),
+                ..Default::default()
+            },
+            spec: "test spec".to_string(),
+            status: Some(serde_json::json!({
+                "conditions": [{
+                    "type": "ResolvedRefs",
+                    "status": "False",
+                    "reason": "SecretNotFound",
+                    "message": "Secret not found",
+                    "observedGeneration": 1
+                }]
+            })),
+        };
+
+        let result = processor.on_init_apply(resource, None).await;
+        match result {
+            WorkItemResult::Processed { obj, status_changed } => {
+                assert!(status_changed, "parse-time status mutation must be persisted");
+                assert_eq!(
+                    obj.status
+                        .as_ref()
+                        .and_then(|status| status.pointer("/conditions/0/status"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("True")
+                );
+            }
+            other => panic!("expected processed result, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1334,6 +1398,7 @@ mod tests {
                 ..Default::default()
             },
             spec: "v1".to_string(),
+            status: None,
         };
         processor.save(obj, None);
         assert!(processor.get("obj1").is_some());

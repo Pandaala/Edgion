@@ -1,0 +1,32 @@
+# ForwardAuth success.statusCodes test: custom list [204] only — excludes 200.
+#
+# The auth server returns 200 for "Bearer valid-token". With success.statusCodes: [204],
+# the gateway treats 200 as non-success and short-circuits, returning the auth
+# server's response (status 200 + auth body) to the client. The backend is NOT reached.
+#
+# Reuses the shared auth-svc Service declared in 01_EdgionPlugins_forward-auth-basic.yaml.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-strict-204
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        success:
+          statusCodes: [204]
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision: {}

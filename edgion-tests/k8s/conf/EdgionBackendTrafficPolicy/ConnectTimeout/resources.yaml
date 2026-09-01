@@ -1,0 +1,79 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ct-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31943
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ct-svc-a
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: blackhole
+      port: 1
+      targetPort: 1
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ct-svc-b
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ct-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ct-svc-a
+  connection:
+    connectTimeout: 300ms
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ct-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ct-gateway
+  hostnames:
+    - connect-timeout.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /blackhole
+      retry:
+        attempts: 0
+      backendRefs:
+        - name: ct-svc-a
+          port: 1
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /ok
+      backendRefs:
+        - name: ct-svc-b
+          port: 30001

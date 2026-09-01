@@ -7,6 +7,9 @@ CONTAINER="${CONTAINER:-test-client}"
 TARGET_HOST="${TARGET_HOST:-edgion-gateway.edgion-system.svc.cluster.local}"
 TEST_CLIENT_BIN_PATH="${TEST_CLIENT_BIN_PATH:-/usr/local/bin/test_client}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+ENDPOINT_INVENTORY="${SCRIPT_DIR}/endpoint_inventory.sh"
+PLUGIN_VALIDATION_ADMISSION="${SCRIPT_DIR}/verify_plugin_validation_admission.sh"
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl not found in PATH"
@@ -16,6 +19,12 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "jq not found in PATH"
   exit 1
 fi
+if [[ ! -x "${ENDPOINT_INVENTORY}" ]]; then
+  echo "EndpointSlice inventory helper not found or not executable: ${ENDPOINT_INVENTORY}"
+  exit 1
+fi
+# shellcheck source=endpoint_inventory.sh
+source "${ENDPOINT_INVENTORY}"
 
 if [[ -z "${POD}" ]]; then
   POD="$(
@@ -56,6 +65,13 @@ for ((idx=0; idx<${#ARGS[@]}; idx++)); do
 done
 
 TEST_TARGET_HOST="${TARGET_HOST}"
+K8S_ADMISSION_VERIFIED="${EDGION_TEST_K8S_ADMISSION_VERIFIED:-}"
+
+if [[ "${RESOURCE}" == "EdgionPlugins" && "${ITEM}" == "PluginValidationStatus" ]]; then
+  "${PLUGIN_VALIDATION_ADMISSION}"
+  K8S_ADMISSION_VERIFIED="PluginValidationStatus"
+fi
+
 # Compatibility for current test-client image: admin_api_url uses target_host+admin_port.
 # PortConflict suite only queries controller Admin API, so route target_host to controller.
 if [[ "${RESOURCE}" == "Gateway" && "${ITEM}" == "PortConflict" ]]; then
@@ -191,93 +207,82 @@ if [[ "${RESOURCE}" == "Gateway" && "${ITEM}" == "PortConflict" ]]; then
   exit 1
 fi
 
-# Resolve the DirectEndpoint backend Pod IP directly from the K8s API.
-# The gateway admin API (port 12001) is loopback-only and is no longer reachable
-# over Service DNS, so kubectl is the primary (and only) resolver here.
 DIRECT_ENDPOINT_IP="${EDGION_TEST_DIRECT_ENDPOINT_IP:-}"
-if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
-  # EndpointSlice readiness lags pod scheduling, so retry briefly before giving up.
-  for _ in $(seq 1 15); do
-    DIRECT_ENDPOINT_IP="$(
-      kubectl get endpointslices -n edgion-default \
-        -l kubernetes.io/service-name=direct-endpoint-backend -o json 2>/dev/null \
-        | jq -r 'first(.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]?) // empty' 2>/dev/null || true
-    )"
-    if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
-      DIRECT_ENDPOINT_IP="$(
-        kubectl get endpoints -n edgion-default direct-endpoint-backend \
-          -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true
-      )"
-    fi
-    [[ -n "${DIRECT_ENDPOINT_IP}" ]] && break
-    sleep 1
-  done
+if [[ -z "${DIRECT_ENDPOINT_IP}" \
+  && "${RESOURCE}" == "EdgionPlugins" && "${ITEM}" == "DirectEndpoint" ]]; then
+  DIRECT_ENDPOINT_IP="$(
+    "${ENDPOINT_INVENTORY}" --namespace edgion-default \
+      --service direct-endpoint-backend --port http --timeout-secs 30 \
+      | jq -r '.[0].address'
+  )"
 fi
-
 if [[ -n "${DIRECT_ENDPOINT_IP}" ]]; then
   echo "DirectEndpoint IP: ${DIRECT_ENDPOINT_IP}"
-else
-  # The direct-endpoint-backend fixture is only deployed for the DirectEndpoint
-  # test, so an empty result is expected for every other resource/item. Warn and
-  # continue with an empty IP; the DirectEndpoint test's own assertions will fail
-  # if the IP is genuinely required but missing.
-  echo "WARNING: DirectEndpoint IP not resolved (kubectl endpointslices/endpoints both empty); continuing with empty EDGION_TEST_DIRECT_ENDPOINT_IP"
 fi
 
-TEST_SERVER_ENDPOINT_IPS="$(
-  kubectl get endpointslices -n edgion-test \
-    -l kubernetes.io/service-name=edgion-test-server -o json 2>/dev/null \
-    | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]?] | unique | join(",")' 2>/dev/null || true
-)"
-if [[ -z "${TEST_SERVER_ENDPOINT_IPS}" || "${TEST_SERVER_ENDPOINT_IPS}" == "null" ]]; then
-  TEST_SERVER_ENDPOINT_IPS="$(
-    kubectl get endpoints -n edgion-test edgion-test-server -o json 2>/dev/null \
-      | jq -r '[.subsets[]?.addresses[]?.ip] | unique | join(",")' 2>/dev/null || true
+TEST_SERVER_ENDPOINT_IPS="${EDGION_TEST_BACKEND_ENDPOINT_IPS:-}"
+if [[ "${RESOURCE}" == "EdgionBackend" ]]; then
+  TEST_SERVER_EXPECTED_REPLICAS="$(
+    endpoint_inventory_strict_deployment_replicas edgion-test edgion-test-server
   )"
+  TEST_SERVER_ENDPOINT_IPS="$("${ENDPOINT_INVENTORY}" --namespace edgion-test \
+    --service edgion-test-server --port 30001 \
+    --expected-count "${TEST_SERVER_EXPECTED_REPLICAS}" --timeout-secs 30 --output ips)"
+elif [[ -z "${TEST_SERVER_ENDPOINT_IPS}" && "${RESOURCE}" == "EdgionPlugins" ]]; then
+  case "${RESOURCE}/${ITEM}" in
+    EdgionPlugins/RequestMirror|EdgionPlugins/CredentialInjector|EdgionPlugins/RequestBodyBuffer|EdgionPlugins/BodyPlugins|EdgionPlugins/Guardrail)
+      TEST_SERVER_ENDPOINT_IPS="$("${ENDPOINT_INVENTORY}" --namespace edgion-test \
+        --service edgion-test-server --port 30001 --timeout-secs 30 --output ips)"
+      ;;
+  esac
 fi
-echo "Test server endpoints: ${TEST_SERVER_ENDPOINT_IPS:-<none>}"
+if [[ -n "${TEST_SERVER_ENDPOINT_IPS}" ]]; then
+  echo "Test server endpoints: ${TEST_SERVER_ENDPOINT_IPS}"
+fi
 
-resolve_ready_service_endpoint_ips() {
-  local namespace="$1" service="$2" ips
-  ips="$(
-    kubectl get endpointslices -n "${namespace}" \
-      -l "kubernetes.io/service-name=${service}" -o json 2>/dev/null \
-      | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]?] | unique | join(",")' 2>/dev/null || true
-  )"
-  if [[ -z "${ips}" || "${ips}" == "null" ]]; then
-    ips="$(
-      kubectl get endpoints -n "${namespace}" "${service}" -o json 2>/dev/null \
-        | jq -r '[.subsets[]?.addresses[]?.ip] | unique | join(",")' 2>/dev/null || true
-    )"
+LB_RR_EPS_ENDPOINT_IPS="${EDGION_TEST_LB_RR_EPS_ENDPOINT_IPS:-}"
+LB_RR_MULTI_ENDPOINT_IPS="${EDGION_TEST_LB_RR_MULTI_ENDPOINT_IPS:-}"
+if [[ "${RESOURCE}" == "HTTPRoute" \
+   && ( "${ITEM}" == "Backend/LBRoundRobin" || "${ITEM}" == "Backend" ) ]]; then
+  LB_RR_EPS_HEALTH_ENDPOINTS="$(endpoint_inventory_wait_for_backend_health \
+    edgion-default lb-rr-service 30001 3 "${NAMESPACE}" "${POD}" "${CONTAINER}" 90)"
+  LB_RR_MULTI_HEALTH_ENDPOINTS="$(endpoint_inventory_wait_for_backend_health \
+    edgion-default lb-rr-multi-service 30001 4 "${NAMESPACE}" "${POD}" "${CONTAINER}" 90)"
+  if [[ -z "${LB_RR_EPS_ENDPOINT_IPS}" ]]; then
+    LB_RR_EPS_ENDPOINT_IPS="$("${ENDPOINT_INVENTORY}" --namespace edgion-default \
+      --service lb-rr-service --port 30001 --expected-count 3 --timeout-secs 30 --output ips)"
   fi
-  echo "${ips}"
-}
-
-LB_RR_EPS_ENDPOINT_IPS="$(resolve_ready_service_endpoint_ips edgion-default lb-rr-service)"
-LB_RR_MULTI_ENDPOINT_IPS="$(resolve_ready_service_endpoint_ips edgion-default lb-rr-multi-service)"
-echo "RoundRobin endpoints: eps=${LB_RR_EPS_ENDPOINT_IPS:-<none>} multi=${LB_RR_MULTI_ENDPOINT_IPS:-<none>}"
+  if [[ -z "${LB_RR_MULTI_ENDPOINT_IPS}" ]]; then
+    LB_RR_MULTI_ENDPOINT_IPS="$("${ENDPOINT_INVENTORY}" --namespace edgion-default \
+      --service lb-rr-multi-service --port 30001 --expected-count 4 --timeout-secs 30 --output ips)"
+  fi
+  echo "RoundRobin endpoints: eps=${LB_RR_EPS_ENDPOINT_IPS} multi=${LB_RR_MULTI_ENDPOINT_IPS}"
+fi
 
 GATEWAY_METRICS_ENDPOINTS="${EDGION_TEST_GATEWAY_METRICS_ENDPOINTS:-}"
 if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" ]]; then
-  GATEWAY_METRICS_ENDPOINTS="$(
-    kubectl get endpointslices -n edgion-system -l kubernetes.io/service-name=edgion-gateway -o json 2>/dev/null \
-      | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]? | "\(.):12090"] | unique | join(",")' 2>/dev/null || true
-  )"
-fi
-
-if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" || "${GATEWAY_METRICS_ENDPOINTS}" == "null" ]]; then
-  GATEWAY_METRICS_ENDPOINTS="$(
-    kubectl get endpoints -n edgion-system edgion-gateway -o json 2>/dev/null \
-      | jq -r '[.subsets[]?.addresses[]?.ip | "\(.):12090"] | unique | join(",")' 2>/dev/null || true
-  )"
-fi
-
-if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" || "${GATEWAY_METRICS_ENDPOINTS}" == "null" ]]; then
-  GATEWAY_METRICS_ENDPOINTS="edgion-gateway.edgion-system.svc.cluster.local:12090"
+  GATEWAY_METRICS_ENDPOINTS="$("${ENDPOINT_INVENTORY}" --namespace edgion-system \
+    --service edgion-gateway --port 12090 --expected-count 1 --timeout-secs 30 --output hostports)"
 fi
 
 METRICS_ENDPOINT_COUNT="$(echo "${GATEWAY_METRICS_ENDPOINTS}" | tr ',' '\n' | awk 'NF{count++} END{print count+0}')"
 echo "Gateway metrics endpoints (${METRICS_ENDPOINT_COUNT}): ${GATEWAY_METRICS_ENDPOINTS}"
+
+GATEWAY_CAPABILITIES="${EDGION_TEST_GATEWAY_CAPABILITIES:-}"
+if [[ -z "${GATEWAY_CAPABILITIES}" ]]; then
+  GATEWAY_CAPABILITIES="$(
+    kubectl exec -n edgion-system deployment/edgion-gateway -c edgion-gateway -- sh -c '
+      if [ -x /usr/local/edgion/edgion-gateway ]; then
+        exec /usr/local/edgion/edgion-gateway --print-build-capabilities
+      fi
+      exec /usr/local/bin/edgion-gateway --print-build-capabilities
+    '
+  )"
+fi
+if [[ -z "${GATEWAY_CAPABILITIES}" ]]; then
+  echo "Gateway capability probe returned an empty result" >&2
+  exit 1
+fi
 
 kubectl exec -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
   env EDGION_TEST_ADMIN_API_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller-leader.edgion-system.svc.cluster.local:12101}" \
@@ -285,14 +290,22 @@ kubectl exec -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
   env EDGION_TOKEN="${EDGION_TOKEN:-${EDGION_TEST_ADMIN_TOKEN:-}}" \
   env EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-}" \
   env EDGION_TEST_GATEWAY_ADMIN_URL="${EDGION_TEST_GATEWAY_ADMIN_URL:-}" \
+  env EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
+  env EDGION_TEST_K8S_ADMISSION_VERIFIED="${K8S_ADMISSION_VERIFIED}" \
   env EDGION_TEST_AI_PROVIDER_HTTP_BASE="${EDGION_TEST_AI_PROVIDER_HTTP_BASE:-}" \
   env EDGION_TEST_AI_PROVIDER_HTTPS_BASE="${EDGION_TEST_AI_PROVIDER_HTTPS_BASE:-}" \
   env EDGION_TEST_AI_PROVIDER_MTLS_BASE="${EDGION_TEST_AI_PROVIDER_MTLS_BASE:-}" \
   env EDGION_TEST_AI_PROVIDER_SNI_BASE="${EDGION_TEST_AI_PROVIDER_SNI_BASE:-}" \
   env EDGION_TEST_AI_GATEWAY_NAME="${EDGION_TEST_AI_GATEWAY_NAME:-}" \
   env EDGION_TEST_K8S_MODE="true" \
+  env TEST_SERVER_HOST="${TEST_SERVER_HOST:-edgion-test-server.edgion-test.svc.cluster.local}" \
   env EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
   env EDGION_TEST_BACKEND_ENDPOINT_IPS="${TEST_SERVER_ENDPOINT_IPS}" \
+  env EDGION_TEST_DNS_SERVER_HOST="${EDGION_TEST_DNS_SERVER_HOST:-dns-test-server.edgion-test.svc.cluster.local}" \
+  env EDGION_TEST_MIRROR_SERVER_HOST="${EDGION_TEST_MIRROR_SERVER_HOST:-percent-mirror-test-server.edgion-test.svc.cluster.local}" \
+  env EDGION_TEST_TRANSPORT_RECORDER_HOST="${EDGION_TEST_TRANSPORT_RECORDER_HOST:-transport-recorder.edgion-test.svc.cluster.local}" \
+  env EDGION_TEST_WASM_CALLOUT_ORIGIN="${EDGION_TEST_WASM_CALLOUT_ORIGIN:-http://wasm-auth-server.edgion-test.svc.cluster.local:30040}" \
+  env EDGION_TEST_GUARDRAIL_FIXTURE_HOST="${EDGION_TEST_GUARDRAIL_FIXTURE_HOST:-edgion-test-server.edgion-test.svc.cluster.local}" \
   env EDGION_TEST_LB_RR_EPS_ENDPOINT_IPS="${LB_RR_EPS_ENDPOINT_IPS}" \
   env EDGION_TEST_LB_RR_MULTI_ENDPOINT_IPS="${LB_RR_MULTI_ENDPOINT_IPS}" \
   env EDGION_TEST_GATEWAY_METRICS_ENDPOINTS="${GATEWAY_METRICS_ENDPOINTS}" \

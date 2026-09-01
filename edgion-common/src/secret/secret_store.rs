@@ -64,6 +64,16 @@ impl SecretStore {
         self.secrets.read().len()
     }
 
+    /// Stable-sorted resource identities without Secret values.
+    ///
+    /// This is used by the integration-only Controller diagnostics to prove
+    /// cache cleanup by identity without exposing credential material.
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys = self.secrets.read().keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
     /// Create a key from namespace and name
     fn make_key(namespace: Option<&str>, name: &str) -> String {
         match namespace {
@@ -114,6 +124,7 @@ mod stats_tests {
     fn empty_store_reports_zero() {
         let store = SecretStore::new();
         assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
     }
 }
 
@@ -150,6 +161,8 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("default/my-secret".to_string(), secret);
         store.replace_all(secrets);
+
+        assert_eq!(store.keys(), vec!["default/my-secret"]);
 
         let found = store.get(Some("default"), "my-secret");
         assert!(found.is_some());

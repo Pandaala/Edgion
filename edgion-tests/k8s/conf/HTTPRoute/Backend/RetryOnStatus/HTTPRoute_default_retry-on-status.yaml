@@ -22,6 +22,6 @@ spec:
     timeouts:
       request: 10s
     backendRefs:
-    - name: test-http
+    - name: test-http-retry
       namespace: edgion-test
       port: 30001

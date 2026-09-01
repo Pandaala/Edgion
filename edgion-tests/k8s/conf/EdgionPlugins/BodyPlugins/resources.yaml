@@ -1,0 +1,802 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hmac-body-credentials
+  namespace: edgion-default
+type: Opaque
+stringData:
+  credentials.yaml: |
+    - username: body-user
+      secret: "body-hmac-secret-key-must-be-at-least-32-bytes"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-body
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: hmac-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HmacAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-body-credentials
+                namespace: edgion-default
+        algorithms: [hmac-sha256]
+        clockSkew: 300
+        enforceHeaders: ["@request-target", host, date, digest]
+        validateRequestBody: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-body
+          namespace: edgion-default
+          port: 30040
+        request:
+          path:
+            template: /verify
+          method:
+            template: POST
+          headers:
+            forwardAll: true
+        forwardBody: true
+        decision: {}
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /secret
+            - op: replace
+              path: /name
+              value: gateway
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "edgion-test-server.edgion-test.svc.cluster.local:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: BUFFERED
+        failureModeAllow: false
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Wasm
+      body:
+        maxBodySize: 1MiB
+        conditions:
+          run:
+            anyOf:
+              - type: keyMatch
+                key:
+                  type: method
+                values: [POST]
+      config:
+        source:
+          file: /usr/local/edgion/test-assets/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000
+  upstreamResponseBodyFilterPlugins:
+    - enable: true
+      type: Wasm
+      config:
+        source:
+          file: /usr/local/edgion/test-assets/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-body-mirror
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Wasm
+      body:
+        maxBodySize: 1MiB
+      config:
+        source:
+          file: /usr/local/edgion/test-assets/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-owner-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HmacAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-body-credentials
+                namespace: edgion-default
+        algorithms: [hmac-sha256]
+        clockSkew: 300
+        enforceHeaders: ["@request-target", host, date, digest]
+        validateRequestBody: true
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "edgion-test-server.edgion-test.svc.cluster.local:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: BUFFERED
+        failureModeAllow: false
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-body
+          namespace: edgion-default
+          port: 30040
+        request:
+          path:
+            template: /verify
+          method:
+            template: POST
+          headers:
+            forwardAll: true
+            custom:
+              - name: Authorization
+                value: Bearer valid-token
+        forwardBody: true
+        decision: {}
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mutation-retry-shorter
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /payload
+              value: x
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mutation-retry-longer
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /payload
+              value: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mirror-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: committed
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-mirror-chain-longer
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /version
+              value: committed-body-created-by-a-longer-proxy-rewrite-mutation
+    - enable: true
+      type: RequestMirror
+      config:
+        backendRef:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        connectTimeoutMs: 500
+        writeTimeoutMs: 1000
+        maxBufferedChunks: 10
+        mirrorLog: true
+        maxConcurrent: 100
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-patch-advanced
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: test
+              path: /version
+              value: 1.0
+            - op: remove
+              path: /secret
+            - op: replace
+              path: /name
+              value: gateway
+            - op: add
+              path: /items/-
+              value: tail
+            - op: copy
+              from: /profile
+              path: /profileSnapshot
+            - op: move
+              from: /name
+              path: /displayName
+            - op: add
+              path: /tenant
+              valueTemplate: "${header:X-Tenant}"
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-patch-atomic-failure
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /name
+              value: must-not-be-published
+            - op: test
+              path: /version
+              value: 2
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-patch-spill
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      body:
+        maxBodySize: 512KiB
+      config:
+        jsonBody:
+          operations:
+            - op: remove
+              path: /discard
+            - op: replace
+              path: /version
+              value: spilled
+            - op: copy
+              from: /meta
+              path: /metaCopy
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-to-json
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-to-form
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: jsonToForm
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-rewrite-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: ProxyRewrite
+      config:
+        jsonBody:
+          operations:
+            - op: replace
+              path: /name
+              value: gateway
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-roundtrip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: FormJsonTransform
+      config:
+        direction: jsonToForm
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-small-later
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: FormJsonTransform
+      body:
+        maxBodySize: "8"
+      config:
+        direction: jsonToForm
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-same-direction
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-spill
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      body:
+        maxBodySize: "512k"
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: form-json-retry
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      config:
+        direction: formToJson
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: json-form-spill
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: FormJsonTransform
+      body:
+        maxBodySize: "512k"
+      config:
+        direction: jsonToForm
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: hmac-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["hmac-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: hmac-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-owner-chain, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-owner-chain.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-owner-chain}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mutation-retry-shorter, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mutation-retry-shorter.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mutation-retry-shorter}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http-retry, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mutation-retry-longer, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mutation-retry-longer.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mutation-retry-longer}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http-retry, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mirror-chain, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mirror-chain.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mirror-chain}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mirror-chain-longer, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mirror-chain-longer.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mirror-chain-longer}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: forward-auth-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["forward-auth-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: forward-auth-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: proxy-rewrite-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["proxy-rewrite-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: proxy-rewrite-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: ext-proc-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["ext-proc-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: ext-proc-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-patch-advanced, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-patch-advanced.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-patch-advanced}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-patch-atomic-failure, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-patch-atomic-failure.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-patch-atomic-failure}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-patch-spill, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-patch-spill.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-patch-spill}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: wasm-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["wasm-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: wasm-body-retry, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["wasm-body-retry.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http-retry, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: wasm-body-mirror, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["wasm-body-mirror.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body-mirror}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-to-json, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-to-json.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-to-json}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-to-form, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-to-form.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-to-form}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-rewrite-chain, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-rewrite-chain.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-rewrite-chain}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-roundtrip, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-roundtrip.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-roundtrip}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-small-later, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-small-later.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-small-later}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-spill, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-spill.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-spill}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-same-direction, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-same-direction.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-same-direction}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: form-json-retry, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["form-json-retry.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: form-json-retry}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http-retry, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: json-form-spill, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["json-form-spill.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: json-form-spill}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]

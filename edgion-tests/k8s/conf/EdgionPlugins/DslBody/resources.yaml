@@ -1,0 +1,556 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-body-http-call
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "body-http-call"
+        source: |
+          let mode = req.header("X-Body-Mode")
+          if mode == "http-call-mutate" {
+            req.body.prepend("[")
+            req.body.append("]")
+          }
+
+          let expected_digest = req.header("X-Expected-Body-Sha256")
+          let expected_length = req.header("X-Expected-Body-Length")
+          if mode == "http-call-timeout" {
+            let result = http.call("POST", "http://edgion-test-server.edgion-test.svc.cluster.local:30001/body-slow", req.body, 10)
+            if result["status"] != 0 {
+              return deny(502, "body call did not time out")
+            }
+          } else if mode == "http-call-redirect" {
+            let result = http.call("POST", "http://edgion-test-server.edgion-test.svc.cluster.local:30001/body-redirect", req.body, 3000)
+            if result["status"] != 307 {
+              return deny(502, "body call followed redirect")
+            }
+          } else {
+            let result = http.call(
+              "POST",
+              "http://edgion-test-server.edgion-test.svc.cluster.local:30001/body-digest",
+              req.body,
+              3000,
+              {"Content-Type": "application/octet-stream"}
+            )
+            if result["status"] != 200 {
+              return deny(502, "body call failed")
+            }
+
+            let headers = result["headers"]
+            if headers["x-body-sha256"] != expected_digest {
+              return deny(502, "body call digest mismatch")
+            }
+            if headers["x-body-len"] != expected_length {
+              return deny(502, "body call length mismatch")
+            }
+            if headers["x-content-length"] != expected_length {
+              return deny(502, "body call framing mismatch")
+            }
+            if headers["x-transfer-encoding"] != "absent" {
+              return deny(502, "body call used transfer encoding")
+            }
+          }
+          resp.set_header("X-Body-Call", "ok")
+        errorPolicy: deny
+        httpMaxTimeoutMs: 3000
+        httpMaxRequestBodyBytes: 1048576
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-body-mac
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "body-mac"
+        maxBodyScanPasses: 2
+        source: |
+          let mut expected_md5 = "9ec9d4a1ab4fb25d0ce0a8c08c9e79ba"
+          let mut expected_hmac = "4385857ed6eeb5a93e188822a03ded29dd338167c8458806dbfc8c055a7ad965"
+          if req.body.byte_len() == 1048576 {
+            expected_md5 = "12564a07eb1f09728e729910398fd87f"
+            expected_hmac = "359d85cc392220dbcf11eb224e511e2a3e2cf93953540ba8014071c22787de24"
+          }
+          if req.body.md5() != expected_md5 {
+            return deny(422, "body MD5 mismatch")
+          }
+          if req.body.hmac_sha256("integration-secret") != expected_hmac {
+            return deny(422, "body HMAC mismatch")
+          }
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-digest-cache
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "digest-cache"
+        maxBodyScanPasses: 1
+        source: |
+          let expected = req.header("X-Expected-Body-SHA256")
+          for i in range(0, 40) {
+            if req.body.sha256() != expected {
+              return deny(422, "body digest cache mismatch")
+            }
+          }
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-json-select
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "json-select"
+        maxBodyScanPasses: 1
+        source: |
+          let values = req.body.json_select({
+            "id": "$.user.id",
+            "idAlias": "$.user.id",
+            "name": "$.user.name",
+            "enabled": "$.enabled",
+            "missing": "$.missing",
+            "nullValue": "$.nullValue"
+          })
+          if values["id"] != 7 || values["idAlias"] != 7 {
+            return deny(422, "JSON multi-select integer mismatch")
+          }
+          if values["name"] != "alice" || values["enabled"] != true {
+            return deny(422, "JSON multi-select scalar mismatch")
+          }
+          if values["missing"] != nil || values["nullValue"] != nil {
+            return deny(422, "JSON multi-select Nil mismatch")
+          }
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-late-body-buffered
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestBodyBuffer
+      config: {}
+      body:
+        maxBodySize: 1MiB
+        conditions:
+          run:
+            allOf:
+              - type: keyMatch
+                key:
+                  type: header
+                  name: X-Capture-Body
+                values: ["yes"]
+  upstreamResponseFilterPlugins:
+    - type: Dsl
+      config:
+        name: "late-body-reader"
+        source: |
+          if req.body == "late-body" {
+            resp.set_header("X-Late-Body", "matched")
+          }
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-late-body-unbuffered
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - type: Dsl
+      config:
+        name: "late-body-reader-without-buffer"
+        source: |
+          if req.body == "late-body" {
+            resp.set_header("X-Late-Body", "unexpected")
+          }
+        errorPolicy: ignore
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-req-body-read
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "req-body-read"
+        source: |
+          let mode = req.header("X-Body-Mode")
+          if mode == "inspect" {
+            if req.body.byte_len() != 14 {
+              return deny(422, "body byte length mismatch")
+            }
+            if req.body.len() != 13 {
+              return deny(422, "body text length mismatch")
+            }
+            if req.body.is_empty() {
+              return deny(422, "body unexpectedly empty")
+            }
+            if req.body.starts_with("alpha-") == false {
+              return deny(422, "body prefix mismatch")
+            }
+            if req.body.ends_with("-omega") == false {
+              return deny(422, "body suffix mismatch")
+            }
+            if req.body.contains("π-om") == false {
+              return deny(422, "body substring mismatch")
+            }
+            if req.body.matches("^alpha-π-omega$") == false {
+              return deny(422, "body regex mismatch")
+            }
+            if req.body != "alpha-π-omega" {
+              return deny(422, "body equality mismatch")
+            }
+            if "alpha-π-omega" != req.body {
+              return deny(422, "reverse body equality mismatch")
+            }
+            if req.body.read(6, 2) != "π" {
+              return deny(422, "body range mismatch")
+            }
+            if req.body.read_all() != "alpha-π-omega" {
+              return deny(422, "body full read mismatch")
+            }
+            if req.body.sha256() != "ee04b27ecbbd770d66cb864060c5b8f92c24c0e8316ca4006e272428ef3882c2" {
+              return deny(422, "body digest mismatch")
+            }
+          } else if mode == "json" {
+            if req.body.json_get("$.users[1].name") != "alice" {
+              return deny(422, "JSON string selection mismatch")
+            }
+            if req.body.json_get("$.enabled") != true {
+              return deny(422, "JSON boolean selection mismatch")
+            }
+            if req.body.json_get("$.missing") != nil {
+              return deny(422, "missing JSON selection mismatch")
+            }
+          } else if mode == "mutate" {
+            req.body.replace("dog", "fox")
+            req.body.prepend("[")
+            req.body.append("]")
+            req.body.remove(1, 5)
+          } else if mode == "bodyless-mutate" {
+            req.body.append("seed")
+          } else if mode == "spill-mutate" {
+            if req.body.byte_len() != 262144 {
+              return deny(422, "spilled body length mismatch")
+            }
+            if req.body.read(100000, 3) != "xxx" {
+              return deny(422, "spilled body range mismatch")
+            }
+            req.body.prepend("[")
+            req.body.append("]")
+            req.body.remove(1, 2)
+          } else if mode == "spill-scan" {
+            if req.body.byte_len() != 262144 {
+              return deny(422, "spilled scan body length mismatch")
+            }
+            if req.body.contains("needle") == false {
+              return deny(422, "spilled cross-chunk substring mismatch")
+            }
+            if req.body.matches("needle") == false {
+              return deny(422, "spilled cross-chunk regex mismatch")
+            }
+          } else if mode == "spill-json" {
+            if req.body.byte_len() <= 131072 {
+              return deny(422, "JSON body did not exceed the spill threshold")
+            }
+            if req.body.json_get("$.selected") != "{\"n\":1.0}" {
+              return deny(422, "spilled JSON selection mismatch")
+            }
+          } else {
+            if req.body.starts_with("xxxx") == false {
+              return deny(422, "spilled body prefix mismatch")
+            }
+            if req.body.ends_with("xxxx") == false {
+              return deny(422, "spilled body suffix mismatch")
+            }
+            if req.body.sha256() != "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310fbdb7e914e9" {
+              return deny(422, "body digest mismatch")
+            }
+          }
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: expect-continue-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      body:
+        maxBodySize: 5B
+      config:
+        name: "expect-continue-body"
+        source: |
+          let body_bytes = req.body.byte_len()
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: expect-continue-pass
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "expect-continue-pass"
+        source: |
+          let body_bytes = req.body.byte_len()
+        errorPolicy: deny
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-body-http-call-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-body-http-call.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-body-http-call
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-body-mac-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-body-mac.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-body-mac
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-digest-cache-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-digest-cache.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-digest-cache
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-json-select-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-json-select.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-json-select
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-late-body-buffered-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-late-body-buffered.example.com"
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-late-body-buffered
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-late-body-unbuffered-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-late-body-unbuffered.example.com"
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-late-body-unbuffered
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-req-body-read-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-req-body-read.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-req-body-read
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs:
+        # Retry sequence state is process-local; use the selector-generated
+        # single-endpoint backend shared by retry integration suites.
+        - name: test-http-retry
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: expect-continue-body-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "expect-body.example.com"
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: expect-continue-body
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: expect-continue-pass-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "expect-body-pass.example.com"
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: expect-continue-pass
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
