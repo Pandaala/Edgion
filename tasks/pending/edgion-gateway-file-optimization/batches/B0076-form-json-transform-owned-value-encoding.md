@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `a542c7e0`
-- Pipeline state: implementation independently approved and fully verified; pending local commit
+- Pipeline state: implementation independently approved, fully verified, and committed as `77a25855`
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/form_json_transform/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/form_json_transform/plugin.rs`
@@ -55,4 +55,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change row, all verification complete
-- Commit: pending
+- Commit: `77a25855`
