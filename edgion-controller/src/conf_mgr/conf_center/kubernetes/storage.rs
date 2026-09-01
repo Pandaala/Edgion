@@ -23,15 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-/// Maximum replace attempts for a precondition-free Admin API update.
-///
-/// A status-subresource write can advance `resourceVersion` between our GET
-/// and PUT even though it does not contend with the operator-owned fields.
-/// Re-reading and re-merging closes that narrow backend OCC race while keeping
-/// the request's documented last-writer-wins semantics. Explicit CAS updates
-/// never use this retry budget.
-const UNCONDITIONAL_UPDATE_MAX_ATTEMPTS: usize = 3;
-
 /// Kubernetes API based configuration writer
 ///
 /// Implements ConfWriter by calling K8s API server.
@@ -564,39 +555,25 @@ impl CenterApi for KubernetesStorage {
 
         let requested = self.parse_dynamic_object(kind, &content, &api_resource)?;
 
-        let max_attempts = if expected_resource_version.is_some() {
-            1
-        } else {
-            UNCONDITIONAL_UPDATE_MAX_ATTEMPTS
-        };
-        for attempt in 1..=max_attempts {
-            // Get current resource to obtain resourceVersion (required for replace).
-            let current = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
+        // Get current resource to obtain resourceVersion (required for replace)
+        let current = api.get(name).await.map_err(|e| self.map_kube_error(e))?;
 
-            let current_value = serde_json::to_value(&current).map_err(|source| ConfWriterError::ParseError {
-                context: "Failed to serialize current Kubernetes resourceVersion",
-                source: source.into(),
-            })?;
-            ensure_expected_resource_version_value(&current_value, expected_resource_version)?;
+        let current_value = serde_json::to_value(&current).map_err(|source| ConfWriterError::ParseError {
+            context: "Failed to serialize current Kubernetes resourceVersion",
+            source: source.into(),
+        })?;
+        ensure_expected_resource_version_value(&current_value, expected_resource_version)?;
 
-            // Preserve the latest status and Kubernetes-owned metadata, while
-            // replacing labels, annotations, and operator fields from the
-            // original request. Resolved fields in current.spec are
-            // deliberately not restored.
-            let obj = merge_dynamic_operator_update(current, requested.clone())?;
+        // Preserve the current status and Kubernetes-owned metadata, while
+        // replacing labels, annotations, and operator fields from the request.
+        // The merge starts from the request, so resolved fields in current.spec
+        // are deliberately not restored.
+        let obj = merge_dynamic_operator_update(current, requested)?;
 
-            match api.replace(name, &Default::default(), &obj).await {
-                Ok(_) => break,
-                Err(error)
-                    if expected_resource_version.is_none()
-                        && attempt < max_attempts
-                        && matches!(&error, kube::Error::Api(response) if response.code == 409) =>
-                {
-                    continue;
-                }
-                Err(error) => return Err(self.map_kube_error(error)),
-            }
-        }
+        // Use K8s API replace (fails if resource doesn't exist with 404)
+        api.replace(name, &Default::default(), &obj)
+            .await
+            .map_err(|e| self.map_kube_error(e))?;
 
         tracing::info!(
             component = "kubernetes_writer",
@@ -1418,7 +1395,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unconditional_update_regets_and_remerges_after_replace_conflict() {
+    async fn unconditional_update_surfaces_replace_conflict_without_server_retry() {
         let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
         let captured = Arc::clone(&requests);
         let service = service_fn(move |request: http::Request<Body>| {
@@ -1459,7 +1436,7 @@ mod tests {
             allowed_namespaces: BTreeSet::new(),
         };
 
-        storage
+        let error = storage
             .update_one_if_version(
                 "ConfigMap",
                 Some("default"),
@@ -1468,11 +1445,13 @@ mod tests {
                 None,
             )
             .await
-            .expect("precondition-free update must absorb the status OCC race");
+            .expect_err("the Admin API must surface the backend conflict to its caller");
+
+        assert!(matches!(error, ConfWriterError::Conflict(_)));
 
         let requests = requests.lock().expect("request capture lock must not be poisoned");
         let methods = requests.iter().map(|(method, _, _)| method.clone()).collect::<Vec<_>>();
-        assert_eq!(methods, vec![Method::GET, Method::PUT, Method::GET, Method::PUT]);
+        assert_eq!(methods, vec![Method::GET, Method::PUT]);
         let puts = requests
             .iter()
             .filter(|(method, _, _)| *method == Method::PUT)
@@ -1480,9 +1459,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(puts[0]["metadata"]["resourceVersion"], "42");
         assert_eq!(puts[0]["status"]["state"], "old");
-        assert_eq!(puts[1]["metadata"]["resourceVersion"], "43");
-        assert_eq!(puts[1]["status"]["state"], "latest");
-        assert_eq!(puts[1]["data"]["value"], "requested");
+        assert_eq!(puts[0]["data"]["value"], "requested");
     }
 
     #[tokio::test]
@@ -1585,7 +1562,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unconditional_update_conflict_retry_is_bounded() {
+    async fn unconditional_update_does_not_retry_a_persistent_conflict() {
         let requests = Arc::new(Mutex::new(Vec::<Method>::new()));
         let captured = Arc::clone(&requests);
         let service = service_fn(move |request: http::Request<Body>| {
@@ -1620,13 +1597,11 @@ mod tests {
                 None,
             )
             .await
-            .expect_err("retry budget exhaustion must surface the final conflict");
+            .expect_err("the first backend conflict must be surfaced");
 
         assert!(matches!(error, ConfWriterError::Conflict(_)));
         let methods = requests.lock().expect("request capture lock must not be poisoned");
-        assert_eq!(methods.len(), UNCONDITIONAL_UPDATE_MAX_ATTEMPTS * 2);
-        assert_eq!(methods.iter().filter(|method| **method == Method::GET).count(), 3);
-        assert_eq!(methods.iter().filter(|method| **method == Method::PUT).count(), 3);
+        assert_eq!(methods.as_slice(), &[Method::GET, Method::PUT]);
     }
 
     #[tokio::test]

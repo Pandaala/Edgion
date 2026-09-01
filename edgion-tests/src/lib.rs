@@ -19,6 +19,8 @@
 
 #[path = "client/access_log_client.rs"]
 pub mod access_log_client;
+#[path = "client/admin_apply.rs"]
+pub mod admin_apply;
 #[path = "client/dynamic/mod.rs"]
 pub mod dynamic;
 #[path = "client/framework.rs"]

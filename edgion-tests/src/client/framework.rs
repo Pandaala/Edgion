@@ -304,17 +304,26 @@ impl TestContext {
             namespace,
             name
         );
-        let mut put_req = client
-            .put(&update_url)
-            .header("Content-Type", "application/x-yaml")
-            .body(yaml_content.to_string());
-        if let Some(ref token) = self.admin_token {
-            put_req = put_req.header("Authorization", format!("Bearer {}", token));
-        }
-        let response = put_req
-            .send()
-            .await
-            .map_err(|e| format!("Admin API PUT failed: {}", e))?;
+        let explicit_cas = crate::admin_apply::has_explicit_resource_version(&value);
+        let body = yaml_content.to_string();
+        let token = self.admin_token.clone();
+        let send_put = || {
+            let mut request = client
+                .put(&update_url)
+                .header("Content-Type", "application/x-yaml")
+                .body(body.clone());
+            if let Some(ref token) = token {
+                request = request.header("Authorization", format!("Bearer {}", token));
+            }
+            async move { request.send().await.map_err(anyhow::Error::from) }
+        };
+        let response = if explicit_cas {
+            send_put().await.map_err(|e| format!("Admin API PUT failed: {}", e))?
+        } else {
+            crate::admin_apply::put_unconditional_with_conflict_retry(send_put)
+                .await
+                .map_err(|e| format!("Admin API PUT failed: {:#}", e))?
+        };
 
         if response.status().is_success() {
             return Ok(());

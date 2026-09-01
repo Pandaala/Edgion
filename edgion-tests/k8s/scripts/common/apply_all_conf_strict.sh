@@ -77,7 +77,7 @@ if ! command -v kubectl >/dev/null 2>&1; then
   exit 1
 fi
 
-APPLY_ARGS=(apply --server-side --force-conflicts --field-manager=edgion-k8s-test)
+APPLY_ARGS=(--request-timeout=15s apply --server-side --force-conflicts --field-manager=edgion-k8s-test)
 WORK_DIR="$(mktemp -d /tmp/edgion-k8s-apply-batch.XXXXXX)"
 cleanup() {
   rm -rf "${WORK_DIR}"
@@ -141,7 +141,7 @@ copy_effective_files() {
 
 apply_single_file_with_retry() {
   local f="$1"
-
+  local out rc retry_delay
   local ok=false
   for attempt in 1 2 3; do
     out="$(kubectl "${APPLY_ARGS[@]}" -f "${f}" 2>&1)" && rc=0 || rc=$?
@@ -152,9 +152,18 @@ apply_single_file_with_retry() {
     fi
 
     if echo "${out}" | grep -qE 'Operation cannot be fulfilled|the object has been modified'; then
-      echo "  Conflict (attempt ${attempt}/3), retrying: $(basename "${f}")"
-      sleep 1
-      continue
+      if [[ "${attempt}" -lt 3 ]]; then
+        if [[ "${attempt}" -eq 1 ]]; then
+          retry_delay=1
+        else
+          retry_delay=2
+        fi
+        echo "  Conflict (attempt ${attempt}/3), retrying in ${retry_delay}s: $(basename "${f}")"
+        sleep "${retry_delay}"
+        continue
+      fi
+      echo "  ${out}"
+      break
     fi
 
     echo "  ${out}"

@@ -81,25 +81,28 @@ impl HealthCheckTransitionTestSuite {
             .ok_or_else(|| "policy is missing spec.healthCheck.active".to_string())?;
         active["path"] = Value::String(probe_path.to_string());
 
-        let mut put_req = ctx
-            .http_client
-            .put(&admin_url)
-            .header("Content-Type", "application/json")
-            // Status updates may advance the Kubernetes resourceVersion after
-            // this suite's GET. This transition intentionally requests the
-            // Admin API's last-writer-wins update contract; the policy must
-            // still exist, but its status is not an operator precondition.
-            .header("If-Match", "*")
-            .body(serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated policy JSON: {}", e))?);
-        if let Some(ref token) = ctx.admin_token {
-            put_req = put_req.header("Authorization", format!("Bearer {}", token));
-        }
-        put_req
-            .send()
-            .await
-            .map_err(|e| format!("Failed to update policy: {}", e))?
-            .error_for_status()
-            .map_err(|e| format!("Policy update status error: {}", e))?;
+        let body =
+            serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated policy JSON: {}", e))?;
+        let token = ctx.admin_token.clone();
+        crate::admin_apply::put_unconditional_with_conflict_retry(|| {
+            let mut request = ctx
+                .http_client
+                .put(&admin_url)
+                .header("Content-Type", "application/json")
+                // Status updates may advance the Kubernetes resourceVersion
+                // after this suite's GET. `If-Match: *` deliberately requests
+                // the last-writer-wins contract, so a narrow 409 replay is safe.
+                .header("If-Match", "*")
+                .body(body.clone());
+            if let Some(ref token) = token {
+                request = request.header("Authorization", format!("Bearer {}", token));
+            }
+            async move { request.send().await.map_err(anyhow::Error::from) }
+        })
+        .await
+        .map_err(|e| format!("Failed to update policy: {:#}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Policy update status error: {}", e))?;
 
         Ok(())
     }
