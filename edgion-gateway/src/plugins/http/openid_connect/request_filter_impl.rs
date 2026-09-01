@@ -10,7 +10,7 @@ impl RequestFilter for OpenidConnect {
         if session.get_path() == self.config.logout_path {
             let fallback_redirect_target = self.logout_redirect_target();
             let post_logout_redirect_uri = self.resolve_post_logout_redirect_uri_for_idp(session);
-            let session_cookie = match self.extract_session_cookie_from_request(session) {
+            let mut session_cookie = match self.extract_session_cookie_from_request(session) {
                 Ok(Some((payload, _))) => Some(payload),
                 Ok(None) => None,
                 Err(_) => {
@@ -18,10 +18,11 @@ impl RequestFilter for OpenidConnect {
                     None
                 }
             };
-            let id_token_hint = session_cookie.as_ref().and_then(|v| v.id_token.clone());
-            self.maybe_revoke_tokens_on_logout(session_cookie.clone()).await;
-            if let Some(ref payload) = session_cookie {
-                self.remove_cached_access_token(&payload.session_ref).await;
+            let id_token_hint = session_cookie.as_mut().and_then(|v| v.id_token.take());
+            let session_ref = session_cookie.as_ref().map(|v| v.session_ref.clone());
+            self.maybe_revoke_tokens_on_logout(session_cookie).await;
+            if let Some(session_ref) = session_ref.as_deref() {
+                self.remove_cached_access_token(session_ref).await;
             }
             let logout_redirect_target = self
                 .build_logout_redirect_target(fallback_redirect_target, post_logout_redirect_uri, id_token_hint)
@@ -75,7 +76,8 @@ impl RequestFilter for OpenidConnect {
                         .unwrap_or_default();
                     let refresh_lock_key = Self::refresh_lock_key(&raw_session_cookie_value);
 
-                    if token.is_empty() && session_cookie.refresh_token.as_deref().is_some() {
+                    let cache_miss_refresh_attempted = token.is_empty() && session_cookie.refresh_token.is_some();
+                    if cache_miss_refresh_attempted {
                         match self
                             .try_refresh_session_token_singleflight(&refresh_lock_key, &mut session_cookie)
                             .await
@@ -91,7 +93,7 @@ impl RequestFilter for OpenidConnect {
                         }
                     }
 
-                    if self.should_preemptive_refresh(&session_cookie) {
+                    if !cache_miss_refresh_attempted && self.should_preemptive_refresh(&token, &session_cookie) {
                         match self
                             .try_refresh_session_token_singleflight(&refresh_lock_key, &mut session_cookie)
                             .await

@@ -24,6 +24,18 @@ fn base_config() -> OpenidConnectConfig {
     }
 }
 
+fn plugin_log_entries(plugin_log: &PluginLog) -> Vec<String> {
+    serde_json::to_value(plugin_log)
+        .expect("plugin log must serialize")
+        .get("log")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
 fn secret_ref(name: &str) -> edgion_resources::resources::common::SecretObjectReference {
     edgion_resources::resources::common::SecretObjectReference {
         group: None,
@@ -795,12 +807,12 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
+    cfg.revoke_tokens_on_logout = true;
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
 
-    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let plugin = Arc::new(OpenidConnect::new(&cfg, "default".to_string()));
     plugin
         .jwks_provider
         .seed_discovery(DiscoveryDocument {
@@ -811,24 +823,27 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
             introspection_endpoint: None,
             userinfo_endpoint: None,
             end_session_endpoint: Some("https://idp.example.com/logout".to_string()),
-            revocation_endpoint: None,
+            revocation_endpoint: Some("https://idp.example.com/revoke".to_string()),
         })
         .await;
 
     let now = OpenidConnect::now_unix_secs();
     let session_cookie_payload = OidcSessionCookie {
         session_ref: "session-ref".to_string(),
-        access_token: "access-token".to_string(),
+        access_token: String::new(),
         created_at: now,
         expires_at: Some(now + 60),
         id_token: Some("id-token-hint".to_string()),
-        refresh_token: None,
+        refresh_token: Some("refresh-token".to_string()),
     };
     let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
         &session_cookie_payload,
         plugin.session_cipher().expect("prepared session cipher"),
     )
     .expect("encode session cookie");
+    plugin
+        .cache_access_token("session-ref", "access-token", Some(now + 60))
+        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -847,16 +862,34 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
         _ => None,
     });
     session.expect_downstream_is_tls().returning(|| Some(true));
-    session.expect_write_response_header().returning(|resp, _| {
+    let plugin_at_response = plugin.clone();
+    session.expect_write_response_header().returning(move |resp, end| {
+        assert!(end);
+        assert!(plugin_at_response.access_token_cache.get("session-ref").is_none());
         assert_eq!(resp.status.as_u16(), 302);
         let location = resp.headers.get("Location").and_then(|v| v.to_str().ok()).unwrap_or("");
         assert!(location.contains("post_logout_redirect_uri=https%3A%2F%2Fapi.example.com%2Fafter-logout"));
         assert!(location.contains("id_token_hint=id-token-hint"));
+        let cookies: Vec<&str> = resp
+            .headers
+            .get_all("Set-Cookie")
+            .iter()
+            .map(|value| value.to_str().expect("set-cookie must be ASCII"))
+            .collect();
+        assert_eq!(
+            cookies,
+            vec![
+                "edgion_oidc_session=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly; Secure",
+                "edgion_oidc_state=; Path=/.edgion/oidc/callback; SameSite=Lax; Max-Age=0; HttpOnly; Secure",
+            ]
+        );
         Ok(())
     });
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(plugin.access_token_cache.get("session-ref").is_none());
+    assert_eq!(plugin_log_entries(&log), vec!["logout handled"]);
 }
 
 #[tokio::test]
@@ -996,6 +1029,8 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
     cfg.unauth_action = UnauthAction::Deny;
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
+    cfg.renew_access_token_on_expiry = true;
+    cfg.access_token_expires_leeway = 30;
     cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -1034,13 +1069,27 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
         created_at: now,
         expires_at: Some(now + 60),
         id_token: None,
-        refresh_token: None,
+        refresh_token: Some("refresh-token".to_string()),
     };
     let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
         &session_cookie_payload,
         plugin.session_cipher().expect("prepared session cipher"),
     )
     .expect("encode session cookie");
+    let lock_key = OpenidConnect::refresh_lock_key(&encoded_cookie);
+    plugin
+        .put_refresh_result(
+            &lock_key,
+            OidcSessionCookie {
+                session_ref: "session-ref".to_string(),
+                access_token: token.to_string(),
+                created_at: now,
+                expires_at: Some(now + 60),
+                id_token: None,
+                refresh_token: Some("refresh-token".to_string()),
+            },
+        )
+        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -1055,9 +1104,11 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
         }
     });
     session.expect_header_value().returning(|_| None);
+    session.expect_append_response_header().times(0);
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
+    assert_eq!(plugin_log_entries(&log), vec!["session token verified"]);
 }
 
 #[tokio::test]
@@ -1067,6 +1118,8 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     cfg.unauth_action = UnauthAction::Deny;
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
+    cfg.renew_access_token_on_expiry = true;
+    cfg.access_token_expires_leeway = 30;
     cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -1119,7 +1172,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
                 session_ref: "session-ref".to_string(),
                 access_token: refreshed_token.to_string(),
                 created_at: now,
-                expires_at: Some(now + 120),
+                expires_at: Some(now + 1),
                 id_token: None,
                 refresh_token: Some("refresh-token".to_string()),
             },
@@ -1142,10 +1195,148 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     session
         .expect_append_response_header()
         .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))
+        .times(1)
         .returning(|_, _| Ok(()));
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
+    assert_eq!(
+        plugin_log_entries(&log),
+        vec!["token refresh miss", "session token verified"]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
+    let mut cfg = base_config();
+    cfg.timeout = 1;
+    cfg.bearer_only = false;
+    cfg.unauth_action = UnauthAction::Pass;
+    cfg.renew_access_token_on_expiry = true;
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+    let plugin = Arc::new(OpenidConnect::new(&cfg, "default".to_string()));
+
+    let now = OpenidConnect::now_unix_secs();
+    let payload = OidcSessionCookie {
+        session_ref: "session-ref".to_string(),
+        access_token: String::new(),
+        created_at: now,
+        expires_at: Some(now + 60),
+        id_token: None,
+        refresh_token: Some("refresh-token".to_string()),
+    };
+    let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
+        &payload,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("encode session cookie");
+    let lock_key = OpenidConnect::refresh_lock_key(&encoded_cookie);
+    let flight = plugin.refresh_singleflight.get_or_create(&lock_key);
+    let held_guard = flight.lock().lock().await;
+
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/".to_string());
+    session.expect_get_query_param().returning(|_| None);
+    session.expect_get_cookie().returning(move |name| {
+        if name == "edgion_oidc_session" {
+            Some(encoded_cookie.clone())
+        } else {
+            None
+        }
+    });
+    session.expect_header_value().returning(|_| None);
+
+    let plugin_for_request = plugin.clone();
+    let handle = tokio::spawn(async move {
+        let start = tokio::time::Instant::now();
+        let mut log = PluginLog::new("OpenidConnect");
+        let result = plugin_for_request.run_request(&mut session, &mut log).await;
+        (result, log, tokio::time::Instant::now().duration_since(start))
+    });
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(999)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !handle.is_finished(),
+        "the one-second singleflight wait must still be active"
+    );
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    for _ in 0..16 {
+        if handle.is_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(handle.is_finished(), "a second preemptive wait must not start");
+    let (result, log, elapsed) = handle.await.expect("request task must complete");
+    drop(held_guard);
+
+    assert_eq!(elapsed, Duration::from_secs(1));
+    assert_eq!(result, PluginRunningResult::GoodNext);
+    assert_eq!(
+        plugin_log_entries(&log),
+        vec!["err: token refresh fail", "err: session no token", "no token; pass"]
+    );
+}
+
+#[tokio::test]
+async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_once() {
+    let mut cfg = base_config();
+    cfg.bearer_only = false;
+    cfg.unauth_action = UnauthAction::Pass;
+    cfg.renew_access_token_on_expiry = true;
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: None,
+            token_endpoint: Some("https://idp.example.com/token".to_string()),
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+
+    let now = OpenidConnect::now_unix_secs();
+    let payload = OidcSessionCookie {
+        session_ref: "session-ref".to_string(),
+        access_token: String::new(),
+        created_at: now,
+        expires_at: Some(now + 60),
+        id_token: None,
+        refresh_token: Some(String::new()),
+    };
+    let encoded_cookie = OpenidConnect::encode_signed_cookie_payload(
+        &payload,
+        plugin.session_cipher().expect("prepared session cipher"),
+    )
+    .expect("encode session cookie");
+
+    let mut session = MockPluginSession::new();
+    let mut log = PluginLog::new("OpenidConnect");
+    session.expect_get_path().return_const("/".to_string());
+    session.expect_get_query_param().returning(|_| None);
+    session.expect_get_cookie().returning(move |name| {
+        if name == "edgion_oidc_session" {
+            Some(encoded_cookie.clone())
+        } else {
+            None
+        }
+    });
+    session.expect_header_value().returning(|_| None);
+
+    let result = plugin.run_request(&mut session, &mut log).await;
+    assert_eq!(result, PluginRunningResult::GoodNext);
+    assert_eq!(
+        plugin_log_entries(&log),
+        vec!["err: token refresh fail", "err: session no token", "no token; pass"]
+    );
 }
 
 #[test]
@@ -1279,8 +1470,29 @@ fn test_should_preemptive_refresh() {
         id_token: None,
         refresh_token: Some("r".to_string()),
     };
-    assert!(plugin.should_preemptive_refresh(&near_exp));
-    assert!(!plugin.should_preemptive_refresh(&far_exp));
+    let no_exp = OidcSessionCookie {
+        expires_at: None,
+        ..far_exp.clone()
+    };
+    let no_refresh = OidcSessionCookie {
+        refresh_token: None,
+        ..near_exp.clone()
+    };
+    let cookie_token_missing = OidcSessionCookie {
+        access_token: String::new(),
+        ..far_exp.clone()
+    };
+    assert!(plugin.should_preemptive_refresh("resolved-token", &near_exp));
+    assert!(!plugin.should_preemptive_refresh("resolved-token", &far_exp));
+    assert!(!plugin.should_preemptive_refresh("resolved-token", &cookie_token_missing));
+    assert!(!plugin.should_preemptive_refresh("resolved-token", &no_exp));
+    assert!(!plugin.should_preemptive_refresh("resolved-token", &no_refresh));
+    assert!(plugin.should_preemptive_refresh("", &far_exp));
+
+    let mut disabled_cfg = cfg;
+    disabled_cfg.renew_access_token_on_expiry = false;
+    let disabled = OpenidConnect::new(&disabled_cfg, "default".to_string());
+    assert!(!disabled.should_preemptive_refresh("", &near_exp));
 }
 
 #[test]

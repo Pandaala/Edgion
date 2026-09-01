@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `0a95362a` was rebaselined |
-| Coverage | 532 tracked files: 111 changed, 126 examined-no-change, 9 deferred, 286 non-terminal |
-| Active batch | B0092 OpenID Connect Arc cache snapshots; independently approved and awaiting commit gate |
-| Analysis queue | B0093 OpenID Connect request/logout/userinfo flow pending fresh analysis after B0092 |
+| Campaign status | in-progress; B0093 and its independently reviewed D0062 security prerequisite have passed all required verification |
+| Coverage | 532 tracked files: 112 changed, 128 examined-no-change, 9 deferred, 283 non-terminal |
+| Active batch | B0093 OpenID Connect refresh orchestration; final combined review and exact commit gate in progress |
+| Analysis queue | B0094 remaining OpenID Connect validation/error/module files |
 
 ## AI guide summary
 

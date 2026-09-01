@@ -63,14 +63,14 @@ impl OpenidConnect {
         self.get_cached_access_token(&session_cookie.session_ref).await
     }
 
-    pub(super) fn should_preemptive_refresh(&self, payload: &OidcSessionCookie) -> bool {
+    pub(super) fn should_preemptive_refresh(&self, resolved_access_token: &str, payload: &OidcSessionCookie) -> bool {
         if !self.config.renew_access_token_on_expiry {
             return false;
         }
         if payload.refresh_token.as_deref().is_none() {
             return false;
         }
-        if payload.access_token.trim().is_empty() {
+        if resolved_access_token.trim().is_empty() {
             return true;
         }
         let Some(exp) = payload.expires_at else {

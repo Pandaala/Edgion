@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `dc6ab680`; all three target blobs were unchanged when the batch started
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/openid_connect/{discovery_jwks.rs,jwks_provider.rs,refresh_flight_registry.rs}`
 - Exact implementation files: `edgion-gateway/src/plugins/http/openid_connect/{discovery_jwks.rs,jwks_provider.rs}`
@@ -39,4 +39,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 2 owned rows changed and 1 examined-no-change
-- Commit: pending
+- Commit: `2aae3554`

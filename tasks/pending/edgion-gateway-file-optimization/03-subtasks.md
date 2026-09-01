@@ -119,7 +119,7 @@
 | `plugins-http-key-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-ldap-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-mock` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-openid-connect` | 16 | 9 | 1 | 0 | pending |
+| `plugins-http-openid-connect` | 16 | 10 | 3 | 0 | pending |
 | `plugins-http-proxy-rewrite` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-rate-limit` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-rate-limit-redis` | 2 | 0 | 0 | 0 | pending |
@@ -459,16 +459,16 @@
 | `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
 | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` | `plugins-http-openid-connect` | source | changed | B0090 |
-| `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | pending | — |
+| `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/mod.rs` | `plugins-http-openid-connect` | source | pending | — |
 | `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
 | `edgion-gateway/src/plugins/http/openid_connect/refresh_flight_registry.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0092 |
-| `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | — |
+| `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | changed | B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
-| `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | changed | B0090; support reopened in B0091 |
-| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | changed | CACHE-001 / `40f7eb74`; support reopened in B0091 |
+| `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | changed | B0090; support reopened in B0091 and B0093 |
+| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | changed | CACHE-001 / `40f7eb74`; support reopened in B0091 and B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | changed | B0090; support reopened in B0091 |
-| `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | pending | — |
+| `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | changed | B0062 |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/mod.rs` | `plugins-http-proxy-rewrite` | source | pending | — |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs` | `plugins-http-proxy-rewrite` | source | pending | — |
