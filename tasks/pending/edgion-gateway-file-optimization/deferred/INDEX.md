@@ -55,6 +55,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0049 — Align IP restriction docs with named IpGroup schema | needs-implementation | [campaign finding](D0049-ip-restriction-named-group-documentation.md) |
 | D0050 — Parse JWE protected headers as strict JSON objects | needs-implementation | [campaign finding](D0050-jwe-protected-header-strict-json.md) |
 | D0051 — Align JWE resolved-credential failure policy | needs-discussion | [campaign finding](D0051-jwe-resolved-credential-auth-failure.md) |
+| D0052 — Canonicalize auth claim-to-header projection | needs-discussion | [campaign finding](D0052-auth-claim-header-projection-plan.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -101,3 +102,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Align IP restriction docs with named IpGroup schema | pending | [task](../../../todo/align-ip-restriction-named-group-documentation.md) |
 | Harden JWE protected header JSON parsing | pending | [task](../../../todo/harden-jwe-protected-header-json-parsing.md) |
 | Align JWE resolved-credential failure policy | pending | [task](../../../todo/align-jwe-resolved-credential-failure-policy.md) |
+| Canonicalize auth claim-to-header projection | pending | [task](../../../todo/canonicalize-auth-claim-header-projection.md) |

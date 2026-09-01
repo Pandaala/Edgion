@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `0a95362a` was rebaselined |
-| Coverage | 532 tracked files: 95 changed, 112 examined-no-change, 9 deferred, 316 non-terminal |
-| Active batch | B0084 JWE decrypt generation preparation; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0084 completes its commit gate |
+| Coverage | 532 tracked files: 100 changed, 122 examined-no-change, 9 deferred, 301 non-terminal |
+| Active batch | B0085 JwtAuth claim enforcement and generation preparation; independently approved and awaiting commit gate |
+| Analysis queue | B0086 KeyAuth and B0087 LDAP reports queued for freshness revalidation after B0085 |
 
 ## AI guide summary
 

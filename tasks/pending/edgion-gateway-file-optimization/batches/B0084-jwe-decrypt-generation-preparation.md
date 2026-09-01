@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `0a95362a`; the two owned blobs were unchanged from the queued `1967292a` analysis baseline
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/jwe_decrypt/{mod.rs,plugin.rs}`
 - Supporting documentation: `docs/{en,zh-CN}/user-guide/edgion-plugins/jwe-decrypt.md`
@@ -35,4 +35,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `b9e3223a`

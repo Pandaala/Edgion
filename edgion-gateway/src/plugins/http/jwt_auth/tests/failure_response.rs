@@ -1,78 +1,126 @@
 //! 401 response shape (WWW-Authenticate header) and auth_failure_delay timing.
 
+use bytes::Bytes;
+use mockall::Sequence;
+use tokio::time::{advance, Duration, Instant};
+
 use super::common::*;
-use parking_lot::Mutex;
-use std::sync::Arc;
 
-#[tokio::test]
-async fn test_401_includes_www_authenticate_header() {
-    let auth = jwt_auth_with_credential(
-        TEST_SECRET,
-        JwtAlgorithm::HS256,
-        Some(|c| {
-            c.realm = "my-api".to_string();
-        }),
-    );
+const FAILURE_BODY: &[u8] = b"401 Unauthorized - Invalid or missing JWT";
 
-    let mut mock = MockPluginSession::new();
-    let mut log = PluginLog::new("JwtAuth");
-
-    mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
-
-    let headers_captured: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
-    let headers_clone = headers_captured.clone();
-    mock.expect_write_response_header().returning(move |resp, _| {
-        if let Some(val) = resp.headers.get("WWW-Authenticate") {
-            headers_clone
-                .lock()
-                .push(("WWW-Authenticate".to_string(), val.to_str().unwrap_or("").to_string()));
-        }
-        Ok(())
-    });
-    mock.expect_write_response_body().returning(|_, _| Ok(()));
-    mock.expect_shutdown().returning(|| {});
-
-    let r = auth.run_request(&mut mock, &mut log).await;
-    assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-
-    let headers = headers_captured.lock();
-    assert!(
-        headers
-            .iter()
-            .any(|(k, v)| k == "WWW-Authenticate" && v.contains("Bearer") && v.contains("my-api")),
-        "Expected WWW-Authenticate header with realm, got: {:?}",
-        *headers
-    );
+fn expect_auth_response(mock: &mut MockPluginSession, challenge: &'static str) {
+    let mut sequence = Sequence::new();
+    mock.expect_write_response_header()
+        .withf(move |response, end_of_stream| {
+            !end_of_stream
+                && response.status.as_u16() == 401
+                && response
+                    .headers
+                    .get("content-type")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("text/plain")
+                && response
+                    .headers
+                    .get("www-authenticate")
+                    .and_then(|value| value.to_str().ok())
+                    == Some(challenge)
+        })
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    mock.expect_write_response_body()
+        .withf(|body, end_of_stream| {
+            *end_of_stream && body.as_deref() == Some(Bytes::from_static(FAILURE_BODY).as_ref())
+        })
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    mock.expect_shutdown()
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|| {});
 }
 
 #[tokio::test]
-async fn test_auth_failure_delay() {
+async fn missing_token_returns_exact_bare_bearer_challenge() {
     let auth = jwt_auth_with_credential(
         TEST_SECRET,
         JwtAlgorithm::HS256,
-        Some(|c| {
-            c.auth_failure_delay_ms = 100;
-        }),
+        Some(|config| config.realm = "my-api".to_string()),
     );
-
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
-
     mock.expect_get_method().return_const("GET".to_string());
     mock.expect_header_value().returning(|_| None);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
-    mock.expect_write_response_header().returning(|_, _| Ok(()));
-    mock.expect_write_response_body().returning(|_, _| Ok(()));
-    mock.expect_shutdown().returning(|| {});
+    expect_auth_response(&mut mock, "Bearer realm=\"my-api\"");
 
-    let start = std::time::Instant::now();
-    let r = auth.run_request(&mut mock, &mut log).await;
-    let elapsed = start.elapsed();
+    assert_eq!(
+        auth.run_request(&mut mock, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("No token"), "got: {log:?}");
+    assert!(!log.contains("Deny"), "got: {log:?}");
+}
 
-    assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-    assert!(elapsed.as_millis() >= 90, "Expected delay of ~100ms, got {:?}", elapsed);
+#[tokio::test]
+async fn invalid_token_returns_exact_invalid_token_challenge() {
+    let auth = jwt_auth_with_credential(
+        TEST_SECRET,
+        JwtAlgorithm::HS256,
+        Some(|config| config.realm = "my-api".to_string()),
+    );
+    let mut mock = MockPluginSession::new();
+    let mut log = PluginLog::new("JwtAuth");
+    mock.expect_get_method().return_const("GET".to_string());
+    mock.expect_header_value()
+        .returning(|_| Some("Bearer not-a-jwt".to_string()));
+    mock.expect_get_query_param().returning(|_| None);
+    mock.expect_get_cookie().returning(|_| None);
+    expect_auth_response(
+        &mut mock,
+        "Bearer realm=\"my-api\", error=\"invalid_token\", error_description=\"Unauthorized - Invalid or missing JWT\"",
+    );
+
+    assert_eq!(
+        auth.run_request(&mut mock, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    assert!(log.contains("Deny malformed token"), "got: {log:?}");
+    assert!(!serde_json::to_string(&log).unwrap().contains("not-a-jwt"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn auth_failure_delay_is_exact_under_paused_time() {
+    let auth = jwt_auth_with_credential(
+        TEST_SECRET,
+        JwtAlgorithm::HS256,
+        Some(|config| config.auth_failure_delay_ms = 100),
+    );
+    let mut mock = MockPluginSession::new();
+    mock.expect_get_method().return_const("GET".to_string());
+    mock.expect_header_value().returning(|_| None);
+    mock.expect_get_query_param().returning(|_| None);
+    mock.expect_get_cookie().returning(|_| None);
+    expect_auth_response(&mut mock, "Bearer realm=\"jwt\"");
+
+    let start = Instant::now();
+    let task = tokio::spawn(async move {
+        let mut log = PluginLog::new("JwtAuth");
+        let result = auth.run_request(&mut mock, &mut log).await;
+        (result, log)
+    });
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+
+    advance(Duration::from_millis(99)).await;
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+
+    advance(Duration::from_millis(1)).await;
+    let (result, log) = task.await.unwrap();
+    assert_eq!(Instant::now().duration_since(start), Duration::from_millis(100));
+    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert!(log.contains("No token"), "got: {log:?}");
 }

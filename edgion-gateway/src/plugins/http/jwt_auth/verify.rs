@@ -1,20 +1,24 @@
 //! JWT verification: iss-routed, algorithm-confusion-defended.
 
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::{decode, decode_header};
 use serde_json::Value;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::fmt;
 
-use super::credentials::JwtIssuerGroupStore;
+use super::credentials::{CachedJwtIssuerGroup, JwtIssuerGroupStore};
 use super::to_jwt_algorithm;
 use crate::plugins::runtime::PluginLog;
-use edgion_resources::resources::edgion_plugins::plugin_configs::{JwtAuthConfig, ResolvedJwtIssuerGroup};
+use edgion_resources::resources::edgion_plugins::plugin_configs::JwtAuthConfig;
 
-#[derive(Debug)]
-pub(super) struct VerifyOk {
-    pub group: Arc<ResolvedJwtIssuerGroup>,
+pub(super) struct VerifyOk<'a> {
+    pub group: &'a CachedJwtIssuerGroup,
     pub iss: String,
     pub claims: Value,
+}
+
+impl fmt::Debug for VerifyOk<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerifyOk").finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -27,16 +31,17 @@ pub(super) enum VerifyDeny {
     InvalidCredentials,
     SignatureFail,
     ExpTooFar,
+    InvalidNumericDate,
 }
 
 /// Sync verify: peek payload (insecure decode) -> route by iss -> enforce
 /// header.alg == group.algorithm -> look up kid scoped to group -> real decode.
-pub(super) fn verify_jwt(
+pub(super) fn verify_jwt<'a>(
     token: &str,
-    store: &JwtIssuerGroupStore,
+    store: &'a JwtIssuerGroupStore,
     config: &JwtAuthConfig,
     plugin_log: &mut PluginLog,
-) -> Result<VerifyOk, VerifyDeny> {
+) -> Result<VerifyOk<'a>, VerifyDeny> {
     // 1. Decode header -- gives us the token's claimed alg.
     let header = match decode_header(token) {
         Ok(h) => h,
@@ -47,12 +52,7 @@ pub(super) fn verify_jwt(
     };
 
     // 2. Peek at payload (insecure decode) to read iss.
-    let mut peek_validation = Validation::new(header.alg);
-    peek_validation.insecure_disable_signature_validation();
-    peek_validation.validate_aud = false;
-    peek_validation.validate_exp = false;
-    peek_validation.required_spec_claims = Default::default();
-    let peek = match decode::<Value>(token, &DecodingKey::from_secret(&[]), &peek_validation) {
+    let peek = match decode::<Value>(token, store.peek_decoding_key(), store.peek_validation()) {
         Ok(d) => d.claims,
         Err(_) => {
             plugin_log.push("Deny malformed token");
@@ -82,8 +82,7 @@ pub(super) fn verify_jwt(
     //    Without this, an attacker could submit alg=HS256 token claiming an
     //    RS-issuer's iss and force HMAC verification with the public key
     //    used as the symmetric secret (classic JWT alg-confusion attack).
-    let group = &cached_group.resolved;
-    if header.alg != to_jwt_algorithm(group.algorithm) {
+    if header.alg != to_jwt_algorithm(cached_group.algorithm) {
         plugin_log.push("Deny bad algorithm"); // NO group/iss/alg value
         return Err(VerifyDeny::BadAlgorithm);
     }
@@ -103,46 +102,51 @@ pub(super) fn verify_jwt(
     };
 
     // 7. Real verification -- group.algorithm + this cred's secret/public_key.
-    let mut validation = Validation::new(to_jwt_algorithm(group.algorithm));
-    match group.audiences.as_deref() {
-        Some(auds) if !auds.is_empty() => {
-            let set: HashSet<String> = auds.iter().cloned().collect();
-            validation.aud = Some(set);
-        }
-        _ => {
-            // None OR Some(vec![]) -> explicit "no aud check"
-            validation.validate_aud = false;
-        }
-    }
-    validation.leeway = config.lifetime_grace_period;
-
-    let decoded = match decode::<Value>(token, decoding_key, &validation) {
+    let decoded = match decode::<Value>(token, decoding_key, cached_group.validation()) {
         Ok(d) => d,
         Err(e) => {
             plugin_log.push(classify_jwt_decode_error(&e));
             return Err(VerifyDeny::SignatureFail);
         }
     };
+    let verified_iss = match decoded.claims.get("iss").and_then(Value::as_str) {
+        Some(iss) if !iss.is_empty() => iss.to_string(),
+        _ => {
+            plugin_log.push("Deny missing iss");
+            return Err(VerifyDeny::MissingIss);
+        }
+    };
 
     // 8. Reject tokens whose exp exceeds now + maximum_expiration.
     if config.maximum_expiration > 0 {
-        if let Some(exp) = decoded.claims.get("exp").and_then(|v| v.as_u64()) {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            if exp > now.saturating_add(config.maximum_expiration) {
-                plugin_log.push("Deny exp too far");
-                return Err(VerifyDeny::ExpTooFar);
-            }
+        let Some(exp) = decoded.claims.get("exp").and_then(numeric_date) else {
+            plugin_log.push("Deny invalid token");
+            return Err(VerifyDeny::InvalidNumericDate);
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if exp > now.saturating_add(config.maximum_expiration) {
+            plugin_log.push("Deny exp too far");
+            return Err(VerifyDeny::ExpTooFar);
         }
     }
 
     Ok(VerifyOk {
-        group: Arc::clone(group),
-        iss: iss.to_string(),
+        group: cached_group,
+        iss: verified_iss,
         claims: decoded.claims,
     })
+}
+
+fn numeric_date(value: &Value) -> Option<u64> {
+    let number = value.as_number()?;
+    if let Some(value) = number.as_u64() {
+        return Some(value);
+    }
+    let value = number.as_f64()?;
+    (value.is_finite() && value >= 0.0 && value < u64::MAX as f64).then(|| value.round() as u64)
 }
 
 /// Map jsonwebtoken decode errors to PluginLog literal strings.
@@ -212,7 +216,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
-        let store = JwtIssuerGroupStore::new(by_iss, false);
+        let store = JwtIssuerGroupStore::new(by_iss, false, 0);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -228,7 +232,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
-        let store = JwtIssuerGroupStore::new(by_iss, false);
+        let store = JwtIssuerGroupStore::new(by_iss, false, 0);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -244,7 +248,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a); // no slash
-        let store = JwtIssuerGroupStore::new(by_iss, false);
+        let store = JwtIssuerGroupStore::new(by_iss, false, 0);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -265,7 +269,7 @@ mod tests {
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
-        let store = JwtIssuerGroupStore::new(by_iss, false);
+        let store = JwtIssuerGroupStore::new(by_iss, false, 0);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -286,7 +290,7 @@ mod tests {
         let mut by_iss = HashMap::new();
         by_iss.insert("https://a.example".to_string(), group_a);
         by_iss.insert("https://b.example".to_string(), group_b);
-        let store = JwtIssuerGroupStore::new(by_iss, false);
+        let store = JwtIssuerGroupStore::new(by_iss, false, 0);
         let config = config_default_keyclaim();
         let mut log = PluginLog::new("JwtAuth");
 
@@ -296,5 +300,91 @@ mod tests {
         let token = make_token(Algorithm::HS256, "ka", "https://b.example", secret_a);
         let err = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
         assert!(matches!(err, VerifyDeny::MissingKey));
+    }
+
+    #[test]
+    fn verify_reuses_cached_malformed_key_error_without_logging_key_context() {
+        let group = ResolvedJwtIssuerGroup {
+            group: "sensitive-group".to_string(),
+            algorithm: JwtAlgorithm::HS256,
+            audiences: None,
+            credentials: HashMap::from([(
+                "sensitive-kid".to_string(),
+                ResolvedJwtCredential {
+                    key: Some("sensitive-kid".to_string()),
+                    secret: Some("not-valid-base64!".to_string()),
+                    public_key: None,
+                },
+            )]),
+        };
+        let store = JwtIssuerGroupStore::new(
+            HashMap::from([("https://sensitive.example".to_string(), group)]),
+            true,
+            0,
+        );
+        let config = config_default_keyclaim();
+        let token = make_token(
+            Algorithm::HS256,
+            "sensitive-kid",
+            "https://sensitive.example",
+            b"unused-signing-secret-at-least-32-bytes",
+        );
+
+        for _ in 0..2 {
+            let mut log = PluginLog::new("JwtAuth");
+            let error = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
+            assert!(matches!(error, VerifyDeny::InvalidCredentials));
+            assert!(log.contains("Deny invalid credentials"));
+            let serialized = serde_json::to_string(&log).unwrap();
+            for forbidden in ["sensitive-group", "sensitive-kid", "https://sensitive.example"] {
+                assert!(!serialized.contains(forbidden), "failure log leaked `{forbidden}`");
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_date_matches_jsonwebtoken_rounding_boundary() {
+        assert_eq!(numeric_date(&json!(42_u64)), Some(42));
+        assert_eq!(numeric_date(&json!(42.49)), Some(42));
+        assert_eq!(numeric_date(&json!(42.5)), Some(43));
+        assert_eq!(numeric_date(&json!(42.51)), Some(43));
+        assert_eq!(numeric_date(&json!(-0.1)), None);
+
+        let max_as_float = serde_json::Number::from_f64(u64::MAX as f64).unwrap();
+        assert_eq!(numeric_date(&Value::Number(max_as_float)), None);
+    }
+
+    #[test]
+    fn verify_ok_debug_is_fully_opaque() {
+        let secret = b"sensitive-key-material-at-least-32-bytes";
+        let store = JwtIssuerGroupStore::new(
+            HashMap::from([(
+                "sensitive-issuer".to_string(),
+                make_hs_group("sensitive-group", "sensitive-kid", secret),
+            )]),
+            false,
+            0,
+        );
+        let ok = VerifyOk {
+            group: store.lookup_by_iss("sensitive-issuer").unwrap(),
+            iss: "sensitive-issuer".to_string(),
+            claims: json!({
+                "sub": "sensitive-claim",
+                "token": "sensitive-token"
+            }),
+        };
+
+        let debug = format!("{ok:?}");
+        assert_eq!(debug, "VerifyOk { .. }");
+        for sentinel in [
+            "sensitive-issuer",
+            "sensitive-group",
+            "sensitive-kid",
+            "sensitive-key-material",
+            "sensitive-claim",
+            "sensitive-token",
+        ] {
+            assert!(!debug.contains(sentinel), "Debug leaked `{sentinel}`: {debug}");
+        }
     }
 }
