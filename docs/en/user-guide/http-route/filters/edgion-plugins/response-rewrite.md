@@ -46,6 +46,10 @@ spec:
 
 ### Headers Configuration Format
 
+Header names must be valid HTTP field-name tokens of at most 256 bytes. Values
+used by `set` and `add` must be valid HTTP header values; control characters
+that could inject another header, such as CR or LF, are rejected.
+
 **set/add format**:
 ```yaml
 headers:
@@ -225,6 +229,21 @@ config:
 
 HTTP response header names are case-insensitive, but using standard capitalization format is recommended (e.g., `Content-Type` rather than `content-type`).
 
+Names within each configured list are retained in declaration order, including
+duplicates. A `rename` whose source and destination differ only by case is
+invalid.
+
+### 4. Response Framing Headers
+
+`set`, `add`, and the destination of `rename` cannot target `Content-Length` or
+`Transfer-Encoding` (case-insensitive). The gateway owns those fields so the
+proxied response can remain streaming with correct framing.
+
+Removing either framing header is allowed, as is using one as the source of a
+rename to a non-framing header. For example, renaming `Content-Length` to
+`X-Upstream-Length` is valid; renaming another header to `Content-Length` is
+not.
+
 ---
 
 ## Complete Example
@@ -384,7 +403,7 @@ spec:
 
 **Check**:
 1. Confirm the original response header exists in the upstream response
-2. Check the `from` field name is correct (case sensitivity)
+2. Confirm the `from` field identifies the intended source and is a valid HTTP header name; matching is case-insensitive
 
 ### Issue 3: Configuration Validation Fails
 

@@ -3,8 +3,33 @@
 //! Rewrites responses before returning to client.
 //! Supports status code and headers modification.
 
+use http::HeaderValue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::gwapi_types::{is_valid_header_token, HEADER_NAME_MAX_LEN};
+
+const INVALID_STATUS_CODE: &str = "statusCode must be between 200 and 599";
+const INVALID_SET_NAME: &str = "headers.set name must be a valid HTTP header name of at most 256 bytes";
+const INVALID_SET_VALUE: &str = "headers.set value must be a valid HTTP header value";
+const INVALID_SET_FRAMING: &str = "headers.set must not target content-length or transfer-encoding";
+const INVALID_ADD_NAME: &str = "headers.add name must be a valid HTTP header name of at most 256 bytes";
+const INVALID_ADD_VALUE: &str = "headers.add value must be a valid HTTP header value";
+const INVALID_ADD_FRAMING: &str = "headers.add must not target content-length or transfer-encoding";
+const INVALID_REMOVE_NAME: &str = "headers.remove name must be a valid HTTP header name of at most 256 bytes";
+const INVALID_RENAME_SOURCE: &str = "headers.rename source must be a valid HTTP header name of at most 256 bytes";
+const INVALID_RENAME_DESTINATION: &str =
+    "headers.rename destination must be a valid HTTP header name of at most 256 bytes";
+const INVALID_RENAME_FRAMING: &str = "headers.rename must not target content-length or transfer-encoding";
+const INVALID_SELF_RENAME: &str = "headers.rename source and destination must differ";
+
+fn is_valid_header_name(name: &str) -> bool {
+    name.len() <= HEADER_NAME_MAX_LEN as usize && is_valid_header_token(name)
+}
+
+fn is_response_framing_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
+}
 
 /// Response Rewrite plugin configuration
 ///
@@ -101,47 +126,60 @@ impl ResponseRewriteConfig {
     pub fn check_fields(&self) -> Option<String> {
         if let Some(status) = self.status_code {
             if !crate::http_status::is_valid_final_http_status(status) {
-                return Some(format!("Invalid status code: {}. Must be between 200 and 599.", status));
+                return Some(INVALID_STATUS_CODE.to_string());
             }
         }
 
-        // Validate header names are not empty
         if let Some(ref headers) = self.headers {
-            // Check set headers
             if let Some(ref set_headers) = headers.set {
                 for entry in set_headers {
-                    if entry.name.is_empty() {
-                        return Some("Header name in 'set' cannot be empty.".to_string());
+                    if !is_valid_header_name(&entry.name) {
+                        return Some(INVALID_SET_NAME.to_string());
+                    }
+                    if is_response_framing_header(&entry.name) {
+                        return Some(INVALID_SET_FRAMING.to_string());
+                    }
+                    if HeaderValue::from_str(&entry.value).is_err() {
+                        return Some(INVALID_SET_VALUE.to_string());
                     }
                 }
             }
 
-            // Check add headers
             if let Some(ref add_headers) = headers.add {
                 for entry in add_headers {
-                    if entry.name.is_empty() {
-                        return Some("Header name in 'add' cannot be empty.".to_string());
+                    if !is_valid_header_name(&entry.name) {
+                        return Some(INVALID_ADD_NAME.to_string());
+                    }
+                    if is_response_framing_header(&entry.name) {
+                        return Some(INVALID_ADD_FRAMING.to_string());
+                    }
+                    if HeaderValue::from_str(&entry.value).is_err() {
+                        return Some(INVALID_ADD_VALUE.to_string());
                     }
                 }
             }
 
-            // Check remove headers
             if let Some(ref remove_headers) = headers.remove {
                 for name in remove_headers {
-                    if name.is_empty() {
-                        return Some("Header name in 'remove' cannot be empty.".to_string());
+                    if !is_valid_header_name(name) {
+                        return Some(INVALID_REMOVE_NAME.to_string());
                     }
                 }
             }
 
-            // Check rename headers
             if let Some(ref rename_headers) = headers.rename {
                 for entry in rename_headers {
-                    if entry.from.is_empty() {
-                        return Some("Header 'from' name in 'rename' cannot be empty.".to_string());
+                    if !is_valid_header_name(&entry.from) {
+                        return Some(INVALID_RENAME_SOURCE.to_string());
                     }
-                    if entry.to.is_empty() {
-                        return Some("Header 'to' name in 'rename' cannot be empty.".to_string());
+                    if !is_valid_header_name(&entry.to) {
+                        return Some(INVALID_RENAME_DESTINATION.to_string());
+                    }
+                    if is_response_framing_header(&entry.to) {
+                        return Some(INVALID_RENAME_FRAMING.to_string());
+                    }
+                    if entry.from.eq_ignore_ascii_case(&entry.to) {
+                        return Some(INVALID_SELF_RENAME.to_string());
                     }
                 }
             }
@@ -167,6 +205,20 @@ impl PluginValidation for ResponseRewriteConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_with_headers(headers: ResponseHeaderActions) -> ResponseRewriteConfig {
+        ResponseRewriteConfig {
+            status_code: None,
+            headers: Some(headers),
+        }
+    }
+
+    fn header(name: impl Into<String>, value: impl Into<String>) -> ResponseHeaderEntry {
+        ResponseHeaderEntry {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
 
     #[test]
     fn test_response_rewrite_config_default() {
@@ -198,11 +250,11 @@ mod tests {
     #[test]
     fn test_response_rewrite_config_validate_invalid_status() {
         let config = ResponseRewriteConfig {
-            status_code: Some(600), // Invalid
+            status_code: Some(600),
             headers: None,
         };
 
-        assert!(config.check_fields().unwrap().contains("Invalid status code"));
+        assert_eq!(config.check_fields().as_deref(), Some(INVALID_STATUS_CODE));
     }
 
     #[test]
@@ -244,56 +296,311 @@ mod tests {
     }
 
     #[test]
-    fn test_response_rewrite_config_validate_empty_header_name() {
-        let config = ResponseRewriteConfig {
-            status_code: None,
-            headers: Some(ResponseHeaderActions {
-                set: Some(vec![ResponseHeaderEntry {
-                    name: "".to_string(), // Empty name
-                    value: "value".to_string(),
-                }]),
-                add: None,
-                remove: None,
-                rename: None,
-            }),
-        };
+    fn header_name_length_boundary_applies_to_every_action_position() {
+        let max_name = "x".repeat(HEADER_NAME_MAX_LEN as usize);
+        let other_max_name = format!("y{}", "x".repeat(HEADER_NAME_MAX_LEN as usize - 1));
+        let valid = config_with_headers(ResponseHeaderActions {
+            set: Some(vec![header(&max_name, "set")]),
+            add: Some(vec![header(&other_max_name, "add")]),
+            remove: Some(vec![max_name.clone()]),
+            rename: Some(vec![HeaderRename {
+                from: max_name.clone(),
+                to: other_max_name,
+            }]),
+        });
+        assert_eq!(valid.check_fields(), None);
 
-        assert!(config.check_fields().unwrap().contains("cannot be empty"));
+        let too_long = "x".repeat(HEADER_NAME_MAX_LEN as usize + 1);
+        let cases = [
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: Some(vec![header(&too_long, "value")]),
+                    add: None,
+                    remove: None,
+                    rename: None,
+                }),
+                INVALID_SET_NAME,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: Some(vec![header(&too_long, "value")]),
+                    remove: None,
+                    rename: None,
+                }),
+                INVALID_ADD_NAME,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: Some(vec![too_long.clone()]),
+                    rename: None,
+                }),
+                INVALID_REMOVE_NAME,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: too_long.clone(),
+                        to: "X-New".to_string(),
+                    }]),
+                }),
+                INVALID_RENAME_SOURCE,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: "X-Old".to_string(),
+                        to: too_long,
+                    }]),
+                }),
+                INVALID_RENAME_DESTINATION,
+            ),
+        ];
+        for (config, expected) in cases {
+            assert_eq!(config.check_fields().as_deref(), Some(expected));
+        }
     }
 
     #[test]
-    fn test_response_rewrite_config_validate_empty_rename() {
-        // Empty 'from'
+    fn invalid_header_tokens_are_classified_by_action_position() {
+        let cases = [
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: Some(vec![header("bad name", "value")]),
+                    add: None,
+                    remove: None,
+                    rename: None,
+                }),
+                INVALID_SET_NAME,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: Some(vec![header("bad:name", "value")]),
+                    remove: None,
+                    rename: None,
+                }),
+                INVALID_ADD_NAME,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: Some(vec![String::new()]),
+                    rename: None,
+                }),
+                INVALID_REMOVE_NAME,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: "bad(name".to_string(),
+                        to: "X-New".to_string(),
+                    }]),
+                }),
+                INVALID_RENAME_SOURCE,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: "X-Old".to_string(),
+                        to: "bad name".to_string(),
+                    }]),
+                }),
+                INVALID_RENAME_DESTINATION,
+            ),
+        ];
+        for (config, expected) in cases {
+            assert_eq!(config.check_fields().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn header_value_errors_are_fixed_and_do_not_echo_values() {
+        let secret = "Bearer top-secret\r\nInjected: yes";
+        let set = config_with_headers(ResponseHeaderActions {
+            set: Some(vec![header("X-Token", secret)]),
+            add: None,
+            remove: None,
+            rename: None,
+        });
+        let add = config_with_headers(ResponseHeaderActions {
+            set: None,
+            add: Some(vec![header("X-Token", secret)]),
+            remove: None,
+            rename: None,
+        });
+
+        let set_error = set.check_fields().unwrap();
+        assert_eq!(set_error, INVALID_SET_VALUE);
+        assert!(!set_error.contains("top-secret"));
+        let add_error = add.check_fields().unwrap();
+        assert_eq!(add_error, INVALID_ADD_VALUE);
+        assert!(!add_error.contains("top-secret"));
+    }
+
+    #[test]
+    fn framing_destinations_and_case_insensitive_self_renames_are_rejected() {
+        let cases = [
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: Some(vec![header("Content-Length", "1")]),
+                    add: None,
+                    remove: None,
+                    rename: None,
+                }),
+                INVALID_SET_FRAMING,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: Some(vec![header("TRANSFER-ENCODING", "chunked")]),
+                    remove: None,
+                    rename: None,
+                }),
+                INVALID_ADD_FRAMING,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: "X-Length".to_string(),
+                        to: "content-length".to_string(),
+                    }]),
+                }),
+                INVALID_RENAME_FRAMING,
+            ),
+            (
+                config_with_headers(ResponseHeaderActions {
+                    set: None,
+                    add: None,
+                    remove: None,
+                    rename: Some(vec![HeaderRename {
+                        from: "X-Old".to_string(),
+                        to: "x-old".to_string(),
+                    }]),
+                }),
+                INVALID_SELF_RENAME,
+            ),
+        ];
+        for (config, expected) in cases {
+            assert_eq!(config.check_fields().as_deref(), Some(expected));
+        }
+
+        let framing_sources = config_with_headers(ResponseHeaderActions {
+            set: None,
+            add: None,
+            remove: Some(vec!["Transfer-Encoding".to_string()]),
+            rename: Some(vec![HeaderRename {
+                from: "Content-Length".to_string(),
+                to: "X-Upstream-Length".to_string(),
+            }]),
+        });
+        assert_eq!(framing_sources.check_fields(), None);
+    }
+
+    #[test]
+    fn validation_error_priority_is_stable() {
+        let invalid_value = "secret\r\nInjected: yes";
         let config = ResponseRewriteConfig {
-            status_code: None,
+            status_code: Some(600),
             headers: Some(ResponseHeaderActions {
-                set: None,
-                add: None,
-                remove: None,
+                set: Some(vec![header("bad name", invalid_value)]),
+                add: Some(vec![header("Content-Length", invalid_value)]),
+                remove: Some(vec![String::new()]),
                 rename: Some(vec![HeaderRename {
-                    from: "".to_string(),
-                    to: "X-New".to_string(),
+                    from: String::new(),
+                    to: "Transfer-Encoding".to_string(),
                 }]),
             }),
         };
+        assert_eq!(config.check_fields().as_deref(), Some(INVALID_STATUS_CODE));
 
-        assert!(config.check_fields().unwrap().contains("'from'"));
-
-        // Empty 'to'
-        let config = ResponseRewriteConfig {
+        let set_name_first = ResponseRewriteConfig {
             status_code: None,
-            headers: Some(ResponseHeaderActions {
-                set: None,
-                add: None,
-                remove: None,
-                rename: Some(vec![HeaderRename {
-                    from: "X-Old".to_string(),
-                    to: "".to_string(),
-                }]),
-            }),
+            ..config.clone()
         };
+        assert_eq!(set_name_first.check_fields().as_deref(), Some(INVALID_SET_NAME));
 
-        assert!(config.check_fields().unwrap().contains("'to'"));
+        let framing_before_value = config_with_headers(ResponseHeaderActions {
+            set: Some(vec![header("Content-Length", invalid_value)]),
+            add: None,
+            remove: None,
+            rename: None,
+        });
+        assert_eq!(
+            framing_before_value.check_fields().as_deref(),
+            Some(INVALID_SET_FRAMING)
+        );
+
+        let add_before_remove = config_with_headers(ResponseHeaderActions {
+            set: Some(vec![header("X-Set", "valid")]),
+            add: Some(vec![header("Transfer-Encoding", invalid_value)]),
+            remove: Some(vec![String::new()]),
+            rename: Some(vec![HeaderRename {
+                from: String::new(),
+                to: String::new(),
+            }]),
+        });
+        assert_eq!(add_before_remove.check_fields().as_deref(), Some(INVALID_ADD_FRAMING));
+
+        let remove_before_rename = config_with_headers(ResponseHeaderActions {
+            set: None,
+            add: None,
+            remove: Some(vec![String::new()]),
+            rename: Some(vec![HeaderRename {
+                from: String::new(),
+                to: String::new(),
+            }]),
+        });
+        assert_eq!(
+            remove_before_rename.check_fields().as_deref(),
+            Some(INVALID_REMOVE_NAME)
+        );
+
+        let rename_source_before_destination = config_with_headers(ResponseHeaderActions {
+            set: None,
+            add: None,
+            remove: None,
+            rename: Some(vec![HeaderRename {
+                from: String::new(),
+                to: String::new(),
+            }]),
+        });
+        assert_eq!(
+            rename_source_before_destination.check_fields().as_deref(),
+            Some(INVALID_RENAME_SOURCE)
+        );
+
+        let rename_framing_before_self = config_with_headers(ResponseHeaderActions {
+            set: None,
+            add: None,
+            remove: None,
+            rename: Some(vec![HeaderRename {
+                from: "Content-Length".to_string(),
+                to: "content-length".to_string(),
+            }]),
+        });
+        assert_eq!(
+            rename_framing_before_self.check_fields().as_deref(),
+            Some(INVALID_RENAME_FRAMING)
+        );
     }
 
     #[test]
@@ -367,16 +674,11 @@ mod validation_trait_tests {
     #[test]
     fn validation_error_returns_field_error_without_validate_call() {
         let config = ResponseRewriteConfig {
-            status_code: Some(600), // out of range, triggers a field-level error
+            status_code: Some(600),
             headers: None,
         };
 
-        let result = config.validation_error();
-        assert!(
-            result.as_deref().unwrap_or("").contains("Invalid status code: 600"),
-            "expected invalid status code error, got: {:?}",
-            result,
-        );
+        assert_eq!(config.validation_error().as_deref(), Some(INVALID_STATUS_CODE));
     }
 
     #[test]
@@ -408,11 +710,6 @@ mod validation_trait_tests {
                 rename: None,
             }),
         };
-        let result = config.validation_error();
-        assert!(
-            result.as_deref().unwrap_or("").contains("cannot be empty"),
-            "expected empty-header error, got: {:?}",
-            result,
-        );
+        assert_eq!(config.validation_error().as_deref(), Some(INVALID_SET_NAME));
     }
 }

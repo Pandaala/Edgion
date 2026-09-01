@@ -71,6 +71,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0065 — Define complete RegionRoute table validation | needs-discussion | [campaign finding](D0065-region-route-effective-table-validation.md) |
 | D0066 — Bound RequestMirror concurrency and buffering | needs-discussion | [campaign finding](D0066-request-mirror-capacity-bounds.md) |
 | D0067 — Isolate RequestMirror unit tests from the network | needs-implementation | [campaign finding](D0067-request-mirror-unit-test-network-isolation.md) |
+| D0068 — Unify response-header mutation policy | needs-discussion | [campaign finding](D0068-response-header-mutation-policy.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -133,3 +134,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Define complete RegionRoute table validation | pending | [task](../../../todo/define-region-route-effective-table-validation.md) |
 | Bound RequestMirror concurrency and buffering | pending | [task](../../../todo/bound-request-mirror-concurrency-and-buffering.md) |
 | Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
+| Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |

@@ -27,4 +27,4 @@
 - No-change candidate: `mod.rs`
 - Deferred: D0046 retains invalid/final HTTP status unification; shared compiled-predicate ownership remains a cross-consumer boundary and is not changed here
 - Integration: existing frozen coverage is sufficient; generation ownership and byte reuse are deterministic unit-test concerns, so no integration issue is needed
-- Commit: pending
+- Commit: `2e744ada`
