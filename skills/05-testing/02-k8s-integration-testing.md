@@ -65,6 +65,16 @@ Constraints to keep in mind:
 
 `edgion-tests/k8s/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `edgion-tests/k8s/conf` and no longer rely on an external deploy repo loading `edgion-tests/integration/conf`.
 
+The entry point targets the standard Kubernetes API. OrbStack, Docker Desktop,
+kind, and similar distributions are optional local-development environments,
+not product requirements. Its automatic preflight checks the active kubectl
+context, API-server reachability, Node inventory/readiness/architecture, and
+host-side CLI/PyYAML dependencies before the first cluster mutation. Docker is
+checked only when the selected local image mode needs to build images.
+`EDGION_K8S_EXPECTED_CONTEXT` can pin an exact context in CI or on a developer
+machine with access to multiple clusters; no distribution-specific context is
+hard-coded.
+
 ## 5. What must be changed for new conf (landing checklist)
 
 ### 5.1 Directory and naming alignment (P0)
@@ -157,6 +167,15 @@ Corresponding script:
 - `edgion-tests/k8s/scripts/run_k8s_integration.sh`
   - `--prepare-only`: only prepare the environment
   - `--skip-prepare`: only run tests
+
+Cleanup is ownership-scoped rather than an unconditional pre-run step. A
+successful default run collects diagnostics and then removes the resources it
+created. A healthy harness-owned environment preserved with `--keep-alive` can
+be reused when its recorded inputs still match. A manual `cleanup.sh` is needed
+only when an interrupted run leaves residue, the clean-boundary check reports a
+conflict, or the operator explicitly wants a fresh environment. The runner must
+never pre-delete arbitrary objects merely because they exist in the currently
+selected context.
 
 ## 8. Quick index of affected suites (code scan)
 

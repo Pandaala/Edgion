@@ -10,6 +10,40 @@ This directory is the Kubernetes test entry for Edgion examples.
 
 ## Usage
 
+### Prerequisites
+
+The runner targets a standard Kubernetes API and does not require OrbStack.
+Before it mutates the cluster it automatically verifies:
+
+- `kubectl` has a current context and can reach the API server;
+- the context contains at least one Ready Node with a reported architecture;
+- `kubectl`, `jq`, `curl`, `python3`, and PyYAML are installed.
+
+On a machine with multiple contexts, pin the intended target without making
+any distribution name mandatory:
+
+```bash
+EDGION_K8S_EXPECTED_CONTEXT=my-test-cluster \
+  ./edgion-tests/k8s/scripts/run_k8s_integration.sh ...
+```
+
+The runner fails before mutation if the active context differs.
+
+Docker is required only for local image modes that build images
+(`build-import` and `prepare-local-images`). A remote cluster may use any
+registry-visible multi-architecture images without Docker on the runner host.
+
+For an unfiltered run, the image config must set all five images, including
+the dedicated isolated-job image:
+
+```bash
+CONTROLLER_IMAGE=registry.example.com/edgion-controller:<tag>
+GATEWAY_IMAGE=registry.example.com/edgion-gateway:<tag>
+TEST_CLIENT_IMAGE=registry.example.com/edgion-test-client:<tag>
+TEST_SERVER_IMAGE=registry.example.com/edgion-test-server:<tag>
+ISOLATED_JOB_IMAGE=registry.example.com/edgion-isolated-test:<tag>
+```
+
 Validate conf does not contain Endpoint/EndpointSlice:
 
 ```bash
@@ -30,7 +64,23 @@ Deploy integration environment (controller/gateway/test pods):
 Run full Kubernetes integration (apply suites from `edgion-tests/k8s/conf` + run test_client):
 
 ```bash
-./edgion-tests/k8s/scripts/run_k8s_integration.sh
+./edgion-tests/k8s/scripts/run_k8s_integration.sh \
+  --image-config /path/to/images.env \
+  --full-test
+```
+
+`--cluster-mode auto` is the default and supports both local and remote
+clusters. Use `--cluster-mode remote` only when auto-detection is unsuitable.
+
+For an optional OrbStack/local-Docker workflow, build every image (including
+the isolated-job image) and use the generated config:
+
+```bash
+./edgion-tests/k8s/scripts/orbstack/fast_build.sh --version local-dev
+./edgion-tests/k8s/scripts/run_k8s_integration.sh \
+  --local-image-mode local-existing \
+  --image-config edgion-tests/k8s/scripts/config/images.env \
+  --full-test
 ```
 
 Two-phase behavior (default):
@@ -83,6 +133,14 @@ Clean test environment:
 ./edgion-tests/k8s/scripts/cleanup.sh --with-images
 ./edgion-tests/k8s/scripts/cleanup.sh --with-crds --with-images
 ```
+
+Manual cleanup is not required before every run. A normal owned run starts
+from a clean boundary and automatically removes its resources after collecting
+diagnostics. A healthy harness-owned environment preserved with `--keep-alive`
+can also be reused when its input state still matches. Run `cleanup.sh` when an
+interrupted run leaves residue, the runner reports an ownership conflict, or
+you explicitly want a fresh environment. The runner intentionally refuses to
+pre-delete resources because the selected context may be a shared cluster.
 
 ## Notes
 

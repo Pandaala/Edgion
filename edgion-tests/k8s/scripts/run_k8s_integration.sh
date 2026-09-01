@@ -356,6 +356,8 @@ Env:
                                  and assets; required for an unfiltered test run
   EDGION_HAPROXY_IMAGE           HAProxy image used by isolated PROXY protocol tests
                                  (default: ${HAPROXY_IMAGE})
+  EDGION_K8S_EXPECTED_CONTEXT    Optional exact kubectl context guard; fail before
+                                 mutation when the active context differs
   EDGION_ISOLATED_IMAGE_PULL_POLICY
                                  Pull policy for the isolated-test image
   EDGION_HAPROXY_IMAGE_PULL_POLICY
@@ -581,6 +583,58 @@ trap 'exit 143' TERM
 # for every current/previous Controller log request.
 RUN_START_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+preflight_kubernetes_cluster() {
+  local context version_output nodes_json node_count ready_count non_ready_count architectures
+
+  if ! context="$(kubectl config current-context 2>&1)" || [[ -z "${context}" ]]; then
+    echo "Kubernetes preflight failed: kubectl has no current context" >&2
+    return 1
+  fi
+  if [[ -n "${EDGION_K8S_EXPECTED_CONTEXT:-}" && "${context}" != "${EDGION_K8S_EXPECTED_CONTEXT}" ]]; then
+    echo "Kubernetes preflight failed: current context ${context} does not match EDGION_K8S_EXPECTED_CONTEXT=${EDGION_K8S_EXPECTED_CONTEXT}" >&2
+    return 1
+  fi
+
+  if ! version_output="$(kubectl --request-timeout=10s version --output=json 2>&1)"; then
+    echo "Kubernetes preflight failed: API server is not reachable through context ${context}" >&2
+    echo "${version_output}" >&2
+    return 1
+  fi
+
+  if ! nodes_json="$(kubectl --request-timeout=10s get nodes -o json 2>&1)"; then
+    echo "Kubernetes preflight failed: cannot list Nodes through context ${context}" >&2
+    echo "${nodes_json}" >&2
+    return 1
+  fi
+  if ! echo "${nodes_json}" | jq -e '.kind == "NodeList" and (.items | type == "array")' >/dev/null; then
+    echo "Kubernetes preflight failed: kubectl returned an invalid NodeList" >&2
+    return 1
+  fi
+
+  node_count="$(echo "${nodes_json}" | jq '.items | length')"
+  ready_count="$(echo "${nodes_json}" | jq '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length')"
+  non_ready_count=$((node_count - ready_count))
+  if [[ "${node_count}" -eq 0 ]]; then
+    echo "Kubernetes preflight failed: context ${context} has no Nodes" >&2
+    return 1
+  fi
+  if [[ "${ready_count}" -eq 0 ]]; then
+    echo "Kubernetes preflight failed: context ${context} has no Ready Nodes" >&2
+    return 1
+  fi
+
+  architectures="$(echo "${nodes_json}" | jq -r '.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | .status.nodeInfo.architecture // empty' | sort -u | xargs)"
+  if [[ -z "${architectures}" ]]; then
+    echo "Kubernetes preflight failed: Ready Nodes do not report an architecture" >&2
+    return 1
+  fi
+
+  echo "Kubernetes preflight passed: context=${context} ready_nodes=${ready_count}/${node_count} architectures=${architectures}"
+  if [[ "${non_ready_count}" -gt 0 ]]; then
+    echo "[WARN] Kubernetes context ${context} also has ${non_ready_count} non-Ready Node(s)"
+  fi
+}
+
 get_cluster_arches() {
   kubectl get nodes -o json | jq -r '.items[].status.nodeInfo.architecture' | sort -u
 }
@@ -724,6 +778,21 @@ check_image_arch_compat() {
     return 1
   fi
   return 0
+}
+
+require_local_image_build_tooling() {
+  local mode="$1"
+  if [[ "${mode}" != "build-import" && "${mode}" != "prepare-local-images" && "${PREPARE_LOCAL_IMAGES}" != "true" ]]; then
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Local image mode ${mode} requires docker" >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "Local image mode ${mode} requires a reachable Docker daemon" >&2
+    exit 1
+  fi
 }
 
 auto_detect_image_arch() {
@@ -882,7 +951,7 @@ apply_local_test_image_overrides() {
 }
 
 print_cluster_and_image_context() {
-  local mode arches primary local_mode
+  local mode arches primary local_mode build_import_local_images=false
   mode="$(detect_cluster_mode)"
   arches="$(get_cluster_arches | xargs)"
   primary="$(get_cluster_arches | head -n1)"
@@ -907,7 +976,7 @@ print_cluster_and_image_context() {
         PULL_POLICY_OVERRIDE="IfNotPresent"
         ;;
       build-import)
-        build_and_import_local_images
+        build_import_local_images=true
         PULL_POLICY_OVERRIDE="IfNotPresent"
         ;;
       prepare-local-images)
@@ -923,6 +992,10 @@ print_cluster_and_image_context() {
     LOCAL_IMAGE_MODE_RESOLVED="remote-pull"
   fi
 
+  require_local_image_build_tooling "${LOCAL_IMAGE_MODE_RESOLVED}"
+  if [[ "${build_import_local_images}" == "true" ]]; then
+    build_and_import_local_images
+  fi
   prepare_local_images_if_needed "${mode}"
   apply_local_test_image_overrides
 
@@ -2624,6 +2697,7 @@ should_run_prepare() {
   return 0
 }
 
+preflight_kubernetes_cluster
 print_cluster_and_image_context
 if [[ "${FILTERED_MODE}" == "false" && "${PREPARE_ONLY}" == "false" && -z "${ISOLATED_JOB_IMAGE}" ]]; then
   echo "EDGION_ISOLATED_JOB_IMAGE or ISOLATED_JOB_IMAGE in --image-config is required for an unfiltered test run"
