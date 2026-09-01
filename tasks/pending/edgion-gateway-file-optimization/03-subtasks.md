@@ -340,7 +340,7 @@
 | `edgion-gateway/src/plugins/http/canary/plugin.rs` | `plugins-http-canary` | source | changed | B0066 |
 | `edgion-gateway/src/plugins/http/common/auth_common.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/capped_writer.rs` | `plugins-http-common` | source | pending | — |
-| `edgion-gateway/src/plugins/http/common/http_client.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/http_client.rs` | `plugins-http-common` | source | changed | B0102: canonical default and dedicated RequestMirror singleton clients |
 | `edgion-gateway/src/plugins/http/common/http_util.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/json_request.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | pending | — |
@@ -485,10 +485,10 @@
 | `edgion-gateway/src/plugins/http/request_access_policy/plugin.rs` | `plugins-http-request-access-policy` | source | changed | B0100 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
-| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | pending | — |
-| `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | pending | — |
-| `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | pending | — |
-| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | pending | — |
+| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
+| `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
+| `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
+| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | changed | B0102 |
 | `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | pending | — |
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | pending | — |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | pending | — |

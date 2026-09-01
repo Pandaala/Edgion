@@ -69,6 +69,8 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0063 — Validate rate-limit response header names canonically | needs-implementation | [campaign finding](D0063-rate-limit-response-header-validation.md) |
 | D0064 — Validate RealIp header names canonically | needs-implementation | [campaign finding](D0064-real-ip-header-name-validation.md) |
 | D0065 — Define complete RegionRoute table validation | needs-discussion | [campaign finding](D0065-region-route-effective-table-validation.md) |
+| D0066 — Bound RequestMirror concurrency and buffering | needs-discussion | [campaign finding](D0066-request-mirror-capacity-bounds.md) |
+| D0067 — Isolate RequestMirror unit tests from the network | needs-implementation | [campaign finding](D0067-request-mirror-unit-test-network-isolation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -129,3 +131,5 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
 | Define complete RegionRoute table validation | pending | [task](../../../todo/define-region-route-effective-table-validation.md) |
+| Bound RequestMirror concurrency and buffering | pending | [task](../../../todo/bound-request-mirror-concurrency-and-buffering.md) |
+| Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |

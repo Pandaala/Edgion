@@ -24,4 +24,4 @@
 - Final review: independently approved both examined-no-change dispositions with no Must Fix or Should Fix; canonical capture, spill, logical/physical limits, late-read and release ownership, failure diagnostics, access-log ownership, and observability restraint remain intact
 - Coverage: `mod.rs` and `plugin.rs` examined-no-change
 - Verification: 3 RequestBodyBuffer, 25 body-gate, 5 request-body config, 34 PluginRuntime, 18 resources request-body, Controller resolution, late-reader reuse/release, and disk-spill non-materialization tests passed across analysis and review; format, locked workspace check/Clippy, Gateway binary build, agent-doc, SSA, metrics, Pingora source, no-tracing, English-only, diff, and frozen-path guards passed
-- Commit: pending
+- Commit: `6537bb33`

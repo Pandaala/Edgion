@@ -37,13 +37,17 @@ is a bug" rule also gets a line there.
   Centralizes pool / timeout / redirect / proxy-env / TLS policy; the default
   redirect policy is `OutboundRedirect::Deny` because a forgotten redirect
   policy is an SSRF surface. Gateway code reaches it via the re-export
-  `crate::link_sys::http_client`. Convenience layers on top:
-  `build_pooled_outbound_client` and the process-global `get_http_client()`
-  singleton in `edgion-gateway/src/plugins/http/common/http_client.rs`.
+  `crate::link_sys::http_client`. The process-global getters in
+  `edgion-gateway/src/plugins/http/common/http_client.rs` both use this factory:
+  `get_http_client()` has pool 32, a 5-second connect timeout, and a 10-second
+  total timeout; the dedicated `get_mirror_http_client()` has pool 32 and no
+  internal connect or total timeout because RequestMirror owns the outer
+  `connect_timeout + write_timeout` deadline. Both deny redirects and disable
+  proxy-environment pickup.
 - **Rule**: every outbound `reqwest::Client` MUST be built through the
   factory. A bare `reqwest::Client::builder()` outside `#[cfg(test)]` code is
   a bug.
-- **Verified consumers** (2026-07-26): the shared singleton,
+- **Verified consumers** (2026-09-01): the default and RequestMirror singletons,
   `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
   and OCI pulls, openid_connect (default branch), request_mirror,
   the elasticsearch link_sys provider, health-check probes,

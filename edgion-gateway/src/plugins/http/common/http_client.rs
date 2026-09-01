@@ -1,7 +1,9 @@
 //! Shared HTTP client for plugins that need to call external services.
 //!
-//! Provides a global `reqwest::Client` singleton with connection pooling,
-//! and utilities for hop-by-hop header filtering.
+//! Provides process-wide `reqwest::Client` singletons with connection pooling:
+//! the default client for ordinary plugin dependencies and a dedicated,
+//! timeout-free RequestMirror client. It also provides utilities for hop-by-hop
+//! header filtering.
 //!
 //! ## Usage
 //!
@@ -16,27 +18,33 @@
 //!
 //! ## Design Decisions
 //!
-//! - **Global singleton**: `reqwest::Client` maintains an internal connection pool.
-//!   Sharing a single instance across all plugins maximizes connection reuse.
+//! - **Process-wide singletons**: `reqwest::Client` maintains an internal connection pool.
+//!   The default and RequestMirror clients each share one pool across all of their consumers.
 //! - **OnceLock lazy initialization**: Consistent with the project's pattern (e.g., RateLimit).
-//!   The client is only created on first use.
+//!   Each client is created only on first use.
 //! - **No automatic redirects**: Auth-type requests should not follow redirects automatically.
 //!   A 302 from an auth service typically indicates an authentication failure or redirect to login.
-//! - **Default timeouts**: Prevent external services from hanging the gateway.
-//!   Individual plugins can override per-request timeouts.
+//! - **Timeout ownership**: The default client has fixed defensive timeouts. RequestMirror has no
+//!   internal client timeout because its detached send owns one outer combined deadline.
 
 use reqwest::Client;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::link_sys::http_client::{
-    apply_outbound_policy, build_outbound_client, OutboundClientConfig, OutboundRedirect,
-};
+use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 
 /// Global shared HTTP client with connection pooling.
 ///
 /// Uses OnceLock for lazy initialization; reqwest::Client is designed to be shared.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+static MIRROR_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn build_client_or_exit(component: &'static str, config: OutboundClientConfig) -> Client {
+    build_outbound_client(config).unwrap_or_else(|e| {
+        tracing::error!(component, error = %e, "Failed to build HTTP client");
+        std::process::exit(1);
+    })
+}
 
 /// Get an Arc-wrapped HTTP client for sharing (e.g. in spawned tasks).
 /// Uses the default secure client.
@@ -57,21 +65,41 @@ pub fn get_http_client_arc() -> std::sync::Arc<Client> {
 /// - TLS enabled (rustls)
 pub fn get_http_client() -> &'static Client {
     HTTP_CLIENT.get_or_init(|| {
-        build_outbound_client(OutboundClientConfig {
-            pool_max_idle_per_host: Some(32),
-            connect_timeout: Some(Duration::from_secs(5)),
-            total_timeout: Some(Duration::from_secs(10)),
-            redirect: OutboundRedirect::Deny,
-            // Plugin dependency traffic must never inherit HTTP(S)_PROXY from
-            // the gateway process. Proxy routing would bypass the canonical
-            // dial-time egress resolver/classifier.
-            disable_proxy: true,
-            ..Default::default()
-        })
-        .unwrap_or_else(|e| {
-            tracing::error!(component = "http_client", error = %e, "Failed to build HTTP client");
-            std::process::exit(1);
-        })
+        build_client_or_exit(
+            "http_client",
+            OutboundClientConfig {
+                pool_max_idle_per_host: Some(32),
+                connect_timeout: Some(Duration::from_secs(5)),
+                total_timeout: Some(Duration::from_secs(10)),
+                redirect: OutboundRedirect::Deny,
+                // Plugin dependency traffic must never inherit HTTP(S)_PROXY from
+                // the gateway process. Proxy routing would bypass the canonical
+                // dial-time egress resolver/classifier.
+                disable_proxy: true,
+                ..Default::default()
+            },
+        )
+    })
+}
+
+/// Get the process-wide RequestMirror HTTP client.
+///
+/// RequestMirror owns its deadline around the complete detached send. This
+/// client therefore has no internal connect or total timeout that could clip
+/// the configured `connect_timeout + write_timeout` budget.
+pub(crate) fn get_mirror_http_client() -> &'static Client {
+    MIRROR_HTTP_CLIENT.get_or_init(|| {
+        build_client_or_exit(
+            "request_mirror_http_client",
+            OutboundClientConfig {
+                pool_max_idle_per_host: Some(32),
+                connect_timeout: None,
+                total_timeout: None,
+                redirect: OutboundRedirect::Deny,
+                disable_proxy: true,
+                ..Default::default()
+            },
+        )
     })
 }
 
@@ -98,39 +126,6 @@ pub fn build_webhook_client(
         dns_resolver,
         ..Default::default()
     }))
-}
-
-/// Build a pooled outbound reqwest client with an explicit timeout policy.
-///
-/// Centralizes the pool + redirect policy shared by plugin outbound clients,
-/// while letting each caller pick its own connect timeout and decide whether to
-/// impose a client-level total timeout.
-///
-/// - `connect_timeout`: TCP/TLS connect deadline.
-/// - `total_timeout`: `Some(d)` sets reqwest's whole-request timeout; `None`
-///   omits it — for streaming-body callers that enforce their own deadline.
-///
-/// Always sets `redirect::none` (redirect-following is an SSRF surface) and
-/// `pool_max_idle_per_host(32)`. This is the request_mirror client shape; the
-/// other outbound sites (task 03) will extend the signature with redirect /
-/// proxy / pool parameters rather than call this unchanged.
-pub fn build_pooled_outbound_client(
-    connect_timeout: Duration,
-    total_timeout: Option<Duration>,
-) -> reqwest::Result<Client> {
-    apply_outbound_policy(
-        Client::builder(),
-        OutboundClientConfig {
-            pool_max_idle_per_host: Some(32),
-            connect_timeout: Some(connect_timeout),
-            total_timeout,
-            redirect: OutboundRedirect::Deny,
-            disable_proxy: true,
-            ..Default::default()
-        },
-    )
-    .expect("pooled outbound config has no TLS; apply_outbound_policy is infallible here")
-    .build()
 }
 
 /// Canonical hop-by-hop headers that MUST NOT be forwarded to upstream services.
@@ -276,5 +271,14 @@ mod tests {
         let client2 = get_http_client();
         // Both should point to the same instance
         assert!(std::ptr::eq(client1, client2));
+    }
+
+    #[test]
+    fn test_get_mirror_http_client_is_process_wide_and_dedicated() {
+        let mirror1 = get_mirror_http_client();
+        let mirror2 = get_mirror_http_client();
+
+        assert!(std::ptr::eq(mirror1, mirror2));
+        assert!(!std::ptr::eq(mirror1, get_http_client()));
     }
 }

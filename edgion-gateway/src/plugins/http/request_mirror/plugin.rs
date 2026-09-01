@@ -15,7 +15,7 @@ use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, va
 use crate::ctx::{MirrorAbandonReason, MirrorCancellation};
 use crate::observe::metrics::record_mirror_metric;
 use crate::plugins::http::common::http_client::{
-    build_pooled_outbound_client, connection_listed_hop_by_hop, is_hop_by_hop_or_listed,
+    connection_listed_hop_by_hop, get_mirror_http_client, is_hop_by_hop_or_listed,
 };
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{MirrorConfig, MirrorState};
@@ -28,7 +28,6 @@ pub struct RequestMirrorPlugin {
     config: HTTPRequestMirrorFilter,
     tuning: MirrorTuning,
     semaphore: Arc<Semaphore>,
-    client: reqwest::Client,
 }
 
 async fn wait_for_send_or_cancel<F>(send_result: F, mut cancel_rx: oneshot::Receiver<()>) -> Option<F::Output>
@@ -77,10 +76,6 @@ impl RequestMirrorPlugin {
             tuning.channel_full_timeout_ms = 1000;
         }
 
-        let connect_timeout = Duration::from_millis(tuning.connect_timeout_ms.max(1));
-        let client =
-            build_pooled_outbound_client(connect_timeout, None).expect("failed to build RequestMirror reqwest client");
-
         // If backendRef.namespace is absent, default to current route/plugin namespace.
         if cfg.backend_ref.namespace.is_none() {
             cfg.backend_ref.namespace = Some(default_namespace);
@@ -90,7 +85,6 @@ impl RequestMirrorPlugin {
             semaphore: Arc::new(Semaphore::new(tuning.max_concurrent)),
             config: cfg,
             tuning,
-            client,
         }
     }
 
@@ -279,10 +273,10 @@ impl RequestFilter for RequestMirrorPlugin {
         let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(cfg.max_buffered_chunks);
         let (cancellation, cancel_rx) = MirrorCancellation::new();
         let abandon_reason = cancellation.reason_handle();
-        let client = self.client.clone();
 
         let channel_full_timeout_ms = self.tuning.channel_full_timeout_ms;
         let uses_committed_snapshot = committed_body.is_some();
+        let client = get_mirror_http_client().clone();
 
         let writer_handle = tokio::spawn(async move {
             let _permit = permit;
@@ -453,13 +447,10 @@ mod arming_tests {
         get_roundrobin_store().update_data_only(add, HashMap::new(), &Default::default());
     }
 
-    fn test_plugin() -> RequestMirrorPlugin {
-        let tuning = MirrorTuning {
-            // The mirror access log needs process-wide log infrastructure that a
-            // unit test does not bootstrap.
-            mirror_log: false,
-            ..MirrorTuning::default()
-        };
+    fn test_plugin_with_tuning(mut tuning: MirrorTuning) -> RequestMirrorPlugin {
+        // The mirror access log needs process-wide log infrastructure that a
+        // unit test does not bootstrap.
+        tuning.mirror_log = false;
         RequestMirrorPlugin::new(
             HTTPRequestMirrorFilter {
                 backend_ref: BackendObjectReference {
@@ -475,6 +466,30 @@ mod arming_tests {
             tuning,
             TEST_NS.to_string(),
         )
+    }
+
+    fn test_plugin() -> RequestMirrorPlugin {
+        test_plugin_with_tuning(MirrorTuning::default())
+    }
+
+    #[test]
+    fn different_plugin_generations_share_the_process_mirror_client() {
+        let before = get_mirror_http_client();
+
+        let mut first_tuning = MirrorTuning::default();
+        first_tuning.connect_timeout_ms = 11;
+        first_tuning.write_timeout_ms = 17;
+        let _first = test_plugin_with_tuning(first_tuning);
+        let after_first = get_mirror_http_client();
+
+        let mut second_tuning = MirrorTuning::default();
+        second_tuning.connect_timeout_ms = 23;
+        second_tuning.write_timeout_ms = 29;
+        let _second = test_plugin_with_tuning(second_tuning);
+        let after_second = get_mirror_http_client();
+
+        assert!(std::ptr::eq(before, after_first));
+        assert!(std::ptr::eq(before, after_second));
     }
 
     fn test_session(headers_end_stream: Option<bool>) -> MockPluginSession {

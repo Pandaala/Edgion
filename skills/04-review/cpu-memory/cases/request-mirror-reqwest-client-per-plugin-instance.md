@@ -1,6 +1,6 @@
 ---
 name: request-mirror-reqwest-client-per-plugin-instance
-description: Use when reviewing findings that flag RequestMirrorPlugin (or any gateway HTTP plugin) for building its own reqwest::Client in `new()`; this fragments the per-host connection pool, duplicates TLS/DNS caches across plugin instances, and panics on builder failure during plugin load. The fix shares the process-level singleton from `common::http_client::get_http_client()`.
+description: Use when reviewing findings that flag RequestMirrorPlugin for building its own reqwest::Client in `new()`; this fragments the per-host connection pool, duplicates TLS/DNS caches across plugin instances, and panics on builder failure during plugin load. The fix uses the dedicated process-level `common::http_client::get_mirror_http_client()` singleton without internal timeouts.
 ---
 
 > See also: [cpu-memory/SKILL.md](../SKILL.md) for the index.
@@ -25,9 +25,9 @@ The fix removes the `client` field entirely and pulls a shared singleton at requ
 let client = get_mirror_http_client().clone(); // process-level OnceLock from common::http_client
 ```
 
-`get_mirror_http_client()` is a **dedicated** singleton (not the generic `get_http_client()`):
+`get_mirror_http_client()` is a **dedicated** singleton (not the default `get_http_client()`):
 it shares the pool / TLS / DNS state across all `RequestMirrorPlugin` instances, but deliberately
-omits both `.timeout(...)` and `.connect_timeout(...)`. The auth/webhook singleton's hard-coded
+omits both `.timeout(...)` and `.connect_timeout(...)`. The default singleton's hard-coded
 `timeout(10s)` + `connect_timeout(5s)` would silently cap any operator who configured
 `connect_timeout_ms > 5000` or `connect_timeout_ms + write_timeout_ms > 10000` (the schema has no
 upper bound). Per-plugin `connect_timeout_ms` / `write_timeout_ms` bounds are enforced by the
@@ -47,9 +47,11 @@ total/connect timeout caps clipping operator-configured mirror timeouts.
 **1. `reqwest::Client` is designed to be shared**
 
 `reqwest::Client` is internally `Arc`-wrapped; cloning hands out a new reference to the same
-connection pool, TLS session cache, and DNS cache. The project already standardised on this in
-`edgion-gateway/src/plugins/http/common/http_client.rs` (`get_http_client()` / `OnceLock<Client>`),
-used by every other plugin that talks to external HTTP services. RequestMirror was the outlier.
+connection pool, TLS session cache, and DNS cache. The project already standardised on
+process-wide `OnceLock<Client>` ownership in
+`edgion-gateway/src/plugins/http/common/http_client.rs`; the default `get_http_client()` and the
+timeout-free `get_mirror_http_client()` now each share one pool for their distinct contracts.
+RequestMirror's former per-instance ownership was the outlier.
 
 **2. The per-plugin differentiator collapses into the outer timeout wrapper**
 
@@ -65,8 +67,9 @@ the outer `tokio::time::timeout(...)` → `Err(_)` → label `"timeout"` branch 
 
 `RequestMirrorPlugin::new` is called from `plugin_runtime.rs` during route / EdgionPlugins
 reconcile. A panic there terminates the gateway process. Switching to the singleton removes
-the panic path entirely: `get_http_client()` itself uses `unwrap_or_else(|e| { error!; exit(1) })`
-once at first-use, with a single error log; the failure surface is centralised.
+the per-plugin constructor panic path: `get_mirror_http_client()` uses the common singleton
+builder's fatal initialization handling once at first use, with a single error log; the failure
+surface is centralised and never falls back to the default client's shorter timeouts.
 
 ## Intended behavior change (documented, accepted)
 
@@ -92,4 +95,4 @@ Re-open only if:
 
 - F-017 (BadLogic, Medium), fixed 2026-05-27.
 - Source: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs`.
-- Singleton: `edgion-gateway/src/plugins/http/common/http_client.rs::get_http_client`.
+- Singleton: `edgion-gateway/src/plugins/http/common/http_client.rs::get_mirror_http_client`.

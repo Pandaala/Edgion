@@ -15,15 +15,17 @@ shadow copy of a request via a standalone `reqwest::Client` rather than through 
 `EdgionBackend` / `get_peer` upstream machinery used by the primary request. As a result the
 mirror path diverges from the primary path in three ways:
 
-1. **LB policy bypass** — `resolve_target` (`plugin.rs:135`) calls `select_roundrobin_backend_key`,
+1. **LB policy bypass** — `RequestMirrorPlugin::resolve_target` calls `select_roundrobin_backend_key`,
    which is plain round-robin; the service's configured EWMA / LeastConn / ConsistentHash policy
    does not apply to mirror traffic.
 2. **BackendTLSPolicy bypass** — the scheme is a port heuristic `port == 443 → https`
-   (`plugin.rs:128`, already marked `// TODO(Phase 2)`); a mirror target requiring mTLS never
-   receives a client certificate, so the backend silently rejects the mirror connection.
-3. **Per-plugin connection pool** — the `reqwest::Client` is a per-instance field built in `new()`
-   (`plugin.rs:26,49-54`); each `EdgionPlugins` reload rebuilds it. (This pool/client-sharing
-   sub-aspect is the separate sibling finding F-017; see Reference Cases.)
+   inside `RequestMirrorPlugin::resolve_target`, already marked `// TODO(Phase 2)`; a mirror target
+   requiring mTLS never receives a client certificate, so the backend silently rejects the mirror
+   connection.
+3. **Dedicated connection pool** — mirror traffic uses a process-wide `reqwest::Client` singleton
+   separate from the primary Pingora upstream pool. The singleton survives `EdgionPlugins`
+   reloads and shares its pool across every RequestMirror instance. (This client-sharing
+   sub-aspect was fixed by the separate sibling finding F-017; see Reference Cases.)
 
 Health-check and circuit-breaker ejection ARE honored for the mirror path
 (`select_roundrobin_backend_key` → `is_backend_healthy`, `backends/selector.rs`), correcting the
@@ -51,20 +53,20 @@ mTLS client certs are sourced for a fire-and-forget shadow request) that needs a
 
 **2. The blast radius is shadow traffic only**
 
-The mirror is fire-and-forget: `run_request` spawns the send task and immediately returns
-`GoodNext` (`plugin.rs:235-316`); failures surface only in `mirror_log` + a metric and never affect
-the primary response. So the BackendTLSPolicy bypass degrades the *mirror*, not production traffic —
-it is a silent shadow-path failure, not a request-correctness or security hole on the live path.
-LB-policy divergence likewise only changes how shadow load is distributed; round-robin for shadow
-traffic is an acceptable simplification. This is consistent with a medium-severity gap, not a
-critical one.
+The mirror is fire-and-forget: `<RequestMirrorPlugin as RequestFilter>::run_request` spawns the
+send task and immediately returns `GoodNext`; failures surface only in `mirror_log` + a metric and
+never affect the primary response. So the BackendTLSPolicy bypass
+degrades the *mirror*, not production traffic — it is a silent shadow-path failure, not a
+request-correctness or security hole on the live path. LB-policy divergence likewise only changes
+how shadow load is distributed; round-robin for shadow traffic is an acceptable simplification.
+This is consistent with a medium-severity gap, not a critical one.
 
 **3. The BackendTLSPolicy gap is an acknowledged Phase-2 item, not an oversight**
 
 The port-heuristic scheme already carries an explicit `// TODO(Phase 2): Use BackendTLSPolicy to
-determine TLS instead of port heuristic.` comment at `plugin.rs:128`. The limitation is recorded at
-the call site; it is a deferred feature, not an undiagnosed defect, and re-filing it as a bug does
-not change the disposition.
+determine TLS instead of port heuristic.` comment in `RequestMirrorPlugin::resolve_target`. The
+limitation is recorded at the call site; it is a deferred feature, not an undiagnosed defect, and
+re-filing it as a bug does not change the disposition.
 
 ## Fix Suggestions Not Accepted
 
@@ -94,16 +96,16 @@ Re-open this decision only if:
   ⚠️ accepted tradeoff; closed without code change.
 - Sibling pool/client-sharing sub-aspect: F-017,
   [../cpu-memory/cases/request-mirror-reqwest-client-per-plugin-instance.md](../cpu-memory/cases/request-mirror-reqwest-client-per-plugin-instance.md).
-  NOTE: that entry describes a `get_mirror_http_client()` singleton fix; as of 2026-06-14 the
-  current source still carries the per-plugin `client` field (`plugin.rs:26,49-54`) and no
-  `get_mirror_http_client` exists in `common/http_client.rs`, so the pool-fragmentation sub-aspect
-  is live in code — that F-017 record is stale relative to the source.
+  The dedicated `get_mirror_http_client()` singleton now lives in `common/http_client.rs`, and
+  RequestMirror no longer carries a per-plugin client field, so the F-017 record matches the
+  current source.
 - Same review-set family of accepted architecture tradeoffs:
   [no-per-route-global-plugin-override-or-exclude.md](no-per-route-global-plugin-override-or-exclude.md),
   [filter-iteration-control-sync-phase-tradeoff.md](filter-iteration-control-sync-phase-tradeoff.md),
   [body-filter-read-only-by-design.md](body-filter-read-only-by-design.md).
-- Source: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs:115-146` (`resolve_target`,
-  round-robin + port-heuristic scheme), `:235-316` (fire-and-forget spawn);
+- Source: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs`
+  (`RequestMirrorPlugin::resolve_target` for round-robin + port-heuristic scheme, and its
+  `<RequestMirrorPlugin as RequestFilter>::run_request` implementation for the fire-and-forget spawn);
   `edgion-gateway/src/backends/selector.rs` (`select_roundrobin_backend_key` → `is_backend_healthy`).
 </content>
 </invoke>
