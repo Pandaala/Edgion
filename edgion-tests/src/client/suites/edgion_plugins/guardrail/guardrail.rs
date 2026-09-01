@@ -604,52 +604,7 @@ impl GuardrailTestSuite {
                         if let Err(error) = reset_observations(&ctx).await {
                             return TestResult::failed(start.elapsed(), error);
                         }
-<<<<<<< Updated upstream
                         let response = match request_openai_protocol(&ctx, REJECT_EXT_PROC_HOST, h2).await {
-=======
-                        let response = if h2 {
-                            let address =
-                                match tokio::net::lookup_host(format!("{}:{}", ctx.target_host, ctx.http_port)).await {
-                                    Ok(mut addresses) => match addresses.next() {
-                                        Some(address) => address,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "test address resolved to no endpoints".to_string(),
-                                            )
-                                        }
-                                    },
-                                    Err(error) => {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("failed to resolve test address: {error}"),
-                                        )
-                                    }
-                                };
-                            let client = match reqwest::Client::builder()
-                                .no_proxy()
-                                .http2_prior_knowledge()
-                                .resolve(REJECT_EXT_PROC_HOST, address)
-                                .build()
-                            {
-                                Ok(client) => client,
-                                Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
-                            };
-                            client
-                                .post(format!("http://{REJECT_EXT_PROC_HOST}:{}{PATH}", ctx.http_port))
-                                .json(&json!({
-                                    "model": "fixture-model",
-                                    "stream": true,
-                                    "messages": [{"role": "user", "content": "fixture prompt"}]
-                                }))
-                                .send()
-                                .await
-                                .map_err(|error| error.to_string())
-                        } else {
-                            request(&ctx, REJECT_EXT_PROC_HOST).await
-                        };
-                        let response = match response {
->>>>>>> Stashed changes
                             Ok(response) => response,
                             Err(error) => return TestResult::failed(start.elapsed(), error),
                         };
