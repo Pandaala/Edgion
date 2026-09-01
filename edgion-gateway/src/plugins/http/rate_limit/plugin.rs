@@ -58,8 +58,8 @@ const CMS_HASHES: usize = 4;
 /// Each plugin instance owns its own Rate instance, which is lazily initialized
 /// on the first request. The Rate instance is NOT shared between different plugins.
 pub struct RateLimit {
-    name: String,
     config: RateLimitConfig,
+    reject_body: Bytes,
     /// The Rate instance, lazily initialized on first use
     rate: OnceLock<Rate>,
 }
@@ -78,10 +78,15 @@ impl RateLimit {
     pub fn create(config: &RateLimitConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
         let _ = validated_config.validate();
+        let message = validated_config
+            .reject_message
+            .take()
+            .unwrap_or_else(|| "Rate limit exceeded".to_string());
+        let reject_body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
         let plugin = RateLimit {
-            name: "RateLimit".to_string(),
             config: validated_config,
+            reject_body,
             rate: OnceLock::new(),
         };
 
@@ -140,8 +145,6 @@ impl RateLimit {
 
     /// Build rejection response
     async fn reject_request(&self, session: &mut dyn PluginSession, retry_after: Duration) -> PluginRunningResult {
-        let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
-
         // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
@@ -192,13 +195,11 @@ impl RateLimit {
             }
         }
 
-        let body = Bytes::from(serde_json::json!({"message": message}).to_string());
-
         if let Err(_e) = session.write_response_header(resp, false).await {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        if let Err(_e) = session.write_response_body(Some(body), true).await {
+        if let Err(_e) = session.write_response_body(Some(self.reject_body.clone()), true).await {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -209,7 +210,7 @@ impl RateLimit {
 #[async_trait]
 impl RequestFilter for RateLimit {
     fn name(&self) -> &str {
-        &self.name
+        "RateLimit"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
@@ -259,6 +260,9 @@ impl RequestFilter for RateLimit {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::edgion_plugins::OnKeyMiss;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     fn create_basic_config() -> RateLimitConfig {
         let mut config = RateLimitConfig {
@@ -269,6 +273,96 @@ mod tests {
         };
         let _ = config.validate();
         config
+    }
+
+    #[test]
+    fn plugin_name_is_shared_static_storage() {
+        let config = create_basic_config();
+        let plugin1 = RateLimit::create(&config);
+        let plugin2 = RateLimit::create(&config);
+
+        assert_eq!(plugin1.name(), "RateLimit");
+        assert!(std::ptr::eq(plugin1.name(), plugin2.name()));
+    }
+
+    #[tokio::test]
+    async fn reject_body_matches_previous_json_encoding_without_mutating_caller_config() {
+        let message = "Too \"many\"\nrequests";
+        let config = RateLimitConfig {
+            reject_message: Some(message.to_string()),
+            on_key_miss: OnKeyMiss::Deny,
+            ..Default::default()
+        };
+        let caller_snapshot = serde_json::to_value(&config).expect("config should serialize");
+        let expected = Bytes::from(serde_json::json!({"message": message}).to_string());
+        let plugin = RateLimit::create(&config);
+
+        assert_eq!(serde_json::to_value(&config).unwrap(), caller_snapshot);
+
+        let captured_body = Arc::new(Mutex::new(None));
+        let captured_body_for_mock = Arc::clone(&captured_body);
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().return_const(None::<String>);
+        session.expect_write_response_header().times(1).returning(|_, end| {
+            assert!(!end);
+            Ok(())
+        });
+        session
+            .expect_write_response_body()
+            .times(1)
+            .returning(move |body, end| {
+                assert!(end);
+                *captured_body_for_mock.lock() = body;
+                Ok(())
+            });
+
+        let mut plugin_log = PluginLog::new("RateLimit");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut plugin_log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert_eq!(captured_body.lock().as_ref(), Some(&expected));
+    }
+
+    #[tokio::test]
+    async fn repeated_missing_key_denials_clone_the_precomputed_body() {
+        let config = RateLimitConfig {
+            on_key_miss: OnKeyMiss::Deny,
+            ..Default::default()
+        };
+        let plugin = RateLimit::create(&config);
+        let captured_bodies = Arc::new(Mutex::new(Vec::new()));
+        let captured_bodies_for_mock = Arc::clone(&captured_bodies);
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().times(2).return_const(None::<String>);
+        session.expect_write_response_header().times(2).returning(|_, end| {
+            assert!(!end);
+            Ok(())
+        });
+        session
+            .expect_write_response_body()
+            .times(2)
+            .returning(move |body, end| {
+                assert!(end);
+                captured_bodies_for_mock
+                    .lock()
+                    .push(body.expect("rejection must have a body"));
+                Ok(())
+            });
+
+        for _ in 0..2 {
+            let mut plugin_log = PluginLog::new("RateLimit");
+            assert_eq!(
+                plugin.run_request(&mut session, &mut plugin_log).await,
+                PluginRunningResult::ErrTerminateRequest
+            );
+        }
+
+        let bodies = captured_bodies.lock();
+        assert_eq!(bodies.len(), 2);
+        assert!(!bodies[0].is_empty());
+        assert_eq!(bodies[0], bodies[1]);
+        assert!(std::ptr::eq(bodies[0].as_ptr(), bodies[1].as_ptr()));
     }
 
     #[tokio::test]

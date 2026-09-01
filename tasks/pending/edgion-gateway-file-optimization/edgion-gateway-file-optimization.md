@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0095 passed every commit gate |
-| Coverage | 532 tracked files: 114 changed, 130 examined-no-change, 10 deferred, 278 non-terminal |
-| Active batch | B0095 ProxyRewrite plugin boundary; exact commit in progress |
-| Analysis queue | B0096 RateLimit candidate is analyzed and awaits B0095 commit |
+| Campaign status | in-progress; B0096 passed every commit gate |
+| Coverage | 532 tracked files: 115 changed, 131 examined-no-change, 10 deferred, 276 non-terminal |
+| Active batch | B0096 RateLimit plugin boundary; exact commit in progress |
+| Analysis queue | B0097 RateLimitRedis candidate is analyzed and awaits B0096 commit |
 
 ## AI guide summary
 

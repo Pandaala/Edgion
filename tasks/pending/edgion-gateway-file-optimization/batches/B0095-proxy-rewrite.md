@@ -21,4 +21,4 @@
 - Verification: `cargo fmt --all` and check mode, locked workspace check and Clippy, Gateway binary build, agent-doc/SSA/metrics/Pingora/no-tracing/English-only guards, diff check, and frozen paths all passed; Clippy emitted only pre-existing warnings
 - Coverage: `mod.rs` examined-no-change; `plugin.rs` changed
 - Integration: existing integration tests remained frozen and sufficient; no follow-up integration issue was created
-- Commit: pending
+- Commit: `b5bdf94a`
