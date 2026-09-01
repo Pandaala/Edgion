@@ -111,7 +111,7 @@
 | `plugins-http-geoip-location` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-guardrail` | 5 | 1 | 4 | 0 | complete |
 | `plugins-http-header-cert-auth` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-hmac-auth` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-hmac-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-ip-restriction` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-json-schema-validation` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-jwe-decrypt` | 2 | 0 | 0 | 0 | pending |
@@ -423,8 +423,8 @@
 | `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/mod.rs` | `plugins-http-header-cert-auth` | source | examined-no-change | B0080 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs` | `plugins-http-header-cert-auth` | source | changed | B0080 |
-| `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | pending | — |
-| `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs` | `plugins-http-hmac-auth` | source | pending | — |
+| `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | examined-no-change | B0081 |
+| `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs` | `plugins-http-hmac-auth` | source | changed | B0081 |
 | `edgion-gateway/src/plugins/http/ip_restriction/mod.rs` | `plugins-http-ip-restriction` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs` | `plugins-http-ip-restriction` | source | pending | — |
 | `edgion-gateway/src/plugins/http/json_schema_validation/mod.rs` | `plugins-http-json-schema-validation` | source | pending | — |

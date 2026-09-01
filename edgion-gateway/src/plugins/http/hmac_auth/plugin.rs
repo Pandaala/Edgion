@@ -48,14 +48,22 @@ struct HmacAuthParams {
 /// HMAC Auth plugin.
 pub struct HmacAuth {
     name: String,
-    config: HmacAuthConfig,
+    auth_failure_delay_ms: u64,
+    realm: String,
+    anonymous: Option<String>,
+    hide_credentials: bool,
     verifier: HmacVerifier,
+}
+
+struct PreparedEnforcedHeader {
+    canonical: String,
+    configured: String,
 }
 
 pub(crate) struct HmacVerifier {
     algorithms: Vec<HmacAlgorithm>,
     clock_skew: u64,
-    enforce_headers: Option<Vec<String>>,
+    enforce_headers: Option<Vec<PreparedEnforcedHeader>>,
     validate_request_body: bool,
     credentials: Arc<HashMap<String, HmacCredential>>,
     body_requirement: BodyRequirement,
@@ -99,7 +107,15 @@ impl HmacVerifier {
         Self {
             algorithms: config.algorithms.clone(),
             clock_skew: config.clock_skew,
-            enforce_headers: config.enforce_headers.clone(),
+            enforce_headers: config.enforce_headers.as_ref().map(|headers| {
+                headers
+                    .iter()
+                    .map(|header| PreparedEnforcedHeader {
+                        canonical: header.to_ascii_lowercase(),
+                        configured: header.clone(),
+                    })
+                    .collect()
+            }),
             validate_request_body: config.validate_request_body,
             credentials: Arc::new(config.resolved_credentials.clone().unwrap_or_default()),
             body_requirement,
@@ -128,7 +144,7 @@ impl HmacVerifier {
     fn verify_headers_with(
         algorithms: &[HmacAlgorithm],
         clock_skew: u64,
-        enforce_headers: Option<&[String]>,
+        enforce_headers: Option<&[PreparedEnforcedHeader]>,
         validate_request_body: bool,
         credentials: Option<&HashMap<String, HmacCredential>>,
         session: &dyn PluginSession,
@@ -166,10 +182,11 @@ impl HmacVerifier {
             let signed: HashSet<&str> = params.headers.iter().map(String::as_str).collect();
             if let Some(header) = required
                 .iter()
-                .find(|header| !signed.contains(header.to_ascii_lowercase().as_str()))
+                .find(|header| !signed.contains(header.canonical.as_str()))
             {
                 return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingRequiredHeader(format!(
-                    "Missing required signed header: {header}"
+                    "Missing required signed header: {}",
+                    header.configured
                 )));
             }
         }
@@ -237,7 +254,10 @@ impl HmacAuth {
         let verifier = HmacVerifier::new(&config.match_config, body_requirement);
         Self {
             name: "HmacAuth".to_string(),
-            config: config.clone(),
+            auth_failure_delay_ms: config.auth_failure_delay_ms,
+            realm: config.realm.clone(),
+            anonymous: config.anonymous.clone(),
+            hide_credentials: config.hide_credentials,
             verifier,
         }
     }
@@ -251,8 +271,8 @@ impl HmacAuth {
         log_code: &str,
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
-        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-        let _ = send_gateway_auth_error_response(session, status, "hmac", &self.config.realm, None, message).await;
+        apply_auth_failure_delay(self.auth_failure_delay_ms).await;
+        let _ = send_gateway_auth_error_response(session, status, "hmac", &self.realm, None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -383,34 +403,46 @@ impl HmacAuth {
 
     /// Build signing string from request according to signed headers list.
     fn build_signing_string(session: &dyn PluginSession, headers_list: &[String]) -> Result<String, &'static str> {
-        let mut lines = Vec::with_capacity(headers_list.len());
+        let estimated_capacity = headers_list
+            .iter()
+            .fold(0usize, |capacity, header| {
+                capacity.saturating_add(header.len()).saturating_add(2)
+            })
+            .saturating_add(headers_list.len().saturating_sub(1));
+        let mut signing = String::with_capacity(estimated_capacity);
 
-        for header in headers_list {
-            let header_name = header.to_ascii_lowercase();
+        for (index, header_name) in headers_list.iter().enumerate() {
+            if index != 0 {
+                signing.push('\n');
+            }
             if header_name == "@request-target" || header_name == "(request-target)" {
-                let mut target = session.get_path().to_string();
-                if let Some(query) = session.get_query() {
-                    if !query.is_empty() {
-                        target.push('?');
-                        target.push_str(&query);
-                    }
+                let path = session.get_path();
+                let query = session.get_query();
+                let method = session.get_method();
+
+                signing.push_str(header_name);
+                signing.push_str(": ");
+                for ch in method.chars() {
+                    signing.push(ch.to_ascii_lowercase());
                 }
-                lines.push(format!(
-                    "{}: {} {}",
-                    header_name,
-                    session.get_method().to_ascii_lowercase(),
-                    target
-                ));
+                signing.push(' ');
+                signing.push_str(&path);
+                if let Some(query) = query.filter(|query| !query.is_empty()) {
+                    signing.push('?');
+                    signing.push_str(&query);
+                }
                 continue;
             }
 
-            let Some(value) = session.header_value(&header_name) else {
+            let Some(value) = session.header_value(header_name) else {
                 return Err("Missing signed header");
             };
-            lines.push(format!("{}: {}", header_name, value));
+            signing.push_str(header_name);
+            signing.push_str(": ");
+            signing.push_str(&value);
         }
 
-        Ok(lines.join("\n"))
+        Ok(signing)
     }
 
     /// Compute HMAC digest bytes.
@@ -572,7 +604,7 @@ impl HmacAuth {
     }
 
     fn hide_credentials(&self, session: &mut dyn PluginSession) {
-        if !self.config.hide_credentials {
+        if !self.hide_credentials {
             return;
         }
         let _ = session.remove_request_header("authorization");
@@ -605,7 +637,7 @@ impl RequestFilter for HmacAuth {
                     .await;
             }
             HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingAuth) => {
-                if let Some(anonymous) = &self.config.anonymous {
+                if let Some(anonymous) = &self.anonymous {
                     self.set_anonymous_headers(session, anonymous);
                     plugin_log.push("Allow anonymous");
                     return PluginRunningResult::GoodNext;
@@ -622,16 +654,10 @@ impl RequestFilter for HmacAuth {
             }
             HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials) => {
                 plugin_log.push_err("no creds configured");
-                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-                let _ = send_gateway_auth_error_response(
-                    session,
-                    500,
-                    "hmac",
-                    &self.config.realm,
-                    None,
-                    "No credentials configured",
-                )
-                .await;
+                apply_auth_failure_delay(self.auth_failure_delay_ms).await;
+                let _ =
+                    send_gateway_auth_error_response(session, 500, "hmac", &self.realm, None, "Internal gateway error")
+                        .await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
             HmacVerifyOutcome::NoMatch(failure) => {
@@ -683,6 +709,8 @@ impl RequestFilter for HmacAuth {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use bytes::Bytes;
+    use mockall::Sequence;
 
     fn create_plugin() -> HmacAuth {
         let mut config = HmacAuthConfig {
@@ -708,6 +736,46 @@ mod tests {
         HmacAuth::new(&config)
     }
 
+    #[test]
+    fn constructor_retains_only_live_policy_and_one_verifier_generation() {
+        let (plugin, source_secret_ptr) = {
+            let mut config = HmacAuthConfig {
+                auth_failure_delay_ms: 17,
+                realm: "partners".to_string(),
+                anonymous: Some("guest".to_string()),
+                hide_credentials: true,
+                ..Default::default()
+            };
+            config.resolved_credentials = Some(HashMap::from([(
+                "alice".to_string(),
+                HmacCredential {
+                    secret: b"alice-super-secret-key".to_vec(),
+                    headers: HashMap::new(),
+                    group: "default".to_string(),
+                },
+            )]));
+            let source_secret_ptr = config
+                .resolved_credentials
+                .as_ref()
+                .and_then(|credentials| credentials.get("alice"))
+                .expect("test credential must exist")
+                .secret
+                .as_ptr();
+            (HmacAuth::new(&config), source_secret_ptr)
+        };
+
+        assert_eq!(plugin.auth_failure_delay_ms, 17);
+        assert_eq!(plugin.realm, "partners");
+        assert_eq!(plugin.anonymous.as_deref(), Some("guest"));
+        assert!(plugin.hide_credentials);
+        let credential = plugin
+            .verifier
+            .credential("alice")
+            .expect("verifier credential must exist");
+        assert_eq!(credential.secret, b"alice-super-secret-key");
+        assert_ne!(credential.secret.as_ptr(), source_secret_ptr);
+    }
+
     fn rfc2822_now() -> String {
         Utc::now().to_rfc2822()
     }
@@ -721,6 +789,60 @@ mod tests {
 
         let signing = HmacAuth::build_signing_string(&session, &[String::from("@request-target")]).unwrap();
         assert_eq!(signing, "@request-target: get /v1/items?page=1");
+    }
+
+    #[test]
+    fn canonical_signing_and_hmac_vectors_are_wire_stable() {
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().times(2).return_const("/v1/items".to_string());
+        session
+            .expect_get_query()
+            .times(2)
+            .returning(|| Some("page=1&tag=a%20b".to_string()));
+        session.expect_get_method().times(2).return_const("PoSt".to_string());
+        session.expect_header_value().times(2).returning(|name| match name {
+            "host" => Some("API.Example:8443".to_string()),
+            "x-custom" => Some("MiXeD/Value==;".to_string()),
+            _ => None,
+        });
+        let headers = ["@request-target", "host", "x-custom", "(request-target)"]
+            .map(str::to_string)
+            .to_vec();
+        let expected = concat!(
+            "@request-target: post /v1/items?page=1&tag=a%20b\n",
+            "host: API.Example:8443\n",
+            "x-custom: MiXeD/Value==;\n",
+            "(request-target): post /v1/items?page=1&tag=a%20b"
+        );
+
+        let signing = HmacAuth::build_signing_string(&session, &headers).expect("canonical signing must succeed");
+
+        assert_eq!(signing, expected);
+        assert_eq!(signing.len(), 146);
+        for (algorithm, expected_signature) in [
+            (
+                HmacAlgorithm::HmacSha256,
+                "Zfsfak+e6CMopCzcmNeHtfKGtHH+ksXcWtI/O8qn1+A=",
+            ),
+            (
+                HmacAlgorithm::HmacSha384,
+                "UyQwM5enk4xAyaGZCW/HhOkMxj8rAvb3EfDbHbpMZMapN1hYuSs5H/iEmqpQ/9O6",
+            ),
+            (
+                HmacAlgorithm::HmacSha512,
+                "sIFwUh6tTKGSXsCoE9LqRQKlY/3Zj+Hwjat+YXYwH8xw5j/j+hhqDzqdgVUwNXcJ1IzSitgN7wvbtKYr7tB5Kw==",
+            ),
+        ] {
+            let signature = HmacAuth::compute_hmac(algorithm, b"correct horse battery staple", &signing)
+                .expect("test HMAC must succeed");
+            assert_eq!(STANDARD.encode(&signature), expected_signature);
+            assert!(HmacAuth::verify_signature(
+                algorithm,
+                b"correct horse battery staple",
+                &signing,
+                &signature,
+            ));
+        }
     }
 
     #[test]
@@ -891,6 +1013,62 @@ mod tests {
         assert!(log.contains("Deny missing date signed"));
     }
 
+    #[tokio::test]
+    async fn no_credentials_uses_generic_exact_internal_response() {
+        let config = HmacAuthConfig {
+            realm: "partners".to_string(),
+            auth_failure_delay_ms: 0,
+            ..Default::default()
+        };
+        let plugin = HmacAuth::new(&config);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "authorization")
+            .times(1)
+            .return_const(Some("hmac unused".to_string()));
+
+        let mut sequence = Sequence::new();
+        session
+            .expect_write_response_header()
+            .withf(|response, end_of_stream| {
+                !end_of_stream
+                    && response.status.as_u16() == 500
+                    && response
+                        .headers
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("text/plain")
+                    && response
+                        .headers
+                        .get("www-authenticate")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("hmac realm=\"partners\"")
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_write_response_body()
+            .withf(|body, end_of_stream| {
+                *end_of_stream && body.as_deref() == Some(Bytes::from_static(b"500 Internal gateway error").as_ref())
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_shutdown()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| {});
+
+        let mut log = PluginLog::new("HmacAuth");
+        let result = plugin.run_request(&mut session, &mut log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert_eq!(log.render_for_test(), "err: no creds configured");
+    }
+
     use crate::plugins::runtime::PluginLog;
     use serde_json::Value;
 
@@ -981,6 +1159,43 @@ mod tests {
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
         session
+    }
+
+    #[test]
+    fn enforce_headers_are_prepared_once_in_order_with_configured_error_spelling() {
+        let mut config = HmacMatchConfig {
+            clock_skew: 600,
+            enforce_headers: Some(vec!["X-Custom".to_string(), "X-Custom".to_string(), "Date".to_string()]),
+            ..Default::default()
+        };
+        config.resolved_credentials = Some(HashMap::from([(
+            "alice".to_string(),
+            HmacCredential {
+                secret: b"alice-super-secret-key".to_vec(),
+                headers: HashMap::new(),
+                group: "default".to_string(),
+            },
+        )]));
+        let verifier = HmacVerifier::new(&config, None);
+        let prepared = verifier
+            .enforce_headers
+            .as_deref()
+            .expect("enforced headers must be prepared");
+        assert_eq!(prepared.len(), 3);
+        assert_eq!(prepared[0].canonical, "x-custom");
+        assert_eq!(prepared[0].configured, "X-Custom");
+        assert_eq!(prepared[1].canonical, "x-custom");
+        assert_eq!(prepared[1].configured, "X-Custom");
+        assert_eq!(prepared[2].canonical, "date");
+        assert_eq!(prepared[2].configured, "Date");
+
+        let session = signed_session(&["@request-target", "date"], None, b"");
+        match verifier.verify_headers(&session) {
+            HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingRequiredHeader(message)) => {
+                assert_eq!(message, "Missing required signed header: X-Custom");
+            }
+            outcome => panic!("expected first configured header to be missing, got {outcome:?}"),
+        }
     }
 
     fn plugin_validate_body() -> HmacAuth {

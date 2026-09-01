@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `e6034b85`
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed and fully verified
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/header_cert_auth/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs`
@@ -49,4 +49,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row; supporting TLS file is not claimed
-- Commit: pending
+- Commit: `332b2163`

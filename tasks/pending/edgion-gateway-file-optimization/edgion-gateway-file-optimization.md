@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 91 changed, 108 examined-no-change, 9 deferred, 324 non-terminal |
-| Active batch | B0080 HeaderCertAuth exact identity selection and canonical certificate projection; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0080 completes its commit gate |
+| Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `c15e04d7` was rebaselined |
+| Coverage | 532 tracked files: 92 changed, 109 examined-no-change, 9 deferred, 322 non-terminal |
+| Active batch | B0081 HmacAuth bounded runtime ownership and canonical signing assembly; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0081 completes its commit gate |
 
 ## AI guide summary
 
