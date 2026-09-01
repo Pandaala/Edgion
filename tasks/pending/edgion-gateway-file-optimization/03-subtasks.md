@@ -474,8 +474,8 @@
 | `edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs` | `plugins-http-proxy-rewrite` | source | changed | B0095 |
 | `edgion-gateway/src/plugins/http/rate_limit/mod.rs` | `plugins-http-rate-limit` | source | examined-no-change | B0096 |
 | `edgion-gateway/src/plugins/http/rate_limit/plugin.rs` | `plugins-http-rate-limit` | source | changed | B0096 |
-| `edgion-gateway/src/plugins/http/rate_limit_redis/mod.rs` | `plugins-http-rate-limit-redis` | source | pending | — |
-| `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | pending | — |
+| `edgion-gateway/src/plugins/http/rate_limit_redis/mod.rs` | `plugins-http-rate-limit-redis` | source | examined-no-change | B0097 |
+| `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | changed | B0097 |
 | `edgion-gateway/src/plugins/http/real_ip/mod.rs` | `plugins-http-real-ip` | source | pending | — |
 | `edgion-gateway/src/plugins/http/real_ip/plugin.rs` | `plugins-http-real-ip` | source | pending | — |
 | `edgion-gateway/src/plugins/http/region_route/log_consts.rs` | `plugins-http-region-route` | source | pending | — |

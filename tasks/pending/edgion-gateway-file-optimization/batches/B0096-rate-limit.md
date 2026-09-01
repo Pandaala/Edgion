@@ -22,4 +22,4 @@
 - Verification: 57 RateLimit-related and 11 shared key-helper tests passed; `cargo fmt --all` and check mode, locked workspace check and Clippy, Gateway binary build, agent-doc/SSA/metrics/Pingora/no-tracing/English-only guards, diff check, and frozen paths all passed; Clippy emitted only pre-existing warnings
 - Coverage: `mod.rs` examined-no-change; `plugin.rs` changed
 - Integration: existing RateLimit HTTP, gRPC, dynamic, and body-order coverage remained frozen and sufficient; no follow-up integration issue was created
-- Commit: pending
+- Commit: `7f60da30`

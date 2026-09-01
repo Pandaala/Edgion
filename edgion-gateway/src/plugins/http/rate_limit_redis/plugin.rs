@@ -38,8 +38,9 @@ use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitP
 /// Supports multiple rate policies, multiple algorithms (sliding window,
 /// fixed window, token bucket), and true cluster-wide enforcement via Redis.
 pub struct RateLimitRedis {
-    name: String,
     config: RateLimitRedisConfig,
+    config_valid: bool,
+    reject_body: Bytes,
     /// `config.key_prefix` scoped by the owning entry's identity
     /// (`<namespace>/<name>/<alias or #index>`). Resolved once at build time;
     /// the request path never recomputes it.
@@ -68,14 +69,20 @@ impl RateLimitRedis {
 
     fn new(config: &RateLimitRedisConfig, entry_scope: &str) -> RateLimitRedis {
         let mut validated = config.clone();
-        let _ = validated.validate();
+        let config_valid = validated.validate().is_ok();
+        let message = validated
+            .reject_message
+            .take()
+            .unwrap_or_else(|| "Rate limit exceeded".to_string());
+        let reject_body = Bytes::from(serde_json::json!({"message": message}).to_string());
         // A valid key_prefix ends with ':' (enforced by check_fields). A config
         // that fails validation still builds a prefix here, but never reaches
-        // Redis: run_request returns 500 on `validation_error()` first.
+        // Redis: run_request returns 500 when `config_valid` is false.
         let scoped_key_prefix = format!("{}{}:", validated.key_prefix, entry_scope);
         RateLimitRedis {
-            name: "RateLimitRedis".to_string(),
             config: validated,
+            config_valid,
+            reject_body,
             scoped_key_prefix,
             core: RedisRateLimiter::new(),
         }
@@ -130,8 +137,6 @@ impl RateLimitRedis {
         retry_after: Duration,
         result: Option<&RateLimitResult>,
     ) -> PluginRunningResult {
-        let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
-
         // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
@@ -179,13 +184,11 @@ impl RateLimitRedis {
             }
         }
 
-        let body = Bytes::from(serde_json::json!({"message": message}).to_string());
-
         if let Err(_e) = session.write_response_header(resp, false).await {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        if let Err(_e) = session.write_response_body(Some(body), true).await {
+        if let Err(_e) = session.write_response_body(Some(self.reject_body.clone()), true).await {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -214,7 +217,7 @@ impl RateLimitRedis {
 #[async_trait]
 impl RequestFilter for RateLimitRedis {
     fn name(&self) -> &str {
-        &self.name
+        "RateLimitRedis"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
@@ -224,8 +227,7 @@ impl RequestFilter for RateLimitRedis {
         // diagnostics go to metrics instead.
 
         // 1. Validate config
-        use edgion_resources::resources::edgion_plugins::PluginValidation;
-        if self.config.validation_error().is_some() {
+        if !self.config_valid {
             plugin_log.push_err("cfg load fail");
             // invariant: 500 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
@@ -306,6 +308,10 @@ impl RequestFilter for RateLimitRedis {
 mod tests {
     use super::*;
     use crate::plugins::common::redis_rate_limiter::{build_redis_key, truncate_limit_key, RateLimitResult};
+    use edgion_resources::common::KeyGet;
+    use edgion_resources::resources::edgion_plugins::OnKeyMiss;
+    use mockall::Sequence;
+    use parking_lot::Mutex;
 
     #[test]
     fn test_truncate_limit_key_utf8_boundary() {
@@ -382,24 +388,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_config_validation_error() {
+    async fn construction_freezes_config_validity_and_invalid_runs_fail_before_dependencies() {
         use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let valid_config = unreachable_redis_config("default/rlr-valid-config-test", OnRedisFailure::Allow);
+        let valid_plugin = RateLimitRedis::new(&valid_config, "default/test-plugins/#0");
+        assert!(valid_plugin.config_valid);
 
         // Invalid redis_ref (missing namespace slash) makes the config invalid.
         let config = RateLimitRedisConfig {
             redis_ref: "invalid".to_string(),
             ..Default::default()
         };
-        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
+        let plugin = RateLimitRedis::new(&config, "default/test-plugins/#0");
+        assert!(!plugin.config_valid);
 
         let mut mock_session = MockPluginSession::new();
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        let mut plugin_log = PluginLog::new("RateLimitRedis");
+        let mut sequence = Sequence::new();
+        for _ in 0..2 {
+            mock_session
+                .expect_write_response_header()
+                .withf(|response, end_of_stream| {
+                    !*end_of_stream
+                        && response.status.as_u16() == 500
+                        && response
+                            .headers
+                            .get("content-type")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("application/json")
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            mock_session
+                .expect_write_response_body()
+                .withf(|body, end_of_stream| {
+                    *end_of_stream
+                        && body.as_deref() == Some(br#"{"message":"Internal rate limiter error"}"#.as_slice())
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+        }
 
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("cfg load fail"));
+        // No key/Redis/outcome expectations are installed: either dependency
+        // path would panic the mock before the fixed defensive response.
+        for _ in 0..2 {
+            let mut plugin_log = PluginLog::new("RateLimitRedis");
+            assert_eq!(
+                plugin.run_request(&mut mock_session, &mut plugin_log).await,
+                PluginRunningResult::ErrTerminateRequest
+            );
+            assert_eq!(plugin_log.render_for_test(), "err: cfg load fail");
+        }
     }
 
     // ── Task 9: dye-suite record_outcome wiring ─────────────────────────────
@@ -420,6 +461,107 @@ mod tests {
             on_redis_failure,
             ..Default::default()
         }
+    }
+
+    fn missing_key_deny_config(redis_ref: &str, reject_message: Option<&str>) -> RateLimitRedisConfig {
+        let mut config = unreachable_redis_config(redis_ref, OnRedisFailure::Allow);
+        config.key = vec![KeyGet::Header {
+            name: "x-missing".to_string(),
+        }];
+        config.on_key_miss = OnKeyMiss::Deny;
+        config.reject_message = reject_message.map(str::to_string);
+        config
+    }
+
+    #[test]
+    fn plugin_name_is_shared_static_storage() {
+        let config = unreachable_redis_config("default/rlr-name-test", OnRedisFailure::Allow);
+        let plugin1 = RateLimitRedis::create(&config, "default/test-plugins/#0");
+        let plugin2 = RateLimitRedis::create(&config, "default/test-plugins/#1");
+
+        assert_eq!(plugin1.name(), "RateLimitRedis");
+        assert!(std::ptr::eq(plugin1.name(), plugin2.name()));
+    }
+
+    #[tokio::test]
+    async fn reject_body_matches_previous_json_encoding_without_mutating_caller_config() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let message = "Too \"many\"\nrequests";
+        let config = missing_key_deny_config("default/rlr-message-test", Some(message));
+        let caller_snapshot = serde_json::to_value(&config).expect("config should serialize");
+        let expected = Bytes::from(serde_json::json!({"message": message}).to_string());
+        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
+
+        assert_eq!(serde_json::to_value(&config).unwrap(), caller_snapshot);
+        assert_eq!(config.reject_message.as_deref(), Some(message));
+        assert!(config.policies[0].interval_duration.is_none());
+
+        let captured_body = Arc::new(Mutex::new(None));
+        let captured_body_for_mock = Arc::clone(&captured_body);
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().return_const(None::<String>);
+        session.expect_write_response_header().times(1).returning(|_, end| {
+            assert!(!end);
+            Ok(())
+        });
+        session
+            .expect_write_response_body()
+            .times(1)
+            .returning(move |body, end| {
+                assert!(end);
+                *captured_body_for_mock.lock() = body;
+                Ok(())
+            });
+
+        let mut plugin_log = PluginLog::new("RateLimitRedis");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut plugin_log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert_eq!(plugin_log.render_for_test(), "Deny key miss");
+        assert_eq!(captured_body.lock().as_ref(), Some(&expected));
+    }
+
+    #[tokio::test]
+    async fn repeated_missing_key_denials_clone_the_precomputed_body() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let config = missing_key_deny_config("default/rlr-body-clone-test", None);
+        let plugin = RateLimitRedis::create(&config, "default/test-plugins/#0");
+        let captured_bodies = Arc::new(Mutex::new(Vec::new()));
+        let captured_bodies_for_mock = Arc::clone(&captured_bodies);
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().times(2).return_const(None::<String>);
+        session.expect_write_response_header().times(2).returning(|_, end| {
+            assert!(!end);
+            Ok(())
+        });
+        session
+            .expect_write_response_body()
+            .times(2)
+            .returning(move |body, end| {
+                assert!(end);
+                captured_bodies_for_mock
+                    .lock()
+                    .push(body.expect("rejection must have a body"));
+                Ok(())
+            });
+
+        for _ in 0..2 {
+            let mut plugin_log = PluginLog::new("RateLimitRedis");
+            assert_eq!(
+                plugin.run_request(&mut session, &mut plugin_log).await,
+                PluginRunningResult::ErrTerminateRequest
+            );
+            assert_eq!(plugin_log.render_for_test(), "Deny key miss");
+        }
+
+        let bodies = captured_bodies.lock();
+        assert_eq!(bodies.len(), 2);
+        assert!(!bodies[0].is_empty());
+        assert_eq!(bodies[0], bodies[1]);
+        assert!(std::ptr::eq(bodies[0].as_ptr(), bodies[1].as_ptr()));
     }
 
     #[tokio::test]
