@@ -106,7 +106,7 @@ spec:
 |-----------|------|---------|-------------|
 | `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback]` — RegionRoute has no `reject` capability, see below). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the final region name (post-`failoverTo`) on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
 
-The plugin performs no local field validation beyond the shared `dye` shape. Whether `overrideRef` resolves is checked by the Controller and surfaced on the `EdgionPlugins` resource's `ResolvedRefs` status condition; the region table itself is validated by the Gateway when the overlay is applied.
+The plugin validates that `hashCalc.modulo` is at least `2`, in addition to the shared `dye` shape. Whether `overrideRef` resolves is checked by the Controller and surfaced on the `EdgionPlugins` resource's `ResolvedRefs` status condition; the region table itself is validated by the Gateway when the overlay is applied.
 
 ### Route rules
 
@@ -135,7 +135,7 @@ Each region (cluster) in `regions` defines:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `algorithm` | Enum | `crc32` | Hash algorithm: `crc32` (fast, hardware-accelerated) or `sha256` |
-| `modulo` | Integer | `1000` | Hash value domain `[0, modulo-1]`; every region's `hashRange[1]` must be `< modulo` |
+| `modulo` | Integer | `1000` | Hash value domain `[0, modulo-1]`; must be at least `2`, and every region's `hashRange[1]` must be `< modulo` |
 | `writeBack` | Array | none | Targets to which the computed hash is written back (empty = no write-back) |
 
 ---

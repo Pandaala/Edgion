@@ -26,4 +26,4 @@
 - Coverage: `mod.rs` examined-no-change; `plugin.rs` changed; `util/real_ip_extractor.rs` revisited as changed support without duplicate coverage credit
 - Integration: the manifest was re-snapshotted after the user's committed external integration changes, then remained frozen; existing RealIp/PROXY/canonical access-log coverage is sufficient and no integration issue was created
 - Deferred: D0064 owns canonical RealIp header-name admission; no plugin-local runtime validation is allowed here
-- Commit: pending
+- Commit: `e391354b`

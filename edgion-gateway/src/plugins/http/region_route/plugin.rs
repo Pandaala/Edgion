@@ -17,7 +17,7 @@
 //! `compute_effective_regions` is called per request: one ArcSwap load + one hashmap lookup.
 //! The plugin struct itself caches only the base config (Arc) and the optional overlay store key.
 
-use std::sync::Arc;
+use std::{num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -34,11 +34,12 @@ use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, Regi
 
 // ── Hash helpers ──────────────────────────────────────────────────────────────
 
-fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {
+fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: NonZeroU16) -> u16 {
+    let modulo = u64::from(modulo.get());
     match algorithm {
         HashAlgorithm::Crc32 => {
             let n = crc32fast::hash(key.as_bytes()) as u64;
-            (n % modulo as u64) as u16
+            (n % modulo) as u16
         }
         HashAlgorithm::Sha256 => {
             use sha2::{Digest, Sha256};
@@ -50,7 +51,7 @@ fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {
                     .try_into()
                     .expect("SHA-256 output is always 32 bytes; d[..8] is exactly 8"),
             );
-            (n % modulo as u64) as u16
+            (n % modulo) as u16
         }
     }
 }
@@ -300,12 +301,16 @@ impl RegionRoute {
         regions: &'r [RegionDef],
     ) -> Option<(usize, &'r RegionDef)> {
         let modulo = self.base.hash_calc.as_ref().map(|c| c.modulo).unwrap_or(1000);
+        let Some(modulo) = NonZeroU16::new(modulo).filter(|value| value.get() >= 2) else {
+            log.push_err("hash_modulo_invalid");
+            return None;
+        };
 
         // Fast path: try pre-computed hash from hash_key_get.
         if let Some(ref hkg) = self.base.hash_key_get {
             if let Some((raw, src)) = self.extract_first(session, hkg) {
                 if let Ok(v) = raw.parse::<u16>() {
-                    if v < modulo {
+                    if v < modulo.get() {
                         log.push_fmt(
                             "hash_pass={} src={}",
                             la![sensitive(&v.to_string()), sensitive(&src.as_log_str())],
@@ -338,7 +343,7 @@ impl RegionRoute {
             }
         };
 
-        let hash_val = compute_hash(&key, &calc.algorithm, calc.modulo);
+        let hash_val = compute_hash(&key, &calc.algorithm, modulo);
 
         log.push_fmt(
             "hash key={} src={} val={}",
@@ -504,9 +509,13 @@ impl RequestFilter for RegionRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::http::plugin_store::compile_plugins;
     use crate::plugins::runtime::log::PluginLog;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::edgion_plugins::{RegionDef, RegionRouteConfig};
+    use edgion_resources::common::{KeyGet, KeySet};
+    use edgion_resources::resources::edgion_plugins::{
+        EdgionPlugin, EdgionPlugins, HashCalcConfig, RegionDef, RegionRouteConfig, RequestFilterEntry,
+    };
 
     fn make_region(name: &str, low: u16, high: u16, endpoint: &str) -> RegionDef {
         RegionDef {
@@ -602,6 +611,90 @@ mod tests {
             RegionRoute::lookup_by_hash(&regions, 999).map(|(_, r)| r.name.as_str()),
             Some("r2")
         );
+    }
+
+    #[test]
+    fn supported_hash_algorithms_keep_their_existing_vectors() {
+        let modulo = NonZeroU16::new(1000).unwrap();
+        assert_eq!(compute_hash("routing-key", &HashAlgorithm::Crc32, modulo), 554);
+        assert_eq!(compute_hash("routing-key", &HashAlgorithm::Sha256, modulo), 5);
+    }
+
+    #[tokio::test]
+    async fn direct_construction_rejects_invalid_modulo_before_session_side_effects() {
+        for modulo in [0, 1] {
+            let config = RegionRouteConfig {
+                key_get: vec![KeyGet::Header {
+                    name: "x-route-key".to_string(),
+                }],
+                hash_calc: Some(HashCalcConfig {
+                    algorithm: HashAlgorithm::Crc32,
+                    modulo,
+                    write_back: vec![KeySet::Ctx {
+                        name: "route-hash".to_string(),
+                    }],
+                }),
+                route_rules: vec![RouteRule::RouteByHashRange],
+                regions: vec![make_region("region-a", 0, 1, "region-a:80")],
+                ..RegionRouteConfig::default()
+            };
+            let plugin = RegionRoute {
+                name: "RegionRoute".to_string(),
+                base: Arc::new(config),
+                override_key: None,
+            };
+            // No expectations: an extraction, write-back, or jump would fail the test.
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new("RegionRoute");
+
+            let result = plugin.run_request(&mut session, &mut log).await;
+
+            assert_eq!(result, PluginRunningResult::GoodNext);
+            assert_eq!(log.render_for_test(), "err: hash_modulo_invalid");
+        }
+    }
+
+    #[tokio::test]
+    async fn compile_plugins_seals_invalid_modulo_with_generic_response() {
+        let config = RegionRouteConfig {
+            hash_calc: Some(HashCalcConfig {
+                algorithm: HashAlgorithm::Crc32,
+                modulo: 1,
+                write_back: Vec::new(),
+            }),
+            ..RegionRouteConfig::default()
+        };
+        let mut resource = EdgionPlugins::new("invalid-region-route", Default::default());
+        resource.metadata.namespace = Some("default".to_string());
+        resource.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(config))]);
+
+        let compiled = compile_plugins(&resource);
+
+        assert!(!compiled.is_activatable);
+        assert!(!compiled.retain_previous_on_invalid_update);
+        assert_eq!(
+            compiled.preparse_errors,
+            vec!["requestPlugins[0] (RegionRoute): hashCalc.modulo must be at least 2"]
+        );
+        assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1);
+        let filter = compiled
+            .plugin_runtime
+            .request_plugins_iter()
+            .next()
+            .expect("sealed reject filter");
+        assert_eq!(filter.name(), "RejectInvalidConfig");
+
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(filter.name());
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: Some(r#"{"message":"plugin configuration error"}"#.to_string()),
+            }
+        );
+        assert_eq!(log.render_for_test(), "err: invalid plugin config\nerr: RegionRoute");
     }
 
     /// `apply_failover_redirect` with a valid target returns the target region.

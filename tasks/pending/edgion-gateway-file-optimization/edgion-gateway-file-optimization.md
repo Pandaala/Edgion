@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0098 passed every commit gate on the externally advanced HEAD |
-| Coverage | 532 tracked files: 117 changed, 133 examined-no-change, 10 deferred, 272 non-terminal |
-| Active batch | B0098 RealIp plugin boundary; exact commit in progress |
-| Analysis queue | B0099 RegionRoute candidate is analyzed and awaits B0098 commit |
+| Campaign status | in-progress; B0099 passed independent review and every commit gate |
+| Coverage | 532 tracked files: 118 changed, 135 examined-no-change, 10 deferred, 269 non-terminal |
+| Active batch | B0099 RegionRoute plugin boundary; exact local commit in progress |
+| Analysis queue | B0100 RequestAccessPolicy candidate analyzed; revalidate after B0099 commit |
 
 ## AI guide summary
 

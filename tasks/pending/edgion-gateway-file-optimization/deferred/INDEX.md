@@ -68,6 +68,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0062 — Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | resolved | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | D0063 — Validate rate-limit response header names canonically | needs-implementation | [campaign finding](D0063-rate-limit-response-header-validation.md) |
 | D0064 — Validate RealIp header names canonically | needs-implementation | [campaign finding](D0064-real-ip-header-name-validation.md) |
+| D0065 — Define complete RegionRoute table validation | needs-discussion | [campaign finding](D0065-region-route-effective-table-validation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -127,3 +128,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | completed | [task](../../../todo/upgrade-wasmtime-security-patches.md) |
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
+| Define complete RegionRoute table validation | pending | [task](../../../todo/define-region-route-effective-table-validation.md) |

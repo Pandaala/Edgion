@@ -478,9 +478,9 @@
 | `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | changed | B0097 |
 | `edgion-gateway/src/plugins/http/real_ip/mod.rs` | `plugins-http-real-ip` | source | examined-no-change | B0098 |
 | `edgion-gateway/src/plugins/http/real_ip/plugin.rs` | `plugins-http-real-ip` | source | changed | B0098 |
-| `edgion-gateway/src/plugins/http/region_route/log_consts.rs` | `plugins-http-region-route` | source | pending | — |
-| `edgion-gateway/src/plugins/http/region_route/mod.rs` | `plugins-http-region-route` | source | pending | — |
-| `edgion-gateway/src/plugins/http/region_route/plugin.rs` | `plugins-http-region-route` | source | pending | — |
+| `edgion-gateway/src/plugins/http/region_route/log_consts.rs` | `plugins-http-region-route` | source | examined-no-change | B0099 |
+| `edgion-gateway/src/plugins/http/region_route/mod.rs` | `plugins-http-region-route` | source | examined-no-change | B0099 |
+| `edgion-gateway/src/plugins/http/region_route/plugin.rs` | `plugins-http-region-route` | source | changed | B0099 |
 | `edgion-gateway/src/plugins/http/request_access_policy/mod.rs` | `plugins-http-request-access-policy` | source | pending | — |
 | `edgion-gateway/src/plugins/http/request_access_policy/plugin.rs` | `plugins-http-request-access-policy` | source | pending | — |
 | `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | pending | — |

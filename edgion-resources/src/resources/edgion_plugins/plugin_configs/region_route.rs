@@ -109,7 +109,7 @@ pub struct HashCalcConfig {
 
     /// Hash value domain [0, modulo-1]. Default: 1000 (slots 0..=999).
     ///
-    /// Valid hash values are in the range [0, modulo-1].
+    /// Must be at least 2. Valid hash values are in the range [0, modulo-1].
     /// All region hashRange values must satisfy hashRange[1] < modulo.
     #[serde(default = "default_modulo")]
     pub modulo: u16,
@@ -196,12 +196,8 @@ impl RegionDef {
 
 impl RegionRouteConfig {
     /// Validate config. Called in preparse.
-    ///
-    /// No local validation is needed: all field correctness is enforced at build time
-    /// by the Gateway's plugin-build phase. `override_ref` resolution is done at
-    /// request time (fail-to-base).
     pub fn validate(&mut self) {
-        // No local validation needed.
+        // Validation is read-only and exposed through `PluginValidation`.
     }
 }
 
@@ -209,9 +205,12 @@ use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for RegionRouteConfig {
     fn validation_error(&self) -> Option<String> {
-        // Routing-table checks are deferred to plugin-build time or
-        // request-time overlay resolution; there is no local field-level
-        // validation left.
+        if self.hash_calc.as_ref().is_some_and(|calc| calc.modulo < 2) {
+            return Some("hashCalc.modulo must be at least 2".to_string());
+        }
+
+        // Complete routing-table validation is handled separately from this
+        // field-level arithmetic invariant.
         None
     }
 }
@@ -222,10 +221,36 @@ mod validation_trait_tests {
     use crate::resources::edgion_plugins::PluginValidation;
 
     #[test]
-    fn validation_error_returns_none_for_default_config() {
-        // region_route relies on EdgionConfigData chain resolution for all checks;
-        // the trait method must return None and must not panic.
-        let config = RegionRouteConfig::default();
-        assert_eq!(config.validation_error(), None);
+    fn validation_error_rejects_modulo_below_two_without_prior_validate() {
+        for modulo in [0, 1] {
+            let config = RegionRouteConfig {
+                hash_calc: Some(HashCalcConfig {
+                    algorithm: HashAlgorithm::default(),
+                    modulo,
+                    write_back: Vec::new(),
+                }),
+                ..RegionRouteConfig::default()
+            };
+
+            assert_eq!(
+                config.validation_error().as_deref(),
+                Some("hashCalc.modulo must be at least 2")
+            );
+        }
+    }
+
+    #[test]
+    fn validation_error_accepts_minimum_and_default_modulo_without_prior_validate() {
+        let minimum = RegionRouteConfig {
+            hash_calc: Some(HashCalcConfig {
+                algorithm: HashAlgorithm::default(),
+                modulo: 2,
+                write_back: Vec::new(),
+            }),
+            ..RegionRouteConfig::default()
+        };
+
+        assert_eq!(minimum.validation_error(), None);
+        assert_eq!(RegionRouteConfig::default().validation_error(), None);
     }
 }

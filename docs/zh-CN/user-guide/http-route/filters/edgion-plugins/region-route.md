@@ -106,7 +106,7 @@ spec:
 |------|------|--------|------|
 | `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback]`——RegionRoute 没有 `reject` 能力，见下文）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带最终区域名（`failoverTo` 重定向之后的区域）。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
 
-插件除共享的 `dye` 校验外不进行其他本地字段校验。`overrideRef` 能否解析由 Controller 检查，并反映在 `EdgionPlugins` 资源的 `ResolvedRefs` status condition 上；区域表本身则在 Gateway 应用覆盖层时校验。
+除共享的 `dye` 结构外，插件还会校验 `hashCalc.modulo` 至少为 `2`。`overrideRef` 能否解析由 Controller 检查，并反映在 `EdgionPlugins` 资源的 `ResolvedRefs` status condition 上；区域表本身则在 Gateway 应用覆盖层时校验。
 
 ### 路由规则
 
@@ -135,7 +135,7 @@ spec:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `algorithm` | Enum | `crc32` | 哈希算法：`crc32`（快速，硬件加速）或 `sha256` |
-| `modulo` | Integer | `1000` | 哈希值域 `[0, modulo-1]`；所有区域的 `hashRange[1]` 必须 `< modulo` |
+| `modulo` | Integer | `1000` | 哈希值域 `[0, modulo-1]`；必须至少为 `2`，且所有区域的 `hashRange[1]` 必须 `< modulo` |
 | `writeBack` | Array | 无 | 将计算出的哈希写回的目标（空 = 不写回） |
 
 ---
