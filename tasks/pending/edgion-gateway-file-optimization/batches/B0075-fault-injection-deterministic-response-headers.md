@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `42b25fca`
-- Pipeline state: implementation independently approved and fully verified; pending local commit
+- Pipeline state: implementation independently approved, fully verified, and committed as `a542c7e0`
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/fault_injection/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/fault_injection/plugin.rs`
@@ -56,4 +56,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change row, all verification complete
-- Commit: pending
+- Commit: `a542c7e0`

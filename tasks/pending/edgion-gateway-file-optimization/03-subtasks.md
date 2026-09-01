@@ -105,7 +105,7 @@
 | `plugins-http-dynamic-internal-upstream` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-ext-proc` | 8 | 0 | 0 | 0 | pending |
 | `plugins-http-fault-injection` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-form-json-transform` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-form-json-transform` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-forward-auth` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-framework` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-geoip-location` | 2 | 0 | 0 | 0 | pending |
@@ -410,8 +410,8 @@
 | `edgion-gateway/src/plugins/http/ext_proc/streamed.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/fault_injection/mod.rs` | `plugins-http-fault-injection` | source | examined-no-change | B0075 |
 | `edgion-gateway/src/plugins/http/fault_injection/plugin.rs` | `plugins-http-fault-injection` | source | changed | B0075 |
-| `edgion-gateway/src/plugins/http/form_json_transform/mod.rs` | `plugins-http-form-json-transform` | source | pending | — |
-| `edgion-gateway/src/plugins/http/form_json_transform/plugin.rs` | `plugins-http-form-json-transform` | source | pending | — |
+| `edgion-gateway/src/plugins/http/form_json_transform/mod.rs` | `plugins-http-form-json-transform` | source | examined-no-change | B0076 |
+| `edgion-gateway/src/plugins/http/form_json_transform/plugin.rs` | `plugins-http-form-json-transform` | source | changed | B0076 |
 | `edgion-gateway/src/plugins/http/forward_auth/mod.rs` | `plugins-http-forward-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | pending | — |

@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; user-authorized concurrent-agent drift at HEAD `9830fb2a` was rebaselined |
-| Coverage | 532 tracked files: 86 changed, 100 examined-no-change, 9 deferred, 337 non-terminal |
-| Active batch | B0075 FaultInjection deterministic decisions and duplicate response headers; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0075 completes its commit gate |
+| Coverage | 532 tracked files: 87 changed, 101 examined-no-change, 9 deferred, 335 non-terminal |
+| Active batch | B0076 FormJsonTransform owned JSON value encoding; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0076 completes its commit gate |
 
 ## AI guide summary
 

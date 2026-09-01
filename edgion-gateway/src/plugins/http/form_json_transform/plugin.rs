@@ -314,10 +314,10 @@ fn json_to_form(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformF
             Value::Array(values) if values.is_empty() => return Err(TransformFailure::BadRequest),
             Value::Array(values) => {
                 for value in values {
-                    write_json_pair(&mut writer, &key, &value, &mut pair_count)?;
+                    write_json_pair(&mut writer, &key, value, &mut pair_count)?;
                 }
             }
-            value => write_json_pair(&mut writer, &key, &value, &mut pair_count)?,
+            value => write_json_pair(&mut writer, &key, value, &mut pair_count)?,
         }
     }
     Ok(writer.into_inner())
@@ -326,11 +326,11 @@ fn json_to_form(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformF
 fn write_json_pair(
     writer: &mut CappedWriter,
     key: &str,
-    value: &Value,
+    value: Value,
     pair_count: &mut usize,
 ) -> Result<(), TransformFailure> {
     let value = match value {
-        Value::String(value) => value.clone(),
+        Value::String(value) => value,
         Value::Number(value) => value.to_string(),
         Value::Bool(value) => value.to_string(),
         Value::Null | Value::Array(_) | Value::Object(_) => return Err(TransformFailure::BadRequest),
