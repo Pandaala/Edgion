@@ -2,7 +2,7 @@
 
 ## Scope
 - Original baseline: `332b2163`; user-authorized concurrent merge advanced HEAD to `c15e04d7` without changing either HmacAuth target blob
-- Pipeline state: independently approved and batch-scoped verification complete; pending local commit
+- Pipeline state: committed with independently approved batch-scoped verification
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/hmac_auth/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs`
@@ -53,4 +53,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `2ac3cc2b`

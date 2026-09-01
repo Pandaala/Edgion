@@ -31,19 +31,33 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use smallvec::SmallVec;
 use std::net::IpAddr;
 
 use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::plugins::runtime::edgion_config_data::{resolve_ip_list_matchers, resolve_ip_list_ref_keys};
+use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
 
+const PLUGIN_NAME: &str = "IpRestriction";
+const INIT_FAILURE_BODY: &[u8] = br#"{"message":"Access denied"}"#;
+const DEFAULT_DENY_BODY: &[u8] = br#"{"message":"Your IP address is not allowed to access this resource"}"#;
+
 /// IP Restriction plugin
 pub struct IpRestriction {
-    name: String,
-    config: IpRestrictionConfig,
+    ip_source: IpSource,
+    status: u16,
+    default_action: DefaultAction,
+    /// Frozen configured intent: an inline allow group or allow ref enables
+    /// whitelist mode even if no referenced matcher currently resolves.
+    allow_mode: bool,
+    allow_matcher: Option<IpRadixMatcher>,
+    deny_matcher: Option<IpRadixMatcher>,
+    deny_body: Bytes,
     /// True when `validate_and_init` failed at construction; requests are then
     /// denied (fail-closed) instead of evaluated against uncompiled matchers.
     init_failed: bool,
@@ -81,10 +95,20 @@ impl IpRestriction {
 
         let allow_ref_keys = resolve_ip_list_ref_keys(config.allow_refs.as_ref(), namespace);
         let deny_ref_keys = resolve_ip_list_ref_keys(config.deny_refs.as_ref(), namespace);
+        let allow_mode = config.allow_mode();
+        let deny_body = match config.message.as_deref() {
+            Some(message) => Bytes::from(serde_json::json!({"message": message}).to_string()),
+            None => Bytes::from_static(DEFAULT_DENY_BODY),
+        };
 
         let ip_restriction = IpRestriction {
-            name: "IpRestriction".to_string(),
-            config,
+            ip_source: config.ip_source,
+            status: config.status,
+            default_action: config.default_action,
+            allow_mode,
+            allow_matcher: config.allow_matcher.take(),
+            deny_matcher: config.deny_matcher.take(),
+            deny_body,
             init_failed,
             allow_ref_keys,
             deny_ref_keys,
@@ -95,7 +119,7 @@ impl IpRestriction {
 
     /// Extract client IP from session based on configured source
     fn get_source_ip(&self, session: &mut dyn PluginSession) -> Option<IpAddr> {
-        let ip_str = match self.config.ip_source {
+        let ip_str = match self.ip_source {
             IpSource::RemoteIp => session.remote_ip(),
             IpSource::DirectPeerIp => session.direct_peer_ip(),
         };
@@ -112,7 +136,7 @@ impl IpRestriction {
 #[async_trait]
 impl RequestFilter for IpRestriction {
     fn name(&self) -> &str {
-        &self.name
+        PLUGIN_NAME
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
@@ -122,8 +146,14 @@ impl RequestFilter for IpRestriction {
         // request rather than fall through to the (uncompiled) default action.
         if self.init_failed {
             plugin_log.push_err("ip init fail");
-            let body = Bytes::from(serde_json::json!({"message": "Access denied"}).to_string());
-            if let Err(_e) = send_gateway_plain_error_response(session, 403, "application/json", body).await {
+            if let Err(_e) = send_gateway_plain_error_response(
+                session,
+                403,
+                "application/json",
+                Bytes::from_static(INIT_FAILURE_BODY),
+            )
+            .await
+            {
                 plugin_log.push_err("write response fail");
             }
             return PluginRunningResult::ErrTerminateRequest;
@@ -131,21 +161,30 @@ impl RequestFilter for IpRestriction {
 
         let source_ip = self.get_source_ip(session);
 
-        // Resolve referenced IpList matchers (empty fast-path when no refs). Arc vecs are kept
-        // in locals; the borrowed matcher slices are not used after the response-write await.
-        let deny_arcs = resolve_ip_list_matchers(&self.deny_ref_keys);
-        let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
-        let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
-        let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
-
         let should_deny = match source_ip {
-            Some(ip) => match self.config.check_ip_access_with_refs(&ip, &deny_refs, &allow_refs) {
+            Some(ip) => match {
+                // Keep the Arc owners and every matcher borrow inside this lexical scope,
+                // which ends before any response-write await below.
+                let deny_arcs = resolve_ip_list_matchers(&self.deny_ref_keys);
+                let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
+                let mut deny_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.deny_matcher.iter().collect();
+                deny_matchers.extend(deny_arcs.iter().map(|matcher| matcher.as_ref()));
+                let mut allow_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.allow_matcher.iter().collect();
+                allow_matchers.extend(allow_arcs.iter().map(|matcher| matcher.as_ref()));
+                evaluate_ip_access_multi(
+                    &deny_matchers,
+                    &allow_matchers,
+                    self.allow_mode,
+                    &self.default_action,
+                    &ip,
+                )
+            } {
                 AccessDecision::AllowByGroup(g) => {
-                    plugin_log.push(&format!("allow:group={}", g));
+                    plugin_log.push_fmt("allow:group={}", la![g.as_ref()]);
                     false
                 }
                 AccessDecision::DenyByGroup(g) => {
-                    plugin_log.push(&format!("deny:group={}", g));
+                    plugin_log.push_fmt("deny:group={}", la![g.as_ref()]);
                     true
                 }
                 AccessDecision::DenyByWhitelistMiss => {
@@ -165,12 +204,11 @@ impl RequestFilter for IpRestriction {
                 // No client IP. Whitelist mode is decided by configured intent (inline allow
                 // OR allow refs), NOT by resolved-matcher presence — so a refs-only allowlist
                 // still denies here (fail-closed). Deny refs are irrelevant with no IP to test.
-                let whitelist_mode = self.config.allow_mode();
-                if whitelist_mode {
+                if self.allow_mode {
                     plugin_log.push("deny:no-client-ip");
                     true
                 } else {
-                    let deny = matches!(self.config.default_action, DefaultAction::Deny);
+                    let deny = matches!(self.default_action, DefaultAction::Deny);
                     plugin_log.push(if deny {
                         "deny:no-client-ip"
                     } else {
@@ -182,17 +220,11 @@ impl RequestFilter for IpRestriction {
         };
 
         if should_deny {
-            let message = self
-                .config
-                .message
-                .as_deref()
-                .unwrap_or("Your IP address is not allowed to access this resource");
-
-            // `self.config.status` is validated in range 100..600 by IpRestrictionConfig::validate_and_init,
+            // `self.status` is validated in range 100..600 by IpRestrictionConfig::validate_and_init,
             // so the helper's ResponseHeader::build never fails here in practice.
-            let body = Bytes::from(serde_json::json!({"message": message}).to_string());
             if let Err(_e) =
-                send_gateway_plain_error_response(session, self.config.status, "application/json", body).await
+                send_gateway_plain_error_response(session, self.status, "application/json", self.deny_body.clone())
+                    .await
             {
                 plugin_log.push_err("write response fail");
             }
@@ -210,6 +242,7 @@ mod tests {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::edgion_config_data::IpGroup;
     use edgion_resources::resources::edgion_plugins::DefaultAction;
+    use mockall::Sequence;
 
     fn create_ip_config_allow_list() -> IpRestrictionConfig {
         let config = IpRestrictionConfig {
@@ -249,6 +282,119 @@ mod tests {
             deny_matcher: None,
         };
         IpRestrictionConfig::new(config).unwrap()
+    }
+
+    #[test]
+    fn plugin_name_is_static_across_instances() {
+        let first = IpRestriction::create(&create_ip_config_allow_list(), "default");
+        let second = IpRestriction::create(&create_ip_config_deny_list(), "default");
+
+        assert_eq!(first.name(), PLUGIN_NAME);
+        assert_eq!(second.name(), PLUGIN_NAME);
+        assert!(std::ptr::eq(first.name().as_ptr(), second.name().as_ptr()));
+    }
+
+    #[tokio::test]
+    async fn init_failure_uses_fixed_fail_closed_response() {
+        let config = IpRestrictionConfig {
+            message: Some("do not expose this configuration detail".to_string()),
+            ..Default::default()
+        };
+        let plugin = IpRestriction::create(&config, "default");
+        let mut session = MockPluginSession::new();
+        let mut sequence = Sequence::new();
+        session
+            .expect_write_response_header()
+            .withf(|response, end_of_stream| {
+                !end_of_stream
+                    && response.status.as_u16() == 403
+                    && response
+                        .headers
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("application/json")
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_write_response_body()
+            .withf(|body, end_of_stream| {
+                *end_of_stream && body.as_deref() == Some(Bytes::from_static(INIT_FAILURE_BODY).as_ref())
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_shutdown()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| {});
+        let mut log = PluginLog::new(PLUGIN_NAME);
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert_eq!(log.render_for_test(), "err: ip init fail");
+    }
+
+    #[tokio::test]
+    async fn partial_good_deny_uses_exact_prebuilt_custom_body() {
+        let config = IpRestrictionConfig {
+            allow: None,
+            deny: Some(vec![IpGroup {
+                name: "blocked".into(),
+                description: None,
+                cidrs: vec!["not-an-ip".into(), "10.0.0.7/32".into()],
+            }]),
+            default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
+            ip_source: IpSource::RemoteIp,
+            message: Some("quoted \"slash\\line\n©".to_string()),
+            status: 429,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let plugin = IpRestriction::create(&config, "default");
+        let mut session = MockPluginSession::new();
+        session.expect_remote_ip().return_const("10.0.0.7".to_string());
+        let mut sequence = Sequence::new();
+        session
+            .expect_write_response_header()
+            .withf(|response, end_of_stream| {
+                !end_of_stream
+                    && response.status.as_u16() == 429
+                    && response
+                        .headers
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("application/json")
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_write_response_body()
+            .withf(|body, end_of_stream| {
+                *end_of_stream && body.as_deref() == Some(r#"{"message":"quoted \"slash\\line\n©"}"#.as_bytes())
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_shutdown()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| {});
+        let mut log = PluginLog::new(PLUGIN_NAME);
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert_eq!(log.render_for_test(), "deny:group=blocked");
     }
 
     #[tokio::test]
@@ -368,9 +514,34 @@ mod tests {
 
         // An IP outside the configured allow range.
         mock_session.expect_remote_ip().return_const("10.0.0.1".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
+        let mut sequence = Sequence::new();
+        mock_session
+            .expect_write_response_header()
+            .withf(|response, end_of_stream| {
+                !end_of_stream
+                    && response.status.as_u16() == 403
+                    && response
+                        .headers
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("application/json")
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        mock_session
+            .expect_write_response_body()
+            .withf(|body, end_of_stream| {
+                *end_of_stream && body.as_deref() == Some(Bytes::from_static(DEFAULT_DENY_BODY).as_ref())
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        mock_session
+            .expect_shutdown()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|| {});
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -435,6 +606,7 @@ mod tests {
             plugin.run_request(&mut s, &mut log).await,
             PluginRunningResult::ErrTerminateRequest
         );
+        assert_eq!(log.render_for_test(), "deny:group=blocked");
 
         // 8.8.8.8 not in blocklist -> allowed (default Allow).
         let mut s2 = MockPluginSession::new();
@@ -444,6 +616,68 @@ mod tests {
             plugin.run_request(&mut s2, &mut log2).await,
             PluginRunningResult::GoodNext
         );
+        assert_eq!(log2.render_for_test(), "allow:default");
+    }
+
+    #[tokio::test]
+    async fn referenced_deny_precedes_inline_allow_and_logs_group() {
+        use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
+        };
+        use std::sync::Arc as StdArc;
+
+        let ns = "http-ipr-denyref-precedence-unit";
+        let spec = EdgionConfigDataSpec {
+            enable: true,
+            active: None,
+            visibility: Default::default(),
+            unknown_fields: Vec::new(),
+            data: ConfigEntry::IpList(IpListData {
+                items: vec![IpGroup {
+                    name: "blocked".into(),
+                    description: None,
+                    cidrs: vec!["9.9.9.9/32".into()],
+                }],
+            }),
+        };
+        let mut ed = EdgionConfigData::new("blocklist", spec);
+        ed.metadata.namespace = Some(ns.to_string());
+        get_global_edgion_config_data_store().insert_raw_for_test(&format!("{ns}/blocklist"), StdArc::new(ed));
+
+        let config = IpRestrictionConfig {
+            allow: Some(vec![IpGroup {
+                name: "all".into(),
+                description: None,
+                cidrs: vec!["0.0.0.0/0".into()],
+            }]),
+            deny: None,
+            default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: Some(vec![EdgionConfigDataRef {
+                name: "blocklist".into(),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            }]),
+            ip_source: IpSource::RemoteIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let plugin = IpRestriction::create(&config, ns);
+        let mut session = MockPluginSession::new();
+        session.expect_remote_ip().return_const("9.9.9.9".to_string());
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+        let mut log = PluginLog::new(PLUGIN_NAME);
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert_eq!(log.render_for_test(), "deny:group=blocked");
     }
 
     /// Approach-A hot reload: editing the referenced IpList's CONTENT (same key) must change
@@ -527,8 +761,8 @@ mod tests {
 
     /// A denied allow_ref must NOT flip allow_mode to false (which would allow all).
     /// With allow_mode=true but zero allow matchers, a non-matching IP is denied.
-    #[test]
-    fn denied_allow_ref_keeps_allow_mode_and_contributes_no_key() {
+    #[tokio::test]
+    async fn denied_allow_ref_keeps_allow_mode_and_contributes_no_key() {
         use crate::plugins::runtime::edgion_config_data::resolve_ip_list_ref_keys;
         use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
         let cfg = IpRestrictionConfig {
@@ -559,5 +793,18 @@ mod tests {
             ),
             "whitelist miss with no allow matchers must be DENIED (deny-all fail-closed)",
         );
+
+        let plugin = IpRestriction::create(&cfg, "team-a");
+        let mut session = MockPluginSession::new();
+        session.expect_remote_ip().return_const("8.8.8.8".to_string());
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+        let mut log = PluginLog::new(PLUGIN_NAME);
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert_eq!(log.render_for_test(), "deny:not-in-allow");
     }
 }
