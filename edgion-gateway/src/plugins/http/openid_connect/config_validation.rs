@@ -80,23 +80,23 @@ impl OpenidConnect {
             return Ok(());
         }
 
-        let mut available = HashSet::new();
+        let mut available: HashSet<&str> = HashSet::new();
         if let Some(scope) = claims.get("scope").and_then(|v| v.as_str()) {
             for s in scope.split_whitespace() {
-                available.insert(s.to_string());
+                available.insert(s);
             }
         }
         if let Some(scp) = claims.get("scp") {
             match scp {
                 Value::String(s) => {
                     for item in s.split_whitespace() {
-                        available.insert(item.to_string());
+                        available.insert(item);
                     }
                 }
                 Value::Array(arr) => {
                     for item in arr {
                         if let Some(s) = item.as_str() {
-                            available.insert(s.to_string());
+                            available.insert(s);
                         }
                     }
                 }
@@ -105,7 +105,7 @@ impl OpenidConnect {
         }
 
         for required in required_scopes {
-            if !available.contains(required) {
+            if !available.contains(required.as_str()) {
                 return Err(OidcVerifyError::Other {
                     status: 403,
                     message: "Insufficient scope".to_string(),
@@ -164,24 +164,19 @@ impl OpenidConnect {
             }
         }
 
-        let expected_issuers: Option<Vec<&str>> = if let Some(ref issuers) = self.config.issuers {
-            if issuers.is_empty() {
-                None
-            } else {
-                Some(issuers.iter().map(String::as_str).collect())
-            }
-        } else {
-            default_issuer.map(|i| vec![i])
+        let issuer_matches = match self.config.issuers.as_deref() {
+            Some([]) => true,
+            Some(issuers) => claims
+                .get("iss")
+                .and_then(|v| v.as_str())
+                .is_some_and(|iss| issuers.iter().any(|issuer| issuer == iss)),
+            None => default_issuer.is_none_or(|expected| claims.get("iss").and_then(|v| v.as_str()) == Some(expected)),
         };
-
-        if let Some(issuers) = expected_issuers {
-            let iss = claims.get("iss").and_then(|v| v.as_str());
-            if !iss.is_some_and(|v| issuers.contains(&v)) {
-                return Err(OidcVerifyError::Other {
-                    status: 401,
-                    message: "Invalid token issuer".to_string(),
-                });
-            }
+        if !issuer_matches {
+            return Err(OidcVerifyError::Other {
+                status: 401,
+                message: "Invalid token issuer".to_string(),
+            });
         }
 
         if let Some(ref audiences) = self.config.audiences {

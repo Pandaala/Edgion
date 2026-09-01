@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0093 and its independently reviewed D0062 security prerequisite have passed all required verification |
-| Coverage | 532 tracked files: 112 changed, 128 examined-no-change, 9 deferred, 283 non-terminal |
-| Active batch | B0093 OpenID Connect refresh orchestration; final combined review and exact commit gate in progress |
-| Analysis queue | B0094 remaining OpenID Connect validation/error/module files |
+| Campaign status | in-progress; OpenID Connect coverage is terminal and B0094 passed every commit gate |
+| Coverage | 532 tracked files: 113 changed, 129 examined-no-change, 10 deferred, 280 non-terminal |
+| Active batch | B0094 OpenID Connect validation/error/module boundary; exact commit gate in progress |
+| Analysis queue | Select the next pending Gateway anchor after B0094 commits |
 
 ## AI guide summary
 

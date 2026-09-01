@@ -1423,6 +1423,102 @@ fn test_validate_claims_from_value_returns_expired_when_exp_passed() {
 }
 
 #[test]
+fn test_validate_claims_from_value_preserves_issuer_tristate() {
+    let invalid_issuer = || super::OidcVerifyError::Other {
+        status: 401,
+        message: "Invalid token issuer".to_string(),
+    };
+
+    let mut configured = base_config();
+    configured.issuers = Some(vec!["https://configured.example.com".to_string()]);
+    let configured_plugin = OpenidConnect::new(&configured, "default".to_string());
+    assert!(configured_plugin
+        .validate_claims_from_value(
+            &json!({"iss": "https://configured.example.com"}),
+            Some("https://default.example.com"),
+        )
+        .is_ok());
+    assert_eq!(
+        configured_plugin.validate_claims_from_value(
+            &json!({"iss": "https://default.example.com"}),
+            Some("https://default.example.com"),
+        ),
+        Err(invalid_issuer())
+    );
+
+    let mut disabled = base_config();
+    disabled.issuers = Some(Vec::new());
+    let disabled_plugin = OpenidConnect::new(&disabled, "default".to_string());
+    assert!(disabled_plugin
+        .validate_claims_from_value(&json!({}), Some("https://default.example.com"))
+        .is_ok());
+    assert!(disabled_plugin
+        .validate_claims_from_value(
+            &json!({"iss": "https://mismatch.example.com"}),
+            Some("https://default.example.com"),
+        )
+        .is_ok());
+
+    let defaulted_plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    assert!(defaulted_plugin
+        .validate_claims_from_value(
+            &json!({"iss": "https://default.example.com"}),
+            Some("https://default.example.com"),
+        )
+        .is_ok());
+    assert_eq!(
+        defaulted_plugin.validate_claims_from_value(
+            &json!({"iss": "https://mismatch.example.com"}),
+            Some("https://default.example.com"),
+        ),
+        Err(invalid_issuer())
+    );
+    assert_eq!(
+        defaulted_plugin.validate_claims_from_value(&json!({}), Some("https://default.example.com")),
+        Err(invalid_issuer())
+    );
+    assert!(defaulted_plugin.validate_claims_from_value(&json!({}), None).is_ok());
+}
+
+#[test]
+fn test_validate_required_scopes_unions_scope_and_scp_forms() {
+    let mut cfg = base_config();
+    cfg.required_scopes = Some(vec!["openid".to_string(), "api:read".to_string(), "groups".to_string()]);
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+
+    assert!(plugin
+        .validate_required_scopes(&json!({
+            "scope": "openid api:read openid",
+            "scp": "groups api:read groups",
+        }))
+        .is_ok());
+    assert!(plugin
+        .validate_required_scopes(&json!({
+            "scope": "openid openid",
+            "scp": ["api:read", 7, "groups", null, "api:read"],
+        }))
+        .is_ok());
+}
+
+#[test]
+fn test_validate_required_scopes_ignores_non_strings_and_reports_missing_scope() {
+    let mut cfg = base_config();
+    cfg.required_scopes = Some(vec!["api:read".to_string(), "api:write".to_string()]);
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let insufficient_scope = || super::OidcVerifyError::Other {
+        status: 403,
+        message: "Insufficient scope".to_string(),
+    };
+
+    for claims in [
+        json!({"scope": 7, "scp": ["api:read", "api:read", false, null]}),
+        json!({}),
+    ] {
+        assert_eq!(plugin.validate_required_scopes(&claims), Err(insufficient_scope()));
+    }
+}
+
+#[test]
 fn test_validate_required_scopes_only_applies_to_bearer_only_mode() {
     let mut cfg = base_config();
     cfg.required_scopes = Some(vec!["api:read".to_string()]);

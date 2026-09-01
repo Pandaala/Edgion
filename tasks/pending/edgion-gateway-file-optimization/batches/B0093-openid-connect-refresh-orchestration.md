@@ -47,4 +47,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 newly changed owned row, 2 examined-no-change rows, and 2 changed support rows revisited without double-counting coverage
-- Commit: pending final combined review and exact staging
+- Commit: `7f82b19b`
