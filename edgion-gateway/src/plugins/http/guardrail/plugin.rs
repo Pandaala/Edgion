@@ -9,6 +9,7 @@ use super::attached::{AttachedGuardrail, GuardrailSummary};
 use super::response::{response_head_hold_limits, GuardrailResponseProcessor};
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter, UpstreamResponse};
+use crate::routes::http::proxy_http::content_type::is_sse_content_type;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::common::MethodSpec;
 use edgion_resources::resources::edgion_plugins::GuardrailConfig;
@@ -153,8 +154,8 @@ impl UpstreamResponse for Guardrail {
         let status = session.get_response_status().unwrap_or(0);
         let content_type_ok = session
             .get_response_header("content-type")
-            .and_then(|value| value.split(';').next().map(str::trim).map(str::to_owned))
-            .is_some_and(|value| value.eq_ignore_ascii_case("text/event-stream"));
+            .as_deref()
+            .is_some_and(is_sse_content_type);
         let encoding_ok = session
             .get_response_header("content-encoding")
             .is_none_or(|value| value.eq_ignore_ascii_case("identity"));

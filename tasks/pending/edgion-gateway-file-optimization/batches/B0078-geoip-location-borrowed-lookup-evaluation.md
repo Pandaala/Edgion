@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `5ad0d07f`
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed and fully verified
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/geoip_location/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/geoip_location/plugin.rs`
@@ -56,4 +56,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change row
-- Commit: pending
+- Commit: `7f69df81`

@@ -32,11 +32,18 @@ pub fn classify_response_stream_kind(resp: &pingora_http::ResponseHeader) -> Res
     let Ok(ct_str) = std::str::from_utf8(ct.as_bytes()) else {
         return ResponseStreamKind::None;
     };
-    if matches_media_type(ct_str, EVENT_STREAM_MEDIA_TYPE) {
+    if is_sse_content_type(ct_str) {
         ResponseStreamKind::Sse
     } else {
         ResponseStreamKind::None
     }
+}
+
+/// Returns `true` when `content_type` is the exact SSE media type,
+/// case-insensitively, with optional whitespace and parameters.
+#[inline]
+pub(crate) fn is_sse_content_type(content_type: &str) -> bool {
+    matches_media_type(content_type, EVENT_STREAM_MEDIA_TYPE)
 }
 
 /// Match one exact media type case-insensitively, allowing optional whitespace
@@ -137,6 +144,7 @@ mod tests {
             "text/event-stream; charset=utf-8",
             "text/event-stream \t; charset=utf-8",
         ] {
+            assert!(is_sse_content_type(ct), "expected SSE media type match for {ct:?}");
             let mut resp = pingora_http::ResponseHeader::build(200, None).unwrap();
             resp.insert_header("content-type", ct).unwrap();
             assert_eq!(
@@ -160,6 +168,7 @@ mod tests {
             "text/event-stream+json",
             "",
         ] {
+            assert!(!is_sse_content_type(ct), "unexpected SSE media type match for {ct:?}");
             let mut resp = pingora_http::ResponseHeader::build(200, None).unwrap();
             resp.insert_header("content-type", ct).unwrap();
             assert_eq!(

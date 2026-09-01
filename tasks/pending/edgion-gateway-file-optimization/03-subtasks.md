@@ -109,7 +109,7 @@
 | `plugins-http-forward-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-framework` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-geoip-location` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-guardrail` | 5 | 0 | 0 | 0 | pending |
+| `plugins-http-guardrail` | 5 | 1 | 4 | 0 | complete |
 | `plugins-http-header-cert-auth` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-hmac-auth` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-ip-restriction` | 2 | 0 | 0 | 0 | pending |
@@ -416,11 +416,11 @@
 | `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | changed | B0077 |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | examined-no-change | B0078 |
 | `edgion-gateway/src/plugins/http/geoip_location/plugin.rs` | `plugins-http-geoip-location` | source | changed | B0078 |
-| `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | pending | — |
-| `edgion-gateway/src/plugins/http/guardrail/mod.rs` | `plugins-http-guardrail` | source | pending | — |
-| `edgion-gateway/src/plugins/http/guardrail/plugin.rs` | `plugins-http-guardrail` | source | pending | — |
-| `edgion-gateway/src/plugins/http/guardrail/protocol.rs` | `plugins-http-guardrail` | source | pending | — |
-| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | pending | — |
+| `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/mod.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/plugin.rs` | `plugins-http-guardrail` | source | changed | B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/protocol.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/mod.rs` | `plugins-http-header-cert-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs` | `plugins-http-header-cert-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | pending | — |
