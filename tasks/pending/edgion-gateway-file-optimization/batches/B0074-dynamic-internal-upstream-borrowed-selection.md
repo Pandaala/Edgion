@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `46e3ec98`
-- Pipeline state: implementation independently approved and fully verified; pending local commit
+- Pipeline state: implementation independently approved, fully verified, and committed as `42b25fca`
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/dynamic_internal_upstream/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/dynamic_internal_upstream/plugin.rs`
@@ -57,4 +57,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change row, all verification complete
-- Commit: pending
+- Commit: `42b25fca`

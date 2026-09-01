@@ -49,6 +49,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0043 — Enforce exactly one CtxSet transform operation | needs-implementation | [campaign finding](D0043-ctx-set-exact-transform-operation.md) |
 | D0044 — Design sensitive ctx provenance and unmasking | needs-discussion | [campaign finding](D0044-ctx-sensitive-provenance-unmasking.md) |
 | D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | needs-implementation | [campaign finding](D0045-dynamic-external-upstream-sni-host-validation.md) |
+| D0046 — Use canonical final HTTP status validation for local replies | needs-implementation | [campaign finding](D0046-final-http-status-validation-local-replies.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -89,3 +90,4 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Enforce exactly one CtxSet transform operation | pending | [task](../../../todo/enforce-one-ctx-set-transform-operation.md) |
 | Design sensitive ctx provenance and unmasking | pending | [task](../../../todo/design-ctx-sensitive-provenance-unmasking.md) |
 | Reject unsafe DynamicExternalUpstream SNI and Host overrides | pending | [task](../../../todo/reject-unsafe-dynamic-external-upstream-sni-host-overrides.md) |
+| Use canonical final HTTP status validation for local replies | pending | [task](../../../todo/use-canonical-final-http-status-validation-for-local-replies.md) |

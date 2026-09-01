@@ -32,7 +32,6 @@ struct CompiledAbort {
 }
 
 pub struct FaultInjection {
-    name: String,
     compiled: Compiled,
 }
 
@@ -63,16 +62,21 @@ impl FaultInjection {
                 .unwrap_or_default(),
         });
         FaultInjection {
-            name: "FaultInjection".to_string(),
             compiled: Compiled { delay, abort },
         }
     }
 }
 
-/// Pure helper: returns true with probability `ratio`. Sampling the RNG once.
-/// Exposed for unit-testing distribution shape with a seeded RNG.
-pub(crate) fn decide<R: Rng>(rng: &mut R, ratio: f64) -> bool {
-    rng.random::<f64>() < ratio
+/// Pure helper: deterministic endpoints do not sample; intermediate ratios
+/// take exactly one Bernoulli sample.
+fn decide<R: Rng + ?Sized>(rng: &mut R, ratio: f64) -> bool {
+    if ratio <= 0.0 {
+        false
+    } else if ratio >= 1.0 {
+        true
+    } else {
+        rng.random_bool(ratio)
+    }
 }
 
 fn sample_delay<R: Rng>(rng: &mut R, kind: &DelayKind) -> Duration {
@@ -90,7 +94,7 @@ fn sample_delay<R: Rng>(rng: &mut R, kind: &DelayKind) -> Duration {
 #[async_trait]
 impl RequestFilter for FaultInjection {
     fn name(&self) -> &str {
-        &self.name
+        "FaultInjection"
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
@@ -126,7 +130,7 @@ impl RequestFilter for FaultInjection {
             plugin_log.push_fmt("fault abort={}", la![status.as_str()]);
             let _ = session.set_response_header("content-type", &a.content_type);
             for (name, value) in &a.headers {
-                let _ = session.set_response_header(name, value);
+                let _ = session.append_response_header(name, value);
             }
             return PluginRunningResult::ErrResponse {
                 status: a.status_code,
@@ -141,23 +145,97 @@ impl RequestFilter for FaultInjection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{AbortConfig, FaultHeaderEntry};
     use rand::rngs::StdRng;
-    use rand::SeedableRng;
+    use rand::{RngCore, SeedableRng};
 
-    #[test]
-    fn decide_zero_is_never_true() {
-        let mut rng = StdRng::seed_from_u64(42);
-        for _ in 0..1000 {
-            assert!(!decide(&mut rng, 0.0));
+    struct PanicRng;
+
+    impl RngCore for PanicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("deterministic ratio sampled the RNG")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("deterministic ratio sampled the RNG")
+        }
+
+        fn fill_bytes(&mut self, _dst: &mut [u8]) {
+            panic!("deterministic ratio sampled the RNG")
+        }
+    }
+
+    struct CountingRng {
+        calls: usize,
+        value: u64,
+    }
+
+    impl CountingRng {
+        fn returning(value: u64) -> Self {
+            Self { calls: 0, value }
+        }
+    }
+
+    impl RngCore for CountingRng {
+        fn next_u32(&mut self) -> u32 {
+            self.calls += 1;
+            self.value as u32
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.calls += 1;
+            self.value
+        }
+
+        fn fill_bytes(&mut self, dst: &mut [u8]) {
+            self.calls += 1;
+            dst.fill(self.value as u8);
+        }
+    }
+
+    fn abort_config(headers: Option<Vec<FaultHeaderEntry>>) -> FaultInjectionConfig {
+        FaultInjectionConfig {
+            delay: None,
+            abort: Some(AbortConfig {
+                ratio: 1.0,
+                status_code: 503,
+                body: Some("injected fault".to_string()),
+                content_type: "application/problem+json".to_string(),
+                headers,
+            }),
         }
     }
 
     #[test]
-    fn decide_one_is_always_true() {
-        let mut rng = StdRng::seed_from_u64(42);
-        for _ in 0..1000 {
-            assert!(decide(&mut rng, 1.0));
-        }
+    fn fault_injection_name_is_one_static_value() {
+        let first = FaultInjection::new(&abort_config(None));
+        let second = FaultInjection::new(&abort_config(None));
+
+        assert_eq!(first.name(), "FaultInjection");
+        assert_eq!(second.name(), "FaultInjection");
+        assert!(std::ptr::eq(first.name(), second.name()));
+    }
+
+    #[test]
+    fn decide_ratio_endpoints_do_not_sample_rng() {
+        let mut rng = PanicRng;
+
+        assert!(!decide(&mut rng, -1.0));
+        assert!(!decide(&mut rng, 0.0));
+        assert!(decide(&mut rng, 1.0));
+        assert!(decide(&mut rng, 2.0));
+    }
+
+    #[test]
+    fn decide_intermediate_ratio_takes_exactly_one_sample() {
+        let mut hit_rng = CountingRng::returning(0);
+        assert!(decide(&mut hit_rng, 0.5));
+        assert_eq!(hit_rng.calls, 1);
+
+        let mut miss_rng = CountingRng::returning(u64::MAX);
+        assert!(!decide(&mut miss_rng, 0.5));
+        assert_eq!(miss_rng.calls, 1);
     }
 
     #[test]
@@ -193,5 +271,64 @@ mod tests {
         for _ in 0..50 {
             assert_eq!(sample_delay(&mut rng, &kind), Duration::from_millis(300));
         }
+    }
+
+    #[tokio::test]
+    async fn abort_sets_content_type_then_appends_duplicate_headers_in_order() {
+        use mockall::Sequence;
+
+        let plugin = FaultInjection::new(&abort_config(Some(vec![
+            FaultHeaderEntry {
+                name: "set-cookie".to_string(),
+                value: "a=1; Path=/".to_string(),
+            },
+            FaultHeaderEntry {
+                name: "x-fault-step".to_string(),
+                value: "middle".to_string(),
+            },
+            FaultHeaderEntry {
+                name: "set-cookie".to_string(),
+                value: "b=2; Path=/".to_string(),
+            },
+        ])));
+        let mut session = MockPluginSession::new();
+        let mut sequence = Sequence::new();
+        session
+            .expect_set_response_header()
+            .withf(|name, value| name == "content-type" && value == "application/problem+json")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_append_response_header()
+            .withf(|name, value| name == "set-cookie" && value == "a=1; Path=/")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_append_response_header()
+            .withf(|name, value| name == "x-fault-step" && value == "middle")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_append_response_header()
+            .withf(|name, value| name == "set-cookie" && value == "b=2; Path=/")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+
+        let mut log = PluginLog::new("FaultInjection");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 503,
+                body: Some("injected fault".to_string()),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&log).unwrap()["log"],
+            serde_json::json!(["fault abort=503"])
+        );
     }
 }
