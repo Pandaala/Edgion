@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `c15e04d7` was rebaselined |
-| Coverage | 532 tracked files: 94 changed, 111 examined-no-change, 9 deferred, 318 non-terminal |
-| Active batch | B0083 JsonSchemaValidation canonical body-error status mapping; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0083 completes its commit gate |
+| Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `0a95362a` was rebaselined |
+| Coverage | 532 tracked files: 95 changed, 112 examined-no-change, 9 deferred, 316 non-terminal |
+| Active batch | B0084 JWE decrypt generation preparation; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0084 completes its commit gate |
 
 ## AI guide summary
 

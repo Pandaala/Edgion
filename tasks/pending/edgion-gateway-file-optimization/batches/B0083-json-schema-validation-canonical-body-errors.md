@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `e153765f`
-- Pipeline state: independently approved and batch-scoped verification complete; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/json_schema_validation/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/json_schema_validation/plugin.rs`
@@ -39,4 +39,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `1967292a`

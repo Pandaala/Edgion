@@ -429,8 +429,8 @@
 | `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs` | `plugins-http-ip-restriction` | source | changed | B0082 |
 | `edgion-gateway/src/plugins/http/json_schema_validation/mod.rs` | `plugins-http-json-schema-validation` | source | examined-no-change | B0083 |
 | `edgion-gateway/src/plugins/http/json_schema_validation/plugin.rs` | `plugins-http-json-schema-validation` | source | changed | B0083 |
-| `edgion-gateway/src/plugins/http/jwe_decrypt/mod.rs` | `plugins-http-jwe-decrypt` | source | pending | — |
-| `edgion-gateway/src/plugins/http/jwe_decrypt/plugin.rs` | `plugins-http-jwe-decrypt` | source | pending | — |
+| `edgion-gateway/src/plugins/http/jwe_decrypt/mod.rs` | `plugins-http-jwe-decrypt` | source | examined-no-change | B0084 |
+| `edgion-gateway/src/plugins/http/jwe_decrypt/plugin.rs` | `plugins-http-jwe-decrypt` | source | changed | B0084 |
 | `edgion-gateway/src/plugins/http/jwt_auth/credentials.rs` | `plugins-http-jwt-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/jwt_auth/mod.rs` | `plugins-http-jwt-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/jwt_auth/plugin.rs` | `plugins-http-jwt-auth` | source | pending | — |

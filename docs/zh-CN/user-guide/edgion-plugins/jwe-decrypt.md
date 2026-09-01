@@ -19,7 +19,8 @@
   - `send_auth_error_response()` 统一错误响应
   - `set_claims_headers()` 做 payload 字段到头映射（含注入防护与大小限制）
 - 支持严格模式（`strict`）和旁路模式
-- 支持密钥延迟加载（首次请求加载 Secret）
+- 每一代插件运行时在构造时准备一个不可变的 AES-GCM cipher；Secret 更新由 Controller 重新解析，并通过发布替换代生效
+- 拒绝包含 `zip` 或 `crit` 的 protected header；未知的非 critical 参数仍可接受，并作为原始 protected-header AAD 的一部分参与认证
 - 支持 `payloadToHeaders` dot-notation 路径（如 `user.department`）
 - 支持失败延迟（`authFailureDelayMs`）降低时序侧信道风险
 - 支持 `base64Secret` 对双重 base64 编码的密钥做额外解码
@@ -188,19 +189,31 @@ spec:
         strict: true
 ```
 
+## 密钥准备与 Protected Header
+
+Controller 在发布插件配置前尝试解析引用的 Secret。存在已解析凭据时，Gateway 在构造该代运行时插件时消费它，并为这一代准备一个不可变的 cipher；请求路径不会重新加载 Secret。Secret 更新后，正常的 Controller 重新解析和 requeue 流程会发布替换的插件代；已经持有的旧代继续使用其固定 cipher。
+
+当前 Compact JWE 实现不支持压缩或 critical extension。Protected Header Parameter 中只要存在名为 `zip` 或 `crit` 的字段，无论其值为何，都会被拒绝。其他未标记为 critical 的未知参数仍可接受。认证 AAD 始终使用原始编码的 protected segment，而不是重新序列化后的 JSON。这些约束只描述当前支持的 profile，不代表完整实现 RFC 7516。
+
 ## 错误语义
 
-| 场景 | 状态码 | PluginLog |
-|------|--------|-----------|
-| 缺少 JWE 且 `strict=true` | `403` | `jwe:no-token` |
-| JWE 格式错误 | `400` | `jwe:invalid-format` |
-| JWE 缺少必要头（`alg`/`enc`） | `400` | `jwe:missing-header` |
-| Secret/密钥不可用 | `403` | `jwe:no-key` |
-| 密钥长度与算法不匹配 | `500` | `jwe:key-len-err` |
-| 解密失败 | `403` | `jwe:decrypt-fail` |
-| 算法不支持或不匹配 | `400` | `jwe:bad-alg` |
-| 算法不在白名单 | `400` | `jwe:alg-denied` |
-| token 超过大小限制 | `400` | `jwe:too-large` |
+在标准 PluginRuntime 发布路径中，已解析凭据的编码或密钥长度无效时，共享配置校验会在构造 `JweDecrypt` 之前失败。该资源会被 seal fail-closed，并返回当前的通用无效插件响应：HTTP `500`，响应体为 `{"message":"plugin configuration error"}`。静态 PluginLog 条目为 `err: invalid plugin config` 和 `err: JweDecrypt`。由于 JWE 插件没有被构造，该响应不使用插件的 Bearer challenge 或 `authFailureDelayMs`。
+
+如果构造出的插件代仍无法取得引用的 Secret，携带 JWE token 的请求会收到 `403 JWE decryption failed`、Bearer challenge 和配置的认证失败延迟。密文认证失败使用相同的客户端响应和延迟。绕过标准校验的直接构造或旧式防御回退路径，也会把凭据解码和密钥长度失败映射为相同的通用 JWE `403`；这些分支属于纵深防御，而不是正常的 PluginRuntime 路径。没有 token 的请求仍会在检查密钥可用性之前遵循配置的 `strict` 或旁路行为。
+
+| 场景 | 状态码 | 客户端响应体 | PluginLog |
+|------|--------|--------------|-----------|
+| 缺少 JWE 且 `strict=true` | `403` | `403 JWE token required` | `no token` |
+| JWE 格式错误，包括 protected `zip` 或 `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
+| JWE 缺少必要头（`alg`/`enc`） | `400` | `400 JWE missing required headers` | `missing header` |
+| 标准 PluginRuntime 路径中的已解析凭据编码或密钥长度无效 | `500` | `{"message":"plugin configuration error"}` | `err: invalid plugin config`；`err: JweDecrypt` |
+| 构造出的插件代无法取得引用的 Secret/密钥 | `403` | `403 JWE decryption failed` | `err: key load fail` |
+| 直接构造/旧式防御路径中的凭据解码失败 | `403` | `403 JWE decryption failed` | `err: key load fail` |
+| 直接构造/旧式防御路径中的密钥长度不匹配 | `403` | `403 JWE decryption failed` | `err: key len err` |
+| 解密失败 | `403` | `403 JWE decryption failed` | `err: decrypt fail` |
+| 算法不支持或不匹配 | `400` | `400 Unsupported encryption algorithm` | `bad alg` |
+| 算法不在白名单 | `400` | `400 Algorithm not allowed` | `alg denied` |
+| token 超过大小限制 | `400` | `400 JWE token too large` | `token too large` |
 
 ## 相关文档
 
