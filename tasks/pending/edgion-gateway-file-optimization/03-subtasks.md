@@ -446,8 +446,8 @@
 | `edgion-gateway/src/plugins/http/jwt_auth/tests/secret_decoding.rs` | `plugins-http-jwt-auth` | test | examined-no-change | B0085 |
 | `edgion-gateway/src/plugins/http/jwt_auth/tests/token_source.rs` | `plugins-http-jwt-auth` | test | examined-no-change | B0085 |
 | `edgion-gateway/src/plugins/http/jwt_auth/verify.rs` | `plugins-http-jwt-auth` | source | changed | B0085 |
-| `edgion-gateway/src/plugins/http/key_auth/mod.rs` | `plugins-http-key-auth` | source | pending | — |
-| `edgion-gateway/src/plugins/http/key_auth/plugin.rs` | `plugins-http-key-auth` | source | pending | — |
+| `edgion-gateway/src/plugins/http/key_auth/mod.rs` | `plugins-http-key-auth` | source | examined-no-change | B0087 |
+| `edgion-gateway/src/plugins/http/key_auth/plugin.rs` | `plugins-http-key-auth` | source | changed | B0087 |
 | `edgion-gateway/src/plugins/http/ldap_auth/mod.rs` | `plugins-http-ldap-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` | `plugins-http-ldap-auth` | source | pending | — |
 | `edgion-gateway/src/plugins/http/mock/mod.rs` | `plugins-http-mock` | source | pending | — |

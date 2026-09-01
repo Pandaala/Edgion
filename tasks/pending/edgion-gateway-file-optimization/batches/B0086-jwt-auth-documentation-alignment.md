@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `0248159d`
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Anchor coverage: no new rows; this supporting batch documents the completed B0085 JwtAuth audit
 - Exact support files: the English and Chinese JwtAuth user guides and developer guides, plus JwtAuth resource Rustdoc
@@ -37,4 +37,4 @@
 
 ## Handoff
 - Ledger unchanged (support-only); changelog updated: yes; no anchor coverage count changed
-- Commit: pending
+- Commit: `520a38ee`
