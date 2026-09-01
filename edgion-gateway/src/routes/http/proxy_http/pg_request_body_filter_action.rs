@@ -68,9 +68,11 @@ pub async fn request_body_filter_action(
                     header_ops,
                 } => {
                     pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
-                    // Contract obligation: finish the downstream response
-                    // before returning Terminate — the proxy never writes one.
-                    write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
+                    if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
+                        // Contract obligation: finish the downstream response
+                        // before returning Terminate — the proxy never writes one.
+                        write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
+                    }
                     drain_handler_logs(&mut handlers, ctx);
                     ctx.restore_request_body_stream_handlers(handlers);
                     return Ok(RequestBodyAction::Terminate);
@@ -95,7 +97,9 @@ pub async fn request_body_filter_action(
         } = verdict
         {
             pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
-            write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
+            if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
+                write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
+            }
             return Ok(RequestBodyAction::Terminate);
         }
     }
@@ -113,6 +117,14 @@ pub async fn request_body_filter_action(
 
     pg_request_body_filter::request_body_filter(edgion_http, session, body, event, ctx).await?;
     Ok(RequestBodyAction::Continue)
+}
+
+/// A selected pipeline response owns downstream delivery, so a terminal WAF or
+/// handler verdict must not attempt to splice in a local reply. `Terminate`
+/// still stops the request side; Pingora either drains a qualified complete
+/// response or explicitly aborts an incomplete one.
+fn request_body_should_write_terminate_reply(response_selected_by_pipeline: bool) -> bool {
+    !response_selected_by_pipeline
 }
 
 fn run_waf_body_stream(chunk: &[u8], event: RequestBodyEvent, ctx: &mut EdgionHttpContext) -> Option<ChunkVerdict> {
@@ -366,6 +378,12 @@ mod tests {
         ctx.request_info.is_grpc_request = false;
         ctx.is_grpc_route_matched = true;
         assert!(is_canonical_grpc(&ctx));
+    }
+
+    #[test]
+    fn terminate_does_not_replace_a_response_selected_by_pingora() {
+        assert!(!request_body_should_write_terminate_reply(true));
+        assert!(request_body_should_write_terminate_reply(false));
     }
 
     #[tokio::test]

@@ -16,6 +16,18 @@ observed; `Abandoned` is terminal but marks all previously delivered bytes as
 an incomplete prefix. Edgion cancels ExtProc `STREAMED` and RequestMirror work
 on `Abandoned` instead of publishing a clean end-of-stream.
 
+If Pingora's response pipeline selected a final response before delivering
+`Abandoned`, Edgion performs the same incomplete-work cleanup and returns
+`RequestBodyAction::Terminate` without attempting a local WAF/handler
+replacement. At call sites that independently prove the selected response
+complete, Pingora interprets that action as request-side termination and keeps
+draining the response. Selection alone is not completion proof: writer-error
+abandonment or nonterminal termination explicitly aborts downstream without a
+clean response terminator. Edgion suppresses a local replacement for any
+pipeline-selected response, not only for `Abandoned`. This ownership contract
+is recorded in the fork's
+`edgion-changes/review/h2-grpc/h2-abandonment-terminate-preserves-selected-response.md`.
+
 Fix suggestions that retain `end_of_stream: bool` and expose a separate
 session flag are **not accepted**.
 
