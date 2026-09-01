@@ -32,7 +32,7 @@ use crate::tls::validation::outbound_san_mismatch_reason;
 /// Trait every discovery-doc shape must implement so the provider can read
 /// the two universally-required fields. Extended fields (e.g. `token_endpoint`)
 /// stay private to the calling crate.
-pub trait DiscoveryDoc: DeserializeOwned + Send + Sync + Clone + 'static {
+pub trait DiscoveryDoc: DeserializeOwned + Send + Sync + 'static {
     fn issuer(&self) -> &str;
     fn jwks_uri(&self) -> &str;
 }
@@ -93,7 +93,7 @@ pub struct JwksProviderConfig {
 
 /// Minimal discovery doc test fixture — only the two universal fields.
 #[cfg(test)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct LeanDiscoveryDocument {
     pub issuer: String,
     pub jwks_uri: String,
@@ -111,7 +111,7 @@ impl DiscoveryDoc for LeanDiscoveryDocument {
 
 #[derive(Debug, Default)]
 struct JwksState {
-    set: Option<JwkSet>,
+    set: Option<Arc<JwkSet>>,
     expires_at: Option<Instant>,
     last_refresh_at: Option<Instant>,
 }
@@ -124,7 +124,7 @@ struct JwksState {
 /// `fail-open` dye outcome for it.
 #[derive(Debug, Clone)]
 pub struct JwksLookup {
-    pub set: JwkSet,
+    pub set: Arc<JwkSet>,
     /// True only when the most recent fetch attempt failed and a previously
     /// cached set was served in its place. False for every other return path
     /// (TTL fast-path hit, min-refresh-blocked fast-path hit, or a fresh
@@ -136,7 +136,7 @@ pub struct JwksProvider<D: DiscoveryDoc> {
     config: JwksProviderConfig,
     client: Arc<Client>,
     validator: DiscoveryValidator<D>,
-    discovery_doc: RwLock<Option<D>>,
+    discovery_doc: RwLock<Option<Arc<D>>>,
     discovery_refresh: Mutex<()>,
     jwks_state: RwLock<JwksState>,
     jwks_refresh: Mutex<()>,
@@ -159,13 +159,13 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
     /// Read-only cached discovery (no fetch). Used by gateway logout path which
     /// must not pay an HTTP round-trip on the request.
-    pub async fn cached_discovery(&self) -> Option<D> {
+    pub async fn cached_discovery(&self) -> Option<Arc<D>> {
         self.discovery_doc.read().await.clone()
     }
 
     /// Get cached discovery, fetch if absent. Validator runs **before** caching;
     /// a failed validator does NOT poison the cache (next call retries).
-    pub async fn get_or_fetch_discovery(&self) -> Result<D, JwksProviderError> {
+    pub async fn get_or_fetch_discovery(&self) -> Result<Arc<D>, JwksProviderError> {
         if let Some(doc) = self.discovery_doc.read().await.as_ref() {
             return Ok(doc.clone());
         }
@@ -210,6 +210,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         // Caller-supplied config-aware validation runs before caching.
         (self.validator)(&doc).map_err(JwksProviderError::Other)?;
 
+        let doc = Arc::new(doc);
         *self.discovery_doc.write().await = Some(doc.clone());
         Ok(doc)
     }
@@ -301,6 +302,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
         match fetch_result {
             Ok(jwks) => {
+                let jwks = Arc::new(jwks);
                 state.set = Some(jwks.clone());
                 state.expires_at = Some(now + ttl);
                 Ok(JwksLookup {
@@ -338,7 +340,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     /// Used by OIDC plugin tests that exercise post-discovery code paths.
     #[cfg(test)]
     pub async fn seed_discovery(&self, doc: D) {
-        *self.discovery_doc.write().await = Some(doc);
+        *self.discovery_doc.write().await = Some(Arc::new(doc));
     }
 }
 
@@ -472,12 +474,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discovery_cache_returns_one_immutable_snapshot() {
+        let idp = spawn_mock_idp().await;
+        let p = test_provider(test_config(&idp.addr, 60_000, 100));
+
+        let fetched = p.get_or_fetch_discovery().await.unwrap();
+        let cached_fetch = p.get_or_fetch_discovery().await.unwrap();
+        let cached_read = p.cached_discovery().await.unwrap();
+        assert!(Arc::ptr_eq(&fetched, &cached_fetch));
+        assert!(Arc::ptr_eq(&fetched, &cached_read));
+        assert_eq!(fetched.issuer(), idp.addr);
+
+        let seeded = test_provider(test_config(&idp.addr, 60_000, 100));
+        seeded
+            .seed_discovery(LeanDiscoveryDocument {
+                issuer: "https://seeded.example.com".to_string(),
+                jwks_uri: "https://seeded.example.com/jwks".to_string(),
+            })
+            .await;
+        let seeded_fetch = seeded.get_or_fetch_discovery().await.unwrap();
+        let seeded_read = seeded.cached_discovery().await.unwrap();
+        assert!(Arc::ptr_eq(&seeded_fetch, &seeded_read));
+        assert_eq!(seeded_fetch.issuer(), "https://seeded.example.com");
+    }
+
+    #[tokio::test]
     async fn fast_path_returns_cached_within_ttl() {
         let idp = spawn_mock_idp().await;
         let p = test_provider(test_config(&idp.addr, 60_000, 100));
         let a = p.get_jwks(false).await.unwrap();
         let b = p.get_jwks(false).await.unwrap();
         assert_eq!(a.set.keys.len(), b.set.keys.len());
+        assert!(Arc::ptr_eq(&a.set, &b.set));
         assert!(!a.served_stale, "TTL fast-path hit must not be flagged stale");
         assert!(!b.served_stale, "TTL fast-path hit must not be flagged stale");
     }
@@ -500,6 +528,7 @@ mod tests {
             stale.served_stale,
             "cache served after a failed fetch must be flagged served_stale"
         );
+        assert!(Arc::ptr_eq(&fresh.set, &stale.set));
     }
 
     #[tokio::test]
@@ -519,10 +548,11 @@ mod tests {
     async fn force_refresh_blocked_by_min_interval_returns_cached() {
         let idp = spawn_mock_idp().await;
         let p = test_provider(test_config(&idp.addr, 60_000, 60_000));
-        let _ = p.get_jwks(false).await.unwrap();
+        let initial = p.get_jwks(false).await.unwrap();
         idp.jwks_keys_count.store(5, Ordering::SeqCst);
         let still_old = p.get_jwks(true).await.unwrap();
         assert_eq!(still_old.set.keys.len(), 1);
+        assert!(Arc::ptr_eq(&initial.set, &still_old.set));
         assert!(
             !still_old.served_stale,
             "min-refresh-blocked fast path is not a fetch failure, must not be flagged stale"
@@ -555,13 +585,17 @@ mod tests {
         // a failed refresh should hit the fast path.
         let idp = spawn_mock_idp().await;
         let p = test_provider(test_config(&idp.addr, 30, 5_000)); // 30ms TTL, 5s min_refresh
-        let _ = p.get_jwks(false).await.unwrap(); // populate cache (1 request)
+        let fresh = p.get_jwks(false).await.unwrap(); // populate cache (1 request)
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(50)).await; // expire TTL
-        let _ = p.get_jwks(false).await.unwrap(); // stale-fallback (1 more request, fails)
+        let stale = p.get_jwks(false).await.unwrap(); // stale-fallback (1 more request, fails)
+        assert!(stale.served_stale);
+        assert!(Arc::ptr_eq(&fresh.set, &stale.set));
         let after_first_stale = idp.jwks_request_count.load(Ordering::SeqCst);
         for _ in 0..10 {
-            let _ = p.get_jwks(false).await.unwrap();
+            let backoff_hit = p.get_jwks(false).await.unwrap();
+            assert!(!backoff_hit.served_stale);
+            assert!(Arc::ptr_eq(&fresh.set, &backoff_hit.set));
         }
         let after_burst = idp.jwks_request_count.load(Ordering::SeqCst);
         assert_eq!(
@@ -901,6 +935,7 @@ mod tests {
 
         let rotated = p.get_jwks(true).await.expect("force refresh fetch ok");
         assert_eq!(rotated.set.keys.len(), 1);
+        assert!(!Arc::ptr_eq(&first.set, &rotated.set));
         let kid_rot = rotated.set.keys[0].common.key_id.as_deref();
         assert_eq!(kid_rot, Some("k_new"), "force_refresh should pick up rotated kid");
         // Old kid no longer present in the returned set.
@@ -912,5 +947,9 @@ mod tests {
                 .any(|k| k.common.key_id.as_deref() == Some("k_old")),
             "old kid must be gone after rotation"
         );
+        assert_eq!(first.set.keys[0].common.key_id.as_deref(), Some("k_old"));
+
+        let cached_rotated = p.get_jwks(false).await.expect("rotated set cached");
+        assert!(Arc::ptr_eq(&rotated.set, &cached_rotated.set));
     }
 }

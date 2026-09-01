@@ -5,7 +5,7 @@ impl OpenidConnect {
         self.client.clone()
     }
 
-    pub(super) async fn get_or_fetch_discovery(&self) -> Result<DiscoveryDocument, JwksProviderError> {
+    pub(super) async fn get_or_fetch_discovery(&self) -> Result<Arc<DiscoveryDocument>, JwksProviderError> {
         self.jwks_provider.get_or_fetch_discovery().await
     }
 
@@ -27,7 +27,7 @@ impl OpenidConnect {
         &self,
         session: &mut dyn PluginSession,
         force_refresh: bool,
-    ) -> Result<JwkSet, JwksProviderError> {
+    ) -> Result<Arc<JwkSet>, JwksProviderError> {
         match self.jwks_provider.get_jwks(force_refresh).await {
             Ok(lookup) => {
                 if lookup.served_stale {
@@ -42,7 +42,7 @@ impl OpenidConnect {
         }
     }
 
-    pub(super) async fn cached_discovery_doc(&self) -> Option<DiscoveryDocument> {
+    pub(super) async fn cached_discovery_doc(&self) -> Option<Arc<DiscoveryDocument>> {
         self.jwks_provider.cached_discovery().await
     }
 }

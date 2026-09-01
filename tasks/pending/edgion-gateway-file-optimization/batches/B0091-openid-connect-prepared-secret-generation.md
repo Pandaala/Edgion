@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `7b3480d1`; all target blobs were unchanged when the batch started
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Newly covered owned files: `openid_connect/{callback.rs,plugin.rs,session_cookie.rs}`
 - Necessary reopened support: `openid_connect/{token_exchange.rs,token_verify.rs,tests.rs}`
@@ -45,4 +45,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 3 newly changed owned rows and 3 changed support rows revisited without double-counting coverage
-- Commit: pending
+- Commit: `dc6ab680`
