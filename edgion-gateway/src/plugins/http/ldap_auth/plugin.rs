@@ -1,5 +1,6 @@
 //! LDAP Authentication plugin implementation
 
+use std::ops::Range;
 use std::time::Duration;
 
 use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_tls_san_mismatch};
@@ -19,14 +20,30 @@ use ldap3::{LdapConnAsync, LdapConnSettings};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore};
 
+const PLUGIN_NAME: &str = "LdapAuth";
+
 /// LDAP Authentication plugin
 pub struct LdapAuth {
-    name: String,
-    config: LdapAuthConfig,
     ldap_url: String,
-    /// Rustls ClientConfig for TLS-enabled LDAP connections (ldaps or starttls).
-    /// None = plain LDAP (ldaps=false, start_tls=false).
-    tls_config: Option<std::sync::Arc<ClientConfig>>,
+    conn_settings: LdapConnSettings,
+    timeout: Duration,
+    bind_dn_plan: BindDnPlan,
+    auth: AuthPolicy,
+}
+
+enum BindDnPlan {
+    Template(String),
+    AttributeBase { attribute: String, base_dn: String },
+}
+
+struct AuthPolicy {
+    header_type: String,
+    hide_credentials: bool,
+    auth_failure_delay_ms: u64,
+    anonymous: Option<String>,
+    realm: String,
+    credential_identifier_header: String,
+    anonymous_header: String,
 }
 
 #[derive(Debug)]
@@ -50,11 +67,26 @@ fn map_ldap_connect_error(err: &ldap3::LdapError) -> LdapAuthError {
     }
 }
 
-#[derive(Debug, PartialEq)]
 enum ParseAuthResult {
     Missing,
     Invalid,
-    Valid(String, String),
+    Valid(DecodedCredentials),
+}
+
+struct DecodedCredentials {
+    decoded: String,
+    username: Range<usize>,
+    password: Range<usize>,
+}
+
+impl DecodedCredentials {
+    fn username(&self) -> &str {
+        &self.decoded[self.username.clone()]
+    }
+
+    fn password(&self) -> &str {
+        &self.decoded[self.password.clone()]
+    }
 }
 
 /// Accept-all server-certificate verifier for the `verify=false` path.
@@ -213,6 +245,7 @@ impl LdapAuth {
     pub fn new(config: &LdapAuthConfig) -> Result<Self, String> {
         let scheme = if config.ldaps { "ldaps" } else { "ldap" };
         let ldap_url = format!("{}://{}:{}", scheme, config.ldap_host, config.ldap_port);
+        let timeout = Duration::from_millis(config.timeout);
 
         let tls_config = if config.ldaps || config.start_tls {
             let resolved = resolve_outbound_tls(
@@ -238,51 +271,84 @@ impl LdapAuth {
             None
         };
 
+        let mut conn_settings = LdapConnSettings::new()
+            .set_conn_timeout(timeout)
+            .set_starttls(config.start_tls);
+        if let Some(tls_config) = tls_config {
+            conn_settings = conn_settings.set_config(tls_config);
+        }
+
+        let bind_dn_plan = match &config.bind_dn_template {
+            Some(template) => BindDnPlan::Template(template.clone()),
+            None => BindDnPlan::AttributeBase {
+                attribute: config.attribute.clone(),
+                base_dn: config.base_dn.clone(),
+            },
+        };
+
+        let auth = AuthPolicy {
+            header_type: config.header_type.clone(),
+            hide_credentials: config.hide_credentials,
+            auth_failure_delay_ms: config.auth_failure_delay_ms,
+            anonymous: config.anonymous.clone(),
+            realm: config.realm.clone(),
+            credential_identifier_header: config.credential_identifier_header.clone(),
+            anonymous_header: config.anonymous_header.clone(),
+        };
+
         Ok(Self {
-            name: "LdapAuth".to_string(),
-            config: config.clone(),
             ldap_url,
-            tls_config,
+            conn_settings,
+            timeout,
+            bind_dn_plan,
+            auth,
         })
     }
 
-    fn parse_authorization_value(&self, auth_str: &str) -> Option<(String, String)> {
+    fn parse_authorization_value(&self, auth_str: String) -> Option<DecodedCredentials> {
         let trimmed = auth_str.trim();
         let mut parts = trimmed.splitn(2, ' ');
         let scheme = parts.next()?;
         let encoded = parts.next()?.trim();
 
-        if !scheme.eq_ignore_ascii_case(&self.config.header_type) || encoded.is_empty() {
+        if !scheme.eq_ignore_ascii_case(&self.auth.header_type) || encoded.is_empty() {
             return None;
         }
 
         let decoded = general_purpose::STANDARD.decode(encoded).ok()?;
-        let decoded_str = String::from_utf8(decoded).ok()?;
-        let mut user_pass = decoded_str.splitn(2, ':');
-        let username = user_pass.next()?.trim().to_string();
-        let password = user_pass.next()?.to_string();
+        let decoded = String::from_utf8(decoded).ok()?;
+        let colon = decoded.find(':')?;
+        let raw_username = &decoded[..colon];
+        let trimmed_username = raw_username.trim();
+        let username_start = raw_username.len() - raw_username.trim_start().len();
+        let username_end = username_start + trimmed_username.len();
+        let password = colon + 1..decoded.len();
 
-        if username.is_empty() || password.is_empty() {
+        if username_start == username_end || password.is_empty() {
             return None;
         }
 
-        Some((username, password))
+        Some(DecodedCredentials {
+            decoded,
+            username: username_start..username_end,
+            password,
+        })
     }
 
     /// Parse credentials from request headers.
     /// Priority: Proxy-Authorization > Authorization.
     fn parse_credentials(&self, session: &dyn PluginSession) -> ParseAuthResult {
-        let proxy_auth = session.header_value("proxy-authorization");
-        let authorization = session.header_value("authorization");
+        if let Some(value) = session.header_value("proxy-authorization") {
+            return self
+                .parse_authorization_value(value)
+                .map_or(ParseAuthResult::Invalid, ParseAuthResult::Valid);
+        }
 
-        match (proxy_auth, authorization) {
-            (Some(v), _) => self
-                .parse_authorization_value(&v)
-                .map_or(ParseAuthResult::Invalid, |(u, p)| ParseAuthResult::Valid(u, p)),
-            (None, Some(v)) => self
-                .parse_authorization_value(&v)
-                .map_or(ParseAuthResult::Invalid, |(u, p)| ParseAuthResult::Valid(u, p)),
-            (None, None) => ParseAuthResult::Missing,
+        match session.header_value("authorization") {
+            Some(value) => self
+                .parse_authorization_value(value)
+                .map_or(ParseAuthResult::Invalid, ParseAuthResult::Valid),
+            None => ParseAuthResult::Missing,
         }
     }
 
@@ -295,32 +361,24 @@ impl LdapAuth {
         }
         let escaped = ldap3::dn_escape(username);
 
-        if let Some(template) = &self.config.bind_dn_template {
-            return Ok(template.replace("{username}", escaped.as_ref()));
+        match &self.bind_dn_plan {
+            BindDnPlan::Template(template) => Ok(template.replace("{username}", escaped.as_ref())),
+            BindDnPlan::AttributeBase { attribute, base_dn } => Ok(format!("{}={},{}", attribute, escaped, base_dn)),
         }
-
-        Ok(format!("{}={},{}", self.config.attribute, escaped, self.config.base_dn))
     }
 
     async fn ldap_bind(&self, bind_dn: &str, password: &str) -> Result<(), LdapAuthError> {
-        let timeout = Duration::from_millis(self.config.timeout);
-
-        let mut settings = LdapConnSettings::new()
-            .set_conn_timeout(timeout)
-            .set_starttls(self.config.start_tls);
-
-        if let Some(ref cfg) = self.tls_config {
-            settings = settings.set_config(std::sync::Arc::clone(cfg));
-        }
-
-        let (conn, mut ldap) = tokio::time::timeout(timeout, LdapConnAsync::with_settings(settings, &self.ldap_url))
-            .await
-            .map_err(|_| LdapAuthError::Timeout)?
-            .map_err(|e| map_ldap_connect_error(&e))?;
+        let (conn, mut ldap) = tokio::time::timeout(
+            self.timeout,
+            LdapConnAsync::with_settings(self.conn_settings.clone(), &self.ldap_url),
+        )
+        .await
+        .map_err(|_| LdapAuthError::Timeout)?
+        .map_err(|e| map_ldap_connect_error(&e))?;
 
         ldap3::drive!(conn);
 
-        let bind_result = tokio::time::timeout(timeout, ldap.simple_bind(bind_dn, password))
+        let bind_result = tokio::time::timeout(self.timeout, ldap.simple_bind(bind_dn, password))
             .await
             .map_err(|_| LdapAuthError::Timeout)?
             .map_err(|_| LdapAuthError::BindFailed)?;
@@ -337,17 +395,17 @@ impl LdapAuth {
     }
 
     fn apply_authenticated_headers(&self, session: &mut dyn PluginSession, username: &str) {
-        let _ = session.set_request_header(&self.config.credential_identifier_header, username);
-        let _ = session.remove_request_header(&self.config.anonymous_header);
+        let _ = session.set_request_header(&self.auth.credential_identifier_header, username);
+        let _ = session.remove_request_header(&self.auth.anonymous_header);
     }
 
     fn apply_anonymous_headers(&self, session: &mut dyn PluginSession, anonymous_user: &str) {
-        let _ = session.set_request_header(&self.config.credential_identifier_header, anonymous_user);
-        let _ = session.set_request_header(&self.config.anonymous_header, "true");
+        let _ = session.set_request_header(&self.auth.credential_identifier_header, anonymous_user);
+        let _ = session.set_request_header(&self.auth.anonymous_header, "true");
     }
 
     fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
-        if self.config.hide_credentials {
+        if self.auth.hide_credentials {
             let _ = session.remove_request_header("authorization");
             let _ = session.remove_request_header("proxy-authorization");
         }
@@ -357,8 +415,8 @@ impl LdapAuth {
         let _ = send_gateway_auth_error_response(
             session,
             401,
-            &self.config.header_type,
-            &self.config.realm,
+            &self.auth.header_type,
+            &self.auth.realm,
             None,
             "Unauthorized",
         )
@@ -388,14 +446,14 @@ impl LdapAuth {
 #[async_trait]
 impl RequestFilter for LdapAuth {
     fn name(&self) -> &str {
-        &self.name
+        PLUGIN_NAME
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let (username, password) = match self.parse_credentials(session) {
-            ParseAuthResult::Valid(u, p) => (u, p),
+        let credentials = match self.parse_credentials(session) {
+            ParseAuthResult::Valid(credentials) => credentials,
             ParseAuthResult::Missing => {
-                if let Some(anon_user) = &self.config.anonymous {
+                if let Some(anon_user) = &self.auth.anonymous {
                     self.apply_anonymous_headers(session, anon_user);
                     self.hide_credentials_if_needed(session);
                     plugin_log.push("Allow anonymous");
@@ -403,17 +461,17 @@ impl RequestFilter for LdapAuth {
                 }
 
                 plugin_log.push("Deny no credentials");
-                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
             ParseAuthResult::Invalid => {
                 plugin_log.push("Deny invalid header");
-                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 return self.unauthorized(session).await;
             }
         };
 
-        let bind_dn = match self.build_bind_dn(&username) {
+        let bind_dn = match self.build_bind_dn(credentials.username()) {
             Ok(dn) => dn,
             Err(_) => {
                 plugin_log.push("Deny bad username");
@@ -421,11 +479,11 @@ impl RequestFilter for LdapAuth {
             }
         };
 
-        match self.ldap_bind(&bind_dn, &password).await {
+        match self.ldap_bind(&bind_dn, credentials.password()).await {
             Ok(()) => {
-                self.apply_authenticated_headers(session, &username);
+                self.apply_authenticated_headers(session, credentials.username());
                 self.hide_credentials_if_needed(session);
-                plugin_log.push_fmt("OK user {}", la![sensitive(&username)]);
+                plugin_log.push_fmt("OK user {}", la![sensitive(credentials.username())]);
                 PluginRunningResult::GoodNext
             }
             Err(LdapAuthError::InvalidCredentials) => {
@@ -434,7 +492,7 @@ impl RequestFilter for LdapAuth {
                 // and a wrong password, so this branch cannot — and must not appear to —
                 // discriminate username existence.
                 plugin_log.push("Deny bad credential");
-                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
+                apply_auth_failure_delay(self.auth.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }
             Err(LdapAuthError::ConnectionFailed) => {
@@ -467,6 +525,9 @@ impl RequestFilter for LdapAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::common::OutboundTlsLocal;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
 
     fn test_config() -> LdapAuthConfig {
         LdapAuthConfig {
@@ -485,16 +546,70 @@ mod tests {
     }
 
     fn ldap_auth_default() -> LdapAuth {
-        install_test_crypto_provider();
         LdapAuth::new(&test_config()).expect("default plain LDAP must build")
     }
 
     #[test]
     fn test_parse_authorization_value_invalid() {
         let auth = ldap_auth_default();
-        assert_eq!(auth.parse_authorization_value("Basic abc"), None);
-        assert_eq!(auth.parse_authorization_value("ldap !!!"), None);
-        assert_eq!(auth.parse_authorization_value("ldap"), None);
+        assert!(auth.parse_authorization_value("Basic abc".to_string()).is_none());
+        assert!(auth.parse_authorization_value("ldap !!!".to_string()).is_none());
+        assert!(auth.parse_authorization_value("ldap".to_string()).is_none());
+    }
+
+    #[test]
+    fn decoded_credentials_use_one_byte_safe_utf8_backing_buffer() {
+        let auth = ldap_auth_default();
+        let payload = "  José :pä:ss ";
+        let header = format!("LdAp {}", general_purpose::STANDARD.encode(payload));
+        let credentials = auth.parse_authorization_value(header).expect("credentials must parse");
+
+        assert_eq!(credentials.username(), "José");
+        assert_eq!(credentials.password(), "pä:ss ");
+        let backing = credentials.decoded.as_bytes().as_ptr_range();
+        assert!(backing.contains(&credentials.username().as_ptr()));
+        assert!(backing.contains(&credentials.password().as_ptr()));
+    }
+
+    #[test]
+    fn parse_credentials_short_circuits_authorization_when_proxy_is_present() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use mockall::predicate::eq;
+
+        let auth = ldap_auth_default();
+        let proxy = format!("ldap {}", general_purpose::STANDARD.encode("alice:password"));
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .with(eq("proxy-authorization"))
+            .times(1)
+            .return_once(move |_| Some(proxy));
+        session.expect_header_value().with(eq("authorization")).times(0);
+
+        match auth.parse_credentials(&session) {
+            ParseAuthResult::Valid(credentials) => {
+                assert_eq!(credentials.username(), "alice");
+                assert_eq!(credentials.password(), "password");
+            }
+            ParseAuthResult::Missing | ParseAuthResult::Invalid => panic!("proxy credentials must be valid"),
+        }
+    }
+
+    #[test]
+    fn invalid_proxy_does_not_fall_back_to_authorization() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use mockall::predicate::eq;
+
+        let auth = ldap_auth_default();
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .with(eq("proxy-authorization"))
+            .times(1)
+            .return_const(Some("ldap !!!".to_string()));
+        session.expect_header_value().with(eq("authorization")).times(0);
+
+        assert!(matches!(auth.parse_credentials(&session), ParseAuthResult::Invalid));
     }
 
     #[test]
@@ -568,64 +683,253 @@ mod tests {
             bind_dn_template: Some("uid={username},ou=people,dc=example,dc=com".to_string()),
             ..Default::default()
         };
-        install_test_crypto_provider();
         let auth = LdapAuth::new(&config).expect("must build");
         let dn = auth.build_bind_dn("alice,admin").unwrap();
         assert_eq!(dn, r"uid=alice\2cadmin,ou=people,dc=example,dc=com");
     }
 
-    /// No TLS (ldaps=false, start_tls=false) → tls_config must be None.
-    #[test]
-    fn plain_ldap_has_no_tls_config() {
-        install_test_crypto_provider();
-        let config = test_config(); // ldaps=false, start_tls=false
-        let auth = LdapAuth::new(&config).expect("plain LDAP must build");
-        assert!(auth.tls_config.is_none(), "plain LDAP must not build a TLS config");
+    fn secret_with(entries: &[(&str, &[u8])]) -> Secret {
+        let data = entries
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), ByteString(value.to_vec())))
+            .collect();
+        Secret {
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        }
     }
 
-    /// ldaps=true + default outbound (System CA, verify=true) → tls_config is Some.
     #[test]
-    fn ldaps_with_system_ca_builds_tls_config() {
-        install_test_crypto_provider();
+    fn plain_ldap_preserves_caller_secrets_without_retaining_config() {
+        let mut config = test_config();
+        config.tls = OutboundTlsLocal {
+            verify: Some(false),
+            ..Default::default()
+        };
+        config.resolved_ca_certificates = Some(vec![secret_with(&[("ca.crt", b"caller-ca")])]);
+        config.resolved_client_certificate = Some(secret_with(&[
+            ("tls.crt", b"caller-client-cert"),
+            ("tls.key", b"caller-client-key"),
+        ]));
+        let original_ca = config.resolved_ca_certificates.clone();
+        let original_client = config.resolved_client_certificate.clone();
+
+        let auth = LdapAuth::new(&config).expect("plain LDAP must build");
+        assert_eq!(auth.ldap_url, "ldap://ldap.example.com:389");
+        assert!(!auth.conn_settings.starttls());
+        assert_eq!(config.resolved_ca_certificates, original_ca);
+        assert_eq!(config.resolved_client_certificate, original_client);
+    }
+
+    #[test]
+    fn prepared_plain_generations_remain_independent() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<LdapAuth>();
+
+        let k1_config = LdapAuthConfig {
+            ldap_host: "ldap-one.example.com".to_string(),
+            ldap_port: 1389,
+            base_dn: "dc=one,dc=example".to_string(),
+            attribute: "uid".to_string(),
+            header_type: "ldap-one".to_string(),
+            realm: "Realm One".to_string(),
+            timeout: 111,
+            ..Default::default()
+        };
+        let k1 = LdapAuth::new(&k1_config).expect("K1 must build");
+
+        let k2_config = LdapAuthConfig {
+            ldap_host: "ldap-two.example.com".to_string(),
+            ldap_port: 2389,
+            base_dn: "dc=unused,dc=example".to_string(),
+            attribute: "cn".to_string(),
+            bind_dn_template: Some("cn={username},ou=people,dc=two,dc=example".to_string()),
+            header_type: "ldap-two".to_string(),
+            realm: "Realm Two".to_string(),
+            anonymous: Some("guest-two".to_string()),
+            hide_credentials: true,
+            timeout: 222,
+            ..Default::default()
+        };
+        let k2 = LdapAuth::new(&k2_config).expect("K2 must build");
+
+        assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
+        assert_eq!(k1.timeout, Duration::from_millis(111));
+        assert!(!k1.conn_settings.starttls());
+        assert_eq!(k1.auth.header_type, "ldap-one");
+        assert_eq!(k1.auth.realm, "Realm One");
+        assert!(matches!(k1.bind_dn_plan, BindDnPlan::AttributeBase { .. }));
+
+        assert_eq!(k2.ldap_url, "ldap://ldap-two.example.com:2389");
+        assert_eq!(k2.timeout, Duration::from_millis(222));
+        assert!(!k2.conn_settings.starttls());
+        assert_eq!(k2.auth.header_type, "ldap-two");
+        assert_eq!(k2.auth.realm, "Realm Two");
+        assert_eq!(k2.auth.anonymous.as_deref(), Some("guest-two"));
+        assert!(k2.auth.hide_credentials);
+        assert!(matches!(k2.bind_dn_plan, BindDnPlan::Template(_)));
+
+        assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
+        assert_eq!(k1.auth.realm, "Realm One");
+        assert_eq!(k1.build_bind_dn("alice").unwrap(), "uid=alice,dc=one,dc=example");
+    }
+
+    #[test]
+    fn plugin_name_is_static_across_instances() {
+        let first = ldap_auth_default();
+        let second = ldap_auth_default();
+        assert_eq!(first.name(), PLUGIN_NAME);
+        assert_eq!(second.name(), PLUGIN_NAME);
+        assert_eq!(first.name().as_ptr(), second.name().as_ptr());
+    }
+
+    #[tokio::test]
+    async fn anonymous_applies_only_when_both_credential_headers_are_missing() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use mockall::predicate::eq;
+
         let config = LdapAuthConfig {
-            ldaps: true,
+            anonymous: Some("guest".to_string()),
             ..test_config()
         };
-        let auth = LdapAuth::new(&config).expect("LDAPS with system CA must build");
-        assert!(auth.tls_config.is_some(), "LDAPS must produce a TLS config");
+        let auth = LdapAuth::new(&config).expect("anonymous plugin must build");
+        let mut missing = MockPluginSession::new();
+        missing.expect_header_value().times(2).return_const(None::<String>);
+        missing
+            .expect_set_request_header()
+            .with(eq("X-Credential-Identifier"), eq("guest"))
+            .times(1)
+            .returning(|_, _| Ok(()));
+        missing
+            .expect_set_request_header()
+            .with(eq("X-Anonymous-Consumer"), eq("true"))
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut missing_log = PluginLog::new(PLUGIN_NAME);
+        assert_eq!(
+            auth.run_request(&mut missing, &mut missing_log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(missing_log.contains("Allow anonymous"));
+
+        let mut invalid = MockPluginSession::new();
+        invalid
+            .expect_header_value()
+            .with(eq("proxy-authorization"))
+            .times(1)
+            .return_const(Some("ldap invalid-base64".to_string()));
+        invalid.expect_header_value().with(eq("authorization")).times(0);
+        invalid.expect_write_response_header().times(1).returning(|_, _| Ok(()));
+        invalid.expect_write_response_body().times(1).returning(|body, end| {
+            assert_eq!(body.as_deref(), Some(Bytes::from_static(b"401 Unauthorized").as_ref()));
+            assert!(end);
+            Ok(())
+        });
+        invalid.expect_shutdown().times(1).returning(|| {});
+        let mut invalid_log = PluginLog::new(PLUGIN_NAME);
+        assert_eq!(
+            auth.run_request(&mut invalid, &mut invalid_log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+        assert!(invalid_log.contains("Deny invalid header"));
+        assert!(!invalid_log.contains("Allow anonymous"));
     }
 
-    /// verify=false + ldaps=true (no SAN policy) → tls_config is Some (AcceptAllVerifier path).
     #[test]
-    fn ldaps_verify_false_builds_tls_config() {
+    fn ldap_new_tls_cases_are_process_isolated() {
+        const CHILD_ENV: &str = "EDGION_LDAP_AUTH_NEW_TLS_CHILD";
+        const TEST_NAME: &str = "ldap_new_tls_cases_are_process_isolated";
+        const TEST_MODULE: &str = "plugins::http::ldap_auth::plugin::tests";
+
+        if std::env::var(CHILD_ENV).as_deref() != Ok(TEST_NAME) {
+            let exact_test_name = format!("{TEST_MODULE}::{TEST_NAME}");
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("the Rust test harness must have a current executable"),
+            )
+            .args(["--exact", exact_test_name.as_str(), "--nocapture"])
+            .env(CHILD_ENV, TEST_NAME)
+            .output()
+            .expect("the isolated LdapAuth TLS constructor test process must start");
+            assert!(
+                output.status.success(),
+                "isolated LdapAuth TLS constructor test failed:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        run_ldap_new_tls_case_table();
+    }
+
+    fn run_ldap_new_tls_case_table() {
+        use edgion_common::link_sys_core::outbound_tls::set_outbound_global_default;
+        use edgion_resources::resources::backend_tls_policy::{
+            BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
+        };
+        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+        use edgion_resources::resources::common::{OutboundTlsConfig, SecretObjectReference};
+
         install_test_crypto_provider();
-        use edgion_resources::resources::common::OutboundTlsLocal;
-        let config = LdapAuthConfig {
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let ldaps = LdapAuth::new(&LdapAuthConfig {
+            ldaps: true,
+            ldap_port: 636,
+            ..test_config()
+        })
+        .expect("LDAPS with system roots must build");
+        assert_eq!(ldaps.ldap_url, "ldaps://ldap.example.com:636");
+        assert!(!ldaps.conn_settings.starttls());
+        assert!(!ldaps.conn_settings.clone().starttls());
+
+        let starttls = LdapAuth::new(&LdapAuthConfig {
+            start_tls: true,
+            ..test_config()
+        })
+        .expect("StartTLS with system roots must build");
+        assert_eq!(starttls.ldap_url, "ldap://ldap.example.com:389");
+        assert!(starttls.conn_settings.starttls());
+        assert!(starttls.conn_settings.clone().starttls());
+
+        let skip_verify = LdapAuth::new(&LdapAuthConfig {
             ldaps: true,
             tls: OutboundTlsLocal {
                 verify: Some(false),
                 ..Default::default()
             },
             ..test_config()
-        };
-        let auth = LdapAuth::new(&config).expect("verify=false must be honored");
-        assert!(auth.tls_config.is_some());
-    }
+        })
+        .expect("effective verify=false must build the explicit skip-verifier path");
+        assert_eq!(skip_verify.ldap_url, "ldaps://ldap.example.com:389");
 
-    /// caCertificateRefs declared but resolved_ca_certificates=None → construction error (fail-closed).
-    #[test]
-    fn ldaps_secretref_without_resolved_secret_fails() {
-        install_test_crypto_provider();
-        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
-        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
-        use edgion_resources::resources::common::OutboundTlsLocal;
-        let config = LdapAuthConfig {
+        let san_override = LdapAuth::new(&LdapAuthConfig {
+            ldaps: true,
+            tls: OutboundTlsLocal {
+                verify: Some(false),
+                validation: Some(OutboundTlsValidation {
+                    subject_alt_names: Some(vec![SubjectAltName {
+                        san_type: SubjectAltNameType::Hostname,
+                        hostname: Some("ldap.example.com".to_string()),
+                        uri: None,
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..test_config()
+        })
+        .expect("SAN policy must override verify=false and retain secure TLS");
+        assert_eq!(san_override.ldap_url, "ldaps://ldap.example.com:389");
+
+        let missing_ca = LdapAuth::new(&LdapAuthConfig {
             ldaps: true,
             tls: OutboundTlsLocal {
                 validation: Some(OutboundTlsValidation {
                     ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
                         kind: "Secret".to_string(),
-                        name: "missing-secret".to_string(),
+                        name: "missing-ca".to_string(),
                         group: String::new(),
                         namespace: None,
                     }]),
@@ -633,62 +937,100 @@ mod tests {
                 }),
                 ..Default::default()
             },
-            resolved_ca_certificates: None, // not yet resolved
             ..test_config()
+        });
+        assert!(missing_ca.is_err(), "unresolved declared CA must fail closed");
+
+        let invalid_ca = LdapAuth::new(&LdapAuthConfig {
+            ldaps: true,
+            tls: OutboundTlsLocal {
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "invalid-ca".to_string(),
+                        group: String::new(),
+                        namespace: None,
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            resolved_ca_certificates: Some(vec![secret_with(&[("ca.crt", b"not a PEM certificate")])]),
+            ..test_config()
+        });
+        assert!(invalid_ca.is_err(), "invalid declared CA must fail construction");
+
+        let client_ref = SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "ldap-client".to_string(),
+            namespace: None,
         };
-        let result = LdapAuth::new(&config);
+        let missing_client = LdapAuth::new(&LdapAuthConfig {
+            ldaps: true,
+            tls: OutboundTlsLocal {
+                client_certificate_ref: Some(client_ref.clone()),
+                ..Default::default()
+            },
+            ..test_config()
+        });
         assert!(
-            result.is_err(),
-            "SecretRef with no resolved Secret must fail construction (fail-closed)"
+            missing_client.is_err(),
+            "unresolved declared client identity must fail closed"
         );
-    }
 
-    /// Custom CA via resolved_ca_certificates with invalid PEM does not panic; returns Err.
-    #[test]
-    fn ldaps_inline_ca_invalid_pem_does_not_panic() {
-        install_test_crypto_provider();
-        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
-        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
-        use edgion_resources::resources::common::OutboundTlsLocal;
-
-        // An intentionally invalid CA PEM: exercises the error path when
-        // CertificateDer::pem_slice_iter encounters bad base64 in the Secret data.
-        let dummy_ca_pem = b"-----BEGIN CERTIFICATE-----\n\
-            MIICpDCCAYwCCQDU9pQ4pHgSpDANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAl0\n\
-            ZXN0LWNhMB4XDTIzMDEwMTAwMDAwMFoXDTMzMDEwMTAwMDAwMFowFDESMBAGA1UE\n\
-            AwwJdGVzdC1jYTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMqkQPaH\n\
-            placeholder_only_for_length_not_real_base64_data_AAAAAAAAAAAAAAAAAAA\n\
-            -----END CERTIFICATE-----\n";
-
-        // Build a K8s Secret carrying the invalid PEM so the resolver picks it up.
-        let mut data = std::collections::BTreeMap::new();
-        data.insert("ca.crt".to_string(), k8s_openapi::ByteString(dummy_ca_pem.to_vec()));
-        let ca_secret = k8s_openapi::api::core::v1::Secret {
-            data: Some(data),
-            type_: Some("kubernetes.io/tls".to_string()),
-            ..Default::default()
-        };
-
-        let config = LdapAuthConfig {
+        let invalid_client = LdapAuth::new(&LdapAuthConfig {
             ldaps: true,
             tls: OutboundTlsLocal {
-                validation: Some(OutboundTlsValidation {
-                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                        kind: "Secret".to_string(),
-                        name: "dummy-ca".to_string(),
-                        group: String::new(),
-                        namespace: None,
-                    }]),
-                    ..Default::default()
-                }),
+                client_certificate_ref: Some(client_ref.clone()),
                 ..Default::default()
             },
-            resolved_ca_certificates: Some(vec![ca_secret]),
+            resolved_client_certificate: Some(secret_with(&[
+                ("tls.crt", b"invalid certificate"),
+                ("tls.key", b"invalid private key"),
+            ])),
             ..test_config()
-        };
-        // An invalid PEM will fail; for a real test use a valid cert.
-        // We just verify the function is called and returns Err (not panics).
-        let _ = LdapAuth::new(&config); // Ok or Err — just must not panic
+        });
+        assert!(
+            invalid_client.is_err(),
+            "invalid declared client identity must fail construction"
+        );
+
+        let generated = rcgen::generate_simple_self_signed(vec!["client.example.com".to_string()])
+            .expect("test client identity must generate");
+        let cert_pem = generated.cert.pem();
+        let key_pem = generated.signing_key.serialize_pem();
+        set_outbound_global_default(OutboundTlsConfig {
+            client_certificate_ref: Some(client_ref),
+            resolved_client_certificate: Some(secret_with(&[
+                ("tls.crt", cert_pem.as_bytes()),
+                ("tls.key", key_pem.as_bytes()),
+            ])),
+            ..Default::default()
+        });
+        let inherited_client = LdapAuth::new(&LdapAuthConfig {
+            ldaps: true,
+            ..test_config()
+        });
+        assert!(
+            inherited_client.is_ok(),
+            "local TLS must inherit the valid global client identity"
+        );
+
+        set_outbound_global_default(OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        });
+        let inherited_skip_verify = LdapAuth::new(&LdapAuthConfig {
+            ldaps: true,
+            ..test_config()
+        });
+        assert!(
+            inherited_skip_verify.is_ok(),
+            "unset local verify must inherit global false"
+        );
+
+        set_outbound_global_default(OutboundTlsConfig::default());
     }
 
     // -----------------------------------------------------------------------

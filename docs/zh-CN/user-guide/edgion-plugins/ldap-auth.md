@@ -18,7 +18,7 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 - 支持 `Authorization` / `Proxy-Authorization` 认证头
 - `Proxy-Authorization` 优先级高于 `Authorization`
 - 支持自定义认证方案名（`headerType`，如 `ldap` / `basic`）
-- 支持匿名降级（`anonymous`）
+- 支持仅在缺少凭证时匿名放行（`anonymous`）
 - 支持隐藏凭证头（`hideCredentials`）
 - 支持 LDAPS / StartTLS（通过 `ldaps` / `startTls`）
 
@@ -43,13 +43,17 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `ldapPort` | Integer | `389` | LDAP 端口 |
 | `ldaps` | Boolean | `false` | 是否启用 LDAPS |
 | `startTls` | Boolean | `false` | 是否启用 StartTLS（与 `ldaps` 互斥） |
-| `verify` | Boolean | `true` | 是否验证 LDAP 服务器的 TLS 证书。`false` 时跳过对端证书验证（由运维人员负责，启动时记录 WARN）。 |
+| `tls.verify` | Boolean | 继承 | 是否验证 LDAP 服务器证书。未设置本地值时继承 `EdgionGatewayConfig.spec.outboundTls.verify`，最终默认值为 `true`。 |
+| `tls.validation.caCertificateRefs` | Array | 继承 | CA 证书 Secret 引用。存在本地 `validation` 块时，会整体替换全局 validation 块。 |
+| `tls.validation.subjectAltNames` | Array | 继承 | 附加 SAN 策略。非空策略会强制执行完整证书验证，即使请求了 `verify: false`。 |
+| `tls.clientCertificateRef` | Object | 继承 | 客户端 mTLS 身份 Secret。本地客户端身份独立于 validation 块解析；未设置时继承全局身份。 |
 | `baseDn` | String | 无 | 基础 DN，必填 |
 | `attribute` | String | 无 | 用户属性，必填（如 `uid`/`cn`） |
 | `bindDnTemplate` | String | 无 | 自定义 Bind DN 模板，必须包含 `{username}` |
 | `headerType` | String | `ldap` | 认证头方案名 |
 | `hideCredentials` | Boolean | `false` | 是否移除认证头再转发 |
-| `anonymous` | String | 无 | 匿名用户名（配置后无凭证可放行） |
+| `authFailureDelayMs` | Integer | `0` | 返回凭证相关 401 响应前的延迟，单位为毫秒 |
+| `anonymous` | String | 无 | 匿名用户名；仅当两个凭证头都缺失时生效 |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
 | `timeout` | Integer | `10000` | LDAP 超时（毫秒） |
 | `keepalive` | Integer | `60000` | 保留字段 |
@@ -78,6 +82,47 @@ spec:
 ```
 
 LDAP 认证结果不缓存。每个带凭证的请求都会由权威 LDAP 服务校验。
+
+## TLS、全局继承与警告
+
+仅当 `ldaps: true` 或 `startTls: true` 时，Gateway 连接才使用 `tls`。对于启用
+TLS 的 LDAP，未设置的本地 `tls.verify` 会继承全局
+`EdgionGatewayConfig.spec.outboundTls.verify`。本地 `tls.validation` 块会整体
+替换全局 validation 块，不会逐字段合并。客户端身份独立继承：本地
+`tls.clientCertificateRef` 优先，否则使用已配置的全局身份。
+
+```yaml
+requestPlugins:
+  - type: LdapAuth
+    config:
+      ldapHost: ldap.example.com
+      ldapPort: 636
+      ldaps: true
+      baseDn: "dc=example,dc=com"
+      attribute: uid
+      tls:
+        verify: true
+        validation:
+          caCertificateRefs:
+            - kind: Secret
+              name: ldap-ca
+        clientCertificateRef:
+          name: ldap-client-identity
+```
+
+TLS 警告分别表示以下含义：
+
+- 实际使用跳过验证的最终配置时，共享出站 TLS 解析器会警告证书验证已禁用。
+- 非空 SAN 策略会覆盖请求的 `verify: false`，记录覆盖警告，强制执行证书链和
+  SAN 验证，并保留可用的 mTLS 身份。
+- 在最终配置跳过验证的同时设置本地 `clientCertificateRef` 时，客户端身份会被
+  有意省略，LdapAuth 会额外记录 M4 警告，说明客户端证书没有发送。
+
+对于普通 LDAP（`ldaps: false` 且 `startTls: false`），Gateway 插件构造不会调用
+出站 TLS 解析器、构建 TLS 客户端配置，也不会记录上述共享或 M4 警告。不过，
+Controller 仍会处理所有已声明的 TLS Secret 引用、注册依赖、检查 Secret 和
+ReferenceGrant，并可能更新状态、记录日志或重新入队插件。普通 LDAP 应省略未使用
+的 TLS 配置；不要假设它在控制面完全无影响。
 
 ## 使用 `headerType: basic` 示例
 
@@ -124,7 +169,8 @@ spec:
         hideCredentials: true
 ```
 
-匿名放行时会注入：
+仅当两个凭证头都不存在时才会匿名放行。格式错误的认证头以及被 LDAP 拒绝的凭证
+仍会返回 401。匿名放行时会注入：
 - `X-Credential-Identifier: guest-user`
 - `X-Anonymous-Consumer: true`
 
@@ -140,7 +186,7 @@ spec:
 ## 安全建议
 
 - 生产环境优先使用 `ldaps: true` 或 `startTls: true`
-- 保持 `verify: true`（默认值）；`verify: false` 由运维人员负责，仅应用于测试环境
+- 保持最终生效的 `tls.verify: true`；`false` 由运维人员负责，仅应用于测试环境
 - 开启 `hideCredentials: true`，避免凭证透传到上游
 - 在 LDAP 服务器侧启用账户锁定与防爆破策略
 - 叠加 `RateLimit` 插件，并按受保护请求速率规划 LDAP 服务容量

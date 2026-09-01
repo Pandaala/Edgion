@@ -18,7 +18,7 @@ Use cases:
 - Supports `Authorization` / `Proxy-Authorization` authentication headers
 - `Proxy-Authorization` has higher priority than `Authorization`
 - Supports custom authentication scheme names (`headerType`, e.g., `ldap` / `basic`)
-- Supports anonymous degradation (`anonymous`)
+- Supports missing-credential-only anonymous pass-through (`anonymous`)
 - Supports hiding credential headers (`hideCredentials`)
 - Supports LDAPS / StartTLS (via `ldaps` / `startTls`)
 
@@ -44,13 +44,17 @@ Use cases:
 | `ldapPort` | Integer | `389` | LDAP port |
 | `ldaps` | Boolean | `false` | Whether to enable LDAPS |
 | `startTls` | Boolean | `false` | Whether to enable StartTLS (mutually exclusive with `ldaps`) |
-| `verify` | Boolean | `true` | Verify the LDAP server's TLS certificate. When `false`, peer certificate validation is skipped (operator responsibility; a WARN is logged at startup). |
+| `tls.verify` | Boolean | inherited | Verify the LDAP server certificate. An unset local value inherits `EdgionGatewayConfig.spec.outboundTls.verify`; the final default is `true`. |
+| `tls.validation.caCertificateRefs` | Array | inherited | CA bundle Secret references. A present local `validation` block replaces the global validation block as a whole. |
+| `tls.validation.subjectAltNames` | Array | inherited | Additional SAN policy. A non-empty policy forces full certificate verification even when `verify` was requested as `false`. |
+| `tls.clientCertificateRef` | Object | inherited | Client mTLS identity Secret. Local client identity is resolved independently from the validation block; otherwise the global identity is inherited. |
 | `baseDn` | String | **Required** | Base DN |
 | `attribute` | String | **Required** | User attribute (e.g., `uid` / `cn`) |
 | `bindDnTemplate` | String | none | Custom Bind DN template, must contain `{username}` |
 | `headerType` | String | `ldap` | Authentication header scheme name |
 | `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding |
-| `anonymous` | String | none | Anonymous username (when configured, allows unauthenticated requests) |
+| `authFailureDelayMs` | Integer | `0` | Delay before returning a credential-related 401 response, in milliseconds |
+| `anonymous` | String | none | Anonymous username; applies only when both credential headers are missing |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
 | `timeout` | Integer | `10000` | LDAP timeout (milliseconds) |
 | `keepalive` | Integer | `60000` | Reserved field |
@@ -67,7 +71,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: LdapAuth
+    - type: LdapAuth
       config:
         ldapHost: ldap.example.com
         ldapPort: 389
@@ -80,6 +84,55 @@ spec:
 LDAP authentication results are not cached. Every credential-bearing request
 is checked against the authoritative LDAP service.
 
+### TLS, global inheritance, and warnings
+
+`tls` is used by the Gateway connection only when `ldaps: true` or
+`startTls: true`. For TLS-enabled LDAP, an unset local `tls.verify` inherits the
+global `EdgionGatewayConfig.spec.outboundTls.verify`. A local `tls.validation`
+block replaces the global validation block as a whole; its fields are not
+merged. Client identity is inherited independently: a local
+`tls.clientCertificateRef` wins, otherwise a configured global identity is
+used.
+
+```yaml
+requestPlugins:
+  - type: LdapAuth
+    config:
+      ldapHost: ldap.example.com
+      ldapPort: 636
+      ldaps: true
+      baseDn: "dc=example,dc=com"
+      attribute: uid
+      tls:
+        verify: true
+        validation:
+          caCertificateRefs:
+            - kind: Secret
+              name: ldap-ca
+        clientCertificateRef:
+          name: ldap-client-identity
+```
+
+The TLS warnings have distinct meanings:
+
+- When effective skip-verification is actually used, the shared outbound-TLS
+  resolver warns that verification is disabled.
+- A non-empty SAN policy overrides a requested `verify: false`, warns about the
+  override, enforces chain and SAN verification, and retains an available mTLS
+  identity.
+- When a local `clientCertificateRef` is configured while effective
+  skip-verification is used, the client identity is intentionally omitted and
+  LdapAuth emits an additional M4 warning that the client certificate is not
+  sent.
+
+For plain LDAP (`ldaps: false` and `startTls: false`), Gateway plugin
+construction does not call the outbound-TLS resolver, build a TLS client
+configuration, or emit these shared/M4 warnings. The Controller still processes
+any declared TLS Secret references, registers their dependencies, checks
+Secrets and ReferenceGrants, and may update status, log, or requeue the plugin.
+Omit unused TLS configuration for plain LDAP; do not rely on it being inert in
+the control plane.
+
 ## Using `headerType: basic` Example
 
 ```yaml
@@ -90,7 +143,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: LdapAuth
+    - type: LdapAuth
       config:
         ldapHost: ldap.example.com
         baseDn: "dc=example,dc=com"
@@ -114,7 +167,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: LdapAuth
+    - type: LdapAuth
       config:
         ldapHost: ldap.example.com
         baseDn: "dc=example,dc=com"
@@ -123,7 +176,9 @@ spec:
         hideCredentials: true
 ```
 
-When allowing anonymous access, the following headers are injected:
+Anonymous access is used only when neither credential header is present.
+Malformed headers and credentials rejected by LDAP still return 401. When
+allowing anonymous access, the following headers are injected:
 - `X-Credential-Identifier: guest-user`
 - `X-Anonymous-Consumer: true`
 
@@ -139,7 +194,7 @@ When allowing anonymous access, the following headers are injected:
 ## Security Recommendations
 
 - Prefer `ldaps: true` or `startTls: true` in production
-- Keep `verify: true` (the default); `verify: false` is operator responsibility and should only be used for testing
+- Keep the effective `tls.verify: true`; `false` is operator responsibility and should only be used for testing
 - Enable `hideCredentials: true` to prevent credentials from being passed to upstream
 - Enable account lockout and brute-force protection policies on the LDAP server
 - Stack the `RateLimit` plugin and size the LDAP service for the protected request rate

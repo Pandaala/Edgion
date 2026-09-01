@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `520a38ee`; both owned blobs were unchanged from the queued analysis
-- Pipeline state: independently approved and fully verified; pending local commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/key_auth/{mod.rs,plugin.rs}`
 - Exact implementation file: `plugin.rs`, including colocated tests
@@ -37,4 +37,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `cb0ff1c0`

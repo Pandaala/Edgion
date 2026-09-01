@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `0a95362a` was rebaselined |
-| Coverage | 532 tracked files: 101 changed, 123 examined-no-change, 9 deferred, 299 non-terminal |
-| Active batch | B0087 KeyAuth bounded runtime ownership; independently approved and awaiting commit gate |
-| Analysis queue | B0088 LDAP report queued for freshness revalidation after B0087 |
+| Coverage | 532 tracked files: 102 changed, 124 examined-no-change, 9 deferred, 297 non-terminal |
+| Active batch | B0088 LDAP prepared runtime state; independently approved and awaiting commit gate |
+| Analysis queue | B0089 Mock plugin pending fresh analysis after B0088 |
 
 ## AI guide summary
 
