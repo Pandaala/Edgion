@@ -11,9 +11,9 @@
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
 | Campaign status | in-progress; latest user-authorized concurrent-agent drift at HEAD `c15e04d7` was rebaselined |
-| Coverage | 532 tracked files: 93 changed, 110 examined-no-change, 9 deferred, 320 non-terminal |
-| Active batch | B0082 IpRestriction compiled runtime ownership and bounded matching; independently approved and awaiting commit gate |
-| Analysis queue | Empty until B0082 completes its commit gate |
+| Coverage | 532 tracked files: 94 changed, 111 examined-no-change, 9 deferred, 318 non-terminal |
+| Active batch | B0083 JsonSchemaValidation canonical body-error status mapping; independently approved and awaiting commit gate |
+| Analysis queue | Empty until B0083 completes its commit gate |
 
 ## AI guide summary
 

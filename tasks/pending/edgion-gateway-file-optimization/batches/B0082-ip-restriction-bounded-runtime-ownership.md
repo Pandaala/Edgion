@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `2ac3cc2b`
-- Pipeline state: independently approved and batch-scoped verification complete; pending local commit
+- Pipeline state: committed with independently approved batch-scoped verification
 - Active anchor crate: `edgion-gateway`
 - Owned files: `edgion-gateway/src/plugins/http/ip_restriction/{mod.rs,plugin.rs}`
 - Exact implementation file: `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs`
@@ -47,4 +47,4 @@
 
 ## Handoff
 - Ledger/changelog updated: yes; 1 changed and 1 examined-no-change owned row
-- Commit: pending
+- Commit: `e153765f`

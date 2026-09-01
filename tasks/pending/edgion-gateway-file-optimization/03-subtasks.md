@@ -113,7 +113,7 @@
 | `plugins-http-header-cert-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-hmac-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-ip-restriction` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-json-schema-validation` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-json-schema-validation` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-jwe-decrypt` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-jwt-auth` | 15 | 0 | 0 | 0 | pending |
 | `plugins-http-key-auth` | 2 | 0 | 0 | 0 | pending |
@@ -427,8 +427,8 @@
 | `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs` | `plugins-http-hmac-auth` | source | changed | B0081 |
 | `edgion-gateway/src/plugins/http/ip_restriction/mod.rs` | `plugins-http-ip-restriction` | source | examined-no-change | B0082 |
 | `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs` | `plugins-http-ip-restriction` | source | changed | B0082 |
-| `edgion-gateway/src/plugins/http/json_schema_validation/mod.rs` | `plugins-http-json-schema-validation` | source | pending | — |
-| `edgion-gateway/src/plugins/http/json_schema_validation/plugin.rs` | `plugins-http-json-schema-validation` | source | pending | — |
+| `edgion-gateway/src/plugins/http/json_schema_validation/mod.rs` | `plugins-http-json-schema-validation` | source | examined-no-change | B0083 |
+| `edgion-gateway/src/plugins/http/json_schema_validation/plugin.rs` | `plugins-http-json-schema-validation` | source | changed | B0083 |
 | `edgion-gateway/src/plugins/http/jwe_decrypt/mod.rs` | `plugins-http-jwe-decrypt` | source | pending | — |
 | `edgion-gateway/src/plugins/http/jwe_decrypt/plugin.rs` | `plugins-http-jwe-decrypt` | source | pending | — |
 | `edgion-gateway/src/plugins/http/jwt_auth/credentials.rs` | `plugins-http-jwt-auth` | source | pending | — |

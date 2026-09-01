@@ -9,7 +9,7 @@ use edgion_resources::resources::edgion_plugins::{
 use edgion_resources::EdgionErrorCode;
 
 use crate::plugins::http::common::json_request_headers_are_supported;
-use crate::plugins::runtime::traits::session::BodyReadError;
+use crate::plugins::runtime::body_gate::record_body_read_error_status;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
 const INVALID_REQUEST_BODY: &str = "Invalid request body";
@@ -34,24 +34,6 @@ impl JsonSchemaValidation {
             body: body.map(str::to_owned),
         }
     }
-
-    fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
-        let status = match error {
-            BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                Some(EdgionErrorCode::BodyReadTooLarge)
-            }
-            BodyReadError::Timeout => Some(EdgionErrorCode::BodyReadTimeout),
-            BodyReadError::Incomplete => Some(EdgionErrorCode::BodyReadAborted),
-            BodyReadError::Unimplemented => Some(EdgionErrorCode::BodyReadUnimplemented),
-            // The adapter records the more precise refusal status.
-            BodyReadError::NotBuffered => None,
-            BodyReadError::StorageFailure => Some(EdgionErrorCode::BodyCaptureStorageFailed),
-            BodyReadError::GenerationConflict => Some(EdgionErrorCode::BodyMutationConflict),
-        };
-        if let Some(status) = status {
-            session.record_error(status);
-        }
-    }
 }
 
 #[async_trait]
@@ -74,7 +56,7 @@ impl RequestFilter for JsonSchemaValidation {
         let body_len = match session.request_body_available_len(known_bodyless) {
             Ok(body_len) => body_len,
             Err(error) => {
-                Self::record_body_error(session, &error);
+                record_body_read_error_status(session, &error);
                 log.push_err("body length unavailable");
                 return Self::reject(500, None);
             }
@@ -99,7 +81,7 @@ impl RequestFilter for JsonSchemaValidation {
         let body = match session.read_request_body(None).await {
             Ok(body) => body,
             Err(error) => {
-                Self::record_body_error(session, &error);
+                record_body_read_error_status(session, &error);
                 log.push_err("body materialization failed");
                 return Self::reject(500, None);
             }
@@ -148,7 +130,7 @@ impl RequestFilter for JsonSchemaValidation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
     use bytes::Bytes;
     use serde_json::json;
 
