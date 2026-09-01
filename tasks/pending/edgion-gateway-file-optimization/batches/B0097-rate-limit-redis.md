@@ -22,4 +22,4 @@
 - Verification: fourteen RateLimitRedis, twenty-one shared Redis-limiter, and eleven shared key-helper tests passed; `cargo fmt --all` and check mode, locked workspace check and Clippy, Gateway binary build, agent-doc/SSA/metrics/Pingora/no-tracing/English-only guards, diff check, and frozen paths all passed; Clippy emitted only pre-existing warnings
 - Coverage: `mod.rs` examined-no-change; `plugin.rs` changed
 - Integration: existing Redis allow/deny, missing-key, failure-policy, entry-scope, dynamic, and Dye coverage remained frozen and sufficient; no follow-up integration issue was created
-- Commit: pending
+- Commit: `d9bd728c`

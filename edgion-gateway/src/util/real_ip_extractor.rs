@@ -53,6 +53,15 @@ pub struct RealIpExtractor {
     max_trusted_hops: Option<u32>,
 }
 
+/// One canonical RealIp resolution result.
+///
+/// Intentionally does not implement `Debug` so the resolved address cannot be
+/// accidentally formatted outside the sensitivity-aware access-log path.
+pub(crate) struct RealIpResolution {
+    pub(crate) remote_ip: String,
+    pub(crate) downstream_trusted: bool,
+}
+
 impl RealIpExtractor {
     /// Creates a new RealIpExtractor with trusted proxy IP groups
     ///
@@ -162,32 +171,41 @@ impl RealIpExtractor {
     /// # Returns
     /// * Real client IP address as string (without port)
     pub fn extract_real_ip(&self, downstream_peer_ip: &str, headers: &RequestHeader) -> String {
-        let downstream_peer_ip = extract_ip_from_socket_addr(downstream_peer_ip);
-
-        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&downstream_peer_ip) {
-            return downstream_peer_ip.to_string();
-        }
-
-        if let Some(header_value) = headers.headers.get(&self.real_ip_header) {
-            if let Ok(xff_str) = header_value.to_str() {
-                return self.resolve_from_header(xff_str, &downstream_peer_ip);
-            }
-        }
-
-        downstream_peer_ip.to_string()
+        let header_value = headers
+            .headers
+            .get(&self.real_ip_header)
+            .and_then(|value| value.to_str().ok());
+        self.resolve_real_ip(downstream_peer_ip, header_value).remote_ip
     }
 
     /// Extracts the real client IP from a pre-fetched header value string.
     ///
     /// Used by the RealIp plugin which accesses headers via PluginSession.
     pub fn extract_from_header_value(&self, downstream_peer_ip: &str, header_value: &str) -> String {
+        self.resolve_real_ip(downstream_peer_ip, Some(header_value)).remote_ip
+    }
+
+    /// Resolve RemoteIp and downstream trust state in one canonical pass.
+    ///
+    /// The downstream peer is parsed once and checked against the trusted
+    /// matcher once. Recursive header traversal still performs one matcher
+    /// lookup for each valid forwarded hop.
+    pub(crate) fn resolve_real_ip(&self, downstream_peer_ip: &str, header_value: Option<&str>) -> RealIpResolution {
         let downstream_peer_ip = extract_ip_from_socket_addr(downstream_peer_ip);
+        let downstream_trusted = self.is_trusted_proxy(&downstream_peer_ip);
 
-        if self.trusted_proxy_matcher.is_none() || !self.is_trusted_proxy(&downstream_peer_ip) {
-            return downstream_peer_ip.to_string();
+        let remote_ip = if downstream_trusted {
+            header_value
+                .map(|value| self.resolve_from_header(value, &downstream_peer_ip))
+                .unwrap_or_else(|| downstream_peer_ip.to_string())
+        } else {
+            downstream_peer_ip.to_string()
+        };
+
+        RealIpResolution {
+            remote_ip,
+            downstream_trusted,
         }
-
-        self.resolve_from_header(header_value, &downstream_peer_ip)
     }
 
     /// Core extraction logic shared by both entry points.
@@ -265,6 +283,79 @@ mod tests {
             description: None,
             cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn canonical_resolution_returns_remote_ip_and_downstream_trust() {
+        let groups = vec![
+            group("private", &["192.168.0.0/16"]),
+            group("v6-proxy", &["2001:db8::/32"]),
+        ];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
+
+        let trusted = extractor.resolve_real_ip("192.168.1.254:45678", Some("203.0.113.1, 192.168.1.1"));
+        assert!(trusted.downstream_trusted);
+        assert_eq!(trusted.remote_ip, "203.0.113.1");
+
+        let missing_header = extractor.resolve_real_ip("[2001:db8::2]:443", None);
+        assert!(missing_header.downstream_trusted);
+        assert_eq!(missing_header.remote_ip, "2001:db8::2");
+
+        let untrusted = extractor.resolve_real_ip("[2001:db9::2]:443", Some("203.0.113.2"));
+        assert!(!untrusted.downstream_trusted);
+        assert_eq!(untrusted.remote_ip, "2001:db9::2");
+
+        let invalid = extractor.resolve_real_ip("not-an-address", Some("203.0.113.3"));
+        assert!(!invalid.downstream_trusted);
+        assert_eq!(invalid.remote_ip, "0.0.0.0");
+    }
+
+    #[test]
+    fn existing_extraction_entry_points_preserve_canonical_results() {
+        let groups = vec![
+            group("private", &["192.168.0.0/16"]),
+            group("proxy", &["198.51.100.0/24"]),
+        ];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
+        let value = "203.0.113.1, 198.51.100.2, 192.168.1.1";
+
+        let direct = extractor.resolve_real_ip("192.168.1.254:45678", Some(value));
+        assert_eq!(
+            extractor.extract_from_header_value("192.168.1.254:45678", value),
+            direct.remote_ip
+        );
+
+        let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
+        headers.insert_header("X-Forwarded-For", value).unwrap();
+        assert_eq!(
+            extractor.extract_real_ip("192.168.1.254:45678", &headers),
+            direct.remote_ip
+        );
+
+        let missing = RequestHeader::build("GET", b"/", None).unwrap();
+        assert_eq!(
+            extractor.extract_real_ip("192.168.1.254:45678", &missing),
+            "192.168.1.254"
+        );
+    }
+
+    #[test]
+    fn non_utf8_header_falls_back_to_the_trusted_peer() {
+        let groups = vec![group("private", &["192.168.0.0/16"])];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
+        let peer = "192.168.1.254";
+        let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
+        headers
+            .insert_header(
+                "X-Forwarded-For",
+                http::HeaderValue::from_bytes(&[0xff]).expect("obs-text is a valid raw header value"),
+            )
+            .unwrap();
+
+        let canonical = extractor.resolve_real_ip(peer, None);
+        assert!(canonical.downstream_trusted);
+        assert_eq!(canonical.remote_ip, peer);
+        assert_eq!(extractor.extract_real_ip(peer, &headers), canonical.remote_ip);
     }
 
     #[test]

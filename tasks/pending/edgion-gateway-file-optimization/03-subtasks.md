@@ -476,8 +476,8 @@
 | `edgion-gateway/src/plugins/http/rate_limit/plugin.rs` | `plugins-http-rate-limit` | source | changed | B0096 |
 | `edgion-gateway/src/plugins/http/rate_limit_redis/mod.rs` | `plugins-http-rate-limit-redis` | source | examined-no-change | B0097 |
 | `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | changed | B0097 |
-| `edgion-gateway/src/plugins/http/real_ip/mod.rs` | `plugins-http-real-ip` | source | pending | — |
-| `edgion-gateway/src/plugins/http/real_ip/plugin.rs` | `plugins-http-real-ip` | source | pending | — |
+| `edgion-gateway/src/plugins/http/real_ip/mod.rs` | `plugins-http-real-ip` | source | examined-no-change | B0098 |
+| `edgion-gateway/src/plugins/http/real_ip/plugin.rs` | `plugins-http-real-ip` | source | changed | B0098 |
 | `edgion-gateway/src/plugins/http/region_route/log_consts.rs` | `plugins-http-region-route` | source | pending | — |
 | `edgion-gateway/src/plugins/http/region_route/mod.rs` | `plugins-http-region-route` | source | pending | — |
 | `edgion-gateway/src/plugins/http/region_route/plugin.rs` | `plugins-http-region-route` | source | pending | — |
@@ -683,6 +683,6 @@
 | `edgion-gateway/src/util/mod.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/net.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
-| `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
+| `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | changed | UTIL-001 / `a909f16f`; support reopened in B0098 |
 | `edgion-gateway/src/util/redacted.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
 | `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | pending | — |
