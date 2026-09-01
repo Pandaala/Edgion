@@ -30,4 +30,4 @@
 - Integration: existing frozen coverage is sufficient; client identity belongs in deterministic colocated tests and no integration issue is needed
 - Coverage: `plugin.rs` and the previously pending `common/http_client.rs` changed; `mirror_log.rs`, `mirror_state.rs`, and `mod.rs` examined-no-change
 - Verification: 9 RequestMirror and 5 common HTTP-client tests passed in implementation and final review; format, locked workspace check/Clippy, Gateway binary build, agent-doc, SSA, metrics, Pingora source, no-tracing, English-only, diff, and frozen-path guards passed after the corrected review
-- Commit: pending
+- Commit: `10b0584d`

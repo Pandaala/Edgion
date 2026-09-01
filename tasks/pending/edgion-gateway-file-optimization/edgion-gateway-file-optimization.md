@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0102 passed corrected final review and every commit gate |
-| Coverage | 532 tracked files: 121 changed, 141 examined-no-change, 10 deferred, 260 non-terminal |
-| Active batch | B0102 RequestMirror shared outbound client; exact local commit in progress |
-| Analysis queue | B0103 RequestRestriction analyzed and waiting for B0102 commit |
+| Campaign status | in-progress; B0103 passed corrected final review and every commit gate |
+| Coverage | 532 tracked files: 122 changed, 142 examined-no-change, 10 deferred, 258 non-terminal |
+| Active batch | B0103 RequestRestriction prepared generation ownership; exact local commit in progress |
+| Analysis queue | B0104 ResponseRewrite read-only analysis starting |
 
 ## AI guide summary
 

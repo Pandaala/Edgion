@@ -42,16 +42,22 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyRequirement, RequestRestrictionConfig};
 
+const PLUGIN_NAME: &str = "RequestRestriction";
+const DEFAULT_DENY_BODY: &[u8] = br#"{"message":"Access denied by restriction policy"}"#;
+const INVALID_POLICY_BODY: &[u8] = br#"{"message":"Internal restriction policy error"}"#;
+
+struct PreparedRestrictionPolicy {
+    allow_mode: bool,
+    status: u16,
+    deny_body: Bytes,
+}
+
 /// Request Restriction plugin
 pub struct RequestRestriction {
-    name: String,
-    config: RequestRestrictionConfig,
     conditions: CompiledConditionSet,
-    /// Validity computed once at construction. `Some` means the config is
-    /// malformed (e.g. an invalid regex) and the plugin must fail closed.
-    /// The config is immutable for the plugin's lifetime (a reload builds a new
-    /// instance), so this is safe to cache and avoids re-validating per request.
-    config_error: Option<String>,
+    /// `None` means validation failed or a deny policy has unresolved
+    /// dependencies, so requests must take the generic fail-closed path.
+    policy: Option<PreparedRestrictionPolicy>,
 }
 
 impl RequestRestriction {
@@ -70,21 +76,32 @@ impl RequestRestriction {
         config: &RequestRestrictionConfig,
         body_requirement: Option<BodyRequirement>,
     ) -> Box<dyn RequestFilter> {
-        // Clone and validate the config to compile regex patterns; capture (not
-        // discard) the validity so run_request can fail closed without recompiling.
+        // Clone and validate the config to compile regex patterns. The caller's
+        // generation can then be released while the compiled condition set owns
+        // the runtime material it needs.
         let mut validated_config = config.clone();
-        let mut config_error = validated_config.validate().err();
+        let config_valid = validated_config.validate().is_ok();
         let conditions = CompiledConditionSet::new(&validated_config.conditions, "conditions", body_requirement);
-        if !validated_config.allow_mode() && conditions.has_unresolved_refs() {
-            config_error.get_or_insert_with(|| "deny restriction contains unresolved references".to_string());
-        }
-
-        let plugin = RequestRestriction {
-            name: "RequestRestriction".to_string(),
-            config: validated_config,
-            conditions,
-            config_error,
+        let policy = if config_valid {
+            let allow_mode = validated_config.allow_mode();
+            if !allow_mode && conditions.has_unresolved_refs() {
+                None
+            } else {
+                let deny_body = match validated_config.message.as_deref() {
+                    Some(message) => Bytes::from(serde_json::json!({"message": message}).to_string()),
+                    None => Bytes::from_static(DEFAULT_DENY_BODY),
+                };
+                Some(PreparedRestrictionPolicy {
+                    allow_mode,
+                    status: validated_config.status,
+                    deny_body,
+                })
+            }
+        } else {
+            None
         };
+
+        let plugin = RequestRestriction { conditions, policy };
 
         Box::new(plugin)
     }
@@ -93,21 +110,26 @@ impl RequestRestriction {
 #[async_trait]
 impl RequestFilter for RequestRestriction {
     fn name(&self) -> &str {
-        &self.name
+        PLUGIN_NAME
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if self.config_error.is_some() {
+        let Some(policy) = self.policy.as_ref() else {
             plugin_log.push_err("restriction config invalid");
-            let body = Bytes::from(r#"{"message":"Internal restriction policy error"}"#);
-            if let Err(_e) = send_gateway_plain_error_response(session, 500, "application/json", body).await {
+            if let Err(_e) = send_gateway_plain_error_response(
+                session,
+                500,
+                "application/json",
+                Bytes::from_static(INVALID_POLICY_BODY),
+            )
+            .await
+            {
                 plugin_log.push_err("write response fail");
             }
             return PluginRunningResult::ErrTerminateRequest;
-        }
+        };
 
         // Apply polarity only after the shared tri-state evaluator completes.
-        let allow_mode = self.config.allow_mode();
         let eval = match self
             .conditions
             .evaluate_async(session, plugin_log, self.conditions.atomic_count() > 1)
@@ -117,29 +139,21 @@ impl RequestFilter for RequestRestriction {
             Err(terminal) => return terminal,
         };
         let any_matched = eval.state == MatchState::True;
-        let denied = any_matched != allow_mode;
+        let denied = any_matched != policy.allow_mode;
 
         if denied {
-            let deny_msg = if any_matched {
-                format!("Deny {}", eval.cause.unwrap_or("conditions"))
+            if any_matched {
+                plugin_log.push_fmt("Deny {}", crate::la![eval.cause.unwrap_or("conditions")]);
             } else {
-                "Deny (no allow alternative matched)".to_string()
-            };
-            plugin_log.push(&deny_msg);
-
-            let message = self
-                .config
-                .message
-                .as_deref()
-                .unwrap_or("Access denied by restriction policy");
+                plugin_log.push("Deny (no allow alternative matched)");
+            }
 
             // invariant: `check_fields` enforces 100 <= status < 600 before the plugin is
             // built, and a failed validation short-circuits above, so the helper's
             // `ResponseHeader::build` cannot fail on the configured status.
-            let body = Bytes::from(serde_json::json!({"message": message}).to_string());
-
             if let Err(_e) =
-                send_gateway_plain_error_response(session, self.config.status, "application/json", body).await
+                send_gateway_plain_error_response(session, policy.status, "application/json", policy.deny_body.clone())
+                    .await
             {
                 plugin_log.push_err("write response fail");
             }
@@ -216,6 +230,22 @@ mod tests {
             .expect_key_get()
             .withf(move |key| format!("{key:?}") == format!("{want:?}"))
             .return_const(value.clone());
+    }
+
+    #[test]
+    fn plugin_name_is_static_across_generations() {
+        let first = RequestRestriction::create(&cfg(
+            RestrictionMode::Deny,
+            vec![named_group("first", vec![key_match(KeyGet::Method, &["GET"])])],
+        ));
+        let second = RequestRestriction::create(&cfg(
+            RestrictionMode::Allow,
+            vec![named_group("second", vec![key_match(KeyGet::Method, &["POST"])])],
+        ));
+
+        assert_eq!(first.name(), PLUGIN_NAME);
+        assert_eq!(second.name(), PLUGIN_NAME);
+        assert!(std::ptr::eq(first.name().as_ptr(), second.name().as_ptr()));
     }
 
     #[tokio::test]
@@ -382,6 +412,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_deny_body_is_prepared_once_and_survives_caller_changes() {
+        use mockall::Sequence;
+        use std::sync::{Arc, Mutex};
+
+        const EXPECTED_BODY: &str = r#"{"message":"quoted \"slash\\line\n©"}"#;
+
+        let mut config = cfg(
+            RestrictionMode::Allow,
+            vec![named_group("readonly", vec![key_match(KeyGet::Method, &["GET"])])],
+        );
+        config.status = 451;
+        config.message = Some("quoted \"slash\\line\n©".to_string());
+        let plugin = RequestRestriction::create(&config);
+
+        config.status = 403;
+        config.message = Some("caller generation changed".to_string());
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        for _ in 0..2 {
+            let mut session = MockPluginSession::new();
+            expect_key(&mut session, KeyGet::Method, Some("POST".to_string()));
+            let mut sequence = Sequence::new();
+            session
+                .expect_write_response_header()
+                .withf(|response, end_of_stream| {
+                    !end_of_stream
+                        && response.status.as_u16() == 451
+                        && response
+                            .headers
+                            .get("content-type")
+                            .and_then(|value| value.to_str().ok())
+                            == Some("application/json")
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            let seen = observed.clone();
+            session
+                .expect_write_response_body()
+                .withf(|body, end_of_stream| *end_of_stream && body.as_deref() == Some(EXPECTED_BODY.as_bytes()))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move |body, _| {
+                    let body = body.expect("deny response must carry the prepared body");
+                    seen.lock()
+                        .expect("body observation lock must not be poisoned")
+                        .push(body);
+                    Ok(())
+                });
+            session
+                .expect_shutdown()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|| {});
+            let mut log = PluginLog::new(PLUGIN_NAME);
+
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrTerminateRequest
+            );
+            assert_eq!(log.render_for_test(), "Deny (no allow alternative matched)");
+        }
+
+        let observed = observed.lock().expect("body observation lock must not be poisoned");
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0].as_ptr(), observed[1].as_ptr());
+    }
+
+    #[tokio::test]
     async fn test_allow_mode_multi_group_or_passes_on_second_group() {
         // Allow-mode OR across groups: (Method GET) OR (X-Tier gold). A POST with
         // X-Tier: gold matches the second group => pass.
@@ -497,6 +596,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_config_fails_closed() {
+        use mockall::Sequence;
+
         // An invalid regex fails validation at construction; run_request must fail
         // closed (terminate) rather than evaluate a half-compiled config.
         let config = cfg(
@@ -514,12 +615,30 @@ mod tests {
         let plugin = RequestRestriction::create(&config);
         let mut s = MockPluginSession::new();
         let mut log = PluginLog::new("RequestRestriction");
-        s.expect_write_response_header().returning(|_, _| Ok(()));
-        s.expect_write_response_body().returning(|_, _| Ok(()));
-        s.expect_shutdown().returning(|| {});
+        let mut sequence = Sequence::new();
+        s.expect_write_response_header()
+            .withf(|response, end_of_stream| {
+                !end_of_stream
+                    && response.status.as_u16() == 500
+                    && response
+                        .headers
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("application/json")
+            })
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        s.expect_write_response_body()
+            .withf(|body, end_of_stream| *end_of_stream && body.as_deref() == Some(INVALID_POLICY_BODY))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        s.expect_shutdown().times(1).in_sequence(&mut sequence).returning(|| {});
 
         let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert_eq!(log.render_for_test(), "err: restriction config invalid");
     }
 
     #[tokio::test]
@@ -639,6 +758,7 @@ mod tests {
             vec![named_group("signed-body", vec![Condition::HmacAuth(hmac)])],
         );
         let plugin = RequestRestriction::create_with_body(&config, Some(BodyRequirement::fail_close()));
+        drop(config);
 
         let mut session = MockPluginSession::new();
         let auth_c = auth.clone();

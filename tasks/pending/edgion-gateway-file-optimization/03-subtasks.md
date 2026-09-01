@@ -489,8 +489,8 @@
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | changed | B0102 |
-| `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | pending | — |
-| `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | pending | — |
+| `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | examined-no-change | B0103 |
+| `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | pending | — |
 | `edgion-gateway/src/plugins/http/response_rewrite/plugin.rs` | `plugins-http-response-rewrite` | source | pending | — |
 | `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | pending | — |
