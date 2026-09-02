@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0104 passed corrected final review and every commit gate |
-| Coverage | 532 tracked files: 123 changed, 143 examined-no-change, 10 deferred, 256 non-terminal |
-| Active batch | B0104 ResponseRewrite prepared generation and header safety; exact local commit in progress |
-| Analysis queue | B0105 TraceContext analyzed and ready for promotion after B0104 commit |
+| Campaign status | in-progress; B0105 independently approved and fully verified |
+| Coverage | 532 tracked files: 125 changed, 144 examined-no-change, 10 deferred, 253 non-terminal |
+| Active batch | B0105 TraceContext multi-value correctness and allocation-free W3C parsing; ready for exact staging and local commit |
+| Analysis queue | B0106 WAF module is the next read-only candidate after B0105 commits |
 
 ## AI guide summary
 

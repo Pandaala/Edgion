@@ -493,9 +493,9 @@
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | examined-no-change | B0104 |
 | `edgion-gateway/src/plugins/http/response_rewrite/plugin.rs` | `plugins-http-response-rewrite` | source | changed | B0104 |
-| `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | analysis-ready | B0105 |
-| `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | analysis-ready | B0105 |
-| `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | analysis-ready | B0105 |
+| `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | examined-no-change | B0105 |
+| `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | changed | B0105 |
+| `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | pending | — |

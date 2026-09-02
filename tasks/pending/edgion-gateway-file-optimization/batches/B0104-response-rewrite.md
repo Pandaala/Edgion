@@ -30,4 +30,4 @@
 - No-change candidate: `mod.rs`; response-body handling remains examined-no-change and streaming
 - Deferred: D0068 owns a cross-mechanism hop-by-hop response-header mutation policy; D0063 remains limited to rate-limit local-response headers
 - Integration: existing frozen status and normal mutation scenarios are sufficient; deterministic validation and unit tests cover this change, so no integration issue is needed
-- Commit: pending
+- Commit: `a4d3772a`
