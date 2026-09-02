@@ -1542,6 +1542,7 @@ mod compile_plugins_tests {
                 ),
             ),
             ("access_log_extern_blocked", ep_with_blocked_access_log_extern()),
+            ("waf_blank_rules", waf_resource(" \n\t")),
             ("waf_bad_syntax", waf_resource("SecRule invalid-(")),
         ];
 

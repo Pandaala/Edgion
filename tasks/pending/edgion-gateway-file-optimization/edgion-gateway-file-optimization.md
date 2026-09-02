@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0105 independently approved and fully verified |
-| Coverage | 532 tracked files: 125 changed, 144 examined-no-change, 10 deferred, 253 non-terminal |
-| Active batch | B0105 TraceContext multi-value correctness and allocation-free W3C parsing; ready for exact staging and local commit |
-| Analysis queue | B0106 WAF module is the next read-only candidate after B0105 commits |
+| Campaign status | in-progress; B0106 independently approved and fully verified |
+| Coverage | 532 tracked files: 126 changed, 144 examined-no-change, 10 deferred, 252 non-terminal |
+| Active batch | B0106 WAF HTTP plugin module; ready for the local commit gate |
+| Analysis queue | B0107/B0108/B0109 are analysis-ready behind B0106; D0073 records the adjudicated Wasm host-panic boundary for the future `vm_manager.rs` batch |
 
 ## AI guide summary
 

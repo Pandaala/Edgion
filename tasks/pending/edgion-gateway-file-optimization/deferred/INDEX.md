@@ -74,6 +74,9 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0068 — Unify response-header mutation policy | needs-discussion | [campaign finding](D0068-response-header-mutation-policy.md) |
 | D0069 — Correct TraceContext documentation semantics | needs-implementation | [campaign finding](D0069-trace-context-documentation-semantics.md) |
 | D0070 — Enforce TraceContext attachment cardinality | needs-discussion | [campaign finding](D0070-trace-context-attachment-cardinality.md) |
+| D0071 — Reduce WAF header materialization | needs-investigation | [campaign finding](D0071-waf-header-materialization.md) |
+| D0072 — Bound outbound HTTP/2 response header lists | needs-investigation | [campaign finding](D0072-outbound-http2-response-header-list-bound.md) |
+| D0073 — Isolate Wasm host panics at VM boundaries | needs-implementation | [campaign finding](D0073-wasm-host-panic-isolation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -139,3 +142,6 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |
 | Correct TraceContext documentation semantics | pending | [task](../../../todo/correct-trace-context-documentation-semantics.md) |
 | Enforce TraceContext attachment cardinality | pending | [task](../../../todo/enforce-trace-context-attachment-cardinality.md) |
+| Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
+| Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
+| Isolate Wasm host panics at VM boundaries | pending | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |

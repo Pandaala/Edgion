@@ -578,7 +578,7 @@ mod tests {
             .expect_claim_waf_phase()
             .returning(|_, _| crate::ctx::WafPhaseClaim::Execute);
         session.expect_request_headers_bytes().return_once(Vec::new);
-        session.expect_get_method().times(2).return_const("GET".to_string());
+        session.expect_get_method().times(1).return_const("GET".to_string());
         session.expect_get_uri().return_const("/".to_string());
         session.expect_get_request_uri().return_const("/".to_string());
         session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());

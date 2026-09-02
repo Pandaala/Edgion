@@ -39,7 +39,7 @@ impl Drop for WafGenerationMetricLease {
 
 #[inline]
 fn elapsed_micros(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+    u64::try_from(Instant::now().saturating_duration_since(started).as_micros()).unwrap_or(u64::MAX)
 }
 
 struct SharedWaf {
@@ -243,20 +243,20 @@ impl RequestFilter for WafPlugin {
             .iter()
             .map(|(name, value)| RequestHeader::new(name, value))
             .collect();
-        let method = session.get_method().as_bytes().to_vec();
         let uri = session.get_uri();
         let raw_uri = session.get_request_uri();
         let protocol = session.get_http_protocol();
-        let request_line = format!("{} {} {}", session.get_method(), raw_uri, protocol);
-        let remote_addr = session.remote_ip().as_bytes().to_vec();
         let request_id = session.get_request_id();
+        let method = session.get_method();
+        let remote_addr = session.remote_ip();
+        let request_line = format!("{method} {raw_uri} {protocol}");
         let request = RequestHead::new(
             request_line.as_bytes(),
-            &method,
+            method.as_bytes(),
             uri.as_bytes(),
             raw_uri.as_bytes(),
             protocol.as_bytes(),
-            &remote_addr,
+            remote_addr.as_bytes(),
             request_id.as_bytes(),
             &headers,
         );
@@ -477,10 +477,24 @@ mod tests {
 
     #[test]
     fn dedicated_summary_suppresses_all_generic_stage_logs() {
-        let plugin = plugin("", WafMode::On);
+        let plugin = plugin("SecAction \"id:1,phase:1,pass\"\n", WafMode::On);
         assert!(RequestFilter::suppress_automatic_log(&plugin));
         assert!(UpstreamResponseFilter::suppress_automatic_log(&plugin));
         assert!(UpstreamResponse::suppress_automatic_log(&plugin));
+    }
+
+    #[test]
+    fn blank_rules_are_rejected_by_the_gateway_constructor() {
+        let config = WafConfig {
+            rules: " \n\t".to_string(),
+            mode: WafMode::On,
+            priority: 0,
+        };
+
+        assert_eq!(
+            WafPlugin::try_new(&config).err().as_deref(),
+            Some("rules must not be empty")
+        );
     }
 
     fn expect_request_head(session: &mut MockPluginSession, uri: &str) {
@@ -494,7 +508,7 @@ mod tests {
         session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
         session.expect_record_waf_terminal_error().returning(|_, _, _, _| ());
         session.expect_request_headers_bytes().return_once(move || headers);
-        session.expect_get_method().times(2).return_const("POST".to_string());
+        session.expect_get_method().times(1).return_const("POST".to_string());
         session.expect_get_uri().return_const(uri.to_string());
         session.expect_get_request_uri().return_const(uri.to_string());
         session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());

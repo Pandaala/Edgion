@@ -26,6 +26,8 @@
 ## States
 
 - `pending`: not yet completely audited.
+- `analysis-in-progress`: a read-only candidate is being investigated outside the serial mutation lane.
+- `analysis-ready`: a read-only candidate report is complete and awaits current-HEAD promotion.
 - `in-progress`: owned by the active frozen batch.
 - `examined-no-change`: complete audit found no worthwhile safe change.
 - `changed`: changed, reviewed, verified, and committed.
@@ -496,10 +498,10 @@
 | `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | examined-no-change | B0105 |
 | `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | changed | B0105 |
-| `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | pending | — |
-| `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | pending | — |
-| `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | pending | — |
-| `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | pending | — |
+| `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | changed | B0106 |
+| `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | analysis-ready | B0107 |
+| `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | analysis-ready | B0108 |
+| `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | analysis-ready | B0109 |
 | `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | pending | — |

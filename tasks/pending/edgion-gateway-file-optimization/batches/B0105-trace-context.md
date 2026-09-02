@@ -30,4 +30,4 @@
 - Gate diagnostic: the first post-drift check/Clippy attempt was interrupted when its shared explicit TMPDIR disappeared during external cleanup. An independent diagnostic classified this as environment-only and approved a serial retry; no batch code or persistent dependency defect was implicated.
 - Full verification: TraceContext tests passed 20/20 on the locked Pingora v4 graph; `cargo fmt --all` and format check; serial locked workspace check; serial locked workspace Clippy (exit 0 with the existing warning set); locked Gateway binary build; agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, unchanged target blobs, and frozen integration-test guards all passed on current HEAD.
 - Coverage: `plugin.rs` and `w3c.rs` changed; `mod.rs` examined-no-change.
-- Commit: pending
+- Commit: `512d485d`

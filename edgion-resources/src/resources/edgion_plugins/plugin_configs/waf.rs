@@ -60,6 +60,9 @@ impl IncludeSource for NoIncludes {
 impl WafConfig {
     /// Compile the exact strict generation used by both validation and runtime.
     pub fn compile_generation(&self) -> Result<CompiledGeneration, String> {
+        if self.rules.trim().is_empty() {
+            return Err("rules must not be empty".to_string());
+        }
         let defaults = [
             Phase::RequestHeaders,
             Phase::RequestBody,
@@ -85,9 +88,6 @@ impl WafConfig {
 
 impl PluginValidation for WafConfig {
     fn validation_error(&self) -> Option<String> {
-        if self.rules.trim().is_empty() {
-            return Some("rules must not be empty".to_string());
-        }
         self.compile_generation().err()
     }
 }
@@ -95,6 +95,21 @@ impl PluginValidation for WafConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blank_rules_are_rejected_by_the_shared_compile_entry() {
+        let config = WafConfig {
+            rules: " \n\t".to_string(),
+            mode: WafMode::On,
+            priority: 0,
+        };
+
+        assert_eq!(
+            config.compile_generation().err().as_deref(),
+            Some("rules must not be empty")
+        );
+        assert_eq!(config.validation_error().as_deref(), Some("rules must not be empty"));
+    }
 
     #[test]
     fn validation_compiles_supported_rules_without_a_separate_prepare_call() {
