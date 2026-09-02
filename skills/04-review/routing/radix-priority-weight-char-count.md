@@ -57,8 +57,10 @@ routes and raw multi-byte literals are rejected by the Kubernetes CRD.
 
 `RadixPath::new` is called from `RadixRouteMatchEngine::initialize_internal` during route-table
 (re)build, once per extracted path — config time, not the per-request path. The single consumer
-is the comparator at `radix_route_match.rs` (`pb.priority_weight.cmp(&pa.priority_weight)`),
-which reads the already-computed `usize`. The extra O(n) scan is invisible; there is no
+is `cmp_candidate` in `radix_route_match.rs` (`weight_b.cmp(&weight_a)`), which reads the
+already-computed `usize`; since 2026-09-02 that comparator also runs at build time only, inside
+`assign_precedence_ranks` (see
+[radix-candidate-precedence-rank-precomputed.md](radix-candidate-precedence-rank-precomputed.md)). The extra O(n) scan is invisible; there is no
 data-plane cost argument for keeping the byte-length form.
 
 ## Fix Suggestions Not Accepted

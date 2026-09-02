@@ -16,6 +16,13 @@ pub struct RadixPath {
     pub segment_count: usize,
     /// Whether the path contains parameter segments
     pub has_params: bool,
+    /// Global precedence rank within the route snapshot (0 = highest priority).
+    ///
+    /// `RadixPath::new` cannot compute this: the rank depends on every other
+    /// path in the same snapshot. It is left at 0 here and filled in by
+    /// `RadixRouteMatchEngine::initialize_internal` once all paths are known,
+    /// so only read it through a fully built engine.
+    pub precedence_rank: u32,
 }
 
 impl RadixPath {
@@ -80,6 +87,7 @@ impl RadixPath {
             route_idx,
             segment_count,
             has_params,
+            precedence_rank: 0,
         }
     }
 

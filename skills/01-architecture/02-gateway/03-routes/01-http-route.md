@@ -32,11 +32,11 @@ edgion-gateway/src/routes/http/
 
 `RadixRouteMatchEngine` implements Exact and Prefix path matching via an immutable radix tree:
 
-1. **Build phase** (`build`): iterate every `HttpRouteRuleUnit`, create a `RadixPath` per path, insert into `RadixTreeBuilder`, and finally `freeze()` into an immutable `RadixTree`.
+1. **Build phase** (`build`): iterate every `HttpRouteRuleUnit`, create a `RadixPath` per path, insert into `RadixTreeBuilder`, `freeze()` into an immutable `RadixTree`, and finally rank every candidate once (`assign_precedence_ranks`) into `RadixPath::precedence_rank`.
 2. **Match phase** (`match_route`):
    - Call `tree.match_all_ext(path)` to obtain all candidates and their `MatchKind` in one pass.
    - Filter: Exact accepts only `FullyConsumed`; Prefix accepts `FullyConsumed` or `SegmentBoundary`.
-   - Sort by `priority_weight` descending; on ties, run the full Gateway API priority chain via `MatchSpecificity::cmp_precedence()` (method → headers → query params → timestamp → name → rule/match index).
+   - Order candidates by the build-time `precedence_rank` (a plain integer sort). The rank encodes `priority_weight` descending, then the full Gateway API priority chain via `MatchSpecificity::cmp_precedence()` (method → headers → query params → timestamp → name → rule/match index), then `path_idx`.
    - Run `deep_match` on candidates in turn; the first that passes is the final match.
 
 Core fields of `RadixPath`:
@@ -49,6 +49,7 @@ Core fields of `RadixPath`:
 | `is_prefix_match` | Whether the match is a prefix |
 | `has_params` | Whether it contains a `:param` parameter segment |
 | `segment_count` | Number of path segments |
+| `precedence_rank` | Global candidate order, assigned in the last step of the build phase; 0 = highest priority |
 
 The radix tree internally supports `:param` parameter matching; a double colon `::` is escaped as a literal colon.
 

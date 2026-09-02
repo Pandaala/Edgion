@@ -82,7 +82,9 @@ Each `RouteRules` holds two engines internally:
 - Based on a radix tree (`RadixTreeBuilder` + `RadixTree`); all routes are inserted at initialization and frozen into an immutable tree.
 - A single `match_all_ext` traversal returns all candidates with their `MatchKind` (`FullyConsumed` / `SegmentBoundary` / `PartialSegment`).
 - Exact routes accept only `FullyConsumed`; Prefix routes accept `FullyConsumed` or `SegmentBoundary` (rejecting partial-segment matches like `/v2` matching `/v2example`).
-- Candidates are sorted by `priority_weight` in descending order, then deep-matched in turn.
+- Candidate ordering is resolved at build time, not per request: the whole snapshot is ranked once
+  into a per-`RadixPath` `precedence_rank`, so the request path only sorts `(rank, path_idx)`
+  integers before deep-matching candidates in turn.
 
 ### RegexRoutesEngine (RegularExpression)
 
@@ -108,7 +110,9 @@ priority_weight = path_char_count * 4 + type_bonus
 | Static prefix | true | false | 1 |
 | Param prefix | true | true | 0 |
 
-Sort rules: higher `priority_weight` wins; on a tie, the full Gateway API priority chain runs via `MatchSpecificity::cmp_precedence()` — method match → header count → query param count → creation timestamp → route namespace/name lexicographic order → rule/match index.
+Sort rules: higher `priority_weight` wins; on a tie, the full Gateway API priority chain runs via `MatchSpecificity::cmp_precedence()` — method match → header count → query param count → creation timestamp → route namespace/name lexicographic order → rule/match index. `path_idx` is the final tie-break, making the order strict.
+
+This chain reads only immutable snapshot data, so it is evaluated once during `build` (see `assign_precedence_ranks`) and materialized as `RadixPath::precedence_rank`. Ordering a request's candidate subset by that rank is equivalent to running the chain per request, because a strict total order restricted to a subset is that subset's order.
 
 Example: `/api/users` (static exact, 10 chars, weight = 43) wins over `/api/users` (static prefix, weight = 41). For the same path and type, a route with method match wins over a route without.
 

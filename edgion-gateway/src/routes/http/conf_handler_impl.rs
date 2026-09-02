@@ -708,6 +708,247 @@ mod tests {
         assert_eq!(result, vec!["fallback.example.com"]);
     }
 
+    /// Build a route whose rules each carry one path match, so every compiled
+    /// unit contributes exactly one `RadixPath`.
+    fn route_with_paths(
+        namespace: &str,
+        name: &str,
+        hostnames: Vec<&str>,
+        creation_timestamp: &str,
+        rules: serde_json::Value,
+    ) -> HTTPRoute {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "namespace": namespace,
+                "name": name,
+                "creationTimestamp": creation_timestamp
+            },
+            "spec": {
+                "parentRefs": [{
+                    "group": "gateway.networking.k8s.io",
+                    "kind": "Gateway",
+                    "namespace": "default",
+                    "name": "gw1"
+                }],
+                "hostnames": hostnames,
+                "rules": rules
+            }
+        });
+        serde_json::from_value(json).expect("route fixture must deserialize")
+    }
+
+    /// Routes sharing one hostname whose paths overlap and which differ across
+    /// several precedence levels (path length, exact vs prefix, method, header
+    /// count, creation timestamp, route name, rule index).
+    fn precedence_fixture_units() -> Vec<Arc<HttpRouteRuleUnit>> {
+        let older = route_with_paths(
+            "default",
+            "route-a",
+            vec!["rank.example.com"],
+            "2024-01-01T00:00:00Z",
+            serde_json::json!([
+                {"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]},
+                {"matches": [{"path": {"type": "PathPrefix", "value": "/api/v1"}}]},
+                {"matches": [{"path": {"type": "Exact", "value": "/api/v1/users"}}]},
+                {"matches": [{
+                    "path": {"type": "Exact", "value": "/api/v1/orders"},
+                    "method": "GET"
+                }]},
+                {"matches": [{
+                    "path": {"type": "Exact", "value": "/api/v1/orders"},
+                    "method": "GET",
+                    "headers": [{"type": "Exact", "name": "X-A", "value": "1"}]
+                }]}
+            ]),
+        );
+        // Same paths as `route-a`, newer, and alphabetically later: exercises the
+        // creation-timestamp and route-name levels against identical paths.
+        let newer = route_with_paths(
+            "default",
+            "route-b",
+            vec!["rank.example.com"],
+            "2025-01-01T00:00:00Z",
+            serde_json::json!([
+                {"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]},
+                {"matches": [{"path": {"type": "Exact", "value": "/api/v1/users"}}]}
+            ]),
+        );
+
+        let mut data: HashMap<String, Arc<HTTPRoute>> = HashMap::new();
+        data.insert(older.key_name(), Arc::new(older));
+        data.insert(newer.key_name(), Arc::new(newer));
+
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+        let (units, _regex_units) = domain_rules
+            .get("rank.example.com")
+            .expect("fixture hostname must produce route rules");
+        assert!(units.len() >= 7, "fixture must produce enough units: {}", units.len());
+        units.clone()
+    }
+
+    /// The optimization's load-bearing claim: the ranks that
+    /// `assign_precedence_ranks` writes must order candidates exactly the way
+    /// the pre-optimization per-request sort did (stable sort over build order
+    /// by `priority_weight` descending, then `MatchSpecificity::cmp_precedence`).
+    ///
+    /// This drives the real engine, so a wrong write-back index or a wrong
+    /// `routes[route_idx]` lookup fails here — the algebraic unit tests in
+    /// `radix_route_match.rs` cannot catch either.
+    #[test]
+    fn engine_ranks_reproduce_the_legacy_per_request_ordering() {
+        let units = precedence_fixture_units();
+        let engine = RadixRouteMatchEngine::build(units.clone()).expect("engine must build");
+        let paths = engine.paths_for_test();
+        assert_eq!(paths.len(), units.len(), "each fixture unit contributes one path");
+
+        // Reference implementation of the ordering this optimization replaced.
+        let mut expected: Vec<usize> = (0..paths.len()).collect();
+        expected.sort_by(|a, b| {
+            let (pa, pb) = (&paths[*a], &paths[*b]);
+            pb.priority_weight.cmp(&pa.priority_weight).then_with(|| {
+                units[pa.route_idx]
+                    .specificity
+                    .cmp_precedence(&units[pb.route_idx].specificity)
+            })
+        });
+
+        let mut actual: Vec<usize> = (0..paths.len()).collect();
+        actual.sort_unstable_by_key(|i| paths[*i].precedence_rank);
+
+        assert_eq!(actual, expected, "build-time rank diverges from the legacy order");
+
+        // Ranks must be a dense permutation for the request-path integer sort.
+        let mut ranks: Vec<u32> = paths.iter().map(|p| p.precedence_rank).collect();
+        ranks.sort_unstable();
+        assert_eq!(ranks, (0..paths.len() as u32).collect::<Vec<_>>());
+    }
+
+    /// Covers the request path's filter-and-order step, which `match_route`
+    /// otherwise reaches only with a live `Session`. Without this, dropping the
+    /// candidate sort, inverting the `MatchKind` filter, or losing the
+    /// `tree_value - 1` bucket offset would all go undetected by unit tests.
+    #[test]
+    fn engine_filters_and_orders_candidates_for_a_request_path() {
+        let units = precedence_fixture_units();
+        let engine = RadixRouteMatchEngine::build(units).expect("engine must build");
+        let paths = engine.paths_for_test();
+        let matched = |path: &str| -> Vec<String> {
+            engine
+                .ordered_candidates_for_test(path)
+                .iter()
+                .map(|(_, path_idx)| paths[*path_idx as usize].normalized.clone())
+                .collect()
+        };
+
+        // Exact beats prefix, longer prefix beats shorter, and both routes'
+        // copies of a shared path stay adjacent. Pins the ordering: the
+        // traversal yields these in tree order, not precedence order.
+        assert_eq!(
+            matched("/api/v1/users"),
+            vec!["/api/v1/users", "/api/v1/users", "/api/v1", "/api", "/api"]
+        );
+
+        // An Exact route must not match a longer path, while the prefixes above
+        // it still do.
+        assert_eq!(matched("/api/v1/users/extra"), vec!["/api/v1", "/api", "/api"]);
+
+        // A prefix must not match mid-segment: `/api` does not cover `/apifoo`.
+        assert!(matched("/apifoo").is_empty());
+
+        // Unrelated paths produce no candidates at all.
+        assert!(matched("/other").is_empty());
+    }
+
+    /// A route listing the same hostname twice registers its units twice in one
+    /// engine, producing candidates that tie through every level of the
+    /// precedence chain. `spec.hostnames` is `x-kubernetes-list-type: atomic`
+    /// with no `uniqueItems`, and `effective_hostnames` does not dedup, so this
+    /// is reachable rather than hypothetical.
+    ///
+    /// This is the only case where the old stable sort and the new `path_idx`
+    /// tie-break could have diverged. They do not: the old code pushed such
+    /// candidates consecutively in ascending `path_idx` within one bucket, which
+    /// is exactly what the rank now encodes.
+    #[test]
+    fn tied_candidates_from_a_duplicate_hostname_keep_build_order() {
+        let route = route_with_paths(
+            "default",
+            "dup",
+            vec!["dup.example.com", "dup.example.com"],
+            "2024-01-01T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"type": "Exact", "value": "/dup"}}]}]),
+        );
+        let mut data: HashMap<String, Arc<HTTPRoute>> = HashMap::new();
+        data.insert(route.key_name(), Arc::new(route));
+
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+        let (units, _regex_units) = domain_rules
+            .get("dup.example.com")
+            .expect("duplicated hostname must still produce route rules");
+        assert_eq!(units.len(), 2, "the duplicate hostname registers the unit twice");
+        assert_eq!(
+            units[0].specificity.cmp_precedence(&units[1].specificity),
+            std::cmp::Ordering::Equal,
+            "the two registrations must be indistinguishable to the precedence chain"
+        );
+
+        let engine = RadixRouteMatchEngine::build(units.clone()).expect("engine must build");
+        let paths = engine.paths_for_test();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(
+            paths[0].priority_weight, paths[1].priority_weight,
+            "identical paths must carry identical weight, so the pair is fully tied"
+        );
+
+        // Distinct `route_idx`: `extract_paths` yields at most one path per unit,
+        // so tied candidates are duplicate registrations, never one shared route.
+        assert_ne!(paths[0].route_idx, paths[1].route_idx);
+
+        // The tie resolves to build order, deterministically.
+        assert_eq!(paths[0].precedence_rank, 0);
+        assert_eq!(paths[1].precedence_rank, 1);
+        let ordered: Vec<u32> = engine
+            .ordered_candidates_for_test("/dup")
+            .iter()
+            .map(|(_, path_idx)| *path_idx)
+            .collect();
+        assert_eq!(ordered, vec![0, 1]);
+    }
+
+    /// Two routes declaring the same normalized path share one radix tree value,
+    /// so that bucket must hold both path indices. This is the case the dense
+    /// `tree_value - 1` bucket table exists to serve.
+    #[test]
+    fn engine_groups_identical_paths_into_one_bucket() {
+        let units = precedence_fixture_units();
+        let engine = RadixRouteMatchEngine::build(units).expect("engine must build");
+        let buckets = engine.buckets_for_test();
+
+        assert!(!buckets.is_empty(), "bucket table must be populated");
+        assert!(
+            buckets.iter().all(|b| !b.is_empty()),
+            "dense bucket table must not contain gaps"
+        );
+
+        let total: usize = buckets.iter().map(|b| b.len()).sum();
+        assert_eq!(
+            total,
+            engine.paths_for_test().len(),
+            "every path lands in exactly one bucket"
+        );
+
+        // Three normalized paths are declared more than once: `/api` and
+        // `/api/v1/users` by both routes, and `/api/v1/orders` by two rules of
+        // `route-a` that differ only in method/header matching.
+        // Sorted because the fixture's route order follows `HashMap` iteration,
+        // so bucket order is not stable across runs.
+        let mut shared: Vec<usize> = buckets.iter().map(|b| b.len()).filter(|n| *n > 1).collect();
+        shared.sort_unstable();
+        assert_eq!(shared, vec![2, 2, 2], "shared paths must each group both declarations");
+    }
+
     #[test]
     fn metric_backend_slots_include_service_ai_and_invalid_refs() {
         let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
