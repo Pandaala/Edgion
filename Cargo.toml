@@ -112,16 +112,16 @@ boring-sys = "5"
 
 # Pingora — the Gateway builds exclusively against the Edgion fork family so
 # public types never cross a source boundary. Development follows the fork's
-# `edgion_v3` branch; the committed Cargo.lock pins the exact commit, and
+# `edgion_v4` branch; the committed Cargo.lock pins the exact commit, and
 # CI/release builds use `--locked`. Release milestones may temporarily use a
 # protected immutable tag when a manifest-level source identity is required.
-pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3", features = ["connection_filter"] }
-pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
-pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
-pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
-pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
-pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
-tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v3" }
+pingora-core = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4", features = ["connection_filter"] }
+pingora-http = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4" }
+pingora-proxy = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4" }
+pingora-limits = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4" }
+pingora-load-balancing = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4" }
+pingora-ketama = { git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4" }
+tinyufo = { package = "TinyUFO", git = "https://github.com/Pandaala/pingora.git", branch = "edgion_v4" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }
