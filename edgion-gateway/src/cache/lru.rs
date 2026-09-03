@@ -1,6 +1,6 @@
 use parking_lot::Mutex;
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
@@ -22,7 +22,7 @@ pub struct CacheStats {
     pub expirations: u64,
     /// Number of `insert` calls that displaced a live (non-expired) entry
     /// because the cache was at capacity. Entries cleared by
-    /// `prune_expired_from_tail` or explicit `remove` do not count.
+    /// `prune_expired` or explicit `remove` do not count.
     pub evictions: u64,
 }
 
@@ -96,6 +96,16 @@ struct LocalLruCacheInner<K, V> {
     head: Option<usize>,
     tail: Option<usize>,
     free_head: Option<usize>,
+    /// Live TTL deadlines ordered earliest-first, keyed by `(deadline, node index)`.
+    ///
+    /// Holds exactly one record per occupied node that carries a TTL: every
+    /// path that assigns, rewrites, or releases a deadline updates this index in
+    /// the same step, so it never accumulates stale records and its size is
+    /// bounded by `capacity` no matter how often a key is updated. Entries
+    /// inserted without a TTL never enter the index.
+    ///
+    /// The node index disambiguates entries that share a deadline instant.
+    expiration_index: BTreeSet<(Instant, usize)>,
 }
 
 impl<K, V> LocalLruCacheInner<K, V>
@@ -119,6 +129,7 @@ where
             head: None,
             tail: None,
             free_head: Some(0),
+            expiration_index: BTreeSet::new(),
         }
     }
 
@@ -136,6 +147,13 @@ where
         }
 
         let tail = self.tail.expect("tail must exist when cache is full");
+        // insert() drains every expired entry before reaching here, so the tail
+        // is effectively always live and this check is defensive rather than
+        // load-bearing: it only fires for an entry whose deadline falls in the
+        // sub-microsecond window between insert()'s clock read and this one.
+        // Such an entry is then accounted as cleanup, not eviction, which is the
+        // conservative direction for the counter contract documented on
+        // CacheStats::evictions.
         let now = Instant::now();
         let is_live = self.nodes[tail].occupied && !self.nodes[tail].is_expired(now);
         self.remove_index(tail);
@@ -205,6 +223,13 @@ where
             .expect("occupied node must have key")
             .clone();
 
+        // Drop the expiration record before release_index() resets the node and
+        // clears the deadline the record is keyed by. This is the single release
+        // funnel for eviction, lazy expiry, and explicit removal alike.
+        if let Some(expires_at) = self.nodes[idx].expires_at {
+            self.expiration_index.remove(&(expires_at, idx));
+        }
+
         self.detach(idx);
         self.map.remove(&key);
         self.len -= 1;
@@ -214,15 +239,52 @@ where
         value
     }
 
-    fn prune_expired_from_tail(&mut self, now: Instant) {
-        let mut cursor = self.tail;
+    /// Keeps the expiration index in sync with one node's deadline change.
+    ///
+    /// The index holds at most one record per node, so rewriting a TTL must drop
+    /// the previous record before adding the new one; clearing a TTL only drops.
+    fn sync_expiration_record(&mut self, idx: usize, previous: Option<Instant>, next: Option<Instant>) {
+        if previous == next {
+            return;
+        }
+        if let Some(previous) = previous {
+            self.expiration_index.remove(&(previous, idx));
+        }
+        if let Some(next) = next {
+            self.expiration_index.insert((next, idx));
+        }
+    }
 
-        while let Some(idx) = cursor {
-            let prev = self.nodes[idx].prev;
-            if self.nodes[idx].occupied && self.nodes[idx].is_expired(now) {
-                self.remove_index(idx);
+    /// Reclaims every entry whose deadline has passed, earliest deadline first.
+    ///
+    /// Expiry is lazy and request-driven: the index is a passive ordered
+    /// structure with no timer or background task behind it, so this runs only
+    /// when a caller actually needs a slot. When the earliest deadline is still
+    /// in the future the loop exits after a single lookup, which is what keeps
+    /// insertion cost independent of cache capacity.
+    fn prune_expired(&mut self, now: Instant) {
+        while let Some(&(deadline, idx)) = self.expiration_index.first() {
+            if deadline > now {
+                break;
             }
-            cursor = prev;
+
+            // remove_index() drops the matching record, which is what advances
+            // the loop. A record that no longer describes its node would spin
+            // here forever, so drop such a record directly instead.
+            //
+            // The else branch is unreachable while the index is in sync, and it
+            // deliberately degrades gracefully rather than tripping: this runs
+            // on a data-plane path under the shard mutex, where the project
+            // requires a safe fallback over a panic. Dropping the orphan record
+            // restores the invariant and costs at most one skipped reclamation
+            // (the entry still expires lazily in get()). There is no plugin log
+            // or tracing sink reachable from here to leave a trail in.
+            let node_deadline = self.nodes[idx].expires_at.filter(|_| self.nodes[idx].occupied);
+            if node_deadline == Some(deadline) {
+                self.remove_index(idx);
+            } else {
+                self.expiration_index.remove(&(deadline, idx));
+            }
         }
     }
 
@@ -230,8 +292,11 @@ where
         let now = Instant::now();
 
         if let Some(&idx) = self.map.get(&key) {
+            let previous_expires_at = self.nodes[idx].expires_at;
+            let next_expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
             self.nodes[idx].value = Some(value);
-            self.nodes[idx].expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
+            self.nodes[idx].expires_at = next_expires_at;
+            self.sync_expiration_record(idx, previous_expires_at, next_expires_at);
             self.touch(idx);
             return false; // key-update: no eviction
         }
@@ -239,19 +304,25 @@ where
         // Only prune when no free slot is available: alloc_index would
         // otherwise be forced to displace the LRU tail. When free_head is Some,
         // alloc_index returns immediately without touching the list, so the
-        // O(N) tail walk is pure overhead. This preserves the "prune before
+        // pruning pass is pure overhead. This preserves the "prune before
         // forced eviction of a live entry" invariant exercised by
         // `test_eviction_count_zero_when_expired_entry_freed_before_displacement`.
         if self.free_head.is_none() {
-            self.prune_expired_from_tail(now);
+            self.prune_expired(now);
         }
 
         let (idx, evicted) = self.alloc_index();
+        let expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
         self.nodes[idx].key = Some(key.clone());
         self.nodes[idx].value = Some(value);
-        self.nodes[idx].expires_at = ttl.and_then(|ttl| now.checked_add(ttl));
+        self.nodes[idx].expires_at = expires_at;
         self.nodes[idx].occupied = true;
         self.nodes[idx].next_free = None;
+        if let Some(expires_at) = expires_at {
+            // alloc_index() hands back a reset node, so there is no previous
+            // record for this slot to drop.
+            self.expiration_index.insert((expires_at, idx));
+        }
 
         self.attach_head(idx);
         self.map.insert(key, idx);
@@ -296,6 +367,9 @@ where
 
     fn clear(&mut self) {
         self.map.clear();
+        // clear() resets the node pool directly instead of going through
+        // remove_index(), so the expiration index must be dropped explicitly.
+        self.expiration_index.clear();
         self.len = 0;
         self.head = None;
         self.tail = None;
@@ -312,7 +386,9 @@ where
 /// in-process locking.
 ///
 /// Keeps a fixed-capacity node pool plus a doubly-linked LRU list under one
-/// mutex: O(1) touch/insert/remove with predictable metadata allocation.
+/// mutex: O(1) touch/insert/remove. The node pool and the key map are allocated
+/// once at construction; the expiration index is the one structure that grows
+/// and shrinks at runtime, allocating a B-tree node roughly every 11 TTL entries.
 ///
 /// `V` is fully caller-defined. If cloning values is expensive, callers can
 /// store `Arc<T>` as the value type to keep cache hits cheap.
@@ -356,6 +432,17 @@ where
 
     pub fn capacity(&self) -> usize {
         self.inner.lock().capacity
+    }
+
+    /// Number of records currently held by the expiration index.
+    ///
+    /// Diagnostic accessor for tests and benchmarks; not part of the cache
+    /// contract. The index holds exactly one record per live entry that carries
+    /// a TTL, so the result never exceeds [`Self::capacity`] regardless of how
+    /// often a key is updated.
+    #[doc(hidden)]
+    pub fn expiration_index_len(&self) -> usize {
+        self.inner.lock().expiration_index.len()
     }
 
     pub fn len(&self) -> usize {
@@ -730,7 +817,7 @@ mod tests {
 
     #[test]
     fn test_eviction_count_zero_when_expired_entry_freed_before_displacement() {
-        // If prune_expired_from_tail frees a slot, no live entry is displaced.
+        // If prune_expired frees a slot, no live entry is displaced.
         let cache = LocalLruCache::new(2);
         cache.insert("a", 1, None);
         cache.insert("b", 2, Some(Duration::from_millis(10)));
@@ -798,6 +885,253 @@ mod tests {
     fn test_get_keys_empty_cache() {
         let cache: LocalLruCache<&str, i32> = LocalLruCache::new(4);
         assert!(cache.get_keys().is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // Expiration index: one record per live TTL entry, kept in sync by
+    // every path that assigns, rewrites, or releases a deadline.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_entries_without_ttl_never_enter_expiration_index() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, None);
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.expiration_index_len(), 0);
+    }
+
+    #[test]
+    fn test_expiration_index_tracks_only_ttl_entries() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, None);
+        cache.insert("b", 2, Some(Duration::from_secs(60)));
+        cache.insert("c", 3, Some(Duration::from_secs(60)));
+
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.expiration_index_len(), 2);
+    }
+
+    #[test]
+    fn test_ttl_extension_replaces_the_previous_expiration_record() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, Some(Duration::from_millis(10)));
+        // Extending the TTL must drop the old record rather than add a second
+        // one, otherwise the stale deadline would expire a live entry.
+        cache.insert("a", 2, Some(Duration::from_secs(60)));
+        assert_eq!(cache.expiration_index_len(), 1);
+
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cache.get(&"a"), Some(2));
+        assert_eq!(cache.expiration_index_len(), 1);
+    }
+
+    #[test]
+    fn test_clearing_ttl_on_update_drops_the_expiration_record() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, Some(Duration::from_millis(10)));
+        cache.insert("a", 2, None);
+        assert_eq!(cache.expiration_index_len(), 0);
+
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cache.get(&"a"), Some(2));
+    }
+
+    #[test]
+    fn test_repeated_updates_keep_expiration_index_bounded() {
+        // Documented bound: at most one record per live TTL entry, so the index
+        // never exceeds capacity no matter how often a key is rewritten.
+        let cache = LocalLruCache::new(4);
+
+        for round in 0..10_000 {
+            cache.insert("a", round, Some(Duration::from_secs(60)));
+            assert!(cache.expiration_index_len() <= cache.capacity());
+        }
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.expiration_index_len(), 1);
+        assert_eq!(cache.get(&"a"), Some(9_999));
+    }
+
+    #[test]
+    fn test_shortened_ttl_is_pruned_at_its_new_deadline() {
+        // The rewrite path must index the entry under its NEW deadline. If the
+        // index kept the old, later deadline, prune_expired would find nothing
+        // to reclaim and would displace the live LRU tail instead.
+        let cache = LocalLruCache::new(2);
+
+        cache.insert("a", 1, Some(Duration::from_secs(60)));
+        cache.insert("b", 2, None);
+        cache.insert("a", 10, Some(Duration::from_millis(10)));
+        std::thread::sleep(Duration::from_millis(20));
+
+        cache.insert("c", 3, None);
+
+        assert_eq!(cache.get_with_status(&"a"), (None, CacheStatus::Miss));
+        assert_eq!(cache.get(&"b"), Some(2), "live entry must not be displaced");
+        assert_eq!(cache.get(&"c"), Some(3));
+        assert_eq!(cache.stats().evictions, 0, "the slot came from expiry, not eviction");
+        assert_eq!(cache.expiration_index_len(), 0);
+    }
+
+    #[test]
+    fn test_extended_ttl_survives_pruning_at_its_old_deadline() {
+        // Mirror of the case above: after an extension, the old deadline must
+        // leave the index entirely. A record left behind at the old deadline
+        // would make prune_expired consider a live entry reclaimable.
+        let cache = LocalLruCache::new(2);
+
+        cache.insert("a", 1, Some(Duration::from_millis(10)));
+        cache.insert("b", 2, None);
+        cache.insert("a", 10, Some(Duration::from_secs(60)));
+        std::thread::sleep(Duration::from_millis(20));
+
+        // Full cache, nothing genuinely expired: "b" is the LRU tail because the
+        // rewrite of "a" touched it to the head.
+        cache.insert("c", 3, None);
+
+        assert_eq!(
+            cache.get(&"a"),
+            Some(10),
+            "extended entry must survive its old deadline"
+        );
+        assert_eq!(cache.get_with_status(&"b"), (None, CacheStatus::Miss));
+        assert_eq!(cache.get(&"c"), Some(3));
+        assert_eq!(cache.stats().evictions, 1);
+        assert_eq!(
+            cache.expiration_index_len(),
+            1,
+            "exactly one record, at the new deadline"
+        );
+    }
+
+    #[test]
+    fn test_explicit_removal_reclaims_the_expiration_record() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, Some(Duration::from_secs(60)));
+        cache.insert("b", 2, Some(Duration::from_secs(60)));
+        assert_eq!(cache.remove(&"a"), Some(1));
+
+        assert_eq!(cache.expiration_index_len(), 1);
+    }
+
+    #[test]
+    fn test_clear_drops_all_expiration_records() {
+        // clear() resets the node pool without going through remove_index(), so
+        // it is the one path that must drop the index explicitly.
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("a", 1, Some(Duration::from_secs(60)));
+        cache.insert("b", 2, Some(Duration::from_secs(60)));
+        cache.clear();
+
+        assert_eq!(cache.expiration_index_len(), 0);
+
+        // A reused slot must not inherit the cleared entry's deadline.
+        cache.insert("c", 3, None);
+        assert_eq!(cache.expiration_index_len(), 0);
+        assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[test]
+    fn test_lru_eviction_reclaims_the_displaced_entry_record() {
+        let cache = LocalLruCache::new(2);
+
+        cache.insert("a", 1, Some(Duration::from_secs(60)));
+        cache.insert("b", 2, Some(Duration::from_secs(60)));
+        cache.insert("c", 3, Some(Duration::from_secs(60)));
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.stats().evictions, 1);
+        assert_eq!(cache.expiration_index_len(), 2);
+    }
+
+    #[test]
+    fn test_all_expired_cache_reclaims_every_slot_without_eviction() {
+        let cache = LocalLruCache::new(4);
+
+        for key in 0..4 {
+            cache.insert(key, key, Some(Duration::from_millis(10)));
+        }
+        assert_eq!(cache.expiration_index_len(), 4);
+        std::thread::sleep(Duration::from_millis(20));
+
+        // The cache is full but every entry is expired: the insert must reclaim
+        // all four slots and displace no live entry.
+        cache.insert(99, 99, None);
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.stats().evictions, 0);
+        assert_eq!(cache.expiration_index_len(), 0);
+        assert_eq!(cache.get(&99), Some(99));
+    }
+
+    #[test]
+    fn test_pruning_stops_at_the_first_live_deadline() {
+        let cache = LocalLruCache::new(4);
+
+        for key in 0..4 {
+            cache.insert(key, key, Some(Duration::from_secs(60)));
+        }
+        // Nothing is expired, so the full cache must fall back to LRU eviction
+        // and keep every remaining live record indexed.
+        cache.insert(4, 4, Some(Duration::from_secs(60)));
+
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.stats().evictions, 1);
+        assert_eq!(cache.expiration_index_len(), 4);
+        assert_eq!(cache.get(&0), None);
+        for key in 1..5 {
+            assert_eq!(cache.get(&key), Some(key));
+        }
+    }
+
+    #[test]
+    fn test_reused_slot_does_not_carry_over_a_stale_deadline() {
+        // Slot indices are recycled through the free list, so a record left
+        // behind by a previous tenant would expire the new occupant early.
+        let cache = LocalLruCache::new(2);
+
+        cache.insert("a", 1, Some(Duration::from_millis(10)));
+        cache.insert("b", 2, None);
+        std::thread::sleep(Duration::from_millis(20));
+
+        // "a" is expired; "c" reclaims its slot.
+        cache.insert("c", 3, None);
+        assert_eq!(cache.expiration_index_len(), 0);
+
+        // Well past "a"'s original deadline, the slot's new tenant must survive.
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cache.get(&"c"), Some(3));
+        assert_eq!(cache.get(&"b"), Some(2));
+        assert_eq!(cache.stats().evictions, 0);
+    }
+
+    #[test]
+    fn test_mixed_expiration_insert_reclaims_expired_before_evicting_live() {
+        let cache = LocalLruCache::new(4);
+
+        cache.insert("live-1", 1, None);
+        cache.insert("short", 2, Some(Duration::from_millis(10)));
+        cache.insert("live-2", 3, Some(Duration::from_secs(60)));
+        cache.insert("live-3", 4, None);
+        std::thread::sleep(Duration::from_millis(20));
+
+        cache.insert("new", 5, None);
+
+        assert_eq!(cache.stats().evictions, 0);
+        assert_eq!(cache.get_with_status(&"short"), (None, CacheStatus::Miss));
+        assert_eq!(cache.get(&"live-1"), Some(1));
+        assert_eq!(cache.get(&"live-2"), Some(3));
+        assert_eq!(cache.get(&"live-3"), Some(4));
+        assert_eq!(cache.get(&"new"), Some(5));
+        assert_eq!(cache.expiration_index_len(), 1);
     }
 
     #[test]

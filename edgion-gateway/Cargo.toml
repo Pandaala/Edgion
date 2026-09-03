@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "edgion-gateway"
 path = "src/bin/edgion_gateway.rs"
 
+[[bench]]
+name = "lru_expiration"
+harness = false
+
 [lints]
 workspace = true
 

@@ -106,7 +106,21 @@ where
         self.shards.len()
     }
 
+    /// Total number of expiration-index records across all shards.
+    ///
+    /// Diagnostic accessor for tests and benchmarks; see
+    /// [`LocalLruCache::expiration_index_len`]. Torn snapshot, as with `stats`.
+    #[doc(hidden)]
+    pub fn expiration_index_len(&self) -> usize {
+        self.shards.iter().map(|s| s.expiration_index_len()).sum()
+    }
+
     /// Aggregated stats across all shards.
+    ///
+    /// Like every other aggregate here (`len`, `is_empty`, `capacity`,
+    /// `get_keys`, `expiration_index_len`), this locks shards one at a time, so
+    /// the result is a torn snapshot under concurrent writes rather than a
+    /// consistent point-in-time view.
     pub fn stats(&self) -> CacheStats {
         let mut total = CacheStats::default();
         for shard in &self.shards {
@@ -133,6 +147,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -225,5 +240,53 @@ mod tests {
     #[should_panic(expected = "shard count must not exceed capacity")]
     fn test_shards_cannot_exceed_capacity() {
         let _: ShardedLruCache<String, i32> = ShardedLruCache::new(2, 8);
+    }
+
+    #[test]
+    fn test_expiration_index_aggregates_across_shards() {
+        let cache = ShardedLruCache::new(64, 8);
+
+        for i in 0..32 {
+            cache.insert(format!("ttl-{i}"), i, Some(Duration::from_secs(60)));
+        }
+        for i in 0..16 {
+            cache.insert(format!("no-ttl-{i}"), i, None);
+        }
+
+        assert_eq!(cache.expiration_index_len(), 32);
+        assert!(cache.expiration_index_len() <= cache.capacity());
+    }
+
+    #[test]
+    fn test_concurrent_shard_access_keeps_expiration_index_bounded() {
+        // Each shard owns its own node pool, expiration index, and mutex, so
+        // concurrent traffic must never let the two structures diverge.
+        let cache = Arc::new(ShardedLruCache::new(256, 8));
+        let mut handles = Vec::new();
+
+        for worker in 0..8 {
+            let cache = Arc::clone(&cache);
+            handles.push(std::thread::spawn(move || {
+                for round in 0..2_000 {
+                    let key = format!("key-{}", (worker * 97 + round) % 512);
+                    match round % 4 {
+                        0 => cache.insert(key, round, None),
+                        1 => cache.insert(key, round, Some(Duration::from_secs(60))),
+                        2 => cache.insert(key, round, Some(Duration::from_millis(1))),
+                        _ => {
+                            cache.remove(&key);
+                        }
+                    }
+                    assert!(cache.expiration_index_len() <= cache.capacity());
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("worker thread must not panic");
+        }
+
+        assert!(cache.len() <= cache.capacity());
+        assert!(cache.expiration_index_len() <= cache.len());
     }
 }
