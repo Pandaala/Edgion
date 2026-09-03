@@ -1,12 +1,11 @@
 use crate::ctx::EdgionHttpContext;
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
-use crate::runtime::matching::route::check_gateway_listener_match;
+use crate::runtime::matching::route::{check_gateway_listener_match, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
 use edgion_resources::err::EdError;
-use edgion_resources::resources::common::ParentReference;
 use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
@@ -199,8 +198,10 @@ pub struct HttpRouteRuleUnit {
     pub route: Option<Arc<HTTPRoute>>,
     /// Compiled regex for path matching (only for RegularExpression path type)
     pub path_regex: Option<Regex>,
-    /// Parent references for sectionName matching
-    pub parent_refs: Option<Vec<ParentReference>>,
+    /// Parent references for sectionName matching, with their
+    /// `GatewayInfoIndex` lookup keys resolved at snapshot build time.
+    /// `Arc`-shared across every match-item unit of the same route.
+    pub parent_refs: Option<Arc<[ResolvedParentRef]>>,
     /// Pre-compiled regexes for header RegularExpression matchers (aligned with headers vec).
     /// `Regex` is internally Arc-like; the surrounding `HttpRouteRuleUnit` is shared via
     /// outer `Arc<HttpRouteRuleUnit>`, so no extra `Arc` wrapper is needed.
@@ -439,7 +440,7 @@ impl HttpRouteRuleUnit {
     pub(crate) fn deep_match_common(
         matched_info: &MatchInfo,
         req_header: &pingora_http::RequestHeader,
-        parent_refs: &Option<Vec<ParentReference>>,
+        parent_refs: &Option<Arc<[ResolvedParentRef]>>,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         compiled_header_regexes: &[Option<Regex>],

@@ -84,6 +84,32 @@ wait_url() {
     return 1
 }
 
+wait_tcp() {
+    local host="$1" port="$2" pid="$3" tries="${4:-600}" i
+    for i in $(seq 1 "$tries"); do
+        nc -z "$host" "$port" 2>/dev/null && return 0
+        kill -0 "$pid" 2>/dev/null || return 1
+        sleep 0.1
+    done
+    echo "ERROR: ${host}:${port} not accepting within timeout" >&2
+    return 1
+}
+
+# /ready is cache-ready, not listener-frozen. Writing a PROXY-policy change
+# before Pingora preflight would let the update become the startup baseline
+# and the process would never trip the runtime fatal guard.
+wait_gateway_serving() {
+    wait_url "http://127.0.0.1:${GW_PROBE_PORT}/ready" "$GW_PID" 200 600 || {
+        tail -80 "$WORK_DIR/logs/gateway.log" >&2
+        return 1
+    }
+    wait_tcp 127.0.0.1 "$LISTENER_PORT" "$GW_PID" 600 || {
+        echo "ERROR: listener ${LISTENER_PORT} not bound after /ready" >&2
+        tail -80 "$WORK_DIR/logs/gateway.log" >&2
+        return 1
+    }
+}
+
 start_test_server() {
     if lsof -iTCP:"$TEST_SERVER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
         echo "ERROR: test_server port $TEST_SERVER_PORT already in use" >&2
@@ -539,23 +565,54 @@ assert_trusted_sources_policy() {
     esac
 }
 
+probe_listener_http() {
+    python3 - "$LISTENER_PORT" <<'PY'
+import socket, sys
+port = int(sys.argv[1])
+sock = socket.socket()
+sock.settimeout(0.3)
+try:
+    sock.connect(("127.0.0.1", port))
+    sock.sendall(b"GET /headers HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+    data = sock.recv(64)
+except Exception:
+    data = b""
+sock.close()
+sys.exit(0 if data.startswith(b"HTTP/") else 1)
+PY
+}
+
 wait_runtime_fatal() {
-    local saw_503=0 saw_reject=0 i code response rc=0
-    for i in $(seq 1 300); do
-        code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${GW_PROBE_PORT}/ready" 2>/dev/null || true)
-        [ "$code" = 503 ] && saw_503=1
-        response=$(send_required_request 2>/dev/null || true)
-        if kill -0 "$GW_PID" 2>/dev/null; then
-            case "$response" in HTTP/*) ;; *) saw_reject=1 ;; esac
-        else
+    local saw_unready=0 saw_reject=0 i code rc=0
+    # Short I/O timeouts are load-bearing: a 2s PROXY probe can span the entire
+    # FastShutdown window and miss both the readiness flip and the accept-filter
+    # rejection even though the process did trip ListenerPolicyTransition.
+    # FastShutdown makes /ready unreachable (curl 000) rather than returning 503
+    # while the process is still draining; both mean the probe stopped succeeding.
+    for i in $(seq 1 400); do
+        code=$(curl -s -m 0.3 -o /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:${GW_PROBE_PORT}/ready" 2>/dev/null || true)
+        if [ "$code" != 200 ]; then
+            saw_unready=1
+        fi
+        if ! kill -0 "$GW_PID" 2>/dev/null; then
             break
+        fi
+        if ! probe_listener_http; then
+            saw_reject=1
         fi
         sleep 0.05
     done
     kill -0 "$GW_PID" 2>/dev/null && { echo "ERROR: Gateway did not exit after policy transition" >&2; return 1; }
     wait "$GW_PID" || rc=$?
     [ "$rc" -ne 0 ] || { echo "ERROR: runtime policy fatal exited zero" >&2; return 1; }
-    [ "$saw_503" -eq 1 ] || { echo "ERROR: readiness 503 was not observed" >&2; return 1; }
+    grep -Eq 'ListenerPolicyTransition|stopping the gateway' \
+        "$WORK_DIR/logs/gateway.log" "$WORK_DIR/logs/edgion-gateway.log" || {
+        echo "ERROR: runtime fatal log was not observed" >&2
+        tail -80 "$WORK_DIR/logs/gateway.log" >&2
+        return 1
+    }
+    [ "$saw_unready" -eq 1 ] || { echo "ERROR: readiness did not stop succeeding after policy transition" >&2; return 1; }
     [ "$saw_reject" -eq 1 ] || { echo "ERROR: new TCP rejection was not observed" >&2; return 1; }
     GW_PID=""
 }
@@ -573,10 +630,12 @@ spec:
 EOF
     write_http_route_resources runtime
     start_controller; launch_gateway
-    wait_url "http://127.0.0.1:${GW_PROBE_PORT}/ready" "$GW_PID" 200 600
+    wait_gateway_serving
+    plain=$(send_plain_request)
+    assert_http_200_with_identity "$plain" 127.0.0.1 "disabled baseline before transition"
     write_inline_gateway runtime '{"source":"inline","config":{"mode":"required"}}' "$LISTENER_PORT" HTTP
     wait_runtime_fatal
-    launch_gateway; wait_url "http://127.0.0.1:${GW_PROBE_PORT}/ready" "$GW_PID" 200 600
+    launch_gateway; wait_gateway_serving
     assert_required_policy
     cleanup_processes
 
@@ -586,18 +645,19 @@ EOF
     write_ref_gateway runtime runtime-policy edge "$LISTENER_PORT" HTTP
     write_http_route_resources runtime
     start_controller; launch_gateway
-    wait_url "http://127.0.0.1:${GW_PROBE_PORT}/ready" "$GW_PID" 200 600
+    wait_gateway_serving
+    assert_required_policy
     write_ecd_trusted edge runtime-policy Namespace "$CASE_DIR/runtime-policy.tmp"
     mv "$CASE_DIR/runtime-policy.tmp" "$CASE_DIR/EdgionConfigData_edge_runtime-policy.yaml"
     wait_runtime_fatal
-    launch_gateway; wait_url "http://127.0.0.1:${GW_PROBE_PORT}/ready" "$GW_PID" 200 600
+    launch_gateway; wait_gateway_serving
     assert_trusted_sources_policy
     rm "$CASE_DIR/EdgionConfigData_edge_runtime-policy.yaml"
     wait_runtime_fatal
     expect_startup_failure 'ReferenceNotFound'
     write_ecd edge runtime-policy Namespace required
     wait_condition "$CASE_DIR/Gateway_edge_runtime.yaml.status" ResolvedRefs True ResolvedRefs
-    launch_gateway; wait_url "http://127.0.0.1:${GW_PROBE_PORT}/ready" "$GW_PID" 200 600
+    launch_gateway; wait_gateway_serving
     assert_required_policy
 }
 

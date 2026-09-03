@@ -1,4 +1,6 @@
-use crate::routes::common::{effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs};
+use crate::routes::common::{
+    effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs,
+};
 use crate::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo, GrpcRuleRuntime};
 use crate::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
@@ -139,7 +141,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
         .map(|t| t.0.timestamp_millis())
         .unwrap_or(0);
     let route_info = Arc::new(GrpcRouteInfo {
-        parent_refs: Some(accepted_refs),
+        parent_refs: Some(resolve_parent_refs(&accepted_refs, route_namespace)),
         effective_hostnames: effective_hostnames(
             route.spec.resolved_hostnames.as_deref(),
             route.spec.hostnames.as_deref(),
@@ -336,6 +338,38 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// Build-site wiring, gRPC side. Mirrors the HTTP test in
+    /// `routes::http::conf_handler_impl`: only this test would fail if
+    /// `parse_route_to_units` ever handed `resolve_parent_refs` something other
+    /// than the route namespace that the request path later passes as `route_ns`.
+    ///
+    /// gRPC uses its own `unwrap_or("default")` fallback, independent of HTTP's
+    /// stricter "reject a route with no namespace" rule, so it needs its own guard.
+    #[test]
+    fn build_site_resolves_parent_ref_keys_with_the_route_namespace() {
+        // The fixture declares `parentRefs: [{ name: "test-gw" }]` with no
+        // namespace, so the resolved key must fall back to the route namespace.
+        let route = build_grpc_route_with_two_rules("route-ns", "wiring");
+        let units = parse_route_to_units("route-ns/wiring", &Arc::new(route));
+        assert!(!units.is_empty(), "the fixture must compile to at least one unit");
+
+        for unit in &units {
+            let resolved = unit
+                .route_info
+                .parent_refs
+                .as_ref()
+                .expect("the build site always populates parent_refs");
+            assert_eq!(resolved.len(), 1);
+            assert_eq!(
+                resolved[0].gateway_key, "route-ns/test-gw",
+                "the omitted parentRef namespace must fall back to the ROUTE namespace"
+            );
+            assert_eq!(resolved[0].parent_ns, "route-ns");
+            // The same namespace the request path passes as `route_ns`.
+            assert_eq!(unit.matched_info.rsc.ns, "route-ns");
+        }
     }
 
     #[test]

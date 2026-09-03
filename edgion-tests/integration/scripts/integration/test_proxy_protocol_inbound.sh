@@ -47,8 +47,10 @@
 #   3. direct to the PP listener, no header → rejected (mandatory-mode contract)
 #   4. direct to the unselected `plain` listener → 200 with XFF 127.0.0.1
 #   5. trustedSources: a local trusted peer's valid v1/v2 header is adopted;
-#      a Docker peer first proves its effective direct address is outside the
-#      trusted CIDR, then its forged header is not parsed while plain HTTP works.
+#      a 127.0.0.2 peer (outside trusted CIDR 127.0.0.1/32) first proves its
+#      effective direct address, then its forged header is not parsed while
+#      plain HTTP works. Docker is not used here: Docker Desktop NATs
+#      container→host as 127.0.0.1, which cannot distinguish sources.
 # =============================================================================
 set -euo pipefail
 
@@ -535,19 +537,35 @@ phase_unselected_listener() {
     esac
 }
 
-trusted_probe() {
-    local version="$1"
-    python3 - "$GW_TRUST_PORT" "$version" <<'PY'
+UNTRUSTED_SOURCE_IP="127.0.0.2"
+
+# Bind an explicit source address so trusted (127.0.0.1) and untrusted
+# (127.0.0.2) probes are distinct on every platform, including Docker Desktop
+# where container→host.docker.internal is NATed to 127.0.0.1.
+source_probe() {
+    local source_ip="$1" version="${2:-}"
+    python3 - "$GW_TRUST_PORT" "$source_ip" "$version" <<'PY'
 import socket, struct, sys
-port, version = int(sys.argv[1]), sys.argv[2]
-client = "203.0.113.77"
-if version == "v1":
-    prefix = f"PROXY TCP4 {client} 127.0.0.1 45678 {port}\r\n".encode()
-else:
-    addresses = socket.inet_aton(client) + socket.inet_aton("127.0.0.1") + struct.pack("!HH", 45678, port)
-    prefix = b"\r\n\r\n\x00\r\nQUIT\n" + bytes((0x21, 0x11)) + struct.pack("!H", len(addresses)) + addresses
+port, source_ip, version = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 request = b"GET /headers HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-sock = socket.create_connection(("127.0.0.1", port), 5)
+if version == "v1":
+    prefix = f"PROXY TCP4 203.0.113.77 127.0.0.1 45678 {port}\r\n".encode()
+elif version == "v2":
+    addresses = socket.inet_aton("203.0.113.77") + socket.inet_aton("127.0.0.1") + struct.pack("!HH", 45678, port)
+    prefix = b"\r\n\r\n\x00\r\nQUIT\n" + bytes((0x21, 0x11)) + struct.pack("!H", len(addresses)) + addresses
+elif version == "":
+    prefix = b""
+else:
+    raise SystemExit(f"unsupported PROXY probe version {version}")
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(5)
+try:
+    sock.bind((source_ip, 0))
+    sock.connect(("127.0.0.1", port))
+except OSError as exc:
+    print(f"ERROR: cannot establish probe from explicit source {source_ip}: {exc}", file=sys.stderr)
+    sock.close()
+    raise SystemExit(2)
 sock.sendall(prefix + request)
 chunks = []
 while True:
@@ -556,10 +574,22 @@ while True:
         break
     chunks.append(chunk)
 sock.close()
-response = b"".join(chunks)
-body = response.split(b"\r\n\r\n", 1)[-1]
-print(body.decode("utf-8", "replace"))
+print(b"".join(chunks).decode("latin1", "replace"))
 PY
+}
+
+http_body() {
+    printf '%s' "$1" | python3 -c "
+import sys
+data = sys.stdin.buffer.read()
+print(data.split(b'\r\n\r\n', 1)[-1].decode('utf-8', 'replace'))
+"
+}
+
+trusted_probe() {
+    local response
+    response=$(source_probe "127.0.0.1" "$1") || return 1
+    http_body "$response"
 }
 
 phase_trusted_sources() {
@@ -574,41 +604,28 @@ phase_trusted_sources() {
         esac
     done
 
-    plain=$(docker run --rm --network "$DOCKER_NET" --ip "$CLIENT_IP" \
-        --add-host host.docker.internal:host-gateway "$LB_IMAGE" \
-        wget -q -T 8 -O - "http://host.docker.internal:${GW_TRUST_PORT}/headers" 2>/dev/null || true)
-    if [ -z "$plain" ]; then
-        fail "Docker peer's plain HTTP was not served; it may have reached the Gateway inside trusted CIDR 127.0.0.1/32, so this platform cannot prove a distinct untrusted source"
+    if ! plain=$(source_probe "$UNTRUSTED_SOURCE_IP"); then
+        fail "trustedSources topology cannot prove a source outside 127.0.0.1/32"
         return
     fi
-    xff=$(header_value "$plain" x-forwarded-for)
+    body=$(http_body "$plain")
+    xff=$(header_value "$body" x-forwarded-for)
     case "$xff" in
         "") fail "untrusted peer response did not expose an effective direct address"; return ;;
+        *"$UNTRUSTED_SOURCE_IP"*)
+            log_ok "untrusted peer effective direct address '${xff}' is outside trusted CIDR 127.0.0.1/32"
+            ;;
         *127.0.0.1*)
-            fail "Docker peer resolved inside trusted CIDR 127.0.0.1/32 on this platform; source distinction is not valid"
+            fail "untrusted peer resolved inside trusted CIDR 127.0.0.1/32; source distinction is not valid"
             return
             ;;
         *203.0.113.77*) fail "untrusted plain peer unexpectedly acquired the forged identity"; return ;;
-        *) log_ok "Docker peer effective direct address '${xff}' is outside trusted CIDR 127.0.0.1/32" ;;
+        *) fail "untrusted peer X-Forwarded-For '${xff}' is not ${UNTRUSTED_SOURCE_IP}"; return ;;
     esac
-
-    python3 - "$WORK_DIR" "$GW_TRUST_PORT" <<'PY'
-import pathlib, socket, struct, sys
-work_dir, port = pathlib.Path(sys.argv[1]), int(sys.argv[2])
-request = b"GET /headers HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-v1 = f"PROXY TCP4 203.0.113.77 127.0.0.1 45678 {port}\r\n".encode() + request
-addresses = socket.inet_aton("203.0.113.77") + socket.inet_aton("127.0.0.1") + struct.pack("!HH", 45678, port)
-v2 = b"\r\n\r\n\x00\r\nQUIT\n" + bytes((0x21, 0x11)) + struct.pack("!H", len(addresses)) + addresses + request
-(work_dir / "forged-v1.bin").write_bytes(v1)
-(work_dir / "forged-v2.bin").write_bytes(v2)
-PY
 
     for version in v1 v2; do
         set +e
-        forged=$(docker run --rm --network "$DOCKER_NET" --ip "$CLIENT_IP" \
-            --add-host host.docker.internal:host-gateway \
-            -v "${WORK_DIR}/forged-${version}.bin:/tmp/forged.bin:ro" \
-            "$LB_IMAGE" sh -c "nc -w 8 host.docker.internal ${GW_TRUST_PORT} < /tmp/forged.bin")
+        forged=$(source_probe "$UNTRUSTED_SOURCE_IP" "$version")
         forged_rc=$?
         set -e
         if [ "$forged_rc" -ne 0 ] || [ -z "$forged" ]; then

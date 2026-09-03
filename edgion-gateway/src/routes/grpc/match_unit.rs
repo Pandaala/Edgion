@@ -1,10 +1,9 @@
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
-use crate::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener};
+use crate::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
-use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::BackendTLSPolicy;
 use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
@@ -206,7 +205,10 @@ pub const CATCH_ALL_HOSTNAME: &str = "*";
 /// gRPC route level information shared across all rule units
 #[derive(Clone, Debug)]
 pub struct GrpcRouteInfo {
-    pub parent_refs: Option<Vec<ParentReference>>,
+    /// Parent references with their `GatewayInfoIndex` lookup keys resolved
+    /// at snapshot build time. `GrpcRouteInfo` is already `Arc`-shared across
+    /// this route's units, so no inner `Arc` is needed.
+    pub parent_refs: Option<Vec<ResolvedParentRef>>,
     /// Effective hostnames for this route (from resolved_hostnames or hostnames).
     /// Unlike HTTP routes (bucketed by domain), gRPC routes share a single
     /// match engine so we must verify hostname match explicitly.

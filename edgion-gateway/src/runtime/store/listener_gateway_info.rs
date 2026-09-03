@@ -67,6 +67,22 @@ impl GatewayInfoIndex {
     pub fn iter_gateways(&self) -> impl Iterator<Item = (&str, &GatewayListeners)> {
         self.gateways.iter().map(|(k, v)| (k.as_str(), v))
     }
+
+    /// Test-only builder mirroring the single insertion path in `rebuild`.
+    /// Lets route-matching tests assemble an index without constructing whole
+    /// `Gateway` resources.
+    #[cfg(test)]
+    pub(crate) fn from_entries_for_test(entries: Vec<(String, ListenerEntry)>) -> Self {
+        let mut index = Self::new();
+        for (gateway_key, entry) in entries {
+            index
+                .gateways
+                .entry(gateway_key)
+                .or_insert_with(GatewayListeners::new)
+                .add(entry);
+        }
+        index
+    }
 }
 
 /// All listeners of a single Gateway on one port, with O(1) listener_name lookup.

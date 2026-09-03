@@ -1,6 +1,8 @@
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
-use crate::routes::common::{effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs};
+use crate::routes::common::{
+    effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs,
+};
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::routes::http::match_unit::{CompiledBackend, HttpRuleRuntime, MatchSpecificity};
@@ -8,6 +10,7 @@ use crate::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
 use crate::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
+use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
@@ -215,7 +218,7 @@ struct RouteUnitCtx<'a> {
     resource_key: &'a str,
     match_item: &'a HTTPRouteMatch,
     rule: Arc<HTTPRouteRule>,
-    parent_refs: Option<Vec<ParentReference>>,
+    parent_refs: Option<Arc<[ResolvedParentRef]>>,
     creation_ts_ms: i64,
     route_sv: u64,
     /// Concrete `(gateway_ns, gateway_name)` pairs this route attaches to,
@@ -373,6 +376,9 @@ fn append_route_to_hostname(
     }];
 
     let attached_gateways = gateways_from_parent_refs(parent_refs, &validated.namespace);
+    // Resolved once per route and Arc-shared into every match-item unit below,
+    // replacing a per-unit `Vec<ParentReference>` clone.
+    let resolved_parent_refs: Arc<[ResolvedParentRef]> = resolve_parent_refs(parent_refs, &validated.namespace).into();
 
     for (rule_id, rule) in validated.rules.iter().enumerate() {
         if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
@@ -400,7 +406,7 @@ fn append_route_to_hostname(
                     resource_key,
                     match_item,
                     rule: rule_arc.clone(),
-                    parent_refs: Some(parent_refs.to_vec()),
+                    parent_refs: Some(Arc::clone(&resolved_parent_refs)),
                     creation_ts_ms,
                     route_sv,
                     attached_gateways: &attached_gateways,
@@ -1064,6 +1070,55 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Build-site wiring: the units a real HTTPRoute compiles to must carry the
+    /// key the request path would have derived inline, i.e. the route's own
+    /// namespace must reach `resolve_parent_refs`.
+    ///
+    /// The unit tests for `resolve_parent_refs` and `check_gateway_listener_match`
+    /// each cover one half in isolation; only this test would fail if the build
+    /// site ever passed the wrong string (the route's *name*, a listener name, a
+    /// parent's namespace) as the fallback.
+    #[test]
+    fn build_site_resolves_parent_ref_keys_with_the_route_namespace() {
+        // `build_route_with_two_rules` declares `parentRefs: [{ name: "test-gateway" }]`
+        // with no namespace, so every resolved key must use the route's namespace.
+        let route = build_route_with_two_rules("route-ns", "wiring");
+
+        let mut data = HashMap::new();
+        data.insert("route-ns/wiring".to_string(), Arc::new(route));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+
+        let (normal, regex) = domain_rules
+            .get("test.example.com")
+            .expect("the route must compile to a hostname bucket");
+        let units: Vec<_> = normal.iter().chain(regex.iter()).collect();
+        assert_eq!(units.len(), 2, "two rules, one match each");
+
+        for unit in &units {
+            let resolved = unit
+                .parent_refs
+                .as_ref()
+                .expect("the build site always populates parent_refs");
+            assert_eq!(resolved.len(), 1);
+            assert_eq!(
+                resolved[0].gateway_key, "route-ns/test-gateway",
+                "the omitted parentRef namespace must fall back to the ROUTE namespace"
+            );
+            assert_eq!(resolved[0].parent_ns, "route-ns");
+            // The same namespace the request path passes as `route_ns`.
+            assert_eq!(unit.matched_info.rsc.ns, "route-ns");
+        }
+
+        // All units of one route share a single allocation.
+        assert!(
+            Arc::ptr_eq(
+                units[0].parent_refs.as_ref().unwrap(),
+                units[1].parent_refs.as_ref().unwrap()
+            ),
+            "resolved parentRefs must be Arc-shared across the route's units"
+        );
     }
 
     #[test]

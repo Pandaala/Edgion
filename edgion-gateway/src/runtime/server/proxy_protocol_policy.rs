@@ -67,6 +67,23 @@ impl Eq for FrozenListenerPolicy {}
 
 type FrozenPolicySnapshot = BTreeMap<ListenerKey, FrozenListenerPolicy>;
 
+/// Absent keys are `Disabled`: the socket is still bound with no PROXY header
+/// parsing. Adding or removing a Disabled-only listener therefore does not
+/// change socket semantics and must not take the whole process down. Required
+/// and TrustedSources presence/absence remains fatal.
+fn declaration_or_disabled(snapshot: &FrozenPolicySnapshot, key: &ListenerKey) -> ProxyProtocolPolicyDeclaration {
+    snapshot
+        .get(key)
+        .map(|policy| policy.declaration.clone())
+        .unwrap_or(ProxyProtocolPolicyDeclaration::Disabled)
+}
+
+fn equivalent_socket_semantics(left: &FrozenPolicySnapshot, right: &FrozenPolicySnapshot) -> bool {
+    left.keys()
+        .chain(right.keys())
+        .all(|key| declaration_or_disabled(left, key) == declaration_or_disabled(right, key))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProxyProtocolFatalDiagnostic {
     pub code: &'static str,
@@ -149,7 +166,8 @@ impl ProxyProtocolPolicyRuntime {
 
     /// Record a prospective Gateway snapshot before its runtime stores are
     /// published. Initial lists establish only `latest`; startup preflight owns
-    /// the baseline. Once frozen, any difference is process-fatal.
+    /// the baseline. Once frozen, a change in PROXY socket semantics is
+    /// process-fatal. Disabled-only keys may appear or disappear.
     pub fn observe_snapshot<'a>(&self, gateways: impl IntoIterator<Item = &'a Gateway>) -> SnapshotDisposition {
         if self.is_fatal() {
             return SnapshotDisposition::RejectFatal;
@@ -161,7 +179,9 @@ impl ProxyProtocolPolicyRuntime {
             match &state.baseline {
                 None => return SnapshotDisposition::Publish,
                 Some(baseline) => match &prospective {
-                    Ok(snapshot) if snapshot == baseline => return SnapshotDisposition::Publish,
+                    Ok(snapshot) if equivalent_socket_semantics(snapshot, baseline) => {
+                        return SnapshotDisposition::Publish;
+                    }
                     Ok(snapshot) => transition_diagnostic(baseline, snapshot),
                     Err(diagnostic) => diagnostic.clone(),
                 },
@@ -196,13 +216,13 @@ impl ProxyProtocolPolicyRuntime {
             .as_ref()
             .ok_or_else(|| anyhow!("Gateway policy preflight ran before the initial Gateway full snapshot"))?;
         let latest_snapshot = match latest {
-            Ok(latest) if latest == &snapshot => latest.clone(),
+            Ok(latest) if equivalent_socket_semantics(latest, &snapshot) => latest.clone(),
             Ok(_) | Err(_) => {
                 bail!("Gateway policy snapshot changed while startup preflight was being prepared")
             }
         };
         if let Some(baseline) = &state.baseline {
-            if baseline != &snapshot {
+            if !equivalent_socket_semantics(baseline, &snapshot) {
                 bail!("Gateway policy startup baseline was already frozen with different content")
             }
         } else {
@@ -436,7 +456,7 @@ fn transition_diagnostic(
     let changed_key = baseline
         .keys()
         .chain(prospective.keys())
-        .find(|key| baseline.get(*key) != prospective.get(*key))
+        .find(|key| declaration_or_disabled(baseline, key) != declaration_or_disabled(prospective, key))
         .cloned();
     let contributor = changed_key
         .as_ref()
@@ -712,8 +732,14 @@ mod tests {
                 ),
             ),
             (
-                with_address(gateway("a", 18103, ResolvedInboundProxyProtocol::Disabled), "127.0.0.1"),
-                with_address(gateway("a", 18103, ResolvedInboundProxyProtocol::Disabled), "127.0.0.2"),
+                with_address(
+                    gateway("a", 18103, ready(CanonicalProxyProtocolTrustPolicy::Required {})),
+                    "127.0.0.1",
+                ),
+                with_address(
+                    gateway("a", 18103, ready(CanonicalProxyProtocolTrustPolicy::Required {})),
+                    "127.0.0.2",
+                ),
             ),
         ];
 
@@ -728,13 +754,36 @@ mod tests {
         }
 
         let runtime = ProxyProtocolPolicyRuntime::new();
-        let initial = gateway("remove", 18104, ResolvedInboundProxyProtocol::Disabled);
+        let initial = gateway("remove", 18104, ready(CanonicalProxyProtocolTrustPolicy::Required {}));
         runtime.observe_snapshot([&initial]);
         runtime.preflight_and_freeze([&initial]).unwrap();
         assert!(matches!(
             runtime.observe_snapshot(std::iter::empty()),
             SnapshotDisposition::RejectFatal
         ));
+    }
+
+    #[test]
+    fn disabled_listener_add_remove_and_readd_do_not_trip() {
+        let runtime = ProxyProtocolPolicyRuntime::new();
+        let initial = gateway("remove", 18130, ResolvedInboundProxyProtocol::Disabled);
+        runtime.observe_snapshot([&initial]);
+        runtime.preflight_and_freeze([&initial]).unwrap();
+        assert!(matches!(
+            runtime.observe_snapshot(std::iter::empty()),
+            SnapshotDisposition::Publish
+        ));
+        assert!(!runtime.is_fatal());
+        assert!(matches!(
+            runtime.observe_snapshot([&initial]),
+            SnapshotDisposition::Publish
+        ));
+        let extra = gateway("extra", 18131, ResolvedInboundProxyProtocol::Disabled);
+        assert!(matches!(
+            runtime.observe_snapshot([&initial, &extra]),
+            SnapshotDisposition::Publish
+        ));
+        assert!(!runtime.is_fatal());
     }
 
     #[test]

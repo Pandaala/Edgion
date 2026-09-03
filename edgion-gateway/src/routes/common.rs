@@ -1,3 +1,5 @@
+use crate::runtime::matching::route::ResolvedParentRef;
+use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use edgion_resources::constants::annotations::edgion::{
     TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
@@ -105,6 +107,32 @@ pub(crate) fn gateways_from_parent_refs(parent_refs: &[ParentReference], route_n
         .map(|pr| {
             let ns = pr.namespace.clone().unwrap_or_else(|| route_ns.to_string());
             (ns, pr.name.clone())
+        })
+        .collect()
+}
+
+/// Resolve accepted parentRefs into the form the request path consumes.
+///
+/// Runs on the config-publish path so `check_gateway_listener_match` never has
+/// to build its `GatewayInfoIndex` lookup key per request per route candidate.
+///
+/// Deliberately does NOT filter by `kind`/`group`: the request path does not
+/// filter either — a non-Gateway ref simply misses the index — and this must
+/// stay behaviour-identical. [`gateways_from_parent_refs`], which drives metric
+/// handles, is a different consumer and keeps its own filter.
+///
+/// Order is preserved: `check_gateway_listener_match` returns the first match,
+/// so reordering would change which Gateway a route attaches to.
+pub(crate) fn resolve_parent_refs(parent_refs: &[ParentReference], route_ns: &str) -> Vec<ResolvedParentRef> {
+    parent_refs
+        .iter()
+        .map(|pr| {
+            let parent_ns = pr.namespace.as_deref().unwrap_or(route_ns);
+            ResolvedParentRef {
+                gateway_key: format_gateway_key(parent_ns, &pr.name),
+                parent_ns: parent_ns.to_string(),
+                section_name: pr.section_name.clone(),
+            }
         })
         .collect()
 }
@@ -276,6 +304,117 @@ pub fn resolve_tcp_keepalive(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    fn parent_ref(name: &str, namespace: Option<&str>) -> ParentReference {
+        ParentReference {
+            group: None,
+            kind: None,
+            namespace: namespace.map(str::to_string),
+            name: name.to_string(),
+            section_name: None,
+            port: None,
+        }
+    }
+
+    #[test]
+    fn resolve_parent_refs_uses_the_explicit_namespace_when_present() {
+        let refs = vec![parent_ref("gw", Some("gw-ns"))];
+        let resolved = resolve_parent_refs(&refs, "route-ns");
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].gateway_key, "gw-ns/gw");
+        assert_eq!(resolved[0].parent_ns, "gw-ns");
+    }
+
+    #[test]
+    fn resolve_parent_refs_falls_back_to_the_route_namespace() {
+        // Gateway API: "When unspecified, this refers to the local namespace of
+        // the Route." Omitting the namespace is the ordinary same-namespace
+        // spelling, so this fallback is the common path, not an edge case.
+        let refs = vec![parent_ref("gw", None)];
+        let resolved = resolve_parent_refs(&refs, "route-ns");
+
+        assert_eq!(resolved[0].gateway_key, "route-ns/gw");
+        assert_eq!(resolved[0].parent_ns, "route-ns");
+    }
+
+    #[test]
+    fn resolve_parent_refs_is_per_route_because_the_fallback_differs() {
+        // The same ParentReference attached to routes in two namespaces must
+        // resolve to two different keys. This is why resolution cannot be
+        // cached per ParentReference and must stay per (route, parentRef).
+        let refs = vec![parent_ref("gw", None)];
+
+        let in_a = resolve_parent_refs(&refs, "ns-a");
+        let in_b = resolve_parent_refs(&refs, "ns-b");
+
+        assert_eq!(in_a[0].gateway_key, "ns-a/gw");
+        assert_eq!(in_b[0].gateway_key, "ns-b/gw");
+        assert_ne!(in_a[0].gateway_key, in_b[0].gateway_key);
+    }
+
+    #[test]
+    fn resolve_parent_refs_keeps_parent_ns_recoverable_when_the_key_has_no_prefix() {
+        // `format_gateway_key` emits a BARE NAME for an empty namespace, so
+        // `gateway_key` is not always "<ns>/<name>". This is why `parent_ns` is
+        // stored as its own field instead of being sliced back out of the key.
+        // The Gateway API CRD forbids an explicit empty `namespace`
+        // (`minLength: 1`) and both build sites supply a non-empty fallback, so
+        // this shape is unreachable in production — the assertion locks the
+        // layout decision, not a live code path.
+        let refs = vec![parent_ref("gw", None)];
+        let resolved = resolve_parent_refs(&refs, "");
+
+        assert_eq!(resolved[0].gateway_key, "gw", "no namespace prefix to slice");
+        assert_eq!(resolved[0].parent_ns, "");
+    }
+
+    #[test]
+    fn resolve_parent_refs_preserves_order() {
+        // `check_gateway_listener_match` returns the first match, so reordering
+        // would change which Gateway a route attaches to.
+        let refs = vec![
+            parent_ref("first", None),
+            parent_ref("second", Some("other-ns")),
+            parent_ref("third", None),
+        ];
+        let resolved = resolve_parent_refs(&refs, "route-ns");
+
+        let keys: Vec<&str> = resolved.iter().map(|r| r.gateway_key.as_str()).collect();
+        assert_eq!(keys, vec!["route-ns/first", "other-ns/second", "route-ns/third"]);
+    }
+
+    #[test]
+    fn resolve_parent_refs_does_not_filter_by_kind_or_group() {
+        // The request path does not filter either — a non-Gateway ref simply
+        // misses the index. `gateways_from_parent_refs` is the consumer that
+        // filters; this one must stay behaviour-identical to the old inline
+        // derivation, which saw every ref.
+        let mut service_ref = parent_ref("some-service", None);
+        service_ref.kind = Some("Service".to_string());
+        service_ref.group = Some("example.io".to_string());
+        let refs = vec![service_ref];
+
+        let resolved = resolve_parent_refs(&refs, "route-ns");
+
+        assert_eq!(resolved.len(), 1, "a non-Gateway parentRef must still be resolved");
+        assert_eq!(resolved[0].gateway_key, "route-ns/some-service");
+
+        // Contrast with the metric-handle consumer, which does filter.
+        assert!(gateways_from_parent_refs(&refs, "route-ns").is_empty());
+    }
+
+    #[test]
+    fn resolve_parent_refs_copies_the_section_name() {
+        let mut with_section = parent_ref("gw", None);
+        with_section.section_name = Some("https".to_string());
+        let refs = vec![with_section, parent_ref("gw2", None)];
+
+        let resolved = resolve_parent_refs(&refs, "route-ns");
+
+        assert_eq!(resolved[0].section_name.as_deref(), Some("https"));
+        assert_eq!(resolved[1].section_name, None);
+    }
 
     #[test]
     fn is_core_service_backend_ref_accepts_core_service_and_rejects_others() {

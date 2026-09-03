@@ -113,13 +113,16 @@ listener metadata and per-listener route snapshots, but cannot add or remove Pin
 
 Changing the listener port set requires a Gateway process restart/rolling restart.
 
-Inbound PROXY protocol is part of the same socket boundary. After the baseline is frozen, any
-effective key or declaration change trips a process-wide monotonic fatal guard. Readiness becomes
-503, every TCP service's accept filter rejects new connections before optional stream plugins and
-before PROXY header parsing, and the internal shutdown watcher requests FastShutdown. The process
-returns non-zero so its supervisor can restart it with the newest complete valid snapshot. A
-revert cannot clear the fatal state. Contributor-only changes with the same physical key and
-canonical declaration are diagnostic metadata and do not trip the guard.
+Inbound PROXY protocol is part of the same socket boundary. After the baseline is frozen, a
+change in PROXY socket semantics (Required / TrustedSources presence, CIDRs, or bind address of
+an enabled policy) trips a process-wide monotonic fatal guard. Disabled-only listener keys may
+appear or disappear without a restart: the already-bound socket keeps parsing no PROXY header.
+Readiness becomes 503, every TCP service's accept filter rejects new connections before optional
+stream plugins and before PROXY header parsing, and the internal shutdown watcher requests
+FastShutdown. The process returns non-zero so its supervisor can restart it with the newest
+complete valid snapshot. A revert cannot clear the fatal state. Contributor-only changes with
+the same physical key and canonical declaration are diagnostic metadata and do not trip the
+guard.
 
 ## Key source files
 
