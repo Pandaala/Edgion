@@ -134,7 +134,10 @@ where
     }
 
     /// Returns all live keys in MRU order per shard, concatenated.
-    /// Intended for debugging only.
+    ///
+    /// Allocates a snapshot of the whole live key set, so it is for diagnostics
+    /// and for bounded cold-path sweeps (e.g. invalidating every entry belonging
+    /// to a deleted owner) — never for a per-request lookup.
     pub fn get_keys(&self) -> Vec<K> {
         let mut keys = Vec::new();
         for shard in &self.shards {

@@ -31,6 +31,10 @@ pub struct ResolvedParentRef {
     pub parent_ns: String,
     /// Copied verbatim from the source `ParentReference`.
     pub section_name: Option<String>,
+    // `ParentReference::port` is deliberately absent: its only consumer is
+    // `is_parent_ref_accepted`, which runs inside `filter_accepted_parent_refs`
+    // on the config-publish path, strictly before resolution. Add it here if
+    // request-time parentRef port disambiguation is ever introduced.
 }
 
 /// Check if request hostname matches listener hostname constraint.

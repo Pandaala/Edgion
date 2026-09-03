@@ -358,7 +358,12 @@ fn append_route_to_hostname(
     hostname: &str,
     validated: &ValidatedHttpRoute<'_>,
     resource_key: &str,
+    // Still needed for `gateways_from_parent_refs` below; the request-time form
+    // is passed separately as `resolved_parent_refs`.
     parent_refs: &[ParentReference],
+    // Resolved once per route by the caller and shared across every hostname
+    // bucket, matching how `rule_runtimes` is hoisted.
+    resolved_parent_refs: &Arc<[ResolvedParentRef]>,
     invalid_rule_indices: Option<&Vec<usize>>,
     creation_ts_ms: i64,
     route_sv: u64,
@@ -376,9 +381,6 @@ fn append_route_to_hostname(
     }];
 
     let attached_gateways = gateways_from_parent_refs(parent_refs, &validated.namespace);
-    // Resolved once per route and Arc-shared into every match-item unit below,
-    // replacing a per-unit `Vec<ParentReference>` clone.
-    let resolved_parent_refs: Arc<[ResolvedParentRef]> = resolve_parent_refs(parent_refs, &validated.namespace).into();
 
     for (rule_id, rule) in validated.rules.iter().enumerate() {
         if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
@@ -406,7 +408,7 @@ fn append_route_to_hostname(
                     resource_key,
                     match_item,
                     rule: rule_arc.clone(),
-                    parent_refs: Some(Arc::clone(&resolved_parent_refs)),
+                    parent_refs: Some(Arc::clone(resolved_parent_refs)),
                     creation_ts_ms,
                     route_sv,
                     attached_gateways: &attached_gateways,
@@ -463,6 +465,12 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
             .map(|r| HttpRouteRuleUnit::compile_http_rule(r, &validated.namespace))
             .collect();
 
+        // Resolved ONCE per route, like `rule_runtimes` above: the inputs are
+        // loop-invariant across hostnames, and the resulting slice is
+        // Arc-shared into every match-item unit of every hostname bucket.
+        let resolved_parent_refs: Arc<[ResolvedParentRef]> =
+            resolve_parent_refs(&accepted_refs, &validated.namespace).into();
+
         // invalid_rule_indices refers to spec.rules; when resolved_rules is
         // compiled (delegation), flattening already dropped invalid rules and
         // the indices do not apply.
@@ -478,6 +486,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                 &validated,
                 &resource_key,
                 &accepted_refs,
+                &resolved_parent_refs,
                 invalid_rule_indices,
                 creation_ts_ms,
                 route_sv,
@@ -1118,6 +1127,44 @@ mod tests {
                 units[1].parent_refs.as_ref().unwrap()
             ),
             "resolved parentRefs must be Arc-shared across the route's units"
+        );
+    }
+
+    /// The resolved slice is built once per ROUTE, not once per hostname, so
+    /// units in different hostname buckets of the same route share one
+    /// allocation. This mirrors how `rule_runtimes` is hoisted in the same
+    /// loop; the inputs are loop-invariant across hostnames.
+    #[test]
+    fn resolved_parent_refs_are_shared_across_hostname_buckets() {
+        let mut route = build_route_with_two_rules("route-ns", "multi-host");
+        route.spec.hostnames = Some(vec!["a.example.com".to_string(), "b.example.com".to_string()]);
+        route.pre_parse();
+
+        let mut data = HashMap::new();
+        data.insert("route-ns/multi-host".to_string(), Arc::new(route));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+
+        let first_unit_of = |hostname: &str| {
+            let (normal, regex) = domain_rules
+                .get(hostname)
+                .unwrap_or_else(|| panic!("{hostname} must have a bucket"));
+            normal
+                .iter()
+                .chain(regex.iter())
+                .next()
+                .expect("bucket must hold at least one unit")
+                .clone()
+        };
+
+        let a = first_unit_of("a.example.com");
+        let b = first_unit_of("b.example.com");
+
+        let a_refs = a.parent_refs.as_ref().expect("populated");
+        let b_refs = b.parent_refs.as_ref().expect("populated");
+        assert_eq!(a_refs[0].gateway_key, "route-ns/test-gateway");
+        assert!(
+            Arc::ptr_eq(a_refs, b_refs),
+            "one route must resolve its parentRefs once, not once per hostname"
         );
     }
 

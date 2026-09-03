@@ -468,7 +468,9 @@ fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<HttpDnsResolverConfig> {
 }
 
 /// Resolve an `ExternalName` to IPs through `spec`, honoring the short-TTL
-/// data-plane cache when `cache` is set.
+/// data-plane cache when `cache` is set. A cached address set belongs to the
+/// exact `(service_key, external_name, resolver)` triple, so repointing a
+/// Service at a new hostname misses rather than serving the previous one.
 ///
 /// An IP-literal `external_name` short-circuits the resolver (and the cache):
 /// there is nothing to resolve, and running a name resolver on a literal would
@@ -488,11 +490,18 @@ async fn resolve_external_ips(
     }
     let dns_cache = get_global_dns_cache();
     let fingerprint = spec.fingerprint();
-    if let Some(cached) = dns_cache.get(service_key, &fingerprint, Instant::now()) {
+    if let Some(cached) = dns_cache.get(service_key, external_name, &fingerprint, Instant::now()) {
         return Ok(cached);
     }
     let ips = resolve(spec, external_name).await?;
-    dns_cache.insert(service_key, &fingerprint, ips.clone(), cache_ttl, Instant::now());
+    dns_cache.insert(
+        service_key,
+        external_name,
+        &fingerprint,
+        ips.clone(),
+        cache_ttl,
+        Instant::now(),
+    );
     Ok(ips)
 }
 
@@ -736,6 +745,81 @@ mod selected_service_input_tests {
         assert_eq!(
             selected_http_service_input(&selected, Some(&context)).unwrap_err(),
             EdgionErrorCode::UpstreamNotBackendRefs
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edgion_common::dns::ResolverSpec;
+
+    /// Test TTL long enough that nothing expires mid-test.
+    const TEST_TTL: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn ip_literal_short_circuits_before_the_cache() {
+        let spec = ResolverSpec::System;
+        let service_key = "dnscache-callsite-literal/svc";
+        let got = resolve_external_ips("192.0.2.10", &spec, service_key, true, TEST_TTL)
+            .await
+            .expect("an IP literal always resolves");
+        assert_eq!(got, vec!["192.0.2.10".parse::<IpAddr>().unwrap()]);
+        // A literal is returned before the cache is consulted, so nothing was memoized.
+        assert_eq!(
+            get_global_dns_cache().get(service_key, "192.0.2.10", &spec.fingerprint(), Instant::now()),
+            None
+        );
+    }
+
+    /// The call site must put the *queried hostname* into the cache key, not
+    /// some other string it happens to have in scope.
+    ///
+    /// Both hostnames are pre-seeded, so both lookups are cache hits and the
+    /// test never touches the network. A call site that dropped `external_name`
+    /// from the key (the original defect — every parameter is a `&str`, so the
+    /// compiler cannot catch it) would miss both entries and fall through to
+    /// real resolution instead of returning these addresses.
+    #[tokio::test]
+    async fn cache_lookup_is_keyed_by_the_queried_hostname() {
+        let spec = ResolverSpec::System;
+        let fingerprint = spec.fingerprint();
+        // A key unique to this test: the DNS cache is a process-global singleton
+        // shared with every other test in the binary.
+        let service_key = "dnscache-callsite-hostname/svc";
+        let addrs_a = vec!["10.10.0.1".parse::<IpAddr>().unwrap()];
+        let addrs_b = vec!["10.10.0.2".parse::<IpAddr>().unwrap()];
+
+        let cache = get_global_dns_cache();
+        let now = Instant::now();
+        cache.insert(
+            service_key,
+            "a.example.test",
+            &fingerprint,
+            addrs_a.clone(),
+            TEST_TTL,
+            now,
+        );
+        cache.insert(
+            service_key,
+            "b.example.test",
+            &fingerprint,
+            addrs_b.clone(),
+            TEST_TTL,
+            now,
+        );
+
+        assert_eq!(
+            resolve_external_ips("a.example.test", &spec, service_key, true, TEST_TTL)
+                .await
+                .expect("seeded cache entry"),
+            addrs_a
+        );
+        assert_eq!(
+            resolve_external_ips("b.example.test", &spec, service_key, true, TEST_TTL)
+                .await
+                .expect("seeded cache entry"),
+            addrs_b
         );
     }
 }
