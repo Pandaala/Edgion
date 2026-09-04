@@ -663,8 +663,8 @@ fn validate_mtls_config(
     // 3. Validate allowed_sans patterns (if configured)
     if let Some(allowed_sans) = &client_auth.allowed_sans {
         for san in allowed_sans {
-            if san.trim().is_empty() {
-                errors.push(CertValidationError::MtlsInvalidSanPattern(san.clone()));
+            if let Some(err) = edgion_resources::resources::allowed_san::allowed_san_config_error(san) {
+                errors.push(CertValidationError::MtlsInvalidSanPattern(err));
             }
         }
     }

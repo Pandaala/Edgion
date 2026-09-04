@@ -102,7 +102,7 @@ HMAC 的 `validateRequestBody: true` 在此处被接受。
 - `field: cn` — 仅 subject **CN**。
 - `field: san` — 证书 **SAN** 列表，按「任一条目命中」求值。可选 `sanType`：`DNS` / `URI` / `Email`：
   - **未指定类型**：对原始 SAN 条目做整串匹配（含类型前缀，如 `uri:spiffe://…`、`email:alice@example.com`；DNS 条目是裸值）。
-  - **指定类型**：只考虑该类型的 SAN，并在**去掉前缀**的值上匹配（例如 `sanType: URI` 匹配 `spiffe://…`，而不是 `uri:spiffe://…`）。
+  - **指定类型**：只考虑该类型的 SAN，并在**去掉前缀**的值上匹配（例如 `sanType: URI` 匹配 `spiffe://…`，而不是 `uri:spiffe://…`）。`sanType: DNS` 只匹配无前缀条目，因此排除 `IP:`、`uri:`、`email:` 和 `otherName:`。
 
 > **暴露门控（不对称）。** 客户端证书只有在已暴露给插件层时才可见：
 > - **EdgionTls** 路径需要 `edgion.io/expose-client-cert` 注解；否则 mTLS 条件始终缺失（false）。

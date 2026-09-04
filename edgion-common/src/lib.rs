@@ -1,3 +1,4 @@
+pub mod allowed_san;
 pub mod cert_util;
 pub mod conf_sync;
 pub mod dns;

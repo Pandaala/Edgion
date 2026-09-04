@@ -9,6 +9,8 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use super::allowed_san::{AllowedSan, AllowedSanMatch, AllowedSanType};
+
 /// TLS protocol version (similar to Cloudflare's Minimum TLS Version).
 ///
 /// **Security note**: `Tls10` and `Tls11` are **formally deprecated by IETF
@@ -76,11 +78,10 @@ pub struct ClientAuthConfig {
     #[schemars(skip)]
     pub ca_secret: Option<Secret>,
 
-    /// Optional Subject Alternative Names whitelist
-    /// If configured, client certificate SAN must match one of these
-    /// Validation happens at application layer after TLS handshake
+    /// Optional typed Subject Alternative Name allowlist.
+    /// Omit or empty means no extra SAN constraint. A non-empty list is any-match.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_sans: Option<Vec<String>>,
+    pub allowed_sans: Option<Vec<AllowedSan>>,
 
     /// Optional Common Name whitelist
     /// If configured, client certificate CN must match one of these
@@ -95,6 +96,18 @@ fn default_verify_depth() -> u8 {
 
 fn is_default_verify_depth(depth: &u8) -> bool {
     *depth == 1
+}
+
+impl ClientAuthConfig {
+    /// Compile RegularExpression SAN allowlist entries. Idempotent for other match kinds.
+    pub fn compile_allowed_sans(&mut self) -> Result<(), String> {
+        if let Some(entries) = &mut self.allowed_sans {
+            for (index, entry) in entries.iter_mut().enumerate() {
+                entry.compile().map_err(|err| format!("allowedSans[{index}]: {err}"))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]

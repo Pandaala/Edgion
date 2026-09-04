@@ -437,8 +437,10 @@ spec:
       namespace: default
     verifyDepth: 2
     allowedSans:
-      - "client1.example.com"
-      - "*.internal.example.com"
+      - type: DNS
+        value: "client1.example.com"
+      - type: DNS
+        value: "*.internal.example.com"
     allowedCns:
       - "AdminClient"
 "#;
@@ -452,9 +454,11 @@ spec:
     assert_eq!(client_auth.mode, ClientAuthMode::Mutual);
     assert_eq!(client_auth.ca_secret_ref.as_ref().unwrap().name, "client-ca");
     assert_eq!(client_auth.verify_depth, 2);
-    // TODO: Re-enable when SAN/CN whitelist is implemented
-    // assert_eq!(client_auth.allowed_sans.as_ref().unwrap().len(), 2);
-    // assert_eq!(client_auth.allowed_cns.as_ref().unwrap().len(), 1);
+    let sans = client_auth.allowed_sans.as_ref().unwrap();
+    assert_eq!(sans.len(), 2);
+    assert_eq!(sans[0].value, "client1.example.com");
+    assert_eq!(sans[1].value, "*.internal.example.com");
+    assert_eq!(client_auth.allowed_cns.as_ref().unwrap().len(), 1);
 }
 
 #[test]

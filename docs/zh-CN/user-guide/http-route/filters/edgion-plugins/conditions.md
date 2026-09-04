@@ -123,7 +123,7 @@ body 门闩；它的 outbound webhook body 与被代理的客户端请求体无�
 **`mtlsMatch`** 读取已暴露的客户端证书。前置条件：会话上有可用的 mTLS 客户端证书。前置条件未满足视为缺失值（基值为 false，再应用 `negate`）。
 
 - `field: subject` / `field: cn` — 0 或 1 个值
-- `field: san` — 任一 SAN 条目命中即满足。可选 `sanType`（`DNS`、`URI`、`Email`）按类型过滤并去掉存储前缀（`uri:` / `email:`）。未指定类型时匹配原始存储字符串。
+- `field: san` — 任一 SAN 条目命中即满足。可选 `sanType`（`DNS`、`URI`、`Email`）按类型过滤并去掉存储前缀（`uri:` / `email:`）。`sanType: DNS` 只匹配无前缀条目，因此排除 `IP:`、`uri:`、`email:` 和 `otherName:`。未指定类型时匹配原始存储字符串。
 
 ```yaml
 - type: mtlsMatch

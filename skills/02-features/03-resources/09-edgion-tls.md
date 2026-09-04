@@ -38,8 +38,9 @@ spec:
       name: ca-cert-secret
       namespace: cert-ns
     verifyDepth: 1                                 # Certificate chain verification depth (1-9, default 1)
-    allowedSans:                                   # SAN allowlist
-      - "client.example.com"
+    allowedSans:                                   # typed SAN allowlist (any-match)
+      - type: DNS
+        value: "client.example.com"
     allowedCns:                                    # CN allowlist
       - "My Client"
 
@@ -89,7 +90,7 @@ spec:
 | `mode` | `ClientAuthMode` | `Terminate` | Authentication mode |
 | `caSecretRef` | `SecretObjectReference?` | — | CA certificate Secret (required for Mutual/OptionalMutual) |
 | `verifyDepth` | `u8` | `1` | Certificate chain verification depth (1-9) |
-| `allowedSans` | `Vec<String>?` | — | Subject Alternative Name allowlist |
+| `allowedSans` | `Vec<AllowedSan>?` | — | Typed SAN allowlist (`type` + `value`, optional `match` / `ignoreCase` / `oid`). Omit or empty = no SAN constraint. |
 | `allowedCns` | `Vec<String>?` | — | Common Name allowlist |
 
 **ClientAuthMode enum**:

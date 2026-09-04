@@ -46,7 +46,7 @@ spec:
 | `mode` | Enum | `Terminate` | Client authentication mode (see below) |
 | `caSecretRef` | Object | none | CA certificate Secret. **Required** when `mode` is `Mutual` or `OptionalMutual` |
 | `verifyDepth` | Integer | `1` | Certificate-chain verification depth (1-9) |
-| `allowedSans` | Array\<String\> | none | Subject Alternative Name allowlist |
+| `allowedSans` | Array\<object\> | none | Typed Subject Alternative Name allowlist (`type` + `value`) |
 | `allowedCns` | Array\<String\> | none | Common Name allowlist |
 
 #### `clientAuth.mode` values
@@ -183,7 +183,8 @@ spec:
       name: client-ca
     verifyDepth: 2
     allowedSans:
-      - "client.example.com"
+      - type: DNS
+        value: "client.example.com"
     allowedCns:
       - "Trusted Client"
 ```

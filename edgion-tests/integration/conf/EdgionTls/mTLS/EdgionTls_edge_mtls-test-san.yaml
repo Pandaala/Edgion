@@ -20,5 +20,6 @@ spec:
       namespace: edgion-test
     verifyDepth: 1
     allowedSans:
-      - "client1.example.com"
+      - type: DNS
+        value: "client1.example.com"
 

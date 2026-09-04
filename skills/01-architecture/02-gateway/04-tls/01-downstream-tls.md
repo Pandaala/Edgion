@@ -132,7 +132,7 @@ When EdgionTls has `spec.client_auth` configured, `configure_mtls` enables clien
 
 1. Get the CA certificate PEM from EdgionTls and build an `X509Store`.
 2. Set the verify depth (`verify_depth`, range 1–9).
-3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks.
+3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks. SAN matching is typed (`AllowedSan`: kind × Exact/Prefix/Suffix/Contains/RegularExpression). RegularExpression is compiled when the EdgionTls is ingested into `TlsStore`, never on the handshake path.
 4. Otherwise use the standard BoringSSL verification chain.
 
 ### Client certificate info extraction
@@ -141,7 +141,7 @@ After the handshake completes, `extract_client_cert_info` extracts client-certif
 
 - Subject DN (Distinguished Name).
 - Common Name (CN).
-- Subject Alternative Names (DNS, IP, Email, URI).
+- Subject Alternative Names (DNS, IP, Email, URI, OtherName).
 - SHA256 fingerprint.
 
 The extracted `ClientCertInfo` is stored in `TlsConnMeta.client_cert_info` and is available to plugins and the access log.

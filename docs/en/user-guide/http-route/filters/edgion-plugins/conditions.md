@@ -135,7 +135,7 @@ configuration-time check applies in every Condition consumer.
 **`mtlsMatch`** reads the exposed client certificate. Prerequisite: mTLS with a client certificate available on the session. An unmet prerequisite is a missing value (base false, then `negate`).
 
 - `field: subject` / `field: cn` — 0 or 1 value
-- `field: san` — any SAN entry matching satisfies. Optional `sanType` (`DNS`, `URI`, `Email`) filters by kind and strips the stored prefix (`uri:` / `email:`). Untyped matching uses the raw stored strings.
+- `field: san` — any SAN entry matching satisfies. Optional `sanType` (`DNS`, `URI`, `Email`) filters by kind and strips the stored prefix (`uri:` / `email:`). `sanType: DNS` is the unprefixed remainder and therefore excludes `IP:`, `uri:`, `email:`, and `otherName:` entries. Untyped matching uses the raw stored strings.
 
 ```yaml
 - type: mtlsMatch

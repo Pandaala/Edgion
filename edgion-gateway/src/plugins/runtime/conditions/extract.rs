@@ -68,23 +68,23 @@ fn single(v: Option<String>) -> Vec<String> {
 /// SAN candidate values, optionally filtered/normalized by type.
 ///
 /// SAN storage format (see `tls/runtime/backend/cert_extractor.rs`): DNS names
-/// are bare; `IP:` / `email:` / `uri:` carry a type prefix. Untyped matching
-/// returns the raw stored strings; typed matching filters by prefix and strips
-/// it. `DNS` = entries with no known prefix.
+/// are bare; `IP:` / `email:` / `uri:` / `otherName:` carry a type prefix.
+/// Untyped matching returns the raw stored strings; typed matching filters by
+/// prefix and strips it. `DNS` = entries with no known prefix.
 fn extract_san_values(session: &dyn PluginSession, san_type: Option<&SanType>) -> Vec<String> {
     let Some(cert) = session.client_cert_info() else {
         return Vec::new();
     };
     match san_type {
         None => cert.sans,
-        Some(SanType::Dns) => cert.sans.into_iter().filter(|s| !has_known_san_prefix(s)).collect(),
+        Some(SanType::Dns) => cert
+            .sans
+            .into_iter()
+            .filter(|s| !edgion_common::allowed_san::has_typed_san_display_prefix(s))
+            .collect(),
         Some(SanType::Uri) => strip_san_prefix(cert.sans, "uri:"),
         Some(SanType::Email) => strip_san_prefix(cert.sans, "email:"),
     }
-}
-
-fn has_known_san_prefix(s: &str) -> bool {
-    s.starts_with("uri:") || s.starts_with("email:") || s.starts_with("IP:")
 }
 
 fn strip_san_prefix(sans: Vec<String>, prefix: &str) -> Vec<String> {
@@ -106,6 +106,7 @@ mod tests {
                 "alice.example.com".to_string(),
                 "uri:spiffe://edgion.io/ns/foo".to_string(),
                 "email:alice@example.com".to_string(),
+                "otherName:1.3.6.1.4.1.311.20.2.3=alice@corp.example.com".to_string(),
             ],
             cn: Some("alice".to_string()),
             fingerprint: "ab:cd".to_string(),

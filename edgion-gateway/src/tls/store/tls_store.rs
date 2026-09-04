@@ -78,6 +78,39 @@ fn warn_cert_advisories(key: &str, tls: &EdgionTls) {
     }
 }
 
+/// Compile RegularExpression SAN allowlist entries after conf_sync deserialize.
+/// Handshake matching never compiles a regex. Resources without regex keep the
+/// incoming Arc so TlsStore can preserve shared allocation.
+fn compile_allowed_sans_for_runtime(tls: Arc<EdgionTls>) -> Arc<EdgionTls> {
+    use edgion_resources::resources::edgion_tls::AllowedSanMatch;
+
+    let needs_compile = tls
+        .spec
+        .client_auth
+        .as_ref()
+        .and_then(|auth| auth.allowed_sans.as_ref())
+        .is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.match_kind == AllowedSanMatch::RegularExpression)
+        });
+    if !needs_compile {
+        return tls;
+    }
+
+    let mut owned = (*tls).clone();
+    if let Some(client_auth) = owned.spec.client_auth.as_mut() {
+        if let Err(error) = client_auth.compile_allowed_sans() {
+            tracing::warn!(
+                component = "tls_store",
+                error = %error,
+                "Failed to compile EdgionTls allowedSans regular expressions"
+            );
+        }
+    }
+    Arc::new(owned)
+}
+
 #[derive(serde::Serialize)]
 struct CertRejectedLog<'a> {
     event: &'a str,
@@ -140,6 +173,7 @@ impl TlsStore {
         retain_last_known_good: bool,
     ) {
         warn_cert_advisories(&key, &tls);
+        let tls = compile_allowed_sans_for_runtime(tls);
         let validation = validate_cert(&tls);
         if !validation.is_valid {
             if retain_last_known_good {
@@ -197,6 +231,7 @@ impl TlsStore {
 
         for (key, tls) in data {
             warn_cert_advisories(&key, &tls);
+            let tls = compile_allowed_sans_for_runtime(tls);
             let validation = validate_cert(&tls);
             if !validation.is_valid {
                 if let Some(existing) = current.get(&key) {

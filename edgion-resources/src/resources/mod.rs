@@ -2,6 +2,7 @@
 //!
 //! This module contains all custom resource definitions and Gateway API types
 
+pub mod allowed_san;
 pub mod backend_tls_policy;
 pub mod circuit_breaker;
 pub mod common;
@@ -32,6 +33,7 @@ pub mod udp_route;
 pub mod upstream_authority;
 
 // Re-export all resource types
+pub use self::allowed_san::*;
 pub use self::backend_tls_policy::*;
 pub use self::common::*;
 pub use self::edgion_acme::*;

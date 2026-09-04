@@ -3,23 +3,12 @@
 //! Validates client certificate SAN/CN against whitelist after TLS handshake
 
 use crate::ctx::ClientCertInfo;
+use edgion_common::allowed_san::{client_sans_match_allowed, PresentedSan};
+use edgion_resources::resources::edgion_tls::AllowedSan;
 
-/// Validate client certificate against SAN whitelist
-/// Returns true if certificate matches whitelist or no whitelist configured
-pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &[String]) -> bool {
-    if allowed_sans.is_empty() {
-        return true;
-    }
-
-    for san in &cert_info.sans {
-        for allowed in allowed_sans {
-            if super::matches_host_pattern(san, allowed) {
-                return true;
-            }
-        }
-    }
-
-    false
+/// Validate presented client SANs against the typed allowlist.
+pub fn validate_san_whitelist(presented: &[PresentedSan], allowed_sans: &[AllowedSan]) -> bool {
+    client_sans_match_allowed(presented, allowed_sans)
 }
 
 /// Validate client certificate against CN whitelist
@@ -39,6 +28,9 @@ pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &[String])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ctx::ClientCertInfo;
+    use edgion_common::allowed_san::PresentedSan;
+    use edgion_resources::resources::edgion_tls::AllowedSanType;
 
     #[test]
     fn test_matches_pattern_exact() {
@@ -57,41 +49,32 @@ mod tests {
 
     #[test]
     fn test_validate_san_whitelist_empty() {
-        let cert_info = ClientCertInfo {
-            subject: "CN=test".to_string(),
-            sans: vec!["test.example.com".to_string()],
-            cn: Some("test".to_string()),
-            fingerprint: "abc123".to_string(),
-        };
-
-        // Empty whitelist should allow all
-        assert!(validate_san_whitelist(&cert_info, &[]));
+        assert!(validate_san_whitelist(&[PresentedSan::dns("test.example.com")], &[]));
     }
 
     #[test]
     fn test_validate_san_whitelist_match() {
-        let cert_info = ClientCertInfo {
-            subject: "CN=test".to_string(),
-            sans: vec!["test.example.com".to_string(), "other.com".to_string()],
-            cn: Some("test".to_string()),
-            fingerprint: "abc123".to_string(),
-        };
-
-        assert!(validate_san_whitelist(&cert_info, &["test.example.com".to_string()]));
-        assert!(validate_san_whitelist(&cert_info, &["other.com".to_string()]));
-        assert!(validate_san_whitelist(&cert_info, &["*.example.com".to_string()]));
+        let presented = [PresentedSan::dns("test.example.com"), PresentedSan::dns("other.com")];
+        assert!(validate_san_whitelist(
+            &presented,
+            &[AllowedSan::exact(AllowedSanType::Dns, "test.example.com")]
+        ));
+        assert!(validate_san_whitelist(
+            &presented,
+            &[AllowedSan::exact(AllowedSanType::Dns, "other.com")]
+        ));
+        assert!(validate_san_whitelist(
+            &presented,
+            &[AllowedSan::exact(AllowedSanType::Dns, "*.example.com")]
+        ));
     }
 
     #[test]
     fn test_validate_san_whitelist_no_match() {
-        let cert_info = ClientCertInfo {
-            subject: "CN=test".to_string(),
-            sans: vec!["test.example.com".to_string()],
-            cn: Some("test".to_string()),
-            fingerprint: "abc123".to_string(),
-        };
-
-        assert!(!validate_san_whitelist(&cert_info, &["other.com".to_string()]));
+        assert!(!validate_san_whitelist(
+            &[PresentedSan::dns("test.example.com")],
+            &[AllowedSan::exact(AllowedSanType::Dns, "other.com")]
+        ));
     }
 
     #[test]

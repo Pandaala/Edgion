@@ -118,7 +118,7 @@ spec:
 | `clientAuth.mode` | Enum | `Terminate` | 验证模式。可选值：`Terminate` \| `Mutual` \| `OptionalMutual` |
 | `clientAuth.caSecretRef` | Object | none | CA 证书 Secret（必须包含 `ca.crt` 键）。**`mode` 为 `Mutual` 或 `OptionalMutual` 时必填** |
 | `clientAuth.verifyDepth` | Integer | `1` | 证书链验证深度（1–9），中间 CA 链场景需增大 |
-| `clientAuth.allowedSans` | Array\<String\> | none | 客户端证书 SAN 允许列表，支持通配符 |
+| `clientAuth.allowedSans` | Array\<object\> | none | 带类型的 SAN 允许列表。每项包含 `type`（`DNS` \| `URI` \| `Email` \| `IP` \| `OtherName`）和 `value`。可选 `match`（默认 `Exact`，以及 `Prefix` / `Suffix` / `Contains` / `RegularExpression`）、`ignoreCase`、以及 `OtherName` 所需的 `oid`。省略或空列表表示不额外约束 SAN。DNS Exact 使用 RFC 6125 通配符。RegularExpression 在配置加载时预编译。 |
 | `clientAuth.allowedCns` | Array\<String\> | none | 客户端证书 Common Name 允许列表（精确匹配） |
 
 #### `clientAuth.mode` 取值说明
@@ -249,8 +249,10 @@ spec:
       name: client-ca
       namespace: production
     allowedSans:
-      - "client1.example.com"
-      - "*.internal.example.com"
+      - type: DNS
+        value: "client1.example.com"
+      - type: DNS
+        value: "*.internal.example.com"
     allowedCns:
       - "AdminClient"
 ```
@@ -472,7 +474,7 @@ openssl x509 -in cert.pem -noout -text
 | `Client certificate required` | `mode: Mutual` 且客户端未发送证书 | 让客户端发送 `--cert`/`--key`，或使用 `OptionalMutual` |
 | CA 验证失败 | `caSecretRef` Secret 缺少 `ca.crt` 键 | 使用 `--from-file=ca.crt=...` 重新创建 Secret |
 | 证书链太长 | `verifyDepth` 对中间 CA 链不够大 | 增大 `verifyDepth`（2 或 3） |
-| `InvalidSanPattern` | `hosts` 或 `allowedSans` 中包含多标签 / 部分 / 非最左侧通配符 | 使用单个最左侧标签的通配符，如 `*.example.com` |
+| `InvalidSanPattern` | `hosts` 通配符非法，或 `allowedSans` 的 type/match/正则/OID 校验失败 | DNS Exact 必须是 Gateway API hostname（允许 `*.example.com`）。RegularExpression 在 apply 时编译；OtherName 必须带 `oid`。 |
 | 证书不生效 | EdgionTls 未附加到监听器 | 检查 `parentRefs`（`name` + `sectionName`） |
 
 ## 获取帮助

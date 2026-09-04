@@ -41,9 +41,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
             SubjectAltNameType::Hostname => {
                 if let Some(ref hostname_pattern) = policy_san.hostname {
                     for cert_san in cert_sans {
-                        // Skip entries with known prefixes (IP:, uri:, email:)
-                        if cert_san.starts_with("IP:") || cert_san.starts_with("uri:") || cert_san.starts_with("email:")
-                        {
+                        if edgion_common::allowed_san::has_typed_san_display_prefix(cert_san) {
                             continue;
                         }
                         if super::matches_host_pattern(cert_san, hostname_pattern) {
@@ -170,6 +168,17 @@ mod tests {
         assert!(
             !result.passed,
             "IP and email entries should be skipped for hostname matching"
+        );
+    }
+
+    #[test]
+    fn test_skip_other_name_entries_for_hostname() {
+        let cert_sans = vec!["otherName:1.3.6.1.4.1.311.20.2.3=backend.example.com".to_string()];
+        let policy = vec![hostname_san("backend.example.com")];
+        let result = validate_backend_sans(&cert_sans, &policy);
+        assert!(
+            !result.passed,
+            "otherName display strings must not satisfy hostname pinning"
         );
     }
 

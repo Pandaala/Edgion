@@ -269,7 +269,16 @@ fn test_validate_mtls_config_invalid_san_pattern() {
         }),
         verify_depth: 1,
         ca_secret: None,
-        allowed_sans: Some(vec!["".to_string(), "  ".to_string()]), // Empty patterns
+        allowed_sans: Some(vec![
+            edgion_resources::resources::edgion_tls::AllowedSan::exact(
+                edgion_resources::resources::edgion_tls::AllowedSanType::Dns,
+                "",
+            ),
+            edgion_resources::resources::edgion_tls::AllowedSan::exact(
+                edgion_resources::resources::edgion_tls::AllowedSanType::Dns,
+                "  ",
+            ),
+        ]),
         allowed_cns: None,
     };
 
@@ -297,7 +306,10 @@ fn test_validate_mtls_config_valid() {
         }),
         verify_depth: 2,
         ca_secret: None,
-        allowed_sans: Some(vec!["client1.example.com".to_string()]),
+        allowed_sans: Some(vec![edgion_resources::resources::edgion_tls::AllowedSan::exact(
+            edgion_resources::resources::edgion_tls::AllowedSanType::Dns,
+            "client1.example.com",
+        )]),
         allowed_cns: Some(vec!["AdminClient".to_string()]),
     };
 

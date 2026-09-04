@@ -118,7 +118,7 @@ When `minTlsVersion` is unset, BoringSSL's default (TLS 1.2+) applies, which is 
 | `clientAuth.mode` | Enum | `Terminate` | Verification mode. Allowed values: `Terminate` \| `Mutual` \| `OptionalMutual` |
 | `clientAuth.caSecretRef` | Object | none | CA certificate Secret (must contain a `ca.crt` key). **Required when `mode` is `Mutual` or `OptionalMutual`** |
 | `clientAuth.verifyDepth` | Integer | `1` | Certificate-chain verification depth (1–9). Increase for intermediate-CA chains |
-| `clientAuth.allowedSans` | Array\<String\> | none | Allowlist of client-certificate SANs; supports wildcards |
+| `clientAuth.allowedSans` | Array\<object\> | none | Typed SAN allowlist. Each entry has `type` (`DNS` \| `URI` \| `Email` \| `IP` \| `OtherName`) and `value`. Optional `match` (`Exact` default, `Prefix`, `Suffix`, `Contains`, `RegularExpression`), `ignoreCase`, and `oid` (required for `OtherName`). Omit or empty means no extra SAN constraint. DNS Exact uses RFC 6125 wildcards. RegularExpression is compiled at config load. |
 | `clientAuth.allowedCns` | Array\<String\> | none | Allowlist of client-certificate Common Names (exact match) |
 
 #### `clientAuth.mode` values
@@ -249,8 +249,10 @@ spec:
       name: client-ca
       namespace: production
     allowedSans:
-      - "client1.example.com"
-      - "*.internal.example.com"
+      - type: DNS
+        value: "client1.example.com"
+      - type: DNS
+        value: "*.internal.example.com"
     allowedCns:
       - "AdminClient"
 ```
@@ -473,7 +475,7 @@ openssl x509 -in cert.pem -noout -text
 | `Client certificate required` | `mode: Mutual` and the client sent none | Have the client send `--cert`/`--key`, or use `OptionalMutual` |
 | CA verification fails | `caSecretRef` Secret missing the `ca.crt` key | Recreate the Secret with `--from-file=ca.crt=...` |
 | Chain too long | `verifyDepth` too small for the intermediate chain | Increase `verifyDepth` (2 or 3) |
-| `InvalidSanPattern` | A multi-label / partial / non-leftmost wildcard in `hosts` or `allowedSans` | Use a single leftmost-label wildcard such as `*.example.com` |
+| `InvalidSanPattern` | Invalid `hosts` wildcard, or an `allowedSans` entry that fails type/match/regex/OID checks | DNS Exact values must be Gateway API hostnames (`*.example.com` is allowed). Compile RegularExpression at apply time; OtherName requires `oid`. |
 | Certificate has no effect | EdgionTls not attached to the listener | Check `parentRefs` (`name` + `sectionName`) |
 
 ## Get help

@@ -46,7 +46,7 @@ spec:
 | `mode` | Enum | `Terminate` | 客户端认证模式（见下文） |
 | `caSecretRef` | Object | none | CA 证书 Secret。`mode` 为 `Mutual` 或 `OptionalMutual` 时**必填** |
 | `verifyDepth` | Integer | `1` | 证书链验证深度（1-9） |
-| `allowedSans` | Array\<String\> | none | Subject Alternative Name 允许列表 |
+| `allowedSans` | Array\<object\> | none | 带类型的 Subject Alternative Name 允许列表（`type` + `value`） |
 | `allowedCns` | Array\<String\> | none | Common Name 允许列表 |
 
 #### `clientAuth.mode` 取值说明
@@ -183,7 +183,8 @@ spec:
       name: client-ca
     verifyDepth: 2
     allowedSans:
-      - "client.example.com"
+      - type: DNS
+        value: "client.example.com"
     allowedCns:
       - "Trusted Client"
 ```

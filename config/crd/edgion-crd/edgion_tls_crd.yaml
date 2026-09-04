@@ -105,9 +105,32 @@ spec:
                       default: 1
                     allowedSans:
                       type: array
-                      description: "Optional Subject Alternative Names whitelist"
+                      description: "Optional typed Subject Alternative Name allowlist. Omit or empty means no SAN constraint; a non-empty list matches if any entry matches."
                       items:
-                        type: string
+                        type: object
+                        additionalProperties: false
+                        required:
+                          - type
+                          - value
+                        properties:
+                          type:
+                            type: string
+                            description: "SAN kind"
+                            enum: ["DNS", "URI", "Email", "IP", "OtherName"]
+                          match:
+                            type: string
+                            description: "How value is compared. Defaults to Exact."
+                            enum: ["Exact", "Prefix", "Suffix", "Contains", "RegularExpression"]
+                            default: Exact
+                          value:
+                            type: string
+                            minLength: 1
+                          ignoreCase:
+                            type: boolean
+                            default: false
+                          oid:
+                            type: string
+                            description: "Required when type is OtherName; forbidden otherwise."
                     allowedCns:
                       type: array
                       description: "Optional Common Name whitelist"

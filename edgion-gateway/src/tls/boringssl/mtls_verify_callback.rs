@@ -4,7 +4,7 @@
 //! the client cert chain against a configured SAN/CN whitelist.
 
 use crate::observe::logs::ssl_log::log_ssl;
-use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info;
+use crate::tls::runtime::backend::cert_extractor::{extract_client_cert_info, extract_presented_sans};
 use crate::tls::runtime::gateway::tls_pingora::peek_tls_conn_meta;
 use crate::tls::validation::mtls::{validate_cn_whitelist, validate_san_whitelist};
 use edgion_common::startup::catch_redacted_panic;
@@ -151,7 +151,11 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
     };
 
     if let Some(ref allowed_sans) = client_auth.allowed_sans {
-        if !validate_san_whitelist(&cert_info, allowed_sans) {
+        let presented = ssl
+            .peer_certificate()
+            .map(|cert| extract_presented_sans(&cert))
+            .unwrap_or_default();
+        if !validate_san_whitelist(&presented, allowed_sans) {
             // Mirror the redaction ClientCertInfo gets via serde when normally
             // serialized — err_log embeds these as plain strings, so we have to
             // apply sensitive mode by hand here.
