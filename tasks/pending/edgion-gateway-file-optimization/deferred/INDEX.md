@@ -96,7 +96,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | TLS `SslCtx` owned handoff and exactly-once audit | pending | [task](../../../todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md) |
 | TLS store true incremental and atomic publication | pending | [task](../../../todo/tls-store-true-incremental-atomic-publication.md) |
 | Unify Gateway request-template runtime policies | pending | [task](../../../todo/unify-gateway-request-template-runtime/unify-gateway-request-template-runtime.md) |
-| Make GeoIP lookup failures follow failure policy | fixed | [task](../../../todo/make-geoip-lookup-failures-follow-failure-policy/make-geoip-lookup-failures-follow-failure-policy.md) |
+| Make GeoIP lookup failures follow failure policy | completed | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
 | Enforce EdgionAcme HTTP-01 gatewayRef ownership | pending | [task](../../../todo/enforce-edgion-acme-http01-gatewayref-ownership/enforce-edgion-acme-http01-gatewayref-ownership.md) |
 | Add ACME gatewayRef isolation integration coverage | blocked | [task](../../../todo/add-acme-gatewayref-isolation-integration-coverage.md) |
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |

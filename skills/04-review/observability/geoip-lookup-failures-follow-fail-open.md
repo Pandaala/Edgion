@@ -63,4 +63,4 @@ and no decoder/IP/path labels.
 - HTTP: `edgion-gateway/src/plugins/http/geoip_location/plugin.rs`
 - Stream: `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs`
 - Access log: `edgion-gateway/src/observe/access_log/entry.rs`
-- Origin task: `tasks/todo/make-geoip-lookup-failures-follow-failure-policy/`
+- Campaign finding: `tasks/pending/edgion-gateway-file-optimization/deferred/D0025-geoip-lookup-failure-policy.md`
