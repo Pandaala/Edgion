@@ -47,7 +47,10 @@ pub static GEO_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LookupFault {
+    /// Return `Err(MaxMindDbError::Decoding)` from inside the lookup closure so
+    /// the production `Ok(Err(_)) => Failed` arm is the path under test.
     Decode,
+    /// Panic inside the same `catch_unwind` used on the request path.
     Panic,
 }
 
@@ -139,17 +142,16 @@ impl GeoIpProvider {
         };
         let addr = normalize_addr(ip);
 
-        #[cfg(test)]
-        if LOOKUP_FAULT.with(|c| c.get()) == Some(LookupFault::Decode) {
-            return GeoLookup::Failed;
-        }
-
         // maxminddb 0.30: `lookup` returns a `LookupResult` that must then be
         // `decode`d into the record type; it is not a direct `Option<T>`.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             #[cfg(test)]
             if LOOKUP_FAULT.with(|c| c.get()) == Some(LookupFault::Panic) {
                 panic!("geoip test lookup fault");
+            }
+            #[cfg(test)]
+            if LOOKUP_FAULT.with(|c| c.get()) == Some(LookupFault::Decode) {
+                return Err(maxminddb::MaxMindDbError::decoding("geoip test decode fault"));
             }
             db.reader
                 .lookup(addr)

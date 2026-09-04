@@ -242,7 +242,7 @@ impl RequestFilter for GeoIpLocation {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
-    use crate::geoip::{inject_lookup_fault, GeoIpProvider, LookupFault};
+    use crate::geoip::{inject_lookup_fault, GeoIpProvider, GeoLookup, LookupFault};
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::EdgionHttpContext;
     use edgion_resources::resources::edgion_plugins::plugin_configs::{
@@ -389,6 +389,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cidr_only_config_is_unaffected_by_lookup_failure() {
+        let _lock = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let cfg = GeoIpLocationConfig {
+            default_action: DefaultAction::Allow,
+            fail_open: Some(false),
+            allow_rule_groups: vec![GeoRuleGroup {
+                name: Some("office".into()),
+                rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["10.0.0.0/8"])],
+            }],
+            ..Default::default()
+        };
+        let plugin = GeoIpLocation::create(&cfg);
+
+        let mut allowed_session = session_with_ips("10.1.2.3", "10.1.2.3");
+        let mut log = PluginLog::new("GeoIpLocation");
+        let allowed = plugin.run_request(&mut allowed_session, &mut log).await;
+        assert_eq!(allowed, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "allow");
+
+        let mut denied_session = session_with_ips("8.8.8.8", "8.8.8.8");
+        denied_session.expect_set_response_header().returning(|name, value| {
+            assert_eq!((name, value), ("content-type", "application/json"));
+            Ok(())
+        });
+        let mut log2 = PluginLog::new("GeoIpLocation");
+        let denied = plugin.run_request(&mut denied_session, &mut log2).await;
+        assert_eq!(
+            denied,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+            }
+        );
+        assert_eq!(log2.render_for_test(), "deny");
+    }
+
+    #[tokio::test]
     async fn init_failure_fails_closed() {
         let _lock = crate::geoip::GEO_TEST_LOCK.lock();
         GeoIpProvider::global().clear();
@@ -468,5 +507,8 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert_eq!(log.render_for_test(), "parse:ok");
+        let (remote, direct) = session.ctx().request_info.resolved_geo();
+        assert_eq!(remote, Some(&GeoLookup::Failed));
+        assert_eq!(direct, Some(&GeoLookup::Failed));
     }
 }

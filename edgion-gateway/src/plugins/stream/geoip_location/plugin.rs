@@ -231,6 +231,27 @@ mod tests {
         assert!(matches!(denied, StreamPluginResult::Deny(_)));
     }
 
+    #[tokio::test]
+    async fn cidr_only_config_is_unaffected_by_lookup_failure() {
+        let _lock = GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let cfg = GeoIpLocationConfig {
+            fail_open: Some(false),
+            default_action: DefaultAction::Allow,
+            allow_rule_groups: vec![GeoRuleGroup {
+                name: Some("office".into()),
+                rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["10.0.0.0/8"])],
+            }],
+            ..Default::default()
+        };
+        let plugin = GeoIpLocationStreamPlugin::new(&cfg).unwrap();
+        let allowed = plugin.on_connection(&stream_ctx("10.1.2.3")).await;
+        assert!(matches!(allowed, StreamPluginResult::Allow));
+        let denied = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
+        assert!(matches!(denied, StreamPluginResult::Deny(_)));
+    }
+
     fn load_fixture_db() {
         let path =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb");
@@ -257,13 +278,27 @@ mod tests {
         load_fixture_db();
         let _fault = inject_lookup_fault(LookupFault::Decode);
         let plugin = GeoIpLocationStreamPlugin::new(&country_deny_cfg(false)).unwrap();
-        let result = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let result = metrics::with_local_recorder(&recorder, || {
+            futures::FutureExt::now_or_never(plugin.on_connection(&stream_ctx("8.8.8.8")))
+                .expect("GeoIpLocation stream path must not yield")
+        });
         match result {
             StreamPluginResult::Deny(reason) => {
                 assert!(reason.contains("lookup-failed"), "got: {reason}");
             }
             other => panic!("expected Deny, got {other:?}"),
         }
+        let rendered = handle.render();
+        assert!(
+            rendered.contains("edgion_geoip_denied_total") && rendered.contains("reason=\"lookup_failed\""),
+            "fail-close lookup failure must meter lookup_failed, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("edgion_geoip_lookup_panic_total"),
+            "decode failure must not increment the panic counter, got:\n{rendered}"
+        );
     }
 
     #[tokio::test]
@@ -282,7 +317,26 @@ mod tests {
         load_fixture_db();
         let _fault = inject_lookup_fault(LookupFault::Panic);
         let plugin = GeoIpLocationStreamPlugin::new(&country_deny_cfg(false)).unwrap();
-        let result = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
-        assert!(matches!(result, StreamPluginResult::Deny(_)));
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let result = metrics::with_local_recorder(&recorder, || {
+            futures::FutureExt::now_or_never(plugin.on_connection(&stream_ctx("8.8.8.8")))
+                .expect("GeoIpLocation stream path must not yield")
+        });
+        match result {
+            StreamPluginResult::Deny(reason) => {
+                assert!(reason.contains("lookup-failed"), "got: {reason}");
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+        let rendered = handle.render();
+        assert!(
+            rendered.contains("reason=\"lookup_failed\""),
+            "panic fail-close must meter lookup_failed, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("edgion_geoip_lookup_panic_total"),
+            "panic seam must increment edgion_geoip_lookup_panic_total, got:\n{rendered}"
+        );
     }
 }

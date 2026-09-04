@@ -315,6 +315,11 @@ its own plugin rather than as predicates embedded in another plugin's config.
 - **`failOpen: true`** — the plugin has **no opinion**: HTTP passes the request through
   unchanged; L4 lets the connection continue to the next stream plugin.
 
+An IPv4-only (or otherwise non-covering) database that returns an MMDB input error for a native
+IPv6 address is `Failed`, not `NotFound`, so it follows `failOpen` rather than ordinary
+rule-miss. Official GeoLite2-class databases include IPv6. IPv4-mapped peers are normalized to
+IPv4 before lookup.
+
 **What each disposition costs, concretely, during the cold-start window** (a fresh rollout on an
 `emptyDir` with no database yet, or any period where the updater hasn't succeeded even once):
 
@@ -502,12 +507,12 @@ request's access log entry a `geo` object with the slot(s) that were queried:
 
 ```json
 "geo": {
-  "client": { "country": "CN", "continent": "AS", "city": "Beijing" },
-  "direct": { "country": "US" }
+  "remote": { "status": "found", "country": "CN", "continent": "AS", "city": "Beijing" },
+  "direct_peer": { "status": "found", "country": "US" }
 }
 ```
 
-Each slot (`client` = the `RemoteIp`-side resolution, `direct` = the `DirectPeerIp`-side
+Each slot (`remote` = the `RemoteIp`-side resolution, `direct_peer` = the `DirectPeerIp`-side
 resolution) is an independent, per-request `OnceLock`. The access log reads whichever slots the
 plugin already resolved earlier in the request — it never triggers a lookup of its own. A route
 with no `GeoIpLocation` entry at all therefore costs **zero** MMDB lookups. Parse-only mode

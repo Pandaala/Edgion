@@ -287,6 +287,10 @@ denyRuleGroups:
 - **`failOpen: true`** —— 插件**不表态**：HTTP 会让请求原样通过；L4 会让连接继续交给下一个
   Stream 插件。
 
+仅含 IPv4（或覆盖不完整）的数据库对原生 IPv6 地址返回 MMDB 输入错误时，结果是 `Failed` 而不是
+`NotFound`，因此走 `failOpen`，而不是普通的规则未命中。官方 GeoLite2 一类的库包含 IPv6。
+IPv4-mapped 对端会在查询前规范化成 IPv4。
+
 **每种处置方式在冷启动窗口期间具体的代价**（刚发布、`emptyDir` 上还没有数据库的时期，或任何更新器
 一次都没有成功过的时间段）：
 
@@ -447,12 +451,12 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 
 ```json
 "geo": {
-  "client": { "country": "CN", "continent": "AS", "city": "Beijing" },
-  "direct": { "country": "US" }
+  "remote": { "status": "found", "country": "CN", "continent": "AS", "city": "Beijing" },
+  "direct_peer": { "status": "found", "country": "US" }
 }
 ```
 
-每个槽位（`client` = `RemoteIp` 侧解析结果，`direct` = `DirectPeerIp` 侧解析结果）都是一个
+每个槽位（`remote` = `RemoteIp` 侧解析结果，`direct_peer` = `DirectPeerIp` 侧解析结果）都是一个
 独立的、逐请求的 `OnceLock`。访问日志只读取插件在本次请求中已经解析过的槽位——它本身从不触发
 查询。因此完全没有 `GeoIpLocation` 条目的路由不会产生任何 MMDB 查询。只解析模式（`config: {}`）
 永远会同时解析两个槽位——这正是它存在的全部意义；规则模式只会解析已配置规则实际用到的来源/维度
