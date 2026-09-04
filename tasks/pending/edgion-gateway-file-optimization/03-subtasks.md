@@ -234,7 +234,7 @@
 | `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` | `conf-sync-cache-client` | source | examined-no-change | CONF-SYNC-CACHE-001 / `21b01524`; malformed-event recovery deferred to `tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md` |
 | `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | `conf-sync-cache-client` | source | changed | CONF-SYNC-CACHE-001 / `21b01524` |
 | `edgion-gateway/src/conf_sync/cache_client/mod.rs` | `conf-sync-cache-client` | source | examined-no-change | CONF-SYNC-CACHE-001 / `21b01524` |
-| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; content-signature recovery deferred to `tasks/todo/conf-sync-cert-watch-content-signature.md` |
+| `edgion-gateway/src/conf_sync/conf_client/cert_watch.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353`; content-signature recovery accepted as `(mtime, length)` tradeoff in `skills/04-review/architecture/conf-sync-cert-watch-mtime-length-signature.md` |
 | `edgion-gateway/src/conf_sync/conf_client/config_client.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
 | `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` | `conf-sync-conf-client` | source | changed | CONF-SYNC-CLIENT-001 / `9ca73353`; transactional rotation deferred to `tasks/todo/conf-sync-rotation-transactional-address-selection.md` |
 | `edgion-gateway/src/conf_sync/conf_client/mod.rs` | `conf-sync-conf-client` | source | examined-no-change | CONF-SYNC-CLIENT-001 / `9ca73353` |
@@ -499,10 +499,10 @@
 | `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | changed | B0106 |
-| `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | analysis-ready | B0107 |
+| `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | in-progress | B0107 |
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | analysis-ready | B0108 |
 | `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | analysis-ready | B0109 |
-| `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | pending | — |
+| `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | analysis-in-progress | B0110 |
 | `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | pending | — |

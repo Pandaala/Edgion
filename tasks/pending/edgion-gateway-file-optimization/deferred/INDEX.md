@@ -82,7 +82,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
 | Promote BackendTLSPolicy handling atomically to v1 only | pending | [task](../../../todo/backend-tls-policy-v1-only-atomic-promotion.md) |
 | Publish Service backend traffic policy through one immutable snapshot | pending | [task](../../../todo/backend-traffic-policy-atomic-service-snapshot.md) |
-| Conf-Sync certificate watch content signature | pending | [task](../../../todo/conf-sync-cert-watch-content-signature.md) |
+| Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/conf-sync-cert-watch-mtime-length-signature.md) |
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
 | Conf-Sync rotation transactional address selection | pending | [task](../../../todo/conf-sync-rotation-transactional-address-selection.md) |
 | Fail closed on denied L4 backend references | pending | [task](../../../todo/l4-backend-ref-denied-fail-closed.md) |

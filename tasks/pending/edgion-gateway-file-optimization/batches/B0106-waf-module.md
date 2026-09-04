@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `512d485d`
-- Pipeline state: ready-to-commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned file: `edgion-gateway/src/plugins/http/waf/mod.rs`
 - Baseline blob: `f0ac368e003937bd5e404ceffda030a567d24d23`
@@ -33,4 +33,4 @@
 - Correction implementation: changed only the approved ExtensionRef mock expectation. The named regression passed 1/1, WAF suite 10/10, parity test 1/1, and format/diff/no-tracing/English/frozen guards passed; code containment is exactly the four-file allow-list.
 - Final re-review: LGTM with no Must Fix or Should Fix. The reviewer confirmed the prior failure is resolved, all production value/invariants remain valid, D0071 stays deferred, and no integration issue is needed.
 - Verification: resources WAF 6/6, Gateway WAF 10/10, Controller/Gateway parity 1/1, and the ExtensionRef regression 1/1 passed. `cargo fmt --all` and `--check`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards passed on the current HEAD. Clippy retained only the existing warning set.
-- Commit: pending
+- Commit: `dde42825`
