@@ -8,17 +8,18 @@ use crate::routes::grpc::GrpcMatchInfo;
 use crate::{ai::GenAiSummary, ctx::WafAccessLog, BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
 use serde::Serialize;
 
-/// Explicit per-slot outcome marker. "Not queried" (no database loaded) and
+/// Explicit per-slot outcome marker. "Not queried" (no database loaded),
 /// "queried, no data" (a database is loaded but has no record for this
-/// address) must not collapse into the same absence: downstream index
-/// mappings and dashboards need a stable schema, and the two states drive
-/// different operator conclusions ("the control is not running" vs. "this
-/// client is in a private range").
+/// address), and "queried, lookup failed" (decode error or caught reader
+/// panic) must not collapse into the same absence: downstream index
+/// mappings and dashboards need a stable schema, and the three states drive
+/// different operator conclusions.
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum GeoSlotStatus {
     Unavailable,
     NotFound,
+    LookupFailed,
     Found,
 }
 
@@ -72,6 +73,14 @@ impl GeoSlotLog {
             },
             GeoLookup::NotFound => Self {
                 status: GeoSlotStatus::NotFound,
+                country: None,
+                continent: None,
+                subdivision: None,
+                city: None,
+                coord: None,
+            },
+            GeoLookup::Failed => Self {
+                status: GeoSlotStatus::LookupFailed,
                 country: None,
                 continent: None,
                 subdivision: None,
@@ -371,15 +380,25 @@ mod tests {
         );
     }
 
-    /// Unavailable (no database at all) and NotFound (database loaded, no
-    /// record) stay distinct in the log, as they do in `GeoLookup`.
+    /// Unavailable (no database at all), NotFound (database loaded, no
+    /// record), and Failed (loaded database, decode/panic) stay distinct.
     #[test]
-    fn unavailable_and_not_found_remain_distinguishable() {
+    fn unavailable_not_found_and_failed_remain_distinguishable() {
         let block = GeoLogBlock::from_slots(Some(&GeoLookup::Unavailable), Some(&GeoLookup::NotFound))
             .expect("resolved slots must produce a block");
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("unavailable"));
         assert!(json.contains("not_found"));
+
+        let failed = GeoLogBlock::from_slots(Some(&GeoLookup::Failed), None).expect("failed slot must produce a block");
+        let failed_json = serde_json::to_string(&failed).unwrap();
+        assert!(
+            failed_json.contains("lookup_failed"),
+            "Failed must serialize as lookup_failed: {failed_json}"
+        );
+        assert!(!failed_json.contains("unavailable"));
+        assert!(!failed_json.contains("not_found"));
+        assert!(!failed_json.contains("country"));
     }
 
     /// Building an access-log entry must never force a lookup, so a request

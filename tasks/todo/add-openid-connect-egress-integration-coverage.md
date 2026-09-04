@@ -5,14 +5,14 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-01 |
-| Status | blocked |
+| Status | pending |
 | Type | test |
 | Priority | P1 |
 | Issue | N/A |
 
 ## AI guide summary
 
-Add new end-to-end scenarios proving the D0056 OIDC egress implementation blocks denied DNS and proxy routes while preserving allowed discovery, JWKS, token, and SAN-sensitive TLS flows. This task is blocked on [`openid-connect-dial-time-egress-policy`](openid-connect-dial-time-egress-policy.md); the current Gateway campaign must not modify existing integration tests.
+Add new end-to-end scenarios proving the D0056 OIDC egress implementation blocks denied DNS and proxy routes while preserving allowed discovery, JWKS, token, and SAN-sensitive TLS flows. D0056 is implemented; the current Gateway campaign must not modify existing integration tests.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ Add new end-to-end scenarios proving the D0056 OIDC egress implementation blocks
 
 ## Dependency
 
-Blocked on [`Enforce OpenID Connect Dial-time Egress Policy`](openid-connect-dial-time-egress-policy.md).
+Ready: D0056 dial-time egress is implemented. Add new standalone scenarios; do not modify existing OpenID Connect integration tests.
 
 ## Decision log
 

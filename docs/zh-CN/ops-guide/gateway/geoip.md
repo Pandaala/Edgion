@@ -267,21 +267,23 @@ denyRuleGroups:
 **L4 没有专门的 `city` 限制，但按惯例 city 规则只用于 HTTP 层。** 在连接这一层没有请求属性可供
 组合，因此细粒度的地理规则既难以运维又容易过度拦截；城市级别的判定应该放在 HTTP 层。
 
-### `failOpen`——数据库不可用时的处置方式
+### `failOpen`——数据库不可用与查询失败时的处置方式
 
 当 `denyRuleGroups`/`allowRuleGroups` 非空（规则模式）时，`failOpen` 是**必填**的；在只解析模式
 下则会被**拒绝**——控制器接入路径和 Gateway 构造路径运行的是同一套校验，因此两者永远不会产生
-分歧。它**只管这个插件自己的判定**，当 GeoIP 数据库本身不可用（`GeoLookup::Unavailable`）时
-生效，绝不影响链上其它插件——这种隔离性正是把地理能力独立成一个插件、而不是把谓词内嵌进另一个
-插件配置的核心理由。
+分歧。它**只管这个插件自己的判定**，当 GeoIP 数据库本身不可用（`GeoLookup::Unavailable`）或已
+加载数据库的查询失败（`GeoLookup::Failed`）时生效，绝不影响链上其它插件——这种隔离性正是把地理
+能力独立成一个插件、而不是把谓词内嵌进另一个插件配置的核心理由。
 
 | 情况 | 由谁决定 |
 |---|---|
 | 完全没有加载数据库（`GeoLookup::Unavailable`） | `failOpen` |
+| 数据库已加载，但该地址无法解码（或 reader panic）（`GeoLookup::Failed`） | `failOpen` |
 | 数据库已加载，但没有该地址的记录，或记录缺少该维度 | 普通的规则未命中（缺失的维度不会匹配一条有约束的规则） |
 
 - **`failOpen: false`** —— **HTTP**：插件拒绝该请求（`403`，JSON 正文）。**L4**：连接被拒绝，
-  且 `edgion_geoip_denied_total{reason="db_unavailable"}` 计数加一。
+  且 `edgion_geoip_denied_total` 计数加一：无数据库时 `reason="db_unavailable"`，已加载数据库但
+  本次查询失败时 `reason="lookup_failed"`。
 - **`failOpen: true`** —— 插件**不表态**：HTTP 会让请求原样通过；L4 会让连接继续交给下一个
   Stream 插件。
 
@@ -454,7 +456,9 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 独立的、逐请求的 `OnceLock`。访问日志只读取插件在本次请求中已经解析过的槽位——它本身从不触发
 查询。因此完全没有 `GeoIpLocation` 条目的路由不会产生任何 MMDB 查询。只解析模式（`config: {}`）
 永远会同时解析两个槽位——这正是它存在的全部意义；规则模式只会解析已配置规则实际用到的来源/维度
-（例如，一份纯 CIDR 规则集，对它覆盖的来源根本不需要解析出任何维度）。
+（例如，一份纯 CIDR 规则集，对它覆盖的来源根本不需要解析出任何维度）。每个槽位带有有界的
+`status`：`found`、`not_found`、`unavailable` 或 `lookup_failed`。`lookup_failed` 表示数据库已
+加载，但该地址无法解码（或 reader panic）；其中不会包含解码器原文、IP 或数据库路径。
 
 ### 坐标
 
@@ -473,8 +477,8 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 | `edgion_geoip_db_loaded` | Gauge | 无 | 已加载 GeoIP 数据库时为 `1`，否则为 `0`。在配置了地理规则的情况下对 `== 0` 告警——这是"安全控制项未在运行"的首要信号。 |
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | 无 | 已加载数据库的构建时间戳。对陈旧程度告警。 |
 | `edgion_geoip_update_failed_total` | Counter | `reason`（`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`） | 按分类统计的后台**更新周期**失败。`disk` 表示磁盘空间预检查拒绝启动（还没有发出任何请求）；`deadline` 表示整个周期超过了 `download_deadline_sec`（即使在持续取得进展），区别于 `stall`（在 `stall_timeout_sec` 内没有任何进展）——两者对应相反的修复方式。 |
-| `edgion_geoip_lookup_panic_total` | Counter | 无 | 一次逐请求的 MMDB 查询发生 panic（已捕获）并退化为 `NotFound`。与上面的 `edgion_geoip_update_failed_total` 不同：这是查询路径上的逐请求事件，不是更新周期失败。 |
-| `edgion_geoip_denied_total` | Counter | `layer`（`stage1` \| `tcp` \| `tls`）、`reason`（`deny_country` \| `allow_miss` \| `db_unavailable`） | 被 `GeoIpLocation` 拒绝的 L4 连接。在当前的接入方式下 `layer` 永远是 `stage1`，因为那是该插件唯一的 L4 注册点；另外两个标签取值是为了未来兼容而保留的。永远不携带客户端地址；HTTP 拒绝刻意不计入此处——它们已经出现在访问日志中。 |
+| `edgion_geoip_lookup_panic_total` | Counter | 无 | 一次逐请求的 MMDB 查询发生 panic（已捕获）并报告为 `Failed`。与上面的 `edgion_geoip_update_failed_total` 不同：这是查询路径上的逐请求事件，不是更新周期失败。不含 panic 的解码失败共享 `Failed` 结果，但不增加本计数器。 |
+| `edgion_geoip_denied_total` | Counter | `layer`（`stage1` \| `tcp` \| `tls`）、`reason`（`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`） | 被 `GeoIpLocation` 拒绝的 L4 连接。在当前的接入方式下 `layer` 永远是 `stage1`，因为那是该插件唯一的 L4 注册点；另外两个标签取值是为了未来兼容而保留的。永远不携带客户端地址；HTTP 拒绝刻意不计入此处——它们已经出现在访问日志中。 |
 
 ## 多副本更新行为、抖动与 `.meta` 校验器
 

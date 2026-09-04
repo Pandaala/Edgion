@@ -5,14 +5,14 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-01 |
-| Status | blocked |
+| Status | pending |
 | Type | test |
 | Priority | P1 |
 | Issue | N/A |
 
 ## AI guide summary
 
-Add new end-to-end LDAP Auth scenarios proving the D0053 dial-time egress implementation blocks denied addresses while preserving real LDAPS and StartTLS hostname verification. This task is blocked on [`ldap-auth-dial-time-egress-policy`](ldap-auth-dial-time-egress-policy.md); the current Gateway campaign must not modify existing integration tests.
+Add new end-to-end LDAP Auth scenarios proving the D0053 dial-time egress implementation blocks denied addresses while preserving real LDAPS and StartTLS hostname verification. D0053 is implemented; the current Gateway campaign must not modify existing integration tests.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ Add new end-to-end LDAP Auth scenarios proving the D0053 dial-time egress implem
 
 ## Dependency
 
-Blocked on [`Enforce LDAP Dial-time Egress Policy`](ldap-auth-dial-time-egress-policy.md).
+Ready: D0053 dial-time egress is implemented. Add new standalone scenarios; do not modify existing LDAP integration tests.
 
 ## Decision log
 

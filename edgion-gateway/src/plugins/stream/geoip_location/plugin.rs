@@ -68,21 +68,25 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
         // configured rule actually needs resolved dimensions.
         let needs_facts = self.config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
         let lookup = needs_facts.then(|| GeoIpProvider::global().lookup(ctx.direct_peer_ip));
-        let (facts, unavailable) = match &lookup {
-            None => (GeoDimFacts::default(), false),
-            Some(GeoLookup::Unavailable) => (GeoDimFacts::default(), true),
-            Some(GeoLookup::NotFound) => (GeoDimFacts::default(), false),
-            Some(GeoLookup::Found(info)) => (dim_facts(info), false),
+        let (facts, unavailable, failed) = match &lookup {
+            None => (GeoDimFacts::default(), false, false),
+            Some(GeoLookup::Unavailable) => (GeoDimFacts::default(), true, false),
+            Some(GeoLookup::Failed) => (GeoDimFacts::default(), false, true),
+            Some(GeoLookup::NotFound) => (GeoDimFacts::default(), false, false),
+            Some(GeoLookup::Found(info)) => (dim_facts(info), false, false),
         };
 
-        if unavailable {
-            // Required by validation whenever rule groups are configured.
+        if failed || unavailable {
             let fail_open = self.config.fail_open.unwrap_or(false);
             if fail_open {
                 return StreamPluginResult::Allow;
             }
-            record_geoip_denied(ctx.layer, "db_unavailable");
-            return StreamPluginResult::Deny("geo:deny:db-unavailable".to_string());
+            let reason = if failed { "lookup_failed" } else { "db_unavailable" };
+            record_geoip_denied(ctx.layer, reason);
+            return StreamPluginResult::Deny(format!(
+                "geo:deny:{}",
+                if failed { "lookup-failed" } else { "db-unavailable" }
+            ));
         }
 
         let rule_ctx = GeoRuleContext {
@@ -118,7 +122,7 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
-    use crate::geoip::GEO_TEST_LOCK;
+    use crate::geoip::{inject_lookup_fault, GeoIpProvider, LookupFault, GEO_TEST_LOCK};
     use crate::plugins::stream::stream_plugin_trait::StreamLayer;
     use edgion_resources::resources::edgion_plugins::plugin_configs::{
         DefaultAction, GeoRule, GeoRuleGroup, GeoRuleKey, GeoRuleSource,
@@ -225,5 +229,60 @@ mod tests {
         // Outside the CIDR -> allow configured and missed -> deny.
         let denied = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
         assert!(matches!(denied, StreamPluginResult::Deny(_)));
+    }
+
+    fn load_fixture_db() {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb");
+        GeoIpProvider::global()
+            .load_from(&path)
+            .expect("city fixture must load");
+    }
+
+    fn country_deny_cfg(fail_open: bool) -> GeoIpLocationConfig {
+        GeoIpLocationConfig {
+            fail_open: Some(fail_open),
+            default_action: DefaultAction::Allow,
+            deny_rule_groups: vec![GeoRuleGroup {
+                name: None,
+                rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["RU"])],
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn lookup_failed_fail_closed_denies() {
+        let _lock = GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let plugin = GeoIpLocationStreamPlugin::new(&country_deny_cfg(false)).unwrap();
+        let result = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
+        match result {
+            StreamPluginResult::Deny(reason) => {
+                assert!(reason.contains("lookup-failed"), "got: {reason}");
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn lookup_failed_fail_open_allows() {
+        let _lock = GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let plugin = GeoIpLocationStreamPlugin::new(&country_deny_cfg(true)).unwrap();
+        let result = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
+        assert!(matches!(result, StreamPluginResult::Allow));
+    }
+
+    #[tokio::test]
+    async fn lookup_panic_fail_closed_denies() {
+        let _lock = GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Panic);
+        let plugin = GeoIpLocationStreamPlugin::new(&country_deny_cfg(false)).unwrap();
+        let result = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
+        assert!(matches!(result, StreamPluginResult::Deny(_)));
     }
 }

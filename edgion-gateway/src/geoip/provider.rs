@@ -16,6 +16,9 @@ use std::sync::{Arc, LazyLock};
 
 use super::info::{normalize_addr, project, GeoLookup};
 
+#[cfg(test)]
+use std::cell::Cell;
+
 /// One loaded database plus the build timestamp used by the staleness metric.
 struct LoadedDb {
     reader: maxminddb::Reader<memmap2::Mmap>,
@@ -37,6 +40,38 @@ static GLOBAL: LazyLock<GeoIpProvider> = LazyLock::new(GeoIpProvider::new);
 /// this lock around any test body that touches `GeoIpProvider::global()`.
 #[cfg(test)]
 pub static GEO_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Sticky per-thread lookup fault for deterministic decode/panic coverage.
+/// Cleared by [`LookupFaultGuard`] on drop so a panicked test cannot leak into
+/// the next one sharing the thread.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookupFault {
+    Decode,
+    Panic,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOOKUP_FAULT: Cell<Option<LookupFault>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+pub struct LookupFaultGuard;
+
+#[cfg(test)]
+impl Drop for LookupFaultGuard {
+    fn drop(&mut self) {
+        LOOKUP_FAULT.with(|c| c.set(None));
+    }
+}
+
+/// Inject a sticky lookup fault until the returned guard is dropped.
+#[cfg(test)]
+pub fn inject_lookup_fault(fault: LookupFault) -> LookupFaultGuard {
+    LOOKUP_FAULT.with(|c| c.set(Some(fault)));
+    LookupFaultGuard
+}
 
 impl GeoIpProvider {
     pub fn new() -> Self {
@@ -95,7 +130,8 @@ impl GeoIpProvider {
     ///
     /// MMDB parsing crosses a deserialization boundary over lower-trust bytes on
     /// the data-plane path, so a malformed record could panic inside the reader.
-    /// A caught panic degrades to `NotFound` rather than killing the worker.
+    /// A caught panic, like a decode error, is `GeoLookup::Failed` so consumers
+    /// can apply `failOpen` instead of treating it as ordinary missingness.
     pub fn lookup(&self, ip: IpAddr) -> GeoLookup {
         let guard = self.db.load();
         let Some(db) = guard.as_ref() else {
@@ -103,9 +139,18 @@ impl GeoIpProvider {
         };
         let addr = normalize_addr(ip);
 
+        #[cfg(test)]
+        if LOOKUP_FAULT.with(|c| c.get()) == Some(LookupFault::Decode) {
+            return GeoLookup::Failed;
+        }
+
         // maxminddb 0.30: `lookup` returns a `LookupResult` that must then be
         // `decode`d into the record type; it is not a direct `Option<T>`.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[cfg(test)]
+            if LOOKUP_FAULT.with(|c| c.get()) == Some(LookupFault::Panic) {
+                panic!("geoip test lookup fault");
+            }
             db.reader
                 .lookup(addr)
                 .and_then(|r| r.decode::<maxminddb::geoip2::City>())
@@ -113,10 +158,11 @@ impl GeoIpProvider {
 
         match result {
             Ok(Ok(Some(rec))) => GeoLookup::Found(Arc::new(project(&rec))),
-            Ok(Ok(None)) | Ok(Err(_)) => GeoLookup::NotFound,
+            Ok(Ok(None)) => GeoLookup::NotFound,
+            Ok(Err(_)) => GeoLookup::Failed,
             Err(_) => {
                 crate::observe::metrics::record_geoip_lookup_panic();
-                GeoLookup::NotFound
+                GeoLookup::Failed
             }
         }
     }
@@ -223,5 +269,61 @@ mod tests {
         p.load_from(&fixture_city_db()).unwrap();
         assert_eq!(p.build_epoch(), first);
         assert!(p.is_loaded());
+    }
+
+    #[test]
+    fn decode_fault_is_failed_not_not_found() {
+        let p = GeoIpProvider::new();
+        p.load_from(&fixture_city_db()).unwrap();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Failed);
+    }
+
+    #[test]
+    fn panic_fault_is_failed_and_increments_panic_counter() {
+        let p = GeoIpProvider::new();
+        p.load_from(&fixture_city_db()).unwrap();
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let _fault = inject_lookup_fault(LookupFault::Panic);
+            assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Failed);
+        });
+        let rendered = handle.render();
+        assert!(
+            rendered.contains("edgion_geoip_lookup_panic_total"),
+            "panic seam must increment edgion_geoip_lookup_panic_total, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn decode_fault_does_not_increment_panic_counter() {
+        let p = GeoIpProvider::new();
+        p.load_from(&fixture_city_db()).unwrap();
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let _fault = inject_lookup_fault(LookupFault::Decode);
+            assert_eq!(p.lookup("8.8.8.8".parse().unwrap()), GeoLookup::Failed);
+        });
+        let rendered = handle.render();
+        assert!(
+            !rendered.contains("edgion_geoip_lookup_panic_total"),
+            "decode seam must not increment the panic counter, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn fault_guard_clears_so_later_lookups_are_real() {
+        let p = GeoIpProvider::new();
+        p.load_from(&fixture_city_db()).unwrap();
+        {
+            let _fault = inject_lookup_fault(LookupFault::Decode);
+            assert_eq!(p.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Failed);
+        }
+        match p.lookup("203.0.113.7".parse().unwrap()) {
+            GeoLookup::Found(_) => {}
+            other => panic!("cleared seam must not stick, got {other:?}"),
+        }
     }
 }

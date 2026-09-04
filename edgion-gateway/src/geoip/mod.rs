@@ -11,7 +11,7 @@ pub use config::GeoIpConfig;
 pub use info::{GeoInfo, GeoLookup};
 pub use provider::GeoIpProvider;
 #[cfg(test)]
-pub use provider::GEO_TEST_LOCK;
+pub use provider::{inject_lookup_fault, LookupFault, LookupFaultGuard, GEO_TEST_LOCK};
 pub use updater::GeoIpUpdater;
 
 /// Same-filesystem guard: before spawning the updater, verify the swap

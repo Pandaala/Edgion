@@ -1,17 +1,15 @@
 # D0025 — Make GeoIP Lookup Failures Follow Failure Policy
 
 ## Meta
-- Status: needs-discussion
+- Status: fixed
 - Severity: high
 - Discovered in: B0059, GeoIP provider audit
 - Category: security-correctness
 - Canonical task: [`tasks/todo/make-geoip-lookup-failures-follow-failure-policy/`](../../../todo/make-geoip-lookup-failures-follow-failure-policy/make-geoip-lookup-failures-follow-failure-policy.md)
+- Closed: 2026-09-04 — `GeoLookup::Failed` follows existing `failOpen`; see [`skills/04-review/observability/geoip-lookup-failures-follow-fail-open.md`](../../../../skills/04-review/observability/geoip-lookup-failures-follow-fail-open.md)
 
 ## Evidence
-`GeoIpProvider::lookup` currently maps both MMDB record decode errors and caught reader panics to `GeoLookup::NotFound`. HTTP and stream consumers interpret `NotFound` as ordinary missing data rather than database failure, so a malformed or incompatible lower-trust record can bypass the consumer's existing `failOpen` decision. The existing panic counter documents this deliberate degradation but does not restore policy correctness.
+`GeoIpProvider::lookup` previously mapped both MMDB record decode errors and caught reader panics to `GeoLookup::NotFound`. HTTP and stream consumers interpreted `NotFound` as ordinary missing data rather than database failure, so a malformed or incompatible lower-trust record could bypass the consumer's existing `failOpen` decision.
 
-## Why deferred
-The correction spans the provider outcome model, HTTP and stream policy consumers, access-log representation, bounded metrics, and deterministic malformed-record coverage. A provider-only change would either break exhaustive consumers or leave failure semantics inconsistent.
-
-## Integration-test impact
-Existing integration tests remain frozen. Provider and consumer unit tests with a deterministic malformed-record or decoder seam should cover the complete typed outcome and failure-policy path; no separate integration-test issue is needed unless the reviewed implementation proves otherwise.
+## Resolution
+Decode errors and caught panics are now payload-free `GeoLookup::Failed`. HTTP rule mode and the Stage-1 stream consumer apply the existing `failOpen` contract. Access logs use bounded `lookup_failed`. L4 fail-close uses `reason=lookup_failed`. Successful misses remain `NotFound`; an unloaded database remains `Unavailable`.

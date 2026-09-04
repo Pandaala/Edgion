@@ -1033,15 +1033,17 @@ pub fn record_geoip_update_failed(reason: &'static str) {
 }
 
 /// A per-request MMDB lookup inside `GeoIpProvider::lookup` panicked (caught
-/// via `catch_unwind`) and degraded to `GeoLookup::NotFound`. Label-free: this
+/// via `catch_unwind`) and was reported as `GeoLookup::Failed`. Label-free: this
 /// is a data-integrity signal about the loaded database, not something to
-/// slice by request attributes.
+/// slice by request attributes. Decode-without-panic failures share the
+/// `Failed` outcome but do not increment this counter.
 pub fn record_geoip_lookup_panic() {
     counter!(names::GEOIP_LOOKUP_PANIC).increment(1);
 }
 
 /// L4 geo denials, which are never logged (see the design's §6.6).
-/// `layer` is stage1 | tcp | tls; `reason` is deny_country | allow_miss | db_unavailable.
+/// `layer` is stage1 | tcp | tls; `reason` is deny_country | allow_miss |
+/// db_unavailable | lookup_failed.
 /// Neither label carries a client address.
 pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {
     counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);

@@ -1,17 +1,18 @@
 # D0053 — Enforce LDAP Dial-time Egress Policy
 
 ## Meta
-- Status: needs-discussion
+- Status: resolved
 - Severity: high
 - Discovered in: B0088, LDAP Auth audit
 - Category: egress-security
-- Canonical task: [`tasks/todo/ldap-auth-dial-time-egress-policy.md`](../../../todo/ldap-auth-dial-time-egress-policy.md)
+- Closed: 2026-09-04
+- Canonical record: [`skills/04-review/ldap-auth/dial-time-egress-policy.md`](../../../../skills/04-review/ldap-auth/dial-time-egress-policy.md)
 
 ## Evidence
-`ldapHost` is operator-controlled, but each authenticated request gives an `ldap://` or `ldaps://` URL to ldap3, which performs system DNS resolution and connection establishment without `EgressResolver` or `classify_ip`. The shared dial-time egress policy therefore cannot classify every resolved candidate or block private, loopback, link-local, or otherwise denied destinations.
+Before the fix, `ldapHost` was passed to ldap3 as an `ldap://` or `ldaps://` URL. ldap3 performed system DNS and `TcpStream::connect(host:port)` without `EgressResolver` or `classify_ip`, so dial-time policy could not classify every candidate or block denied destinations.
 
-## Why deferred
-The correct fix needs a shared non-HTTP resolution and dial seam that classifies every candidate while preserving the original hostname for LDAPS and StartTLS SNI and certificate verification. It must also define multi-address fallback, connect timeout, error classification, and all-blocked fail-close behavior. A local URL rewrite or preflight-only lookup would introduce DNS rebinding and TLS identity regressions.
+## Resolution
+`LdapAuth` now holds a Gateway `EgressResolver`, classifies every candidate at connect time, dials only admitted addresses, and keeps the original hostname URL for LDAPS/StartTLS. URL rewrite and preflight-only DNS were rejected.
 
 ## Integration-test impact
-D0054 tracks the required new cross-process coverage after the transport design is implemented. Existing frozen LDAP integration files remain unchanged.
+D0054 remains the standalone cross-process coverage task. Existing frozen LDAP integration files remain unchanged.

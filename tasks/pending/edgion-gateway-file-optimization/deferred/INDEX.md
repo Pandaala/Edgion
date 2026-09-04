@@ -28,7 +28,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0022 — Refresh the LinkSys documentation set | needs-implementation | [campaign finding](D0022-refresh-link-sys-documentation-set.md) |
 | D0023 — Define OTLP egress enforcement and safe endpoint identity | needs-investigation | [campaign finding](D0023-otlp-egress-safe-endpoint-identity.md) |
 | D0024 — Unify Gateway request-template runtime policies | needs-discussion | [campaign finding](D0024-unify-gateway-request-template-runtime.md) |
-| D0025 — Make GeoIP lookup failures follow failure policy | needs-discussion | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
+| D0025 — Make GeoIP lookup failures follow failure policy | fixed | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
 | D0026 — Enforce EdgionAcme HTTP-01 gatewayRef ownership | needs-discussion | [campaign finding](D0026-acme-http01-gatewayref-ownership.md) |
 | D0027 — Add ACME gatewayRef isolation integration coverage | blocked | [campaign finding](D0027-acme-gatewayref-integration-coverage.md) |
 | D0028 — Define the Redis rate-limiter numeric domain | needs-discussion | [campaign finding](D0028-redis-rate-limiter-numeric-domain.md) |
@@ -56,14 +56,14 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0050 — Parse JWE protected headers as strict JSON objects | needs-implementation | [campaign finding](D0050-jwe-protected-header-strict-json.md) |
 | D0051 — Align JWE resolved-credential failure policy | needs-discussion | [campaign finding](D0051-jwe-resolved-credential-auth-failure.md) |
 | D0052 — Canonicalize auth claim-to-header projection | needs-discussion | [campaign finding](D0052-auth-claim-header-projection-plan.md) |
-| D0053 — Enforce LDAP dial-time egress policy | needs-discussion | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
-| D0054 — Add LDAP egress and TLS integration coverage | blocked | [campaign finding](D0054-ldap-auth-egress-integration-coverage.md) |
+| D0053 — Enforce LDAP dial-time egress policy | resolved | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
+| D0054 — Add LDAP egress and TLS integration coverage | pending | [campaign finding](D0054-ldap-auth-egress-integration-coverage.md) |
 | D0055 — Use clone-cheap immutable local response bodies | needs-discussion | [campaign finding](D0055-clone-cheap-local-response-bodies.md) |
-| D0056 — Enforce OpenID Connect dial-time egress policy | needs-discussion | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
-| D0057 — Add OpenID Connect egress integration coverage | blocked | [campaign finding](D0057-openid-connect-egress-integration-coverage.md) |
+| D0056 — Enforce OpenID Connect dial-time egress policy | resolved | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
+| D0057 — Add OpenID Connect egress integration coverage | pending | [campaign finding](D0057-openid-connect-egress-integration-coverage.md) |
 | D0058 — Redact OpenID Connect dependency error responses | needs-implementation | [campaign finding](D0058-openid-connect-dependency-error-redaction.md) |
 | D0059 — Coalesce and back off failed OpenID Connect discovery fetches | needs-discussion | [campaign finding](D0059-openid-connect-discovery-failure-coalescing.md) |
-| D0060 — Decide OpenID Connect session-cookie upstream ownership | needs-discussion | [campaign finding](D0060-openid-connect-session-cookie-upstream-ownership.md) |
+| D0060 — Decide OpenID Connect session-cookie upstream ownership | resolved | [campaign finding](D0060-openid-connect-session-cookie-upstream-ownership.md) |
 | D0061 — Remove the GeoIP updater test's host-temp-space assumption | needs-implementation | [campaign finding](D0061-geoip-updater-test-temp-space.md) |
 | D0062 — Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | resolved | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | D0063 — Validate rate-limit response header names canonically | needs-implementation | [campaign finding](D0063-rate-limit-response-header-validation.md) |
@@ -96,7 +96,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | TLS `SslCtx` owned handoff and exactly-once audit | pending | [task](../../../todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md) |
 | TLS store true incremental and atomic publication | pending | [task](../../../todo/tls-store-true-incremental-atomic-publication.md) |
 | Unify Gateway request-template runtime policies | pending | [task](../../../todo/unify-gateway-request-template-runtime/unify-gateway-request-template-runtime.md) |
-| Make GeoIP lookup failures follow failure policy | pending | [task](../../../todo/make-geoip-lookup-failures-follow-failure-policy/make-geoip-lookup-failures-follow-failure-policy.md) |
+| Make GeoIP lookup failures follow failure policy | fixed | [task](../../../todo/make-geoip-lookup-failures-follow-failure-policy/make-geoip-lookup-failures-follow-failure-policy.md) |
 | Enforce EdgionAcme HTTP-01 gatewayRef ownership | pending | [task](../../../todo/enforce-edgion-acme-http01-gatewayref-ownership/enforce-edgion-acme-http01-gatewayref-ownership.md) |
 | Add ACME gatewayRef isolation integration coverage | blocked | [task](../../../todo/add-acme-gatewayref-isolation-integration-coverage.md) |
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
@@ -124,14 +124,14 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Harden JWE protected header JSON parsing | pending | [task](../../../todo/harden-jwe-protected-header-json-parsing.md) |
 | Align JWE resolved-credential failure policy | pending | [task](../../../todo/align-jwe-resolved-credential-failure-policy.md) |
 | Canonicalize auth claim-to-header projection | pending | [task](../../../todo/canonicalize-auth-claim-header-projection.md) |
-| Enforce LDAP dial-time egress policy | pending | [task](../../../todo/ldap-auth-dial-time-egress-policy.md) |
-| Add LDAP egress and TLS integration coverage | blocked | [task](../../../todo/add-ldap-auth-egress-integration-coverage.md) |
+| Enforce LDAP dial-time egress policy | completed | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
+| Add LDAP egress and TLS integration coverage | pending | [task](../../../todo/add-ldap-auth-egress-integration-coverage.md) |
 | Use clone-cheap immutable local response bodies | pending | [task](../../../todo/use-clone-cheap-local-response-bodies.md) |
-| Enforce OpenID Connect dial-time egress policy | pending | [task](../../../todo/openid-connect-dial-time-egress-policy.md) |
-| Add OpenID Connect egress integration coverage | blocked | [task](../../../todo/add-openid-connect-egress-integration-coverage.md) |
+| Enforce OpenID Connect dial-time egress policy | completed | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
+| Add OpenID Connect egress integration coverage | pending | [task](../../../todo/add-openid-connect-egress-integration-coverage.md) |
 | Redact OpenID Connect dependency error responses | pending | [task](../../../todo/redact-openid-connect-dependency-error-responses.md) |
 | Coalesce and back off failed OpenID Connect discovery fetches | pending | [task](../../../todo/openid-connect-discovery-failure-coalescing.md) |
-| Decide OpenID Connect session-cookie upstream ownership | pending | [task](../../../todo/openid-connect-session-cookie-upstream-ownership.md) |
+| Decide OpenID Connect session-cookie upstream ownership | completed | [campaign finding](D0060-openid-connect-session-cookie-upstream-ownership.md) |
 | Remove the GeoIP updater test's host-temp-space assumption | pending | [task](../../../todo/geoip-updater-test-temp-space.md) |
 | Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | completed | [task](../../../todo/upgrade-wasmtime-security-patches.md) |
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |

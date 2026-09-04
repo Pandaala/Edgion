@@ -1,17 +1,18 @@
 # D0056 — Enforce OpenID Connect Dial-time Egress Policy
 
 ## Meta
-- Status: needs-discussion
+- Status: resolved
 - Severity: high
 - Discovered in: B0090, OpenID Connect audit
 - Category: egress-security
-- Canonical task: [`tasks/todo/openid-connect-dial-time-egress-policy.md`](../../../todo/openid-connect-dial-time-egress-policy.md)
+- Closed: 2026-09-04
+- Canonical record: [`skills/04-review/oidc/dial-time-egress-policy.md`](../../../../skills/04-review/oidc/dial-time-egress-policy.md)
 
 ## Evidence
-The default OpenID Connect outbound-client configuration does not install a Gateway `EgressResolver` and does not disable proxy-environment pickup. The SAN-pinning branch builds a separate raw reqwest client without the resolver or `.no_proxy()`. These clients reach the configured discovery URL and remotely discovered JWKS, token, introspection, userinfo, and revocation endpoints, so DNS and proxy routing can bypass dial-time destination classification even though redirects are denied.
+Before the fix, the default OpenID Connect outbound client omitted `EgressResolver` and `disable_proxy`, and the SAN-pinning branch built a raw reqwest client without either control. Discovery and remotely discovered JWKS, token, introspection, userinfo, and revocation endpoints could therefore bypass dial-time classification through DNS or proxy routing.
 
-## Why deferred
-OpenID Connect deployments may intentionally use an internal identity provider, so the correct default and schema cannot be guessed in a JWK ownership batch. The fix must define one policy for configured and discovery-derived endpoints, inject the same resolver into both default and SAN-pinning client construction, disable proxy-environment influence, preserve hostname TLS/SAN verification, and keep timeout, pooling, redirect, cache, and failure semantics aligned.
+## Resolution
+Both client factories now share `oidc_outbound_client_config`: Gateway `EgressResolver`, `disable_proxy: true`, and redirect deny. IP-literal URLs are classified before send because reqwest skips custom DNS for literals. The SAN branch still attaches a custom verifier through `use_preconfigured_tls` after `apply_outbound_policy`. Private destinations inherit `default_block_private()`. A plugin-local `blockPrivate` field and URL rewrite were rejected.
 
 ## Integration-test impact
-D0057 tracks the required new end-to-end coverage after the client and policy design is implemented. Existing frozen OpenID Connect integration files remain unchanged.
+D0057 remains the standalone cross-process coverage task. Existing frozen OpenID Connect integration files remain unchanged.

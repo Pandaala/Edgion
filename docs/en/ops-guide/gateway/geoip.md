@@ -292,24 +292,26 @@ there is only a connection, with no request attributes to compose against, so fi
 geographic rules there are hard to operate and easy to over-block; city-level decisions belong at
 the HTTP layer.
 
-### `failOpen` — the database-unavailable disposition
+### `failOpen` — the database-unavailable and lookup-failure disposition
 
 `failOpen` is **required** exactly when `denyRuleGroups`/`allowRuleGroups` is non-empty (rule
 mode) and **rejected** in parse-only mode — the same validation runs on the controller ingest
 path and the gateway construction path, so the two can never disagree. It governs **only this
 plugin's own decision** when the GeoIP database itself is unavailable
-(`GeoLookup::Unavailable`); it never reaches into any other plugin on the chain — that isolation
-is the entire reason geo lives in its own plugin rather than as predicates embedded in another
-plugin's config.
+(`GeoLookup::Unavailable`) or a loaded-database lookup fails (`GeoLookup::Failed`); it never
+reaches into any other plugin on the chain — that isolation is the entire reason geo lives in
+its own plugin rather than as predicates embedded in another plugin's config.
 
 | Condition | Governed by |
 |---|---|
 | No database loaded at all (`GeoLookup::Unavailable`) | `failOpen` |
+| Loaded database, but this address could not be decoded (or the reader panicked) (`GeoLookup::Failed`) | `failOpen` |
 | Database loaded but no record for this address, or the record lacks this dimension | ordinary rule-miss (an absent dimension simply doesn't match a constrained rule) |
 
 - **`failOpen: false`** — **HTTP**: the plugin denies the request (`403`, JSON body).
-  **L4**: the connection is denied and `edgion_geoip_denied_total{reason="db_unavailable"}`
-  increments.
+  **L4**: the connection is denied and `edgion_geoip_denied_total` increments with
+  `reason="db_unavailable"` (no database) or `reason="lookup_failed"` (loaded database, this
+  lookup failed).
 - **`failOpen: true`** — the plugin has **no opinion**: HTTP passes the request through
   unchanged; L4 lets the connection continue to the next stream plugin.
 
@@ -511,7 +513,10 @@ plugin already resolved earlier in the request — it never triggers a lookup of
 with no `GeoIpLocation` entry at all therefore costs **zero** MMDB lookups. Parse-only mode
 (`config: {}`) always resolves both slots — that is its entire purpose; rule mode resolves only
 the sources/dimensions its configured rules actually use (a CIDR-only rule set, for instance,
-needs no resolved dimensions at all for the sources it covers).
+needs no resolved dimensions at all for the sources it covers). Each slot carries a bounded
+`status`: `found`, `not_found`, `unavailable`, or `lookup_failed`. `lookup_failed` means the
+database was loaded but this address could not be decoded (or the reader panicked); it never
+includes decoder text, an IP, or a database path.
 
 ### Coordinates
 
@@ -533,8 +538,8 @@ mechanism that lets some ext-log fields opt out of masking does not apply here; 
 | `edgion_geoip_db_loaded` | Gauge | none | `1` when a GeoIP database is loaded, `0` otherwise. Alert on `== 0` while geo rules are configured — this is the primary "security control isn't running" signal. |
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | none | Build timestamp of the loaded database. Alert on staleness. |
 | `edgion_geoip_update_failed_total` | Counter | `reason` (`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`) | Background *update-cycle* failures, by class. `disk` is the free-space precheck refusing to start (no request was ever issued); `deadline` is the whole cycle exceeding `download_deadline_sec` despite steady progress, distinct from `stall` (no progress within `stall_timeout_sec`) — the two call for opposite fixes. |
-| `edgion_geoip_lookup_panic_total` | Counter | none | A per-request MMDB lookup panicked (caught) and degraded to `NotFound`. Distinct from `edgion_geoip_update_failed_total` above: this is a per-request event on the query path, not an update-cycle failure. |
-| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp` \| `tls`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable`) | L4 connections denied by `GeoIpLocation`. In the current wiring `layer` is always `stage1`, since that is the plugin's only L4 registration point; the other two label values are reserved for forward compatibility. Never carries a client address; HTTP denials are deliberately absent here — they already appear in the access log. |
+| `edgion_geoip_lookup_panic_total` | Counter | none | A per-request MMDB lookup panicked (caught) and was reported as `Failed`. Distinct from `edgion_geoip_update_failed_total` above: this is a per-request event on the query path, not an update-cycle failure. Decode-without-panic failures share the `Failed` outcome but do not increment this counter. |
+| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp` \| `tls`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`) | L4 connections denied by `GeoIpLocation`. In the current wiring `layer` is always `stage1`, since that is the plugin's only L4 registration point; the other two label values are reserved for forward compatibility. Never carries a client address; HTTP denials are deliberately absent here — they already appear in the access log. |
 
 ## Multi-replica update behavior, jitter, and the `.meta` validator
 

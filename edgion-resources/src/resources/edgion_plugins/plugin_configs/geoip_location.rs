@@ -17,8 +17,9 @@
 //!    internally AND-ed groups of [`GeoRule`]s, see `geo_rule`) and decide:
 //!    deny hit => deny; allow configured and missed => deny; otherwise
 //!    `defaultAction`. `failOpen` becomes required and governs ONLY this
-//!    plugin's own decision when the GeoIP database itself is unavailable —
-//!    it never reaches into any other plugin on the chain.
+//!    plugin's own decision when the GeoIP database is unavailable or a
+//!    loaded-database lookup fails — it never reaches into any other plugin
+//!    on the chain.
 //!
 //! Validation (`check_fields`) is layer-parameterized (`is_stream`) rather
 //! than split into two methods so the controller ingest path and the gateway
@@ -47,9 +48,9 @@ pub struct GeoIpLocationConfig {
 
     /// Required when `denyRuleGroups`/`allowRuleGroups` is non-empty; ignored
     /// (and not required) in parse-only mode. Governs ONLY this plugin's own
-    /// decision when the GeoIP database is unavailable: `false` denies during
-    /// the outage, `true` treats this plugin as having no opinion (the chain's
-    /// other plugins still decide normally).
+    /// decision when the GeoIP database is unavailable or a loaded-database
+    /// lookup fails: `false` denies, `true` treats this plugin as having no
+    /// opinion (the chain's other plugins still decide normally).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fail_open: Option<bool>,
 
@@ -161,9 +162,9 @@ impl GeoIpLocationConfig {
 
     /// The plugin-level deny/allow judgement, assuming the GeoIP database was
     /// available for every source this config's rules consult (the
-    /// db-unavailable / `failOpen` short-circuit happens one layer up, in the
-    /// gateway plugin, because only it knows which lookups returned
-    /// `GeoLookup::Unavailable`).
+    /// db-unavailable / lookup-failed / `failOpen` short-circuit happens one
+    /// layer up, in the gateway plugin, because only it knows which lookups
+    /// returned `GeoLookup::Unavailable` or `GeoLookup::Failed`).
     ///
     /// Order — the canonical `deny > allow > default` priority every other
     /// access-policy plugin uses (`matcher::ip_cidr_helpers::

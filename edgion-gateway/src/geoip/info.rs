@@ -29,15 +29,19 @@ pub struct GeoInfo {
 
 /// The outcome of one lookup.
 ///
-/// `Unavailable` and `NotFound` drive different policies everywhere downstream:
-/// "the security control is not running" must stay distinguishable from "this
-/// client is in a private range".
+/// `Unavailable`, `NotFound`, and `Failed` drive different policies everywhere
+/// downstream: "the security control is not running" must stay distinguishable
+/// from "this client is in a private range" and from "the loaded database could
+/// not be queried for this address".
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeoLookup {
     /// No database is loaded at all.
     Unavailable,
     /// A database is loaded but has no record for this address.
     NotFound,
+    /// A database is loaded, but decoding the record failed or the reader
+    /// panicked (caught). Payload-free: decoder detail must not escape.
+    Failed,
     Found(Arc<GeoInfo>),
 }
 

@@ -8,10 +8,10 @@
 //! - **Rule mode**: resolve `ctx.direct_peer_geo()` always, and `ctx.remote_geo()`
 //!   only when a configured rule actually references `RemoteIp` (avoids a
 //!   needless second MMDB lookup). If any CONSULTED lookup is
-//!   `GeoLookup::Unavailable`, this plugin's own `failOpen` decides — `false`
-//!   denies, `true` treats this plugin as having no opinion (`GoodNext`); it
-//!   never influences any other plugin on the chain. Otherwise the resolved
-//!   facts feed `GeoIpLocationConfig::decide`.
+//!   `GeoLookup::Unavailable` or `GeoLookup::Failed`, this plugin's own
+//!   `failOpen` decides — `false` denies, `true` treats this plugin as having
+//!   no opinion (`GoodNext`); it never influences any other plugin on the
+//!   chain. Otherwise the resolved facts feed `GeoIpLocationConfig::decide`.
 //!
 //! HTTP geo denials are deliberately NOT metered (`edgion_geoip_denied_total`
 //! is L4-only, see its doc comment) — they already appear in the access log's
@@ -37,17 +37,24 @@ fn default_status() -> u16 {
 #[derive(Clone, Copy)]
 enum RuntimeDecision {
     DatabaseUnavailable,
+    LookupFailed,
     Rule(GeoDecision),
 }
 
-/// Split a `GeoLookup` into matchable facts plus an "unavailable" flag. Both
-/// `NotFound` and `Unavailable` yield empty facts — the caller distinguishes
-/// them via the second element, since only `Unavailable` triggers `failOpen`.
-fn facts_of(lookup: &GeoLookup) -> (GeoDimFacts<'_>, bool) {
+/// Classify a lookup for rule evaluation. `NotFound` is ordinary missingness
+/// (empty facts). Only `Unavailable` and `Failed` trigger `failOpen`.
+enum LookupClass<'a> {
+    Ready(GeoDimFacts<'a>),
+    Unavailable,
+    Failed,
+}
+
+fn classify(lookup: &GeoLookup) -> LookupClass<'_> {
     match lookup {
-        GeoLookup::Unavailable => (GeoDimFacts::default(), true),
-        GeoLookup::NotFound => (GeoDimFacts::default(), false),
-        GeoLookup::Found(info) => (dim_facts(info), false),
+        GeoLookup::Unavailable => LookupClass::Unavailable,
+        GeoLookup::Failed => LookupClass::Failed,
+        GeoLookup::NotFound => LookupClass::Ready(GeoDimFacts::default()),
+        GeoLookup::Found(info) => LookupClass::Ready(dim_facts(info)),
     }
 }
 
@@ -74,7 +81,7 @@ pub struct GeoIpLocation {
     needs_remote_ip: bool,
     /// Some configured `DirectPeerIp` rule needs resolved geo dimensions (a
     /// key other than `Cidr`) — worth resolving `ctx.direct_peer_geo()` and
-    /// letting its `Unavailable` state drive `failOpen`. A CIDR-only config
+    /// letting its `Unavailable`/`Failed` state drive `failOpen`. A CIDR-only config
     /// needs no GeoIP database at all. Always true in parse-only mode
     /// (maximize log usefulness, its whole purpose).
     needs_direct_facts: bool,
@@ -156,16 +163,28 @@ impl RequestFilter for GeoIpLocation {
             let direct_lookup = self.needs_direct_facts.then(|| request_ctx.direct_peer_geo());
             let remote_lookup = self.needs_remote_facts.then(|| request_ctx.remote_geo());
 
-            let (direct_facts, direct_unavailable) = match direct_lookup {
-                Some(lookup) => facts_of(lookup),
-                None => (GeoDimFacts::default(), false),
+            let (direct_facts, mut unavailable, mut failed) = match direct_lookup {
+                Some(lookup) => match classify(lookup) {
+                    LookupClass::Ready(facts) => (facts, false, false),
+                    LookupClass::Unavailable => (GeoDimFacts::default(), true, false),
+                    LookupClass::Failed => (GeoDimFacts::default(), false, true),
+                },
+                None => (GeoDimFacts::default(), false, false),
             };
-            let (remote_facts, remote_unavailable) = match remote_lookup {
-                Some(lookup) => facts_of(lookup),
-                None => (GeoDimFacts::default(), false),
+            let (remote_facts, remote_unavailable, remote_failed) = match remote_lookup {
+                Some(lookup) => match classify(lookup) {
+                    LookupClass::Ready(facts) => (facts, false, false),
+                    LookupClass::Unavailable => (GeoDimFacts::default(), true, false),
+                    LookupClass::Failed => (GeoDimFacts::default(), false, true),
+                },
+                None => (GeoDimFacts::default(), false, false),
             };
+            unavailable |= remote_unavailable;
+            failed |= remote_failed;
 
-            if direct_unavailable || remote_unavailable {
+            if failed {
+                RuntimeDecision::LookupFailed
+            } else if unavailable {
                 RuntimeDecision::DatabaseUnavailable
             } else {
                 let ctx = GeoRuleContext {
@@ -183,6 +202,14 @@ impl RequestFilter for GeoIpLocation {
         };
 
         match decision {
+            RuntimeDecision::LookupFailed if self.config.fail_open.unwrap_or(false) => {
+                plugin_log.push_err("lookup:failed fail-open");
+                PluginRunningResult::GoodNext
+            }
+            RuntimeDecision::LookupFailed => {
+                plugin_log.push_err("lookup:failed fail-closed");
+                self.deny_response(session)
+            }
             RuntimeDecision::DatabaseUnavailable if self.config.fail_open.unwrap_or(false) => {
                 plugin_log.push_err("db:unavailable fail-open");
                 PluginRunningResult::GoodNext
@@ -215,7 +242,7 @@ impl RequestFilter for GeoIpLocation {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
-    use crate::geoip::GeoIpProvider;
+    use crate::geoip::{inject_lookup_fault, GeoIpProvider, LookupFault};
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::EdgionHttpContext;
     use edgion_resources::resources::edgion_plugins::plugin_configs::{
@@ -384,5 +411,62 @@ mod tests {
             }
         );
         assert_eq!(log.render_for_test(), "err: init fail: fail-closed");
+    }
+
+    fn load_fixture_db() {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb");
+        GeoIpProvider::global()
+            .load_from(&path)
+            .expect("city fixture must load");
+    }
+
+    #[tokio::test]
+    async fn lookup_failed_fail_closed_denies() {
+        let _lock = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let plugin = GeoIpLocation::create(&rule_mode_config(false));
+        let mut session = session_with_ips("8.8.8.8", "8.8.8.8");
+        session.expect_set_response_header().returning(|name, value| {
+            assert_eq!((name, value), ("content-type", "application/json"));
+            Ok(())
+        });
+        let mut log = PluginLog::new("GeoIpLocation");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+            }
+        );
+        assert_eq!(log.render_for_test(), "err: lookup:failed fail-closed");
+    }
+
+    #[tokio::test]
+    async fn lookup_failed_fail_open_passes() {
+        let _lock = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let plugin = GeoIpLocation::create(&rule_mode_config(true));
+        let mut session = session_with_ips("8.8.8.8", "8.8.8.8");
+        let mut log = PluginLog::new("GeoIpLocation");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "err: lookup:failed fail-open");
+    }
+
+    #[tokio::test]
+    async fn parse_only_mode_passes_through_lookup_failure() {
+        let _lock = crate::geoip::GEO_TEST_LOCK.lock();
+        load_fixture_db();
+        let _fault = inject_lookup_fault(LookupFault::Decode);
+        let plugin = GeoIpLocation::create(&parse_only_config());
+        let mut session = session_with_ips("8.8.8.8", "8.8.8.8");
+        let mut log = PluginLog::new("GeoIpLocation");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "parse:ok");
     }
 }
