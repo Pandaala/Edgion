@@ -94,6 +94,9 @@ impl OpenidConnect {
             None => return None,
         };
 
+        if super::admit_oidc_outbound_url(userinfo_endpoint).is_err() {
+            return None;
+        }
         let client = self.http_client();
         let resp = match client
             .get(userinfo_endpoint)

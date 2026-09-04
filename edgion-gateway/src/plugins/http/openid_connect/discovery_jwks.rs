@@ -5,6 +5,13 @@ impl OpenidConnect {
         self.client.clone()
     }
 
+    pub(super) fn admit_idp_url(url: &str) -> Result<(), OidcVerifyError> {
+        super::admit_oidc_outbound_url(url).map_err(|_| OidcVerifyError::Other {
+            status: 502,
+            message: BAD_GATEWAY_BODY.to_string(),
+        })
+    }
+
     pub(super) async fn get_or_fetch_discovery(&self) -> Result<Arc<DiscoveryDocument>, JwksProviderError> {
         self.jwks_provider.get_or_fetch_discovery().await
     }

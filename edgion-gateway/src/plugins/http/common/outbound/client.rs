@@ -537,7 +537,7 @@ fn build_resolved_target(target: &WebhookTarget, tls_enabled: bool) -> Result<Re
 /// `FromStr` falls back to parsing a Unix-domain-socket pathname when IP parsing
 /// fails, which turns every hostname into a `SocketAddr::Unix` that
 /// `classify_backend_addr` silently allows.
-fn extract_ip_literal(url: &str) -> Result<Option<std::net::SocketAddr>, String> {
+pub(crate) fn extract_ip_literal(url: &str) -> Result<Option<std::net::SocketAddr>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL {url:?}: {e}"))?;
 
     let host = parsed.host_str().ok_or_else(|| format!("URL has no host: {url:?}"))?;

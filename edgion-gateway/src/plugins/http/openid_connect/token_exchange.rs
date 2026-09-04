@@ -148,6 +148,7 @@ impl OpenidConnect {
             params.push(("code_verifier", verifier.to_string()));
         }
 
+        Self::admit_idp_url(token_endpoint)?;
         let client = self.http_client();
         let base_request = client
             .post(token_endpoint)
@@ -194,6 +195,7 @@ impl OpenidConnect {
         token: &str,
         token_type_hint: Option<&str>,
     ) -> OidcResult<()> {
+        super::admit_oidc_outbound_url(endpoint).map_err(|error| -> OidcError { error.into() })?;
         let client = self.http_client();
         let base_request = client
             .post(endpoint)
@@ -294,6 +296,7 @@ impl OpenidConnect {
             ("client_id", self.config.client_id.clone()),
         ];
 
+        Self::admit_idp_url(token_endpoint)?;
         let client = self.http_client();
         let base_request = client
             .post(token_endpoint)

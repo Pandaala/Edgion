@@ -2344,6 +2344,96 @@ fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
     assert_eq!(error, "openid_connect SAN-pinning TLS config build failed");
 }
 
+#[test]
+fn oidc_default_client_construction_succeeds_with_egress_resolver() {
+    OpenidConnect::try_new(&base_config(), "default".to_string())
+        .expect("default OIDC client must build with dial-time egress policy");
+}
+
+#[tokio::test]
+async fn oidc_egress_blocks_link_local_literal() {
+    let err = super::oidc_egress_resolver()
+        .resolve_socket_addrs("169.254.169.254", 443)
+        .await
+        .expect_err("link-local OIDC targets must fail closed");
+    assert!(
+        err.contains("egress policy blocked all resolved addresses"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn oidc_egress_dns_failure_fails_closed() {
+    use crate::plugins::http::common::outbound::egress::{
+        default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
+    };
+    use edgion_common::dns::ResolverSpec;
+
+    let resolver = EgressResolver::new(
+        ResolverSpec::StandardDns {
+            servers: vec!["not-a-dns-server".to_string()],
+        },
+        EgressPolicy {
+            block_private: default_block_private(),
+        },
+        egress_dns_cache_ttl(),
+    );
+    let err = resolver
+        .resolve_socket_addrs("idp.example.com", 443)
+        .await
+        .expect_err("OIDC DNS failure must fail closed");
+    assert!(
+        err.contains("DNS resolution failed for outbound target"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn oidc_egress_allows_loopback_in_unit_tests() {
+    let addrs = super::oidc_egress_resolver()
+        .resolve_socket_addrs("127.0.0.1", 443)
+        .await
+        .expect("unit tests allow loopback through EgressResolver");
+    assert_eq!(addrs, vec!["127.0.0.1:443".parse().unwrap()]);
+}
+
+#[test]
+fn oidc_admit_blocks_link_local_ip_literal_url() {
+    let err = super::admit_oidc_outbound_url("http://169.254.169.254/latest/meta-data/")
+        .expect_err("link-local IP literal must be classified before reqwest dials");
+    assert_eq!(err, "egress policy blocked destination");
+}
+
+#[test]
+fn oidc_admit_blocks_ipv6_link_local_ip_literal_url() {
+    super::admit_oidc_outbound_url("http://[fe80::1]/jwks")
+        .expect_err("IPv6 link-local IP literal must be classified before reqwest dials");
+}
+
+#[test]
+fn oidc_admit_allows_hostname_url() {
+    super::admit_oidc_outbound_url("https://idp.example.com/jwks")
+        .expect("hostname URLs are classified by EgressResolver at dial time");
+}
+
+#[test]
+fn oidc_admit_allows_loopback_ip_literal_in_unit_tests() {
+    super::admit_oidc_outbound_url("http://127.0.0.1:1/.well-known/openid-configuration")
+        .expect("unit tests allow loopback IP literals");
+}
+
+#[tokio::test]
+async fn oidc_discovery_fetch_rejects_link_local_ip_literal() {
+    let mut config = base_config();
+    config.discovery = "http://169.254.169.254/.well-known/openid-configuration".to_string();
+    let plugin = OpenidConnect::new(&config, "default".to_string());
+    let err = plugin
+        .get_or_fetch_discovery()
+        .await
+        .expect_err("link-local discovery URL must fail closed before dial");
+    assert_eq!(err.to_string(), "egress policy blocked destination");
+}
+
 // -----------------------------------------------------------------------
 // Task 11: JWKS staleness -> dye records.
 //

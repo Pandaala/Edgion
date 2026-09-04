@@ -174,6 +174,9 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             return Ok(doc.clone());
         }
 
+        super::plugin::admit_oidc_outbound_url(&self.config.discovery_url)
+            .map_err(|error| JwksProviderError::Other(error.to_string()))?;
+
         let resp = self
             .client
             .get(&self.config.discovery_url)
@@ -274,6 +277,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
         let discovery = self.get_or_fetch_discovery().await?;
         let fetch_result: Result<JwkSet, String> = async {
+            super::plugin::admit_oidc_outbound_url(discovery.jwks_uri())?;
             let resp = self
                 .client
                 .get(discovery.jwks_uri())

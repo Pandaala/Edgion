@@ -30,13 +30,20 @@ use crate::cli::config::{
     get_default_lru_cache_capacity, get_default_lru_cache_shards, get_refresh_singleflight_max_registered_keys,
     resolve_lru_cache_limits, resolve_tiny_ufo_ttl_cache_limits,
 };
-use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
+use crate::link_sys::http_client::{
+    apply_outbound_policy, build_outbound_client, OutboundClientConfig, OutboundRedirect,
+};
 use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
+};
+use crate::plugins::http::common::outbound::client::extract_ip_literal;
+use crate::plugins::http::common::outbound::egress::{
+    default_block_private, egress_dns_cache_ttl, filter_resolved_addrs, EgressPolicy, EgressResolver,
 };
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::OutboundSanVerifier;
+use edgion_common::dns::ResolverSpec;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::normalize_config_path;
@@ -53,6 +60,56 @@ type VerifyResult<T> = Result<T, OidcVerifyError>;
 const PLUGIN_NAME: &str = "OpenidConnect";
 const CREDENTIAL_FAILURE_BODY: &str = "Unauthorized";
 const BAD_GATEWAY_BODY: &str = "Bad Gateway";
+
+fn oidc_egress_resolver() -> EgressResolver {
+    EgressResolver::new(
+        ResolverSpec::System,
+        EgressPolicy {
+            block_private: default_block_private(),
+        },
+        egress_dns_cache_ttl(),
+    )
+}
+
+/// Admit an OIDC outbound URL. Hostname targets stay on `EgressResolver`.
+/// IP literals never reach that resolver (reqwest dials them directly), so they
+/// are classified here with the same policy. The URL is not rewritten.
+pub(super) fn admit_oidc_outbound_url(url: &str) -> Result<(), &'static str> {
+    let literal = extract_ip_literal(url).map_err(|_| "invalid outbound URL")?;
+    let Some(addr) = literal else {
+        return Ok(());
+    };
+    let admitted = filter_resolved_addrs(
+        vec![addr.ip()],
+        EgressPolicy {
+            block_private: default_block_private(),
+        },
+        false,
+    );
+    if admitted.is_empty() {
+        Err("egress policy blocked destination")
+    } else {
+        Ok(())
+    }
+}
+
+fn oidc_outbound_client_config(
+    timeout_secs: u64,
+    tls: Option<TlsConfig>,
+    dns_resolver: Arc<dyn reqwest::dns::Resolve>,
+) -> OutboundClientConfig {
+    OutboundClientConfig {
+        pool_max_idle_per_host: Some(32),
+        connect_timeout: Some(Duration::from_secs(5)),
+        total_timeout: Some(Duration::from_secs(timeout_secs)),
+        redirect: OutboundRedirect::Deny,
+        disable_proxy: true,
+        tls,
+        tls_context: Some("OpenidConnect"),
+        dns_resolver: Some(dns_resolver),
+        ..Default::default()
+    }
+}
 
 enum PreparedValue<T> {
     Ready(T),
@@ -325,14 +382,17 @@ impl OpenidConnect {
             };
 
             // Phase 2: if SAN pinning is configured (validation.subjectAltNames),
-            // build reqwest with use_preconfigured_tls(rustls::ClientConfig) instead
-            // of the high-level helpers (which can't attach a ServerCertVerifier).
+            // attach rustls via use_preconfigured_tls because the factory's high-level
+            // TLS helpers cannot install a custom ServerCertVerifier. Transport knobs
+            // (proxy, redirect, timeouts, dial-time EgressResolver) still go through
+            // apply_outbound_policy so both branches share one policy contract.
             let san_policy: Vec<SubjectAltName> = tls_for_client
                 .outbound
                 .validation
                 .as_ref()
                 .and_then(|v| v.subject_alt_names.clone())
                 .unwrap_or_default();
+            let dns_resolver: Arc<dyn reqwest::dns::Resolve> = Arc::new(oidc_egress_resolver());
 
             if !san_policy.is_empty() {
                 let resolved = resolve_outbound_tls(
@@ -358,32 +418,33 @@ impl OpenidConnect {
                     );
                     "openid_connect SAN-pinning TLS config build failed".to_string()
                 })?;
-                let client = reqwest::ClientBuilder::new()
-                    .pool_max_idle_per_host(32)
-                    .connect_timeout(Duration::from_secs(5))
-                    .timeout(Duration::from_secs(config.timeout))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .use_preconfigured_tls(rustls_config)
-                    .build()
-                    .map_err(|error| {
-                        tracing::warn!(
-                            component = "openid_connect",
-                            error = %error,
-                            "SAN-pinning HTTP client build failed; OIDC plugin construction rejected"
-                        );
-                        "openid_connect SAN-pinning HTTP client build failed".to_string()
-                    })?;
+                let builder = apply_outbound_policy(
+                    reqwest::Client::builder(),
+                    oidc_outbound_client_config(config.timeout, None, dns_resolver),
+                )
+                .map_err(|error| {
+                    tracing::warn!(
+                        component = "openid_connect",
+                        error = %error,
+                        "SAN-pinning HTTP client build failed; OIDC plugin construction rejected"
+                    );
+                    "openid_connect SAN-pinning HTTP client build failed".to_string()
+                })?;
+                let client = builder.use_preconfigured_tls(rustls_config).build().map_err(|error| {
+                    tracing::warn!(
+                        component = "openid_connect",
+                        error = %error,
+                        "SAN-pinning HTTP client build failed; OIDC plugin construction rejected"
+                    );
+                    "openid_connect SAN-pinning HTTP client build failed".to_string()
+                })?;
                 Arc::new(client)
             } else {
-                let client = build_outbound_client(OutboundClientConfig {
-                    pool_max_idle_per_host: Some(32),
-                    connect_timeout: Some(Duration::from_secs(5)),
-                    total_timeout: Some(Duration::from_secs(config.timeout)),
-                    redirect: OutboundRedirect::Deny,
-                    tls: Some(tls_for_client),
-                    tls_context: Some("OpenidConnect"),
-                    ..Default::default()
-                })
+                let client = build_outbound_client(oidc_outbound_client_config(
+                    config.timeout,
+                    Some(tls_for_client),
+                    dns_resolver,
+                ))
                 .map_err(|error| {
                     tracing::warn!(
                         component = "openid_connect",

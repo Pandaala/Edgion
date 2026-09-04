@@ -34,6 +34,7 @@ impl OpenidConnect {
             return Ok(cached_claims);
         }
 
+        Self::admit_idp_url(&endpoint)?;
         let client = self.http_client();
         let base_request = client
             .post(&endpoint)

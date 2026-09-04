@@ -47,9 +47,11 @@ is a bug" rule also gets a line there.
 - **Rule**: every outbound `reqwest::Client` MUST be built through the
   factory. A bare `reqwest::Client::builder()` outside `#[cfg(test)]` code is
   a bug.
-- **Verified consumers** (2026-09-01): the default and RequestMirror singletons,
+- **Verified consumers** (2026-09-04): the default and RequestMirror singletons,
   `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
-  and OCI pulls, openid_connect (default branch), request_mirror,
+  and OCI pulls, openid_connect (default `build_outbound_client` branch and
+  SAN-pinning `apply_outbound_policy` + `use_preconfigured_tls` branch),
+  request_mirror,
   the elasticsearch link_sys provider, health-check probes,
   all_endpoint_status, the controller ACME DNS-01 providers
   (`edgion-controller/src/services/acme/dns_provider.rs`, factory-default
@@ -65,12 +67,13 @@ is a bug" rule also gets a line there.
   https -> http downgrade on the same host.
 - **Exemptions**:
   - openid_connect SAN-pinning branch
-    (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) builds a raw
-    client with `use_preconfigured_tls` because a custom
-    `ServerCertVerifier` cannot be attached through the factory's high-level
-    TLS helpers. Resolver, TLS-config, or client-build failure rejects plugin
-    construction; it must never fall back to a client that omits the declared
-    CA, mTLS, or SAN policy.
+    (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) still attaches
+    a custom `ServerCertVerifier` with `use_preconfigured_tls` because the
+    factory's high-level TLS helpers cannot. Proxy disable, redirect deny,
+    timeouts, and `EgressResolver` are applied first through
+    `apply_outbound_policy`. Resolver, TLS-config, or client-build failure
+    rejects plugin construction; it must never fall back to a client that omits
+    the declared CA, mTLS, SAN, or egress policy.
   - Test code.
 
 ### 2. Outbound request semantics (`ExternalHttpConnection`) — Unified for its class
@@ -129,11 +132,14 @@ Three canonical pieces, each with a distinct job:
   DNS at all; pins every lookup to the anchor Service's ready endpoints.
 
 **Adoption map** (verified 2026-09-04): `EgressResolver` guards
-forward_auth / webhook, wasm guest callouts, and ldap_auth dial-time LDAP
-connections. Upstream dialing goes through `classify_backend_addr`. DSL
-`http.call` is a documented design tradeoff (F-018): IP-literal-only check
-(`is_ssrf_blocked_ip_literal`) plus a per-hop redirect guard, no
-resolution-time classification — see
+forward_auth / webhook, wasm guest callouts, ldap_auth dial-time LDAP
+connections, and openid_connect IdP clients (default factory and SAN-pinning
+branches; IP-literal URLs are classified before send because reqwest skips
+custom DNS for literals). Upstream dialing goes through `classify_backend_addr`.
+DSL `http.call` is a documented design tradeoff (F-018): the default-off
+`httpBlockPrivateIps` path keeps an IP-literal-only pre-send check plus a
+per-hop redirect guard; when the flag is on, the guarded client also installs
+`EgressResolver`. See
 [dsl-engine-security-model.md](../02-gateway/dsl-engine-security-model.md)
 and the decision rules under [skills/04-review/ssrf/](../../04-review/ssrf/)
 (7 files). Service-backendRef targets are defended by RBAC/NetworkPolicy,
@@ -159,10 +165,12 @@ not in-process checks.
   through `ResolverSpec`; do not embed another resolver library or hand-roll
   lookups.
 - **Deliberate non-adopters** (OS/system resolver via their client library —
-  not gaps): DSL `http.call` (per the F-018 tradeoff above), openid_connect,
+  not gaps): DSL `http.call` (per the F-018 tradeoff above),
   request_mirror, elasticsearch, health probes, the ext_proc tonic channel.
-  ldap_auth is no longer in this list: it resolves through `EgressResolver`
-  (`ResolverSpec::System`) and injects the admitted stream into ldap3.
+  ldap_auth and openid_connect are no longer in this list: ldap_auth resolves
+  through `EgressResolver` (`ResolverSpec::System`) and injects the admitted
+  stream into ldap3; openid_connect installs the same resolver on both IdP
+  HTTP clients.
 - **In-canon special case**: the ACME dns-01 propagation probe
   (`edgion-common/src/dns/txt_probe.rs`, controller cold path) shares the
   hickory backend but is deliberately not `ResolverSpec`-driven — its query

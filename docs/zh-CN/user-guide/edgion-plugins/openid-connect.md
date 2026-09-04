@@ -242,6 +242,10 @@ IdP 传输、响应解码和请求期间的 TLS 失败属于独立的依赖故�
 或响应体。已声明的 TLS CA 和 mTLS 材料由该 generation 的规范 outbound client 消费；
 未解析或格式错误的声明材料遵循前述构造期 fail-close 行为，不会走上述认证凭据回退逻辑。
 
+## 出站流量策略
+
+每一次 OpenID Connect 出站调用——包括配置的 discovery 以及发现得到的 JWKS、token、introspection、userinfo、revocation 端点——都只连接网关出站流量策略允许的地址。主机名目的地由 `EgressResolver` 在拨号时分类。IP 字面量目的地在 reqwest 连接前分类，因为 reqwest 对字面量会跳过自定义 DNS。默认共享客户端与 SAN 钉扎客户端都会忽略 `HTTP_PROXY` / `HTTPS_PROXY`，并且不跟随重定向。回环、链路本地和未指定地址始终被拒绝。RFC1918 私网地址遵循 `outbound_egress_block_private` / `EDGION_OUTBOUND_BLOCK_PRIVATE`（默认 `false`），因此除非打开该开关，典型的集群内身份提供方仍然可达。被拒绝的目的地会失败关闭，公开响应体和 PluginLog 标签不包含端点或解析地址。JWKS 在后续刷新失败时仍可能使用此前缓存的密钥集；该 stale-serve 路径没有改变。TLS SNI、证书校验、自定义 CA 和 SAN 钉扎仍使用原来的主机名。详见[出站流量策略（SSRF 防护）](../../ops-guide/infrastructure/connectors.md#出站流量策略ssrf-防护)。
+
 ## 安全默认值
 
 - 默认不透传 token 到 upstream

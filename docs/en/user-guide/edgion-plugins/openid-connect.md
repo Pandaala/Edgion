@@ -255,6 +255,10 @@ unresolved or malformed declared material follows the construction-time
 fail-closed behavior described above, never these authentication-credential
 fallback rules.
 
+## Outbound egress
+
+Every OpenID Connect outbound call — configured discovery and discovered JWKS, token, introspection, userinfo, and revocation endpoints — connects only to addresses allowed by the gateway outbound egress policy. Hostname destinations are classified by `EgressResolver` at dial time. IP-literal destinations are classified before reqwest connects, because reqwest skips custom DNS for literals. Both the default shared client and the SAN-pinning client ignore `HTTP_PROXY` / `HTTPS_PROXY` and do not follow redirects. Loopback, link-local, and unspecified destinations are always rejected. RFC1918 private destinations follow `outbound_egress_block_private` / `EDGION_OUTBOUND_BLOCK_PRIVATE` (default `false`), so a typical in-cluster identity provider remains reachable unless that switch is enabled. Denied destinations fail closed without including endpoints or resolved addresses in public bodies or PluginLog tags. JWKS may still serve a previously cached set when a later refresh fails; that stale-serve path is unchanged. TLS SNI, certificate verification, custom CA, and SAN pinning still use the original hostname. See [Egress policy (SSRF protection)](../../ops-guide/infrastructure/connectors.md#egress-policy-ssrf-protection).
+
 ## Security Defaults
 
 - Tokens are not passed to upstream by default
