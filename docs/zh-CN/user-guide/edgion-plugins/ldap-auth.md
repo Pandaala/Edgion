@@ -21,6 +21,7 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 - 支持仅在缺少凭证时匿名放行（`anonymous`）
 - 支持隐藏凭证头（`hideCredentials`）
 - 支持 LDAPS / StartTLS（通过 `ldaps` / `startTls`）
+- 每次 LDAP 连接在拨号时应用网关出站流量策略
 
 ## 工作流程
 
@@ -124,6 +125,10 @@ Controller 仍会处理所有已声明的 TLS Secret 引用、注册依赖、检
 ReferenceGrant，并可能更新状态、记录日志或重新入队插件。普通 LDAP 应省略未使用
 的 TLS 配置；不要假设它在控制面完全无影响。
 
+## 出站流量策略
+
+每次 LDAP 连接都会在拨号时解析 `ldapHost`，并且只连接网关出站流量策略允许的地址。回环、链路本地和未指定地址始终被拒绝。RFC1918 私网地址遵循 `outbound_egress_block_private` / `EDGION_OUTBOUND_BLOCK_PRIVATE`（默认 `false`），因此除非打开该开关，典型的集群内 LDAP 仍然可达。被拒绝的目的地与目录不可达一样，以通用 503 失败关闭。LDAPS 和 StartTLS 仍校验原来的 `ldapHost` 主机名。详见[出站流量策略（SSRF 防护）](../../ops-guide/infrastructure/connectors.md#出站流量策略ssrf-防护)。
+
 ## 使用 `headerType: basic` 示例
 
 ```yaml
@@ -182,6 +187,7 @@ spec:
 | 凭证格式非法 | `401` | 通用认证失败 |
 | LDAP 凭证错误 | `401` | 通用认证失败 |
 | LDAP 服务不可达/超时 | `503` | 服务不可用 |
+| LDAP 目的地被出站流量策略拒绝 | `503` | 与不可达相同的通用响应体 |
 
 ## 安全建议
 

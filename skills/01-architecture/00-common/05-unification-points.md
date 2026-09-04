@@ -128,11 +128,12 @@ Three canonical pieces, each with a distinct job:
   for the upstream-authority path: never resolves the composed authority in
   DNS at all; pins every lookup to the anchor Service's ready endpoints.
 
-**Adoption map** (verified 2026-07-19): `EgressResolver` guards
-forward_auth / webhook and wasm guest callouts. Upstream dialing goes through
-`classify_backend_addr`. DSL `http.call` is a documented design tradeoff
-(F-018): IP-literal-only check (`is_ssrf_blocked_ip_literal`) plus a per-hop
-redirect guard, no resolution-time classification — see
+**Adoption map** (verified 2026-09-04): `EgressResolver` guards
+forward_auth / webhook, wasm guest callouts, and ldap_auth dial-time LDAP
+connections. Upstream dialing goes through `classify_backend_addr`. DSL
+`http.call` is a documented design tradeoff (F-018): IP-literal-only check
+(`is_ssrf_blocked_ip_literal`) plus a per-hop redirect guard, no
+resolution-time classification — see
 [dsl-engine-security-model.md](../02-gateway/dsl-engine-security-model.md)
 and the decision rules under [skills/04-review/ssrf/](../../04-review/ssrf/)
 (7 files). Service-backendRef targets are defended by RBAC/NetworkPolicy,
@@ -159,8 +160,9 @@ not in-process checks.
   lookups.
 - **Deliberate non-adopters** (OS/system resolver via their client library —
   not gaps): DSL `http.call` (per the F-018 tradeoff above), openid_connect,
-  request_mirror, elasticsearch, health probes, ldap3, the ext_proc tonic
-  channel.
+  request_mirror, elasticsearch, health probes, the ext_proc tonic channel.
+  ldap_auth is no longer in this list: it resolves through `EgressResolver`
+  (`ResolverSpec::System`) and injects the admitted stream into ldap3.
 - **In-canon special case**: the ACME dns-01 propagation probe
   (`edgion-common/src/dns/txt_probe.rs`, controller cold path) shares the
   hickory backend but is deliberately not `ResolverSpec`-driven — its query

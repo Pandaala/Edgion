@@ -21,6 +21,7 @@ Use cases:
 - Supports missing-credential-only anonymous pass-through (`anonymous`)
 - Supports hiding credential headers (`hideCredentials`)
 - Supports LDAPS / StartTLS (via `ldaps` / `startTls`)
+- Applies the gateway outbound egress policy to each LDAP connection at dial time
 
 ## Workflow
 
@@ -133,6 +134,18 @@ Secrets and ReferenceGrants, and may update status, log, or requeue the plugin.
 Omit unused TLS configuration for plain LDAP; do not rely on it being inert in
 the control plane.
 
+## Outbound egress
+
+Each LDAP connection resolves `ldapHost` at connect time and dials only
+addresses allowed by the gateway outbound egress policy. Loopback, link-local,
+and unspecified destinations are always rejected. RFC1918 private destinations
+follow `outbound_egress_block_private` / `EDGION_OUTBOUND_BLOCK_PRIVATE`
+(default `false`), so typical in-cluster LDAP remains reachable unless that
+switch is enabled. Denied destinations fail closed with the same generic 503 as
+an unreachable directory. LDAPS and StartTLS still verify the original
+`ldapHost` hostname. See
+[Egress policy (SSRF protection)](../../ops-guide/infrastructure/connectors.md#egress-policy-ssrf-protection).
+
 ## Using `headerType: basic` Example
 
 ```yaml
@@ -190,6 +203,7 @@ allowing anonymous access, the following headers are injected:
 | Invalid credential format | `401` | Generic authentication failure |
 | Wrong LDAP credentials | `401` | Generic authentication failure |
 | LDAP service unreachable/timeout | `503` | Service unavailable |
+| LDAP destination denied by egress policy | `503` | Same generic body as unreachable |
 
 ## Security Recommendations
 

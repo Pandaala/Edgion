@@ -7,16 +7,20 @@ use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
 };
+use crate::plugins::http::common::outbound::egress::{
+    default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
+};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::outbound_san_mismatch_reason;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
+use edgion_common::dns::ResolverSpec;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
-use ldap3::{LdapConnAsync, LdapConnSettings};
+use ldap3::{LdapConnAsync, LdapConnSettings, StdStream};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore};
 
@@ -25,7 +29,10 @@ const PLUGIN_NAME: &str = "LdapAuth";
 /// LDAP Authentication plugin
 pub struct LdapAuth {
     ldap_url: String,
+    ldap_host: String,
+    ldap_port: u16,
     conn_settings: LdapConnSettings,
+    egress: EgressResolver,
     timeout: Duration,
     bind_dn_plan: BindDnPlan,
     auth: AuthPolicy,
@@ -65,6 +72,39 @@ fn map_ldap_connect_error(err: &ldap3::LdapError) -> LdapAuthError {
         Some(reason) => LdapAuthError::TlsSanMismatch(reason),
         None => LdapAuthError::ConnectionFailed,
     }
+}
+
+fn ldap_egress_resolver() -> EgressResolver {
+    EgressResolver::new(
+        ResolverSpec::System,
+        EgressPolicy {
+            block_private: default_block_private(),
+        },
+        egress_dns_cache_ttl(),
+    )
+}
+
+/// Resolve and classify `host` at dial time, then connect only to admitted
+/// addresses. The original hostname is preserved by the caller for LDAP TLS.
+async fn connect_admitted_ldap_tcp(
+    resolver: &EgressResolver,
+    host: &str,
+    port: u16,
+) -> Result<std::net::TcpStream, LdapAuthError> {
+    let addrs = resolver
+        .resolve_socket_addrs(host, port)
+        .await
+        .map_err(|_| LdapAuthError::ConnectionFailed)?;
+    dial_admitted_addrs(addrs).await
+}
+
+async fn dial_admitted_addrs(addrs: Vec<std::net::SocketAddr>) -> Result<std::net::TcpStream, LdapAuthError> {
+    for addr in addrs {
+        if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
+            return stream.into_std().map_err(|_| LdapAuthError::ConnectionFailed);
+        }
+    }
+    Err(LdapAuthError::ConnectionFailed)
 }
 
 enum ParseAuthResult {
@@ -298,7 +338,10 @@ impl LdapAuth {
 
         Ok(Self {
             ldap_url,
+            ldap_host: config.ldap_host.clone(),
+            ldap_port: config.ldap_port,
             conn_settings,
+            egress: ldap_egress_resolver(),
             timeout,
             bind_dn_plan,
             auth,
@@ -368,13 +411,15 @@ impl LdapAuth {
     }
 
     async fn ldap_bind(&self, bind_dn: &str, password: &str) -> Result<(), LdapAuthError> {
-        let (conn, mut ldap) = tokio::time::timeout(
-            self.timeout,
-            LdapConnAsync::with_settings(self.conn_settings.clone(), &self.ldap_url),
-        )
+        let (conn, mut ldap) = tokio::time::timeout(self.timeout, async {
+            let stream = connect_admitted_ldap_tcp(&self.egress, &self.ldap_host, self.ldap_port).await?;
+            let settings = self.conn_settings.clone().set_std_stream(StdStream::Tcp(stream));
+            LdapConnAsync::with_settings(settings, &self.ldap_url)
+                .await
+                .map_err(|e| map_ldap_connect_error(&e))
+        })
         .await
-        .map_err(|_| LdapAuthError::Timeout)?
-        .map_err(|e| map_ldap_connect_error(&e))?;
+        .map_err(|_| LdapAuthError::Timeout)??;
 
         ldap3::drive!(conn);
 
@@ -755,6 +800,8 @@ mod tests {
         let k2 = LdapAuth::new(&k2_config).expect("K2 must build");
 
         assert_eq!(k1.ldap_url, "ldap://ldap-one.example.com:1389");
+        assert_eq!(k1.ldap_host, "ldap-one.example.com");
+        assert_eq!(k1.ldap_port, 1389);
         assert_eq!(k1.timeout, Duration::from_millis(111));
         assert!(!k1.conn_settings.starttls());
         assert_eq!(k1.auth.header_type, "ldap-one");
@@ -1221,5 +1268,69 @@ mod tests {
 
         let result = auth.unauthorized(&mut session).await;
         assert!(matches!(result, PluginRunningResult::ErrTerminateRequest));
+    }
+
+    #[tokio::test]
+    async fn link_local_literal_is_blocked_at_dial_time() {
+        let resolver = ldap_egress_resolver();
+        let err = connect_admitted_ldap_tcp(&resolver, "169.254.169.254", 389)
+            .await
+            .expect_err("link-local LDAP targets must fail closed");
+        assert!(matches!(err, LdapAuthError::ConnectionFailed));
+    }
+
+    #[tokio::test]
+    async fn dns_resolution_failure_fails_closed() {
+        let resolver = EgressResolver::new(
+            ResolverSpec::StandardDns {
+                servers: vec!["not-a-dns-server".to_string()],
+            },
+            EgressPolicy {
+                block_private: default_block_private(),
+            },
+            egress_dns_cache_ttl(),
+        );
+        let err = connect_admitted_ldap_tcp(&resolver, "ldap.example.com", 389)
+            .await
+            .expect_err("LDAP DNS failure must fail closed");
+        assert!(matches!(err, LdapAuthError::ConnectionFailed));
+    }
+
+    #[tokio::test]
+    async fn loopback_literal_is_classified_in_unit_tests() {
+        let resolver = ldap_egress_resolver();
+        let addrs = resolver
+            .resolve_socket_addrs("127.0.0.1", 389)
+            .await
+            .expect("unit tests allow loopback through EgressResolver");
+        assert_eq!(addrs, vec!["127.0.0.1:389".parse().unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn dial_skips_refused_candidate_and_uses_next() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind admitted fallback listener");
+        let admitted = listener.local_addr().expect("listener addr");
+        let accept = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept fallback connection");
+            stream
+        });
+
+        let refused = "127.0.0.1:1".parse().unwrap();
+        let std_stream = dial_admitted_addrs(vec![refused, admitted])
+            .await
+            .expect("second admitted address must be dialed");
+        drop(std_stream);
+        accept.await.expect("accepted fallback connection");
+    }
+
+    #[tokio::test]
+    async fn all_refused_candidates_fail_closed() {
+        let refused = "127.0.0.1:1".parse().unwrap();
+        let err = dial_admitted_addrs(vec![refused])
+            .await
+            .expect_err("no admitted TCP candidate must fail closed");
+        assert!(matches!(err, LdapAuthError::ConnectionFailed));
     }
 }
