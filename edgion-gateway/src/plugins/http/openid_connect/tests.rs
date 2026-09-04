@@ -36,6 +36,44 @@ fn plugin_log_entries(plugin_log: &PluginLog) -> Vec<String> {
         .collect()
 }
 
+/// Shared Cookie header for `get_cookie` and `strip_cookie` on a mock session.
+fn install_request_cookies(session: &mut MockPluginSession, cookie_header: &str) -> Arc<Mutex<Option<String>>> {
+    let cookie = Arc::new(Mutex::new(
+        (!cookie_header.is_empty()).then(|| cookie_header.to_string()),
+    ));
+    let for_get = Arc::clone(&cookie);
+    session.expect_get_cookie().returning(move |name| {
+        let header = for_get.lock().clone()?;
+        header.split(';').find_map(|pair| {
+            let mut parts = pair.trim().splitn(2, '=');
+            let key = parts.next()?;
+            (key == name).then(|| parts.next().unwrap_or("").to_string())
+        })
+    });
+    let for_headers = Arc::clone(&cookie);
+    session
+        .expect_request_headers()
+        .returning(move || match for_headers.lock().as_ref() {
+            Some(value) => vec![("Cookie".to_string(), value.clone())],
+            None => Vec::new(),
+        });
+    let for_set = Arc::clone(&cookie);
+    session.expect_set_request_header().returning(move |name, value| {
+        if name.eq_ignore_ascii_case("Cookie") {
+            *for_set.lock() = Some(value.to_string());
+        }
+        Ok(())
+    });
+    let for_remove = Arc::clone(&cookie);
+    session.expect_remove_request_header().returning(move |name| {
+        if name.eq_ignore_ascii_case("Cookie") {
+            *for_remove.lock() = None;
+        }
+        Ok(())
+    });
+    cookie
+}
+
 fn secret_ref(name: &str) -> edgion_resources::resources::common::SecretObjectReference {
     edgion_resources::resources::common::SecretObjectReference {
         group: None,
@@ -519,11 +557,12 @@ async fn test_unauth_action_pass_without_token_allows_request() {
 
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
-    session.expect_get_cookie().returning(|_| None);
+    let cookies = install_request_cookies(&mut session, "");
     session.expect_header_value().returning(|_| None);
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
+    assert!(cookies.lock().is_none());
 }
 
 #[tokio::test]
@@ -1096,19 +1135,17 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
 
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
-    session.expect_get_cookie().returning(move |name| {
-        if name == "edgion_oidc_session" {
-            Some(encoded_cookie.clone())
-        } else {
-            None
-        }
-    });
+    let cookies = install_request_cookies(
+        &mut session,
+        &format!("app=keep; edgion_oidc_session={encoded_cookie}; theme=dark"),
+    );
     session.expect_header_value().returning(|_| None);
     session.expect_append_response_header().times(0);
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
     assert_eq!(plugin_log_entries(&log), vec!["session token verified"]);
+    assert_eq!(cookies.lock().as_deref(), Some("app=keep; theme=dark"));
 }
 
 #[tokio::test]
@@ -1184,13 +1221,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
 
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
-    session.expect_get_cookie().returning(move |name| {
-        if name == "edgion_oidc_session" {
-            Some(encoded_cookie.clone())
-        } else {
-            None
-        }
-    });
+    let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded_cookie}"));
     session.expect_header_value().returning(|_| None);
     session
         .expect_append_response_header()
@@ -1204,6 +1235,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
         plugin_log_entries(&log),
         vec!["token refresh miss", "session token verified"]
     );
+    assert!(cookies.lock().is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1237,13 +1269,10 @@ async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
     let mut session = MockPluginSession::new();
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
-    session.expect_get_cookie().returning(move |name| {
-        if name == "edgion_oidc_session" {
-            Some(encoded_cookie.clone())
-        } else {
-            None
-        }
-    });
+    let cookies = install_request_cookies(
+        &mut session,
+        &format!("edgion_oidc_session={encoded_cookie}; edgion_oidc_state=pending"),
+    );
     session.expect_header_value().returning(|_| None);
 
     let plugin_for_request = plugin.clone();
@@ -1279,6 +1308,7 @@ async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
         plugin_log_entries(&log),
         vec!["err: token refresh fail", "err: session no token", "no token; pass"]
     );
+    assert!(cookies.lock().is_none());
 }
 
 #[tokio::test]
@@ -1322,13 +1352,7 @@ async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_o
     let mut log = PluginLog::new("OpenidConnect");
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
-    session.expect_get_cookie().returning(move |name| {
-        if name == "edgion_oidc_session" {
-            Some(encoded_cookie.clone())
-        } else {
-            None
-        }
-    });
+    let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded_cookie}"));
     session.expect_header_value().returning(|_| None);
 
     let result = plugin.run_request(&mut session, &mut log).await;
@@ -1337,6 +1361,87 @@ async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_o
         plugin_log_entries(&log),
         vec!["err: token refresh fail", "err: session no token", "no token; pass"]
     );
+    assert!(cookies.lock().is_none());
+}
+
+#[test]
+fn strip_gateway_owned_cookies_removes_session_and_state_keeps_others() {
+    let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    let mut session = MockPluginSession::new();
+    let cookies = install_request_cookies(
+        &mut session,
+        "app=keep; edgion_oidc_session=secret; edgion_oidc_state=state; theme=dark",
+    );
+
+    plugin.strip_gateway_owned_cookies(&mut session);
+
+    assert_eq!(cookies.lock().as_deref(), Some("app=keep; theme=dark"));
+}
+
+#[test]
+fn strip_gateway_owned_cookies_drops_header_when_only_gateway_cookies() {
+    let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    let mut session = MockPluginSession::new();
+    let cookies = install_request_cookies(&mut session, "edgion_oidc_session=secret; edgion_oidc_state=state");
+
+    plugin.strip_gateway_owned_cookies(&mut session);
+
+    assert!(cookies.lock().is_none());
+}
+
+#[test]
+fn strip_gateway_owned_cookies_uses_configured_session_name() {
+    let mut cfg = base_config();
+    cfg.session_cookie_name = "custom_oidc_session".to_string();
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+    let cookies = install_request_cookies(
+        &mut session,
+        "custom_oidc_session=secret; edgion_oidc_session=app-owned; other=1",
+    );
+
+    plugin.strip_gateway_owned_cookies(&mut session);
+
+    assert_eq!(
+        cookies.lock().as_deref(),
+        Some("edgion_oidc_session=app-owned; other=1")
+    );
+}
+
+#[test]
+fn strip_gateway_owned_cookies_merges_multiple_cookie_lines() {
+    let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    let mut session = MockPluginSession::new();
+    let cookie = Arc::new(Mutex::new(Some("edgion_oidc_session=secret; app=keep".to_string())));
+    let second_line = Arc::new(Mutex::new(true));
+    let for_headers = Arc::clone(&cookie);
+    let for_second = Arc::clone(&second_line);
+    session.expect_request_headers().returning(move || {
+        let header = for_headers.lock().clone();
+        let mut rows = Vec::new();
+        if let Some(value) = header {
+            rows.push(("Cookie".to_string(), value));
+        }
+        if *for_second.lock() {
+            rows.push(("cookie".to_string(), "edgion_oidc_state=state; theme=dark".to_string()));
+        }
+        rows
+    });
+    let for_set = Arc::clone(&cookie);
+    let for_second_set = Arc::clone(&second_line);
+    session.expect_set_request_header().returning(move |name, value| {
+        assert!(name.eq_ignore_ascii_case("Cookie"));
+        *for_set.lock() = Some(value.to_string());
+        *for_second_set.lock() = false;
+        Ok(())
+    });
+    session.expect_remove_request_header().returning(|_| {
+        panic!("unrelated cookies must keep the Cookie header");
+    });
+
+    plugin.strip_gateway_owned_cookies(&mut session);
+
+    assert_eq!(cookie.lock().as_deref(), Some("app=keep; theme=dark"));
 }
 
 #[test]

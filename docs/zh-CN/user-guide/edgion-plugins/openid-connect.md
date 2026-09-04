@@ -55,7 +55,7 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `sessionSecretRef` | Object | 无 | 引用包含 session 加密密钥的 K8s Secret（`unauthAction=Auth` 时必填） |
-| `sessionCookieName` | String | `"edgion_oidc_session"` | Session Cookie 名称 |
+| `sessionCookieName` | String | `"edgion_oidc_session"` | Session Cookie 名称。该 Cookie 与 `edgion_oidc_state` 由 Gateway 持有，代理到上游前始终从请求中移除；应用自己的 Cookie 保持不变。 |
 | `sessionLifetime` | Integer | `3600` | Session 有效期（秒） |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite 属性。可选值：`Strict` | `Lax` | `None` |
 | `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly 属性 |
@@ -122,7 +122,7 @@ LRU capacity 时，`shards: 0` 表示单分片；仅覆盖 shards 是无效配�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `hideCredentials` | Boolean | `false` | 认证成功后是否移除原始 Authorization 头 |
+| `hideCredentials` | Boolean | `false` | 认证成功后是否移除客户端原始 `Authorization` 头。此开关不控制会话/状态 Cookie；Gateway 自有 Cookie 在代理前始终剥离。 |
 | `authFailureDelayMs` | Integer | `0` | 认证失败延迟（毫秒），防止暴力破解 |
 
 ### 网络参数

@@ -55,7 +55,7 @@
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `sessionSecretRef` | Object | none | Reference to a K8s Secret containing the session encryption key (required when `unauthAction=Auth`) |
-| `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name |
+| `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name. This cookie and `edgion_oidc_state` are Gateway-owned and are always removed from the request before proxying upstream. Application cookies are left unchanged. |
 | `sessionLifetime` | Integer | `3600` | Session lifetime (seconds) |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite attribute. Values: `Strict` | `Lax` | `None` |
 | `sessionCookieHttpOnly` | Boolean | `true` | Cookie HttpOnly attribute |
@@ -125,7 +125,7 @@ registry is also separate from both caches.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `hideCredentials` | Boolean | `false` | Whether to remove the original Authorization header after successful auth |
+| `hideCredentials` | Boolean | `false` | Whether to remove the original client `Authorization` header after successful bearer auth. This flag does not control session or state cookies; those Gateway-owned cookies are always stripped before proxying. |
 | `authFailureDelayMs` | Integer | `0` | Authentication failure delay (milliseconds), mitigates brute-force attacks |
 
 ### Network Parameters

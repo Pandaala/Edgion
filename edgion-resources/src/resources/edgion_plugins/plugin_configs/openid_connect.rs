@@ -227,11 +227,14 @@ pub struct OpenidConnectConfig {
     pub resolved_client_certificate: Option<Secret>,
 
     // Security extras
-    /// Remove Authorization header from the upstream request after successful bearer-token auth.
-    /// In bearer_only mode: removes the original Authorization header.
-    /// In session-cookie mode: no-op (credentials are in cookies, not Authorization header).
-    /// Note: if `access_token_in_authorization_header` is also true, the original header is
-    /// removed first, then a new Authorization: Bearer <token> header is set for upstream.
+    /// Remove the original Authorization header from the upstream request after
+    /// successful bearer-token auth.
+    ///
+    /// Gateway-owned session and state cookies are always stripped before
+    /// proxying and are not controlled by this flag.
+    /// Note: if `access_token_in_authorization_header` is also true, the original
+    /// header is removed first, then a new Authorization: Bearer <token> header
+    /// is set for upstream.
     /// Default: false.
     #[serde(default)]
     pub hide_credentials: bool,

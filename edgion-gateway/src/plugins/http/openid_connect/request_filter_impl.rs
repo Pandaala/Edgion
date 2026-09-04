@@ -123,6 +123,7 @@ impl RequestFilter for OpenidConnect {
                                     &claims,
                                 );
                                 plugin_log.push("session token verified");
+                                self.strip_gateway_owned_cookies(session);
                                 return PluginRunningResult::GoodNext;
                             }
                             Err(err) => {
@@ -147,6 +148,7 @@ impl RequestFilter for OpenidConnect {
                                                     &claims,
                                                 );
                                                 plugin_log.push("token refresh on expiry");
+                                                self.strip_gateway_owned_cookies(session);
                                                 return PluginRunningResult::GoodNext;
                                             }
                                             Err(_) => {
@@ -168,6 +170,7 @@ impl RequestFilter for OpenidConnect {
                                                         plugin_log.push(
                                                             "token refresh wait timeout; stale token within leeway",
                                                         );
+                                                        self.strip_gateway_owned_cookies(session);
                                                         return PluginRunningResult::GoodNext;
                                                     }
                                                     Ok(_) => {}
@@ -196,6 +199,7 @@ impl RequestFilter for OpenidConnect {
             match self.config.unauth_action {
                 UnauthAction::Pass => {
                     plugin_log.push("no token; pass");
+                    self.strip_gateway_owned_cookies(session);
                     return PluginRunningResult::GoodNext;
                 }
                 UnauthAction::Deny => {
@@ -248,6 +252,7 @@ impl RequestFilter for OpenidConnect {
                 if !self.config.access_token_in_authorization_header {
                     self.hide_credentials_if_needed(session);
                 }
+                self.strip_gateway_owned_cookies(session);
                 plugin_log.push("token verified");
                 PluginRunningResult::GoodNext
             }

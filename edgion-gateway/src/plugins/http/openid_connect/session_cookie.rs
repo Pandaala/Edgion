@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::http::common::auth_common::strip_cookie;
 use edgion_common::secret::get_secret;
 use edgion_resources::resources::gateway::SecretObjectReference;
 
@@ -172,6 +173,16 @@ impl OpenidConnect {
         let mut rng = rand::rng();
         rng.fill_bytes(&mut bytes);
         URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    /// Remove Gateway-owned OIDC cookies from the proxied request.
+    ///
+    /// `edgion_oidc_session` (or `sessionCookieName`) and `edgion_oidc_state` are
+    /// Gateway credentials, not application cookies. They are stripped on every
+    /// path that continues upstream, independent of `hideCredentials`.
+    pub(super) fn strip_gateway_owned_cookies(&self, session: &mut dyn PluginSession) {
+        strip_cookie(session, self.session_cookie_name());
+        strip_cookie(session, Self::state_cookie_name());
     }
 
     pub(super) fn extract_session_cookie_from_request(

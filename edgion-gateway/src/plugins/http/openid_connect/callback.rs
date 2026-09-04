@@ -45,10 +45,12 @@ impl OpenidConnect {
         auth_delay(self.config.auth_failure_delay_ms).await;
     }
 
-    /// Remove the Authorization header from the upstream request if hide_credentials is enabled.
+    /// Remove the client Authorization header from the upstream request when
+    /// `hideCredentials` is enabled.
     ///
-    /// This is only meaningful in bearer_only mode (where the credential IS the Authorization
-    /// header). In session-cookie mode the credential is in a cookie, so there is nothing to hide.
+    /// This switch covers the bearer credential only. Gateway-owned session and
+    /// state cookies are always stripped before proxying, including session-cookie
+    /// mode.
     pub(super) fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
         if self.config.hide_credentials {
             let _ = session.remove_request_header("authorization");
