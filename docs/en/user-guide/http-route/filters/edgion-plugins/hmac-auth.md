@@ -6,14 +6,18 @@
 
 ## Overview
 
-HMAC Auth verifies request signatures based on the HTTP Signature specification, ensuring request integrity and identity authenticity. Supports hmac-sha256, hmac-sha384, and hmac-sha512 algorithms.
+HMAC Auth verifies a shared-secret signature over selected parts of the request so the gateway can authenticate the caller and detect tampering. It supports hmac-sha256, hmac-sha384, and hmac-sha512.
+
+This is Edgion's request contract. Other gateways use different header encodings for the same class of feature; clients must follow the format below.
 
 **How it works**:
-1. Client computes an HMAC signature over specified parts of the request using a shared secret
-2. Signature information is placed in the `Authorization` or `Signature` header
+1. Client computes an HMAC over the declared request parts using a shared secret
+2. Client sends the result in `Authorization`, or in `Proxy-Authorization` when `Authorization` is absent
 3. Plugin recomputes the signature and compares it against the request
-4. Matching signature within time window: access granted
+4. Matching signature within the time window: access granted
 5. Mismatched or expired signature: returns 401
+
+---
 
 ## Quick Start
 
@@ -39,7 +43,7 @@ metadata:
   name: hmac-auth-plugin
 spec:
   requestPlugins:
-      type: HmacAuth
+    - type: HmacAuth
       config:
         secretGroups:
           - name: default
@@ -61,7 +65,7 @@ spec:
 | `clockSkew` | Integer | `300` | Allowed clock skew in seconds |
 | `enforceHeaders` | Array\<String\> | none | Headers that must be included in signature |
 | `validateRequestBody` | Boolean | `false` | Whether to validate request body Digest |
-| `hideCredentials` | Boolean | `false` | Remove authentication headers |
+| `hideCredentials` | Boolean | `false` | After successful authentication, remove `Authorization`, `Proxy-Authorization`, and `Signature` before proxying. `Signature` is stripped only; it is not an authentication source. Anonymous requests that skip authentication do not run this cleanup |
 | `anonymous` | String | none | Anonymous username |
 | `realm` | String | `"edgion"` | Authentication realm |
 | `authFailureDelayMs` | Integer | `0` | Auth failure response delay (ms) |
@@ -86,7 +90,7 @@ spec:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: default
@@ -101,7 +105,7 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: default
@@ -119,7 +123,7 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: default
@@ -136,20 +140,46 @@ requestPlugins:
 
 ---
 
-## Signature Format
+## Request Format
 
-Client requests must include the following header:
+The client must send credentials in `Authorization`. If that header is absent, the plugin reads `Proxy-Authorization`. A standalone `Signature` header is not used for authentication.
 
 ```
-Authorization: Signature keyId="service-a",algorithm="hmac-sha256",headers="@request-target host date",signature="base64-encoded-signature"
-Date: Mon, 08 Mar 2026 10:00:00 GMT
+Authorization: hmac username="service-a", algorithm="hmac-sha256", headers="@request-target host date", signature="<base64-signature>"
+Date: Sat, 05 Sep 2026 14:00:00 GMT
 ```
 
-### Signature Computation Steps
+Required quoted parameters:
 
-1. Build the signing string by concatenating header values in the order specified by `headers`
-2. Compute HMAC signature using the algorithm and shared secret
-3. Base64-encode the result
+| Parameter | Meaning |
+|-----------|---------|
+| `username` | Credential username (looked up in `secretGroups`) |
+| `algorithm` | One of `hmac-sha256`, `hmac-sha384`, `hmac-sha512` |
+| `headers` | Space-separated names that enter the signing string, in this order |
+| `signature` | Standard Base64 of the HMAC digest |
+
+The signed name list must include `date` or `x-date`. Send a current `Date` or `X-Date` value in RFC 2822 or RFC 3339 form. The sample date above shows a valid RFC 2822 weekday; replace it with the current request time. The gateway rejects timestamps outside `clockSkew`.
+
+### Signing String
+
+Build one line per name in the `headers` list, in that order, and join them with `\n` (no trailing newline). The plugin lowercases every name in `headers` before building the string, so the left-hand side is always lowercase:
+
+```
+<lowercase-name>: <value>
+```
+
+- Ordinary names use the request header value as received.
+- `@request-target` and `(request-target)` use the lowercase method, a space, the path, and `?` plus the query when a query is present:
+
+```
+@request-target: get /v1/items?page=1
+host: api.example.com
+date: Sat, 05 Sep 2026 14:00:00 GMT
+```
+
+Then HMAC that string with the shared secret and Base64-encode the digest.
+
+When `validateRequestBody` is true, also sign `digest` and send `Digest: SHA-256=<base64(sha256(body))>`.
 
 ---
 
@@ -157,7 +187,7 @@ Date: Mon, 08 Mar 2026 10:00:00 GMT
 
 HMAC Auth uses a **timestamp window** to prevent signature replay — the request `Date` / `X-Date` header must be within `clockSkew` (default `300` seconds / 5 minutes) of the server clock. **The plugin does NOT perform nonce deduplication.**
 
-This matches the dominant industry pattern for HMAC authentication (AWS SigV4, Stripe Webhooks, GitHub Webhooks, Kong `hmac-auth`, APISIX `hmac-auth`) — "timestamp window + HTTPS", no gateway-layer nonce storage.
+This matches a common HMAC authentication pattern (AWS SigV4, Stripe Webhooks, and typical API-gateway HMAC plugins) — "timestamp window + HTTPS", no gateway-layer nonce storage.
 
 ### In-Window Replay Risk and Mitigations
 
@@ -166,7 +196,7 @@ In theory, an attacker who obtains a valid signature can replay it arbitrarily m
 | Threat path | Defense |
 |---|---|
 | Man-in-the-middle capture | **HTTPS** (TLS prevents signature exposure on the wire) |
-| Signature leaked via logs | Enable `hideCredentials: true`; do not add `Authorization` / `Signature` to access-log headers |
+| Signature leaked via logs | Enable `hideCredentials: true`; do not add `Authorization`, `Proxy-Authorization`, or `Signature` to access-log headers |
 | Legitimate client replays maliciously | **Business-layer idempotency keys** (not a gateway concern) |
 | Window configured too wide | Shrink `clockSkew` (e.g., `60`) on high-sensitivity endpoints |
 
@@ -175,25 +205,30 @@ In theory, an attacker who obtains a valid signature can replay it arbitrarily m
 **Minimum secure production config**:
 
 ```yaml
-filters:
-  - type: HmacAuth
-    config:
-      secretGroups:
-        - name: default
-          secretRefs:
-            - name: hmac-creds
-      clockSkew: 300          # 5-minute window; shrink to 60 for sensitive endpoints
-      hideCredentials: true   # strip Authorization/Signature from upstream (reduces log-leak surface)
-      enforceHeaders:
-        - date                # timestamp must be signed
-        - host
-      # Business-layer idempotency: sensitive non-idempotent ops (payments, password changes)
-      # must be protected by the application via an Idempotency-Key header.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: hmac-auth-secure
+spec:
+  requestPlugins:
+    - type: HmacAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-creds
+        clockSkew: 300          # 5-minute window; shrink to 60 for sensitive endpoints
+        hideCredentials: true   # strip Authorization, Proxy-Authorization, and Signature before upstream
+        enforceHeaders:
+          - date                # timestamp must be signed
+          - host
+        # Business-layer idempotency: sensitive non-idempotent ops (payments, password changes)
+        # must be protected by the application via an Idempotency-Key header.
 ```
 
 **Also required**:
 - **HTTPS is mandatory**: HMAC signatures can be captured on cleartext; HTTPS is the baseline assumption of this plugin
-- **Do not log signatures**: default off, but avoid adding `Authorization` / `Signature` to `accessLog.extraHeaders`
+- **Do not log signatures**: default off, but avoid adding `Authorization`, `Proxy-Authorization`, or `Signature` to `accessLog.extraHeaders`
 - **Idempotency for critical ops**: For non-idempotent, high-sensitivity operations (payment, password change, transfer), the backend should require an `Idempotency-Key` header and dedupe at the business layer — this is the correct place for replay protection
 
 ### Why Doesn't Edgion Do Nonce Dedup at the Gateway?
@@ -203,7 +238,7 @@ Nonce deduplication requires **per-request state storage** (in-memory LRU or Red
 - **In-memory LRU**: State is per-gateway-instance; a multi-gateway deployment fails because an attacker can switch instances and replay — **illusory defense**
 - **Redis backend**: Adds ~1–3ms per request and a hard dependency on Redis; the "fail-open vs fail-close on Redis failure" question is a dilemma either way
 
-The industry (AWS / Stripe / GitHub / Kong / APISIX) has settled on "gateway does timestamp window, business layer does idempotency keys". Edgion follows the same layering.
+Edgion follows the common gateway layering: the edge enforces a timestamp window, and the application owns idempotency keys.
 
 If your deployment truly needs gateway-layer nonce deduplication (edge cases), please open an issue to discuss a standalone implementation.
 
@@ -224,7 +259,7 @@ duplicate. The plugin continues serving requests normally.
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: partner-a
@@ -268,6 +303,7 @@ OK group=partner-b user partner-b-user
 - Ensure client and server clocks are synchronized
 - Increase `clockSkew` value
 - Verify the signing string construction
+- Confirm the request uses `hmac` with a `username` parameter, not a `Signature` / `keyId` header
 
 ### Problem 2: Secret Length Too Short
 

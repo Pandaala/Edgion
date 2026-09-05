@@ -114,7 +114,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Design sensitive ctx provenance and unmasking | pending | [task](../../../todo/design-ctx-sensitive-provenance-unmasking.md) |
 | Reject unsafe DynamicExternalUpstream SNI and Host overrides | pending | [task](../../../todo/reject-unsafe-dynamic-external-upstream-sni-host-overrides.md) |
 | Use canonical final HTTP status validation for local replies | pending | [task](../../../todo/use-canonical-final-http-status-validation-for-local-replies.md) |
-| Align HmacAuth documentation with the runtime wire format | pending | [task](../../../todo/align-hmac-auth-wire-format-documentation.md) |
+| Align HmacAuth documentation with the runtime wire format | completed | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
 | Use one EdgionConfigData snapshot per authorization decision | pending | [task](../../../todo/request-scoped-edgion-config-data-snapshot.md) |
 | Align IP restriction docs with named IpGroup schema | pending | [task](../../../todo/align-ip-restriction-named-group-documentation.md) |
 | Harden JWE protected header JSON parsing | pending | [task](../../../todo/harden-jwe-protected-header-json-parsing.md) |

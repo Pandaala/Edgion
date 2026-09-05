@@ -6,14 +6,18 @@
 
 ## 概述
 
-HMAC Auth 基于 HTTP Signature 规范，通过 HMAC 算法验证请求签名，确保请求的完整性和身份真实性。支持 hmac-sha256、hmac-sha384、hmac-sha512 算法。
+HMAC Auth 用共享密钥对请求的选定部分做签名校验，用来认证调用方并发现篡改。支持 hmac-sha256、hmac-sha384、hmac-sha512。
+
+这是 Edgion 自己的请求约定。同类网关功能的请求头编码并不统一，客户端必须按下面的格式签发。
 
 **工作原理**：
-1. 客户端使用共享密钥对请求的指定部分（header、path 等）计算 HMAC 签名
-2. 将签名信息放入 `Authorization` 或 `Signature` header
-3. 插件使用相同的密钥重新计算签名并与请求中的签名比对
+1. 客户端使用共享密钥，对声明的请求部分计算 HMAC
+2. 把结果放在 `Authorization`；若没有该头，则放在 `Proxy-Authorization`
+3. 插件用同一密钥重算签名并与请求比对
 4. 签名匹配且在时间窗口内：允许访问
 5. 签名不匹配或过期：返回 401
+
+---
 
 ## 快速开始
 
@@ -39,7 +43,7 @@ metadata:
   name: hmac-auth-plugin
 spec:
   requestPlugins:
-      type: HmacAuth
+    - type: HmacAuth
       config:
         secretGroups:
           - name: default
@@ -61,7 +65,7 @@ spec:
 | `clockSkew` | Integer | ❌ | `300` | 允许的时钟偏移秒数 |
 | `enforceHeaders` | Array | ❌ | 无 | 签名中必须包含的 header 列表 |
 | `validateRequestBody` | Boolean | ❌ | `false` | 是否验证请求体的 Digest |
-| `hideCredentials` | Boolean | ❌ | `false` | 是否移除认证相关 header |
+| `hideCredentials` | Boolean | ❌ | `false` | 认证成功后，转发前移除 `Authorization`、`Proxy-Authorization` 和 `Signature`。`Signature` 只被摘掉，不是认证源。跳过认证的匿名请求不会做这次清理 |
 | `anonymous` | String | ❌ | 无 | 匿名用户名 |
 | `realm` | String | ❌ | `"edgion"` | 认证域 |
 | `authFailureDelayMs` | Integer | ❌ | `0` | 认证失败延迟响应毫秒数 |
@@ -88,7 +92,7 @@ spec:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: default
@@ -103,7 +107,7 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: default
@@ -121,7 +125,7 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: default
@@ -138,20 +142,46 @@ requestPlugins:
 
 ---
 
-## 签名格式
+## 请求格式
 
-客户端请求需包含以下 Header：
+客户端必须把凭证放在 `Authorization`。若没有该头，插件读取 `Proxy-Authorization`。独立的 `Signature` 头不用于认证。
 
 ```
-Authorization: Signature keyId="service-a",algorithm="hmac-sha256",headers="@request-target host date",signature="base64-encoded-signature"
-Date: Mon, 08 Mar 2026 10:00:00 GMT
+Authorization: hmac username="service-a", algorithm="hmac-sha256", headers="@request-target host date", signature="<base64-signature>"
+Date: Sat, 05 Sep 2026 14:00:00 GMT
 ```
 
-### 签名计算步骤
+必填且必须加引号的参数：
 
-1. 构建签名字符串：按 `headers` 参数指定的顺序拼接各 header 的值
-2. 使用 HMAC 算法和共享密钥计算签名
-3. Base64 编码签名结果
+| 参数 | 含义 |
+|------|------|
+| `username` | 凭证用户名（在 `secretGroups` 中查找） |
+| `algorithm` | `hmac-sha256`、`hmac-sha384` 或 `hmac-sha512` |
+| `headers` | 进入签名串的名称，空格分隔，顺序与签名串一致 |
+| `signature` | HMAC 摘要的标准 Base64 |
+
+签名名称列表必须包含 `date` 或 `x-date`。`Date` / `X-Date` 使用 RFC 2822 或 RFC 3339，且必须是当前请求时间。上面的日期只示范合法的 RFC 2822 星期；请换成实际请求时刻。超出 `clockSkew` 的时间戳会被拒绝。
+
+### 签名串
+
+按 `headers` 列表的顺序，每个名称一行，用 `\n` 连接（末尾不加换行）。插件会先把 `headers` 里的名称转成小写，所以签名串左侧始终是小写：
+
+```
+<lowercase-name>: <value>
+```
+
+- 普通名称使用请求里对应 header 的值。
+- `@request-target` 和 `(request-target)` 使用小写 method、一个空格、path；若有 query 再追加 `?` 和 query：
+
+```
+@request-target: get /v1/items?page=1
+host: api.example.com
+date: Sat, 05 Sep 2026 14:00:00 GMT
+```
+
+然后用共享密钥对该字符串做 HMAC，再 Base64 编码摘要。
+
+当 `validateRequestBody` 为 true 时，还要签名 `digest`，并发送 `Digest: SHA-256=<base64(sha256(body))>`。
 
 ---
 
@@ -159,7 +189,7 @@ Date: Mon, 08 Mar 2026 10:00:00 GMT
 
 HMAC Auth 插件使用**时间戳窗口**机制防止签名重放——请求 `Date` / `X-Date` header 与服务器时钟差必须 ≤ `clockSkew`（默认 `300` 秒 / 5 分钟）。**插件本身不做 nonce 去重**。
 
-这与业界主流 HMAC 认证实现一致（AWS SigV4、Stripe Webhooks、GitHub Webhooks、Kong `hmac-auth`、APISIX `hmac-auth`）——都是"时间戳窗口 + HTTPS"组合，不在代理层做 nonce 存储。
+这与常见的 HMAC 认证做法一致（AWS SigV4、Stripe Webhooks，以及常见的 API 网关 HMAC 插件）——都是"时间戳窗口 + HTTPS"组合，不在代理层做 nonce 存储。
 
 ### 窗口内重放风险与缓解
 
@@ -168,7 +198,7 @@ HMAC Auth 插件使用**时间戳窗口**机制防止签名重放——请求 `D
 | 威胁路径 | 防御 |
 |---|---|
 | 中间人抓包 | **HTTPS**（TLS 阻断签名泄露） |
-| 签名从日志泄露 | 启用 `hideCredentials: true`；access log 不记录 `Authorization` / `Signature` 头 |
+| 签名从日志泄露 | 启用 `hideCredentials: true`；access log 不记录 `Authorization`、`Proxy-Authorization` 或 `Signature` 头 |
 | 合法客户端恶意重放 | **业务层 idempotency key**（非网关层职责） |
 | 窗口期调得过大 | 高敏感接口缩短 `clockSkew`（如 `60`） |
 
@@ -177,24 +207,29 @@ HMAC Auth 插件使用**时间戳窗口**机制防止签名重放——请求 `D
 **生产环境最小安全配置**：
 
 ```yaml
-filters:
-  - type: HmacAuth
-    config:
-      secretGroups:
-        - name: default
-          secretRefs:
-            - name: hmac-creds
-      clockSkew: 300          # 5 分钟窗口；高敏感接口建议缩到 60
-      hideCredentials: true   # 不把 Authorization/Signature 透传给上游（降低日志泄漏面）
-      enforceHeaders:
-        - date                # 时间戳必签
-        - host
-      # 业务层 idempotency：高敏感接口（支付、改密）必须由后端实现
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: hmac-auth-secure
+spec:
+  requestPlugins:
+    - type: HmacAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-creds
+        clockSkew: 300          # 5 分钟窗口；高敏感接口建议缩到 60
+        hideCredentials: true   # 转发前摘掉 Authorization、Proxy-Authorization 和 Signature
+        enforceHeaders:
+          - date                # 时间戳必签
+          - host
+        # 业务层 idempotency：高敏感接口（支付、改密）必须由后端实现
 ```
 
 **同时要求**：
 - **必须走 HTTPS**：HMAC 签名在明文下可被中间人捕获，HTTPS 是本插件的基础假设
-- **不要把签名写进 access log**：默认不写，但注意不要在 `accessLog.extraHeaders` 里加入 `Authorization` / `Signature`
+- **不要把签名写进 access log**：默认不写，但注意不要在 `accessLog.extraHeaders` 里加入 `Authorization`、`Proxy-Authorization` 或 `Signature`
 - **关键操作业务层做 idempotency**：对 "非幂等 + 高敏感" 的操作（支付、改密、转账），业务端应要求 `Idempotency-Key` 请求头，后端在一段时间内对同 key 只执行一次——这是防重放的正确分层
 
 ### 为什么 Edgion 不在网关层做 nonce 去重？
@@ -204,7 +239,7 @@ filters:
 - **内存 LRU**：多 gateway 实例部署时每实例独立，攻击者切换实例就能重放——变成**假象防御**
 - **Redis 后端**：每请求 1 次 Redis 往返（~1–3ms 延迟），引入强依赖；Redis 故障时 fail-open 还是 fail-close 都是取舍困境
 
-业界（AWS / Stripe / GitHub / Kong / APISIX）都选择"网关做时间戳窗口、业务层做 idempotency key"的分层，Edgion 遵循同一模式。
+Edgion 采用常见的网关分层：边缘做时间戳窗口，业务层做 idempotency key。
 
 若你的部署形态确实需要网关层 nonce dedup（极端情况），可提 issue 讨论独立实现方案。
 
@@ -218,7 +253,7 @@ filters:
 
 ```yaml
 requestPlugins:
-    type: HmacAuth
+  - type: HmacAuth
     config:
       secretGroups:
         - name: partner-a
@@ -262,6 +297,7 @@ OK group=partner-b user partner-b-user
 - 确保客户端和服务端时间同步
 - 增大 `clockSkew` 值
 - 检查签名字符串的构造是否正确
+- 确认请求使用带 `username` 参数的 `hmac`，而不是 `Signature` / `keyId` 头
 
 ### 问题 2：密钥长度不足
 
