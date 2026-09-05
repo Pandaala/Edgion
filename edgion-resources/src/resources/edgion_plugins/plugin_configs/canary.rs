@@ -39,8 +39,9 @@ pub struct CanaryConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_profile_ref: Option<EdgionConfigDataRef>,
 
-    /// Behavior when the resolved profile's backendRef is not present in
-    /// the route's `backendRefs` (stale/misconfigured profile).
+    /// Behavior when the resolved profile's backendRef is not usable: not
+    /// present in the route's `backendRefs` (stale/misconfigured profile), or
+    /// present but denied by ReferenceGrant.
     /// - `Reject` (default): 403.
     /// - `Fallback`: fall through to the route's own weighted `backendRefs`
     ///   selection.

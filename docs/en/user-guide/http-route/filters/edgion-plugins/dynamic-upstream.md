@@ -40,11 +40,11 @@ spec:
 | `extract` | Object | none | Extraction rules with `regex` and `group` (default group `1`) |
 | `rules` | Array\<Object\> | none | Match rules list; if unset, uses direct mode |
 | `rules[].value` | String | **Required** | Routing key value to match (exact) |
-| `rules[].backendRef.name` | String | **Required** | Target backendRef name (must exist in the route's `backendRefs`) |
+| `rules[].backendRef.name` | String | **Required** | Target backendRef name (must exist in the route's `backendRefs`, and must not be denied by ReferenceGrant) |
 | `rules[].backendRef.namespace` | String | same as route | Target backendRef namespace; when set, both name and namespace must match |
 | `onMissing` | Enum | `Fallback` | Behavior when the routing key is missing. Allowed values: `Fallback` / `Reject` (400) |
 | `onNoMatch` | Enum | `Fallback` | Behavior when no rule matches (rules mode only). Allowed values: `Fallback` / `Reject` (400) |
-| `onInvalid` | Enum | `Reject` | Behavior when the resolved backendRef is not in the route. Allowed values: `Reject` (403) / `Fallback` |
+| `onInvalid` | Enum | `Reject` | Behavior when the resolved backendRef is not usable — absent from the route, or present but denied by ReferenceGrant. Allowed values: `Reject` (403) / `Fallback` |
 
 `dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
 
@@ -298,7 +298,7 @@ requestPlugins:
 
 ## Behavior Details
 
-- **DynamicInternalUpstream**: The selected target must exist in the current route's `backendRefs`; otherwise it is treated as invalid
+- **DynamicInternalUpstream**: The selected target must exist in the current route's `backendRefs` and must be usable — a cross-namespace reference the Controller denied for lack of a matching `ReferenceGrant` is treated as invalid just like an absent one, and takes `onInvalid`
 - **DynamicExternalUpstream**: Can only route to domains in the `domainMap` whitelist, preventing SSRF
 - In `Fallback` mode, unmatched requests use normal routing logic
 - See [Dye Headers](#dye-headers) above for the `dye` behavior shared by both sub-plugins
@@ -309,7 +309,7 @@ requestPlugins:
 
 ### Q1: What is the difference between `onNoMatch` and `onInvalid` for DynamicInternalUpstream?
 
-**A**: `onNoMatch` applies in rules mode when the routing key matches none of the `rules` entries (default `Fallback`, returning normal weighted selection). `onInvalid` applies after a target is resolved but its name is not present in the route's `backendRefs` (default `Reject` with 403, since this usually indicates a misconfiguration). In direct mode there are no rules, so a non-existent target name falls through to `onInvalid`.
+**A**: `onNoMatch` applies in rules mode when the routing key matches none of the `rules` entries (default `Fallback`, returning normal weighted selection). `onInvalid` applies after a target is resolved but the route cannot use it — its name is not present in the route's `backendRefs`, or it is present as a cross-namespace reference the Controller denied for lack of a matching `ReferenceGrant` (default `Reject` with 403, since either case usually indicates a misconfiguration). In direct mode there are no rules, so a non-existent target name falls through to `onInvalid`.
 
 ### Q2: Why does my DynamicExternalUpstream request go to the normal backend instead of the external domain?
 

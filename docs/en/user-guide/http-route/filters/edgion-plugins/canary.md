@@ -80,7 +80,7 @@ With no `activeProfileRef` configured, every request is pinned to the `stable` p
 | `profiles[].name` | String | **Required** | Name of the target `backendRef` (must match a `backendRef` in the route). |
 | `profiles[].namespace` | String | none | Optional namespace of the target `backendRef`. If unset, matches by name only; if set, both name and namespace must match. |
 | `activeProfileRef` | EdgionConfigDataRef | none | Optional reference to a `Selector` `EdgionConfigData` supplying the active profile name at runtime. |
-| `onInvalid` | Enum | `Reject` | Behavior when the resolved profile's `backendRef` is not present in the route's `backendRefs` (stale/misconfigured profile). Allowed values: `Reject` (403) / `Fallback` (falls through to the route's own weighted `backendRefs` selection). |
+| `onInvalid` | Enum | `Reject` | Behavior when the resolved profile's `backendRef` is not usable — not present in the route's `backendRefs` (stale/misconfigured profile), or present but denied by ReferenceGrant. Allowed values: `Reject` (403) / `Fallback` (falls through to the route's own weighted `backendRefs` selection). |
 
 `dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
 
@@ -166,7 +166,7 @@ Updating `canary-selector.spec.data.config.active` from `stable` to `canary` hot
 
 ### `onInvalid` Choice: `reject` vs `fallback`
 
-If the resolved profile's `backendRef` is missing from the route's `backendRefs` (e.g. the profile was configured with a name that no longer matches any `backendRef` in the route), `onInvalid` decides what happens next:
+If the resolved profile's `backendRef` is unusable — missing from the route's `backendRefs` (e.g. the profile was configured with a name that no longer matches any `backendRef` in the route), or present as a cross-namespace reference the Controller denied for lack of a matching `ReferenceGrant` — `onInvalid` decides what happens next:
 
 ```yaml
 requestPlugins:
@@ -236,7 +236,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # upstream sees X-Can
   One case is a deliberate no-op rather than a failure: if the `Selector`'s `active` field is unset (`null`), the plugin also uses the base `activeProfile` — but this is not logged as a miss, since an absent `active` is a valid "use base" configuration rather than an error.
 
   > Per project convention, these signals live in the access log rather than as Prometheus counters — aggregate them at query time in Elasticsearch / ClickHouse / Loki when you want a "canary switch failure rate by reason" dashboard.
-- **backendRef membership check**: once a profile name is resolved (base or selector), the plugin verifies the profile's target `backendRef` (`name` + optional `namespace`) actually appears in the route's `backendRefs`. This check runs on every request against the *current* route state, so removing a backend from the route invalidates any profile pointing at it — governed by `onInvalid`.
+- **backendRef membership check**: once a profile name is resolved (base or selector), the plugin verifies the profile's target `backendRef` (`name` + optional `namespace`) actually appears in the route's `backendRefs` and is usable. This check runs on every request against the *current* route state, so removing a backend from the route — or losing the `ReferenceGrant` that authorized a cross-namespace one — invalidates any profile pointing at it, governed by `onInvalid`.
 - **`onInvalid` behavior**: see the Usage Scenarios section above.
 - **`dye`**: default-off; a `success` rule (the default `on`) applies only on a successful upstream jump, and `fallback`/`reject` rules apply only on the corresponding `onInvalid` branch — never when the plugin is disabled or has no route, since neither is a recorded outcome. See [Dye Headers](#dye-headers) above.
 - **No route / no backendRefs**: if the request has no route unit or the route rule has no `backendRefs`, the plugin passes through (`GoodNext`) without acting — this should not occur in practice, since `Canary` is only meaningful attached to a route with backends.

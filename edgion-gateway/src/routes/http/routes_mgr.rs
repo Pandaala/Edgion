@@ -49,6 +49,24 @@ impl Clone for RouteRules {
     }
 }
 
+/// The single denial predicate shared by both backend matchers.
+///
+/// `select_backend` asks it about the slot weighted selection landed on;
+/// `find_backend_by_name` asks it about the slot a named jump addressed. Keeping
+/// one construction site means a change to the denial shape cannot land in only
+/// one of them and silently diverge.
+#[inline]
+fn ref_denied_error(schema: &edgion_resources::HTTPBackendRef) -> Option<EdError> {
+    schema.ref_denied.as_ref().map(|denied| EdError::RefDenied {
+        target_namespace: denied.target_namespace.clone(),
+        target_name: denied.target_name.clone(),
+        reason: denied
+            .reason
+            .clone()
+            .unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
+    })
+}
+
 impl RouteRules {
     /// Select backend from the matched route rule
     pub fn select_backend(unit: &Arc<HttpRouteRuleUnit>) -> Result<LogicalBackendHandle, EdError> {
@@ -62,15 +80,8 @@ impl RouteRules {
 
         // Check if this backend reference is denied (no matching ReferenceGrant)
         let backend = unit.backends.get(index).ok_or_else(EdError::BackendNotFound)?;
-        if let Some(ref denied) = backend.schema.ref_denied {
-            return Err(EdError::RefDenied {
-                target_namespace: denied.target_namespace.clone(),
-                target_name: denied.target_name.clone(),
-                reason: denied
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
-            });
+        if let Some(err) = ref_denied_error(&backend.schema) {
+            return Err(err);
         }
 
         // Note: BackendTLSPolicy query is performed in pg_upstream_peer.rs
@@ -81,12 +92,16 @@ impl RouteRules {
 
     /// Find a specific backend_ref by name from the route rule's backend_refs.
     ///
-    /// Used by DynamicInternalUpstream plugin to bypass weighted selection and
-    /// target a specific backend.
+    /// The single name matcher for named jumps: `DynamicInternalUpstream` and
+    /// `Canary` call it to validate a resolved target before publishing a jump,
+    /// and `pick_backend_ref` calls it to consume that jump instead of weighted
+    /// selection. Do not add a second name matcher beside it.
     ///
-    /// Security: The target backend_ref must exist in the route's backend_refs
-    /// list, which was already validated at route configuration time
-    /// (including ReferenceGrant for cross-namespace references).
+    /// Security: this is the enforcement point for the Controller's
+    /// ReferenceGrant decision on a named target — a matching backend_ref
+    /// carrying `ref_denied` yields `EdError::RefDenied`, never a handle.
+    /// Callers must not collapse that into the `BackendNotFound` miss, which is
+    /// the only outcome allowed to fall through to weighted selection.
     ///
     /// Note: This function intentionally does NOT filter by weight.
     /// A backend_ref with weight=0 can still be targeted via DynamicInternalUpstream,
@@ -120,15 +135,8 @@ impl RouteRules {
             }
 
             // Check cross-namespace reference denial
-            if let Some(ref denied) = br.ref_denied {
-                return Err(EdError::RefDenied {
-                    target_namespace: denied.target_namespace.clone(),
-                    target_name: denied.target_name.clone(),
-                    reason: denied
-                        .reason
-                        .clone()
-                        .unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
-                });
+            if let Some(err) = ref_denied_error(br) {
+                return Err(err);
             }
 
             return LogicalBackendHandle::new(Arc::clone(&unit.backends), index).ok_or_else(EdError::BackendNotFound);

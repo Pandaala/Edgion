@@ -61,8 +61,8 @@ pub struct DynamicInternalUpstreamConfig {
     #[serde(default = "default_upstream_fallback")]
     pub on_no_match: UpstreamFallback,
 
-    /// Behavior when the resolved backend_ref name is not found
-    /// in the route's backend_refs list.
+    /// Behavior when the resolved backend_ref is not usable: not found in the
+    /// route's backend_refs list, or present but denied by ReferenceGrant.
     ///
     /// - `reject` (default): return 403 Forbidden (potential misconfiguration)
     /// - `fallback`: proceed with normal weighted backend selection

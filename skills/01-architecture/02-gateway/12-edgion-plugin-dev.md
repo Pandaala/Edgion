@@ -241,6 +241,12 @@ Cross-namespace EdgionConfigData refs require controller-side handling for the
 4. **Gateway data-plane**: when consuming the ref, check `ref_denied`; if set, apply the correct
    fail behavior: `allowRef` → deny-all fail-closed; `denyRef` → under-block (omit that deny set);
    `overrideRef` / `activeProfileRef` → fall to base.
+5. **Plugins that address a route backendRef by name** (a jump publisher such as
+   `DynamicInternalUpstream` or `Canary`) must resolve through
+   `RouteRules::find_backend_by_name` against the route's *compiled* backend view. Never scan
+   `route_unit.rule.backend_refs` yourself: the schema view carries no `ref_denied`, so a hand-
+   rolled scan silently accepts a denied target. See
+   [`skills/04-review/routing/denied-named-jump-fails-closed.md`](../../04-review/routing/denied-named-jump-fails-closed.md).
 
 **Cross-namespace `allowRefs`/`denyRefs` — key semantics for operators:**
 A denied `allowRef` is deny-all fail-closed (whitelist intent preserved); a denied `denyRef` is

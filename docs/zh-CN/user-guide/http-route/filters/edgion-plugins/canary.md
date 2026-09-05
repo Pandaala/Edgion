@@ -80,7 +80,7 @@ spec:
 | `profiles[].name` | String | **必填** | 目标 `backendRef` 名称（必须与路由中的某个 `backendRef` 匹配）。 |
 | `profiles[].namespace` | String | 无 | 目标 `backendRef` 的可选命名空间。不设置时仅按名称匹配；设置时名称和命名空间都需匹配。 |
 | `activeProfileRef` | EdgionConfigDataRef | 无 | 可选引用，指向一个 `Selector` 类型的 `EdgionConfigData`，在运行时提供当前生效的 profile 名。 |
-| `onInvalid` | Enum | `Reject` | 解析出的 profile 对应的 `backendRef` 不在路由的 `backendRefs` 中时（profile 过期/配置错误）的行为。允许值：`Reject`（403）/ `Fallback`（回落到路由自身基于权重的 `backendRefs` 选择）。 |
+| `onInvalid` | Enum | `Reject` | 解析出的 profile 对应的 `backendRef` 不可用时的行为——不在路由的 `backendRefs` 中（profile 过期/配置错误），或虽在其中但被 ReferenceGrant 拒绝。允许值：`Reject`（403）/ `Fallback`（回落到路由自身基于权重的 `backendRefs` 选择）。 |
 
 `dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
 
@@ -166,7 +166,7 @@ spec:
 
 ### `onInvalid` 的选择：`reject` 与 `fallback`
 
-如果解析出的 profile 对应的 `backendRef` 不在路由的 `backendRefs` 中（例如某个 profile 配置的名称已不再匹配路由中的任何 `backendRef`），`onInvalid` 决定接下来的行为：
+如果解析出的 profile 对应的 `backendRef` 不可用——不在路由的 `backendRefs` 中（例如某个 profile 配置的名称已不再匹配路由中的任何 `backendRef`），或虽然存在但属于 Controller 因缺少匹配的 `ReferenceGrant` 而拒绝的跨命名空间引用——`onInvalid` 决定接下来的行为：
 
 ```yaml
 requestPlugins:
@@ -236,9 +236,9 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
   有一种情形是刻意的直通而非失败：如果 `Selector` 的 `active` 字段未设置（`null`），插件同样会使用基础 `activeProfile`——但这不会被记录为 miss，因为未设置 `active` 是一种有效的"使用基础配置"配置，而不是错误。
 
   > 按项目约定,这些信号只走 access log 而不做 Prometheus 计数器——需要"按原因分类的金丝雀切换失败率"仪表盘时,在查询期由 Elasticsearch / ClickHouse / Loki 聚合出来即可。
-- **backendRef 归属校验**：解析出 profile 名（无论来自基础配置还是 selector）之后，插件会校验该 profile 的目标 `backendRef`（`name` + 可选 `namespace`）确实出现在路由当前的 `backendRefs` 中。这个校验在**每个请求**上都针对路由的当前状态执行，因此从路由中移除某个后端会使指向它的任何 profile 失效——由 `onInvalid` 决定后续行为。
+- **backendRef 归属校验**：解析出 profile 名（无论来自基础配置还是 selector）之后，插件会校验该 profile 的目标 `backendRef`（`name` + 可选 `namespace`）确实出现在路由当前的 `backendRefs` 中且可用。这个校验在**每个请求**上都针对路由的当前状态执行，因此从路由中移除某个后端、或失去授权跨命名空间引用的 `ReferenceGrant`，都会使指向它的任何 profile 失效——由 `onInvalid` 决定后续行为。
 - **`onInvalid` 行为**：见上方"使用场景"一节。
-- **`dye`**：默认关闭；配置后只在成功完成上游跳转时才会应用配置的请求/响应头（插件被禁用、无路由、或被拒绝时不会应用）。详见上方[染色请求头](#染色请求头)。
+- **`dye`**：默认关闭；`success` 规则（`on` 的默认值）只在成功完成上游跳转时应用，而 `fallback`/`reject` 规则只在对应的 `onInvalid` 分支上应用——插件被禁用或无路由时都不会应用，因为二者都不是一种“结果”。详见上方[染色请求头](#染色请求头)。
 - **无路由 / 无 backendRefs**：如果请求没有路由单元，或路由规则没有 `backendRefs`，插件直接放行（`GoodNext`），不做任何动作——实践中不应出现此情况，因为 `Canary` 只有挂在带后端的路由上才有意义。
 
 ## 常见问题

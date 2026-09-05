@@ -295,7 +295,10 @@ rechecks both the published generation and membership before installing its snap
 - Prevents SSRF: ensures requests can only be routed to endpoints the route has authorized.
 - Parameters: target IP, optional port, the route's backend_refs, the route's namespace.
 - Returns: `Ok((backend_ref_index, port))` or `Err(reason)`.
-- Used by plugins such as `DirectEndpoint` and `DynamicInternalUpstream`.
+- Used by `DirectEndpoint`, which selects a backend by endpoint address. Name-addressed jumps
+  (`DynamicInternalUpstream`, `Canary`) do NOT use this function — they resolve through
+  `RouteRules::find_backend_by_name`, the single name matcher; see
+  [`skills/04-review/routing/denied-named-jump-fails-closed.md`](../../04-review/routing/denied-named-jump-fails-closed.md).
 
 ## Directory layout
 

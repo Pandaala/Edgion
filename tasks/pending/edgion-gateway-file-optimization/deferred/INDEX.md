@@ -37,7 +37,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/edgionplugins-lkg-identity-coverage-not-standalone.md) |
 | D0032 — Add BackendTLSPolicy-aware AllEndpointStatus probes | needs-discussion | [campaign finding](D0032-all-endpoint-status-backend-tls-policy.md) |
 | D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
-| D0034 — Fail closed on denied L7 named jumps | needs-implementation | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
+| D0034 — Fail closed on denied L7 named jumps | resolved | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
 | D0035 — Add borrowed Authorization header access | needs-discussion | [campaign finding](D0035-auth-borrowed-authorization-header.md) |
 | D0036 — Audit auth credential-copy lifetimes | needs-discussion | [campaign finding](D0036-auth-credential-copy-lifetime-audit.md) |
 | D0039 — Harden auth challenge realm quoted strings | needs-implementation | [campaign finding](D0039-auth-challenge-realm-quoted-string.md) |
@@ -102,7 +102,8 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
 | Add BackendTLSPolicy-aware AllEndpointStatus probes | pending | [task](../../../todo/add-all-endpoint-status-backend-tls-policy-support/add-all-endpoint-status-backend-tls-policy-support.md) |
 | Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
-| Fail closed on denied L7 named jumps | pending | [task](../../../todo/fail-closed-on-denied-l7-named-jumps.md) |
+| Fail closed on denied L7 named jumps | completed | [review rule](../../../../skills/04-review/routing/denied-named-jump-fails-closed.md) |
+| Add denied named-jump integration coverage | pending | [task](../../../todo/add-denied-named-jump-integration-coverage.md) |
 | Add borrowed Authorization header access | pending | [task](../../../todo/add-borrowed-authorization-header-access.md) |
 | Audit auth credential-copy lifetimes | pending | [task](../../../todo/audit-auth-credential-copy-lifetimes.md) |
 | Harden auth challenge realm quoted strings | pending | [task](../../../todo/harden-auth-challenge-realm-quoted-strings.md) |

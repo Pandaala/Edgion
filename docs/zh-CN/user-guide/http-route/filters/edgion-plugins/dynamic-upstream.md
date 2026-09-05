@@ -40,11 +40,11 @@ spec:
 | `extract` | Object | 无 | 提取规则，包含 `regex` 和 `group`（默认 group `1`） |
 | `rules` | Array\<Object\> | 无 | 匹配规则列表；不设置时使用 direct 模式 |
 | `rules[].value` | String | **必填** | 要匹配的路由 key 值（精确匹配） |
-| `rules[].backendRef.name` | String | **必填** | 目标 backendRef 名称（必须存在于路由的 `backendRefs` 中） |
+| `rules[].backendRef.name` | String | **必填** | 目标 backendRef 名称（必须存在于路由的 `backendRefs` 中，且未被 ReferenceGrant 拒绝） |
 | `rules[].backendRef.namespace` | String | 与路由相同 | 目标 backendRef 命名空间；设置时名称和命名空间均需匹配 |
 | `onMissing` | Enum | `Fallback` | 路由 key 缺失时的行为。允许值：`Fallback` / `Reject`（400） |
 | `onNoMatch` | Enum | `Fallback` | 无规则匹配时的行为（仅 rules 模式）。允许值：`Fallback` / `Reject`（400） |
-| `onInvalid` | Enum | `Reject` | 解析出的 backendRef 不在路由中时的行为。允许值：`Reject`（403）/ `Fallback` |
+| `onInvalid` | Enum | `Reject` | 解析出的 backendRef 不可用时的行为——不在路由中，或虽在路由中但被 ReferenceGrant 拒绝。允许值：`Reject`（403）/ `Fallback` |
 
 `dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
 
@@ -298,7 +298,7 @@ requestPlugins:
 
 ## 行为细节
 
-- **DynamicInternalUpstream**：选择的目标必须存在于当前路由的 `backendRefs` 中，否则视为无效。
+- **DynamicInternalUpstream**：选择的目标必须存在于当前路由的 `backendRefs` 中且可用——Controller 因缺少匹配的 `ReferenceGrant` 而拒绝的跨命名空间引用，与不存在的目标一样视为无效，走 `onInvalid`。
 - **DynamicExternalUpstream**：只能路由到 `domainMap` 白名单中的域名，防止 SSRF。
 - 在 `Fallback` 模式下，未匹配的请求使用正常路由逻辑。
 - `dye` 的行为两个子插件共用，详见上方[染色请求头](#染色请求头)。
@@ -309,7 +309,7 @@ requestPlugins:
 
 ### Q1：DynamicInternalUpstream 中 `onNoMatch` 和 `onInvalid` 有何区别？
 
-**A**：`onNoMatch` 适用于 rules 模式下路由 key 未匹配任何 `rules` 条目的情况（默认 `Fallback`，回退到正常加权选择）。`onInvalid` 适用于目标已解析但其名称不在路由 `backendRefs` 中的情况（默认 `Reject` 返回 403，因为这通常意味着配置错误）。在 direct 模式下没有 rules，不存在的目标名称会进入 `onInvalid`。
+**A**：`onNoMatch` 适用于 rules 模式下路由 key 未匹配任何 `rules` 条目的情况（默认 `Fallback`，回退到正常加权选择）。`onInvalid` 适用于目标已解析但路由无法使用它的情况——其名称不在路由 `backendRefs` 中，或虽然存在但属于 Controller 因缺少匹配的 `ReferenceGrant` 而拒绝的跨命名空间引用（默认 `Reject` 返回 403，因为这两种情况通常都意味着配置错误）。在 direct 模式下没有 rules，不存在的目标名称会进入 `onInvalid`。
 
 ### Q2：为什么 DynamicExternalUpstream 的请求走到了正常后端而不是外部域名？
 

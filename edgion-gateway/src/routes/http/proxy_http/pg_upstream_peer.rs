@@ -767,7 +767,8 @@ pub async fn select_http_backend(
 
     // Pick backend_ref: sticky session hit wins outright; otherwise InternalJump
     // (plugin-injected) tries by name first and falls back to weighted
-    // round-robin on miss; without InternalJump, plain weighted round-robin.
+    // round-robin only on a genuine miss; without InternalJump, plain weighted
+    // round-robin.
     let backend_ref = match sticky_backend {
         Some(b) => b,
         None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_deref()) {
@@ -947,7 +948,8 @@ fn sp_repin_on_strict_retry(ctx: &mut EdgionHttpContext) {
 
 /// Pick the `HTTPBackendRef` for an LB-bound request. When `ctx.jump` carries an
 /// `Internal` variant, named lookup is tried first and falls back to weighted
-/// round-robin on miss; when `ctx.jump` is None or carries a non-Internal variant,
+/// round-robin only when the named target is genuinely absent; any other lookup
+/// error propagates. When `ctx.jump` is None or carries a non-Internal variant,
 /// plain weighted round-robin.
 #[inline]
 fn pick_backend_ref(
@@ -956,12 +958,16 @@ fn pick_backend_ref(
     jump: Option<&crate::UpstreamJumpTarget>,
 ) -> Result<crate::backends::LogicalBackendHandle, EdError> {
     if let Some(crate::UpstreamJumpTarget::Internal(j)) = jump {
-        if let Ok(b) =
-            RouteRules::find_backend_by_name(unit, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
+        match RouteRules::find_backend_by_name(unit, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
         {
-            return Ok(b);
+            Ok(b) => return Ok(b),
+            // Only a genuine miss falls through to weighted RR. Every other
+            // outcome — notably `RefDenied` — stays typed and fails closed:
+            // silently selecting a legal sibling would turn a denied
+            // cross-namespace reference into an undetectable misroute.
+            Err(EdError::BackendNotFound()) => {}
+            Err(e) => return Err(e),
         }
-        // Named lookup missed → fall through to weighted RR.
     }
     RouteRules::select_backend(unit)
 }
@@ -1735,10 +1741,10 @@ fn sp_should_repin_on_strict_retry(
 mod tests {
     use super::{
         ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
-        apply_upstream_read_timeout_override, backoff_action, choose_typed_retry_budget, decide_upstream_authority,
-        decide_want_raw, direct_backend_metadata, fold_peer_timeouts, init_backend_context_if_needed,
-        replay_write_floor, sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry,
-        stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
+        apply_upstream_read_timeout_override, backend_select_status, backoff_action, choose_typed_retry_budget,
+        decide_upstream_authority, decide_want_raw, direct_backend_metadata, fold_peer_timeouts,
+        init_backend_context_if_needed, pick_backend_ref, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
+        sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
     };
     use crate::ai::dispatch::AiDispatchError;
     use crate::ai::{render_openai_error, AiProxyError};
@@ -1747,10 +1753,13 @@ mod tests {
     use crate::backends::ServiceBackendKind;
     use crate::ctx::BackendSource;
     use crate::plugins::PluginRuntime;
-    use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
+    use crate::routes::http::match_unit::{
+        CompiledBackend, CompiledBackendTarget, HttpRouteRuleUnit, MatchSpecificity,
+    };
     use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
     use crate::{PeerTimeoutSource, SessionPersistenceState};
-    use edgion_resources::{EdgionErrorCode, HTTPBackendRef};
+    use edgion_resources::resources::common::RefDenied;
+    use edgion_resources::{EdError, EdgionErrorCode, HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
     use pingora_core::prelude::HttpPeer;
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use pingora_core::ErrorType;
@@ -3396,5 +3405,183 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(peer.sni, original_sni);
         assert_eq!(ctx.upstream_authority, None);
+    }
+
+    // ── named-jump backend selection (`pick_backend_ref`) ────────────────────
+
+    /// Minimal `HTTPBackendRef` for route-unit fixtures (only `name`,
+    /// `weight` and `ref_denied` matter here — the rest are the schema's
+    /// non-operator defaults).
+    fn jump_backend_ref(name: &str) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: name.to_string(),
+            namespace: None,
+            port: None,
+            weight: None,
+            group: None,
+            kind: None,
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    /// `HttpRouteRuleUnit` fixture whose schema and compiled backend views are
+    /// built by the production route compiler, so `ref_denied`, namespace and
+    /// weight semantics match what `pick_backend_ref` sees at runtime.
+    fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> {
+        let rule = Arc::new(HTTPRouteRule {
+            name: None,
+            resolved_terminal_route_uid: None,
+            resolved_terminal_rule_identity: None,
+            matches: None,
+            filters: None,
+            backend_refs: Some(backend_refs),
+            timeouts: None,
+            retry: None,
+            session_persistence: None,
+            parsed_timeouts: None,
+            parsed_retry: None,
+            parsed_forward_raw_path: None,
+            parsed_allow_non_idempotent_retry: None,
+            parsed_mirror_tuning: None,
+        });
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "test-ns");
+        let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
+
+        Arc::new(HttpRouteRuleUnit {
+            resource_key: "test-ns/test-route".to_string(),
+            matched_info: crate::MatchInfo {
+                rsc: crate::Rsc::new("HTTPRoute", "test-ns", "test-route"),
+                rule_id: 0,
+                match_id: 0,
+                sv: 0,
+                m: HTTPRouteMatch {
+                    path: None,
+                    headers: None,
+                    query_params: None,
+                    method: None,
+                },
+                labels_meta: None,
+                annotations_meta: None,
+            },
+            rule,
+            route: None,
+            path_regex: None,
+            parent_refs: None,
+            compiled_header_regexes: vec![],
+            compiled_query_regexes: vec![],
+            has_query_matchers: false,
+            specificity: MatchSpecificity {
+                has_method: false,
+                header_count: 0,
+                query_count: 0,
+                creation_ts_ms: 0,
+                route_key: "test-ns/test-route".to_string(),
+                rule_index: 0,
+                match_index: 0,
+            },
+            metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+            plugin_runtime: runtime.plugin_runtime,
+            backends: runtime.backends,
+            backend_finder,
+        })
+    }
+
+    fn internal_jump(name: &str) -> crate::UpstreamJumpTarget {
+        crate::UpstreamJumpTarget::Internal(crate::InternalJumpPreset {
+            backend_ref_name: name.to_string(),
+            backend_ref_namespace: None,
+        })
+    }
+
+    /// A denied named target must surface the typed `RefDenied` error instead
+    /// of silently degrading to weighted selection of its legal sibling — that
+    /// degradation was an undetectable misroute with no access-log error code.
+    ///
+    /// The denied ref deliberately sits in slot 1, NOT slot 0: with equal
+    /// weights `generate_smooth_sequence` yields `[0, 1]` and `select()` starts
+    /// at counter 0, so a slot-0 denied ref would be the weighted fallback's own
+    /// first pick and `select_backend`'s independent `ref_denied` check would
+    /// return the same `RefDenied` — making this test pass against the very bug
+    /// it exists to catch. With the denied ref in slot 1, the pre-fix
+    /// fall-through returns `Ok(app-v1)` and this assertion fails.
+    #[test]
+    fn denied_named_jump_fails_closed_instead_of_selecting_sibling() {
+        let mut denied = jump_backend_ref("app-v2");
+        denied.ref_denied = Some(RefDenied {
+            target_namespace: "test-ns".to_string(),
+            target_name: "app-v2".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
+        let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), denied]);
+
+        let err = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-v2")))
+            .expect_err("denied named jump must not resolve to its legal sibling");
+        assert!(matches!(err, EdError::RefDenied { .. }));
+        assert_eq!(backend_select_status(&err), EdgionErrorCode::RefDenied);
+    }
+
+    /// The weighted fallback this test's sibling must never reach: with the
+    /// same two-backend fixture and no jump at all, selection lands on slot 0.
+    /// Locks in the premise that a pre-fix fall-through would have returned
+    /// `Ok(app-v1)` rather than an error, so the fail-closed test above is not
+    /// vacuous.
+    #[test]
+    fn weighted_selection_reaches_the_legal_sibling_without_a_jump() {
+        let mut denied = jump_backend_ref("app-v2");
+        denied.ref_denied = Some(RefDenied {
+            target_namespace: "test-ns".to_string(),
+            target_name: "app-v2".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        });
+        let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), denied]);
+
+        let backend = pick_backend_ref(&unit, "test-ns", None).expect("weighted selection must resolve");
+        assert_eq!(backend.compiled().schema.name, "app-v1");
+    }
+
+    /// A genuinely absent named target keeps the documented weighted fallback.
+    #[test]
+    fn missing_named_jump_falls_back_to_weighted_selection() {
+        let unit = jump_route_unit(vec![jump_backend_ref("app-v1")]);
+
+        let backend = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("absent-svc")))
+            .expect("a missing named target must fall back to weighted selection");
+        assert_eq!(backend.compiled().schema.name, "app-v1");
+    }
+
+    /// The "hidden backend" contract at the layer that enforces it: weighted
+    /// selection drops a `weight: 0` slot, so only a named jump can ever reach
+    /// it — and `find_backend_by_name` must keep not filtering by weight.
+    #[test]
+    fn weight_zero_named_jump_is_selectable_but_never_weighted() {
+        let hidden = HTTPBackendRef {
+            weight: Some(0),
+            ..jump_backend_ref("app-debug")
+        };
+        let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), hidden]);
+
+        let named = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-debug")))
+            .expect("an explicit weight-zero named target must resolve");
+        assert_eq!(named.compiled().schema.name, "app-debug");
+
+        // Three rounds, not one: a single call would only prove the weight-zero
+        // slot is not selected *first*, which is weaker than "never".
+        for _ in 0..3 {
+            let weighted = pick_backend_ref(&unit, "test-ns", None).expect("weighted selection must resolve");
+            assert_eq!(weighted.compiled().schema.name, "app-v1");
+        }
+    }
+
+    /// Sanity counterpart: an allowed named target still resolves to exactly
+    /// that backend, so the fail-closed test above is not vacuously passing.
+    #[test]
+    fn allowed_named_jump_selects_the_named_backend() {
+        let unit = jump_route_unit(vec![jump_backend_ref("app-v1"), jump_backend_ref("app-v2")]);
+
+        let backend = pick_backend_ref(&unit, "test-ns", Some(&internal_jump("app-v2")))
+            .expect("an allowed named target must resolve");
+        assert_eq!(backend.compiled().schema.name, "app-v2");
     }
 }
