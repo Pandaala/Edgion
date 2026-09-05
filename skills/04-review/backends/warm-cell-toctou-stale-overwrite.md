@@ -5,33 +5,28 @@ description: LB preload warm_cell now seeds the cell via hydrate_if_empty (doubl
 
 # backends-F005 — `warm_cell` startup hydration is now an atomic `hydrate_if_empty`
 
-**Status:** ✅ fixed · 2026-05-24
+**Status:** superseded · 2026-09-02
 **Severity:** Medium (BadLogic) — non-atomic check+write during preload could overwrite a concurrent EP-sync update with a stale snapshot
 
 ## Conclusion
 
-`warm_cell` (`edgion-gateway/src/backends/preload.rs`) now seeds the cell through
-`cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))`
-instead of the old unguarded `if cell.backends.load().is_empty() { cell.replace_backends(backends) }`.
-The empty-check and the store now run under the cell's `build_lock` — the **same** lock held by
-`replace_backends` (`compiled_selector.rs`) — and the provider re-reads the store inside that
-lock, so the freshest backend list is used and no concurrent writer can interleave between the
-check and the write. The `backends.is_empty()` pre-check (lines ~144-150) is retained as a cheap
-guard so services with no EP data are skipped without even creating a cell.
+The preload, `warm_cell`, hydration, and global Service selector-cell cache were deleted when
+Service/EndpointSlice reconciliation moved to eager selector compilation in
+`edgion-gateway/src/backends/discovery/coordinator.rs`. Each serialized source transaction builds
+the complete affected projections and publishes one joint generation, so the former startup
+check-then-write path no longer exists.
 
-Re-reports of the form "`warm_cell` has a TOCTOU between `cell.backends.load().is_empty()` and
-`replace_backends`", "a Tokio EP-sync watch task can call `replace_backends` with fresher data
-between the check and the write", or "preload overwrites a fresher backend list with the stale
-snapshot taken at the top of `warm_cell`" are **not accepted** — verify the current `warm_cell`
-calls `hydrate_if_empty` before re-reporting.
+Re-reports about `warm_cell` or `hydrate_if_empty` are not accepted unless those mechanisms are
+reintroduced. Review the Coordinator's single-generation publication and per-Service activation
+barriers instead.
 
 ## What was wrong (before the fix)
 
 `warm_cell` read the backend list once at the top (`get_backends_for_service`), then did a bare
 `cell.backends.load().is_empty()` check followed by `cell.replace_backends(snapshot)` with no
 lock held across the two steps. The Tokio runtime (started before `preload_load_balancers` runs)
-has live config-sync watch tasks; an EP-sync event arriving between the check and the write calls
-`update_affected_lbs` (`discovery/conf_handler_common.rs`) → `replace_backends(fresher)`.
+had live config-sync watch tasks; an EP-sync event arriving between the check and the write called
+the former affected-LB rebuild helper, then `replace_backends(fresher)`.
 `warm_cell`'s subsequent `replace_backends(stale)` then clobbered the fresher list with the
 snapshot taken at the top, leaving the cell one EP-sync behind until the next `replace_backends`.
 The harm window is startup-only but reachable (e.g. a rolling deploy finishing right as the
@@ -52,8 +47,7 @@ Because `replace_backends` takes the same lock, the three relevant orderings are
 - No concurrent writer → `warm_cell` reads the store inside the lock and seeds the cell.
 
 This is the same atomic-seed pattern already proven on the data-plane path
-(`selector.rs::hydrate_cell_if_empty`, used by `select_roundrobin_backend_key` and
-`get_backends_for_service_key`). Same TOCTOU-on-a-config-sync-driven-cell defect class as
+(the former request selector hydration path). Same TOCTOU-on-a-config-sync-driven-cell defect class as
 [backends-F004](set-service-config-toctou-race.md) and
 [backends-F002](upsert-task-concurrent-handle-leak.md), fixed with the same
 "check and write under one shared lock" principle.
@@ -81,5 +75,5 @@ Re-open only if:
 
 - backends-F005 (review finding, 2026-05-24)
 - backends-F004 / backends-F002 — sibling fixes, same "atomic mutation under a shared lock" principle.
-- `selector.rs::hydrate_cell_if_empty` — the data-plane caller of the same `hydrate_if_empty` method.
-- `discovery/conf_handler_common.rs::update_affected_lbs` — the concurrent `replace_backends` writer.
+- `discovery/coordinator.rs::ServiceDiscoveryCoordinator` — the replacement serialized
+  publication owner.

@@ -747,12 +747,13 @@ start_gateway() {
         exit 1
     fi
     
-    # Verify LB preload completed (with retry to handle log flush race condition)
+    # Verify conf-sync caches are ready (selectors compile with each generation;
+    # there is no separate LB preload pass).
     local lb_timeout=15
     local lb_waited=0
-    while ! grep -q "LB preload completed" "${LOG_DIR}/gateway.log" 2>/dev/null; do
+    while ! grep -q "All caches are ready" "${LOG_DIR}/gateway.log" 2>/dev/null; do
         if [ $lb_waited -ge $lb_timeout ]; then
-            log_error "edgion-gateway LB preload timeout after ${lb_timeout}s"
+            log_error "edgion-gateway cache-ready timeout after ${lb_timeout}s"
             tail -50 "${LOG_DIR}/gateway.log" 2>/dev/null || true
             exit 1
         fi
@@ -764,10 +765,10 @@ start_gateway() {
         # Mac. An assignment always returns 0.
         lb_waited=$((lb_waited + 1))
     done
-    log_info "LB preload  (waited ${lb_waited}s)"
+    log_info "caches ready (waited ${lb_waited}s)"
 
     # Wait for Pingora server to finish binding all listener ports
-    # After LB preload, the server still needs time to process gateways and bind ports
+    # After caches are ready, the server still needs time to process gateways and bind ports
     local listener_wait=0
     local listener_max=10
     while ! grep -q "Listener configured\|Processing gateway.*listeners\b" "${LOG_DIR}/gateway.log" 2>/dev/null; do

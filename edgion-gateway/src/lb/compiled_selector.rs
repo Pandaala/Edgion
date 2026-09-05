@@ -1,15 +1,4 @@
-//! `CompiledSelector` + `ServiceSelectorCell` — precompiled per-service selectors.
-//!
-//! A `ServiceSelectorCell` holds the canonical `Arc<Vec<Arc<EdgionBackend>>>`
-//! for a service, plus four lazily compiled per-policy selector slots stored
-//! as `ArcSwapOption<CompiledSelector>`. The data plane fetches a precompiled
-//! selector with a single atomic load on the hot path; the slow path goes
-//! through a double-checked-lock build that consumes the current backend
-//! snapshot.
-//!
-//! The control plane calls `replace_backends` whenever EP/EPS produces a new
-//! backend list. That atomically swaps the snapshot and clears all four
-//! policy slots so the next request rebuilds them from fresh data.
+//! Eagerly compiled selectors owned by one Service selector generation.
 //!
 //! Backends are stored as `Arc<EdgionBackend>` so selectors return the live
 //! object (with its metric atomics). `RrCore` / `ChCore` resolve
@@ -17,21 +6,17 @@
 //! compile time, with no per-request allocation. `MetricCore` (LeastConn /
 //! EWMA) drives P2C over per-backend atomic counters.
 
-use arc_swap::{ArcSwap, ArcSwapOption};
-use dashmap::DashMap;
-use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
 use pingora_load_balancing::Backend;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::lb::edgion_backend::EdgionBackend;
 use crate::lb::selection::p2c::select_p2c;
 use crate::lb::selection::{consistent_hash::ConsistentHashRing, round_robin::RoundRobinSelector};
 
-/// LB policy discriminator used to pick the right slot in a
-/// [`ServiceSelectorCell`].
+/// LB policy discriminator used to pick one eager selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyKind {
     RoundRobin,
@@ -274,159 +259,7 @@ impl CompiledSelector {
     }
 }
 
-/// Per-service container for the precompiled selectors of all four policies.
-///
-/// The control plane writes new backend lists via `replace_backends`. The data
-/// plane reads through `get_or_build`, which lazily compiles the selector for
-/// the requested policy under a double-checked lock.
-pub struct ServiceSelectorCell {
-    /// Current authoritative backend list (shared Arc per backend so selectors
-    /// can return the live object with its atomics). Replaced atomically;
-    /// readers under `build_lock` see whichever list was stored last before
-    /// the build began.
-    pub(crate) backends: ArcSwap<Vec<Arc<EdgionBackend>>>,
-    rr: ArcSwapOption<CompiledSelector>,
-    ch: ArcSwapOption<CompiledSelector>,
-    least_conn: ArcSwapOption<CompiledSelector>,
-    ewma: ArcSwapOption<CompiledSelector>,
-    /// Single mutex covering the "compile a slot" critical section for all
-    /// four policies. Only contended on first build per (service, policy).
-    build_lock: Mutex<()>,
-}
-
-impl ServiceSelectorCell {
-    pub fn new(initial: Vec<Arc<EdgionBackend>>) -> Self {
-        Self {
-            backends: ArcSwap::from_pointee(initial),
-            rr: ArcSwapOption::const_empty(),
-            ch: ArcSwapOption::const_empty(),
-            least_conn: ArcSwapOption::const_empty(),
-            ewma: ArcSwapOption::const_empty(),
-            build_lock: Mutex::new(()),
-        }
-    }
-
-    /// Atomically replace the backend snapshot and invalidate all precompiled
-    /// selector slots. The next `get_or_build(kind)` call rebuilds the
-    /// requested slot from the new snapshot.
-    ///
-    /// Backends whose address already exists in the current snapshot reuse the
-    /// existing `Arc<EdgionBackend>` so accumulated EWMA and conn_count survive
-    /// EP/EPS-driven updates (rolling deploys, readiness probe flaps, etc.).
-    /// Only genuinely new pod IPs receive fresh wrapper objects.
-    ///
-    /// Both the backend store and the slot clears are performed under `build_lock`
-    /// so that a concurrent `get_or_build` call always sees either the pre-replace
-    /// state (old backends + old slots) or the post-replace state (new backends +
-    /// empty slots). The intermediate state (new backends + old addr_map slot) would
-    /// cause spurious upstream-not-found errors on RR/CH paths.
-    pub fn replace_backends(&self, new: Vec<EdgionBackend>) {
-        let _guard = self.build_lock.lock();
-        let old_snap = self.backends.load();
-        let old_map: HashMap<SocketAddr, Arc<EdgionBackend>> = old_snap
-            .iter()
-            .filter_map(|b| {
-                if let PSocketAddr::Inet(addr) = b.addr {
-                    Some((addr, b.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // NOTE: when an addr matches, the *new* EdgionBackend (with potentially
-        // updated weight/ext) is discarded in favour of the old Arc. This is
-        // intentional: today all callers hard-code weight=1 and ext is not used
-        // by any selector, so silently dropping the new inner is safe. If
-        // per-backend weights or ext-driven selection are ever introduced, this
-        // carry-over must be updated to transfer the new inner onto the reused Arc
-        // (or rebuild a fresh Arc when inner fields differ).
-        let arced: Vec<Arc<EdgionBackend>> = new
-            .into_iter()
-            .map(|b| {
-                if let PSocketAddr::Inet(addr) = b.addr {
-                    old_map.get(&addr).cloned().unwrap_or_else(|| Arc::new(b))
-                } else {
-                    Arc::new(b)
-                }
-            })
-            .collect();
-        self.backends.store(Arc::new(arced));
-        self.rr.store(None);
-        self.ch.store(None);
-        self.least_conn.store(None);
-        self.ewma.store(None);
-    }
-
-    /// Seed the cell with backends from `provider` if the cell is currently empty.
-    ///
-    /// Uses a double-checked lock against `build_lock` — the same lock held by
-    /// `replace_backends` — so the provider read and the subsequent `store` are
-    /// atomic with respect to any concurrent control-plane `replace_backends` call.
-    /// This eliminates the TOCTOU race where hydrate could overwrite a fresh
-    /// control-plane update with stale data-layer content.
-    ///
-    /// The data-plane fast path (cell already non-empty) never acquires the lock.
-    /// Lock contention only occurs on the very first request for a new service.
-    ///
-    /// Returns `true` if the cell is non-empty after this call.
-    pub fn hydrate_if_empty(&self, provider: impl FnOnce() -> Vec<EdgionBackend>) -> bool {
-        // Fast path: no lock needed.
-        if !self.backends.load().is_empty() {
-            return true;
-        }
-        // Slow path: double-checked lock shared with replace_backends.
-        let _guard = self.build_lock.lock();
-        if !self.backends.load().is_empty() {
-            return true;
-        }
-        let backends = provider();
-        if backends.is_empty() {
-            return false;
-        }
-        // Cell is empty and we hold build_lock, so no metric carry-over is needed
-        // (there are no old Arcs to preserve). Wrap directly.
-        let arced: Vec<Arc<EdgionBackend>> = backends.into_iter().map(Arc::new).collect();
-        self.backends.store(Arc::new(arced));
-        true
-    }
-
-    /// Snapshot the current backend list (cheap Arc clone, no copy of backends).
-    pub fn backends_snapshot(&self) -> Arc<Vec<Arc<EdgionBackend>>> {
-        self.backends.load_full()
-    }
-
-    /// Get or lazily build the selector for the requested policy.
-    pub fn get_or_build(&self, kind: PolicyKind) -> Arc<CompiledSelector> {
-        let slot = self.slot_for(kind);
-
-        if let Some(s) = slot.load_full() {
-            return s;
-        }
-
-        let _guard = self.build_lock.lock();
-        if let Some(s) = slot.load_full() {
-            return s;
-        }
-
-        let backends = self.backends.load_full();
-        let new_sel = compile(kind, backends);
-        let arc = Arc::new(new_sel);
-        slot.store(Some(arc.clone()));
-        arc
-    }
-
-    fn slot_for(&self, kind: PolicyKind) -> &ArcSwapOption<CompiledSelector> {
-        match kind {
-            PolicyKind::RoundRobin => &self.rr,
-            PolicyKind::ConsistentHash => &self.ch,
-            PolicyKind::LeastConn => &self.least_conn,
-            PolicyKind::Ewma => &self.ewma,
-        }
-    }
-}
-
-fn compile(kind: PolicyKind, backends: Arc<Vec<Arc<EdgionBackend>>>) -> CompiledSelector {
+pub(crate) fn compile(kind: PolicyKind, backends: Arc<Vec<Arc<EdgionBackend>>>) -> CompiledSelector {
     match kind {
         PolicyKind::RoundRobin => CompiledSelector::RoundRobin(RrCore::build(backends)),
         PolicyKind::ConsistentHash => CompiledSelector::ConsistentHash(ChCore::build(backends)),
@@ -435,45 +268,37 @@ fn compile(kind: PolicyKind, backends: Arc<Vec<Arc<EdgionBackend>>>) -> Compiled
     }
 }
 
-// ── Global cache ─────────────────────────────────────────────────────────
-
-static SELECTOR_CACHE: LazyLock<DashMap<String, Arc<ServiceSelectorCell>>> = LazyLock::new(DashMap::new);
-
-/// Get or create a `ServiceSelectorCell` for `service_key`. Newly created
-/// cells start with an empty backend list; the control plane is expected to
-/// call `replace_backends` shortly thereafter. A request that hits an
-/// uninitialized cell selects on an empty list and returns `None`, which the
-/// caller maps to the appropriate `not_found` status.
-pub fn get_or_create_cell(service_key: &str) -> Arc<ServiceSelectorCell> {
-    if let Some(cell) = SELECTOR_CACHE.get(service_key) {
-        return cell.value().clone();
-    }
-    SELECTOR_CACHE
-        .entry(service_key.to_string())
-        .or_insert_with(|| Arc::new(ServiceSelectorCell::new(Vec::<Arc<EdgionBackend>>::new())))
-        .value()
-        .clone()
-}
-
-/// Return all service keys currently tracked in the global cell cache.
+/// All load-balancing policies compiled from one immutable backend snapshot.
 ///
-/// Used by `full_set` handlers to determine which services were known before
-/// the replacement, so stale cells (services deleted without HC annotations)
-/// are correctly cleaned up regardless of whether they appear in the HC config store.
-pub fn all_cell_keys() -> Vec<String> {
-    SELECTOR_CACHE.iter().map(|e| e.key().clone()).collect()
+/// Construction is intentionally cold-path only. Request handling selects one
+/// of these already-built values and never allocates a selector or takes a
+/// build lock.
+pub struct CompiledSelectors {
+    pub round_robin: Arc<CompiledSelector>,
+    pub consistent_hash: Arc<CompiledSelector>,
+    pub least_conn: Arc<CompiledSelector>,
+    pub ewma: Arc<CompiledSelector>,
 }
 
-/// Drop the cell for `service_key`. Called when a Service is deleted; in-flight
-/// requests that already hold an `Arc<ServiceSelectorCell>` keep working until
-/// they drop it.
-pub fn drop_cell(service_key: &str) {
-    SELECTOR_CACHE.remove(service_key);
-}
+impl CompiledSelectors {
+    pub(crate) fn build(backends: Arc<Vec<Arc<EdgionBackend>>>) -> Self {
+        Self {
+            round_robin: Arc::new(compile(PolicyKind::RoundRobin, backends.clone())),
+            consistent_hash: Arc::new(compile(PolicyKind::ConsistentHash, backends.clone())),
+            least_conn: Arc::new(compile(PolicyKind::LeastConn, backends.clone())),
+            ewma: Arc::new(compile(PolicyKind::Ewma, backends)),
+        }
+    }
 
-/// Look up an existing cell without creating one. Used by tests / diagnostics.
-pub fn try_get_cell(service_key: &str) -> Option<Arc<ServiceSelectorCell>> {
-    SELECTOR_CACHE.get(service_key).map(|c| c.value().clone())
+    #[inline]
+    pub fn get(&self, kind: PolicyKind) -> &Arc<CompiledSelector> {
+        match kind {
+            PolicyKind::RoundRobin => &self.round_robin,
+            PolicyKind::ConsistentHash => &self.consistent_hash,
+            PolicyKind::LeastConn => &self.least_conn,
+            PolicyKind::Ewma => &self.ewma,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -549,47 +374,24 @@ mod tests {
     }
 
     #[test]
-    fn replace_backends_clears_all_slots() {
-        let cell = ServiceSelectorCell::new(vec![arc_backend(1), arc_backend(2)]);
-        let _ = cell.get_or_build(PolicyKind::RoundRobin);
-        let _ = cell.get_or_build(PolicyKind::LeastConn);
-        assert!(cell.rr.load_full().is_some());
-        assert!(cell.least_conn.load_full().is_some());
-
-        cell.replace_backends(vec![backend(3)]);
-        assert!(cell.rr.load_full().is_none());
-        assert!(cell.ch.load_full().is_none());
-        assert!(cell.least_conn.load_full().is_none());
-        assert!(cell.ewma.load_full().is_none());
-    }
-
-    #[test]
-    fn get_or_build_is_cached() {
-        let cell = ServiceSelectorCell::new(vec![arc_backend(1)]);
-        let a = cell.get_or_build(PolicyKind::RoundRobin);
-        let b = cell.get_or_build(PolicyKind::RoundRobin);
-        assert!(Arc::ptr_eq(&a, &b));
-    }
-
-    #[test]
-    fn empty_cell_select_returns_none() {
-        let cell = ServiceSelectorCell::new(Vec::new());
-        let sel = cell.get_or_build(PolicyKind::RoundRobin);
+    fn empty_compiled_selector_returns_none() {
+        let sel = compile(PolicyKind::RoundRobin, Arc::new(Vec::new()));
         assert!(sel.select(None, |_| true, 0).is_none());
     }
 
     #[test]
     fn rr_select_picks_a_backend() {
-        let cell = ServiceSelectorCell::new(vec![arc_backend(1), arc_backend(2)]);
-        let sel = cell.get_or_build(PolicyKind::RoundRobin);
+        let sel = compile(PolicyKind::RoundRobin, Arc::new(vec![arc_backend(1), arc_backend(2)]));
         let picked = sel.select(None, |_| true, 0);
         assert!(picked.is_some());
     }
 
     #[test]
     fn ch_with_empty_key_falls_back_to_rr() {
-        let cell = ServiceSelectorCell::new(vec![arc_backend(1), arc_backend(2)]);
-        let sel = cell.get_or_build(PolicyKind::ConsistentHash);
+        let sel = compile(
+            PolicyKind::ConsistentHash,
+            Arc::new(vec![arc_backend(1), arc_backend(2)]),
+        );
         let picked = sel.select(Some(b""), |_| true, 0);
         assert!(picked.is_some());
     }
@@ -600,8 +402,7 @@ mod tests {
         let b = arc_backend(2);
         a.inc_conn();
         a.inc_conn(); // a has 2, b has 0
-        let cell = ServiceSelectorCell::new(vec![a.clone(), b.clone()]);
-        let sel = cell.get_or_build(PolicyKind::LeastConn);
+        let sel = compile(PolicyKind::LeastConn, Arc::new(vec![a.clone(), b.clone()]));
         // P2C with equal metric would also pick b due to lower conn count
         for _ in 0..20 {
             let picked = sel.select(None, |_| true, 0).expect("must pick");
@@ -616,50 +417,8 @@ mod tests {
     #[test]
     fn rr_select_returns_live_arc() {
         let b = arc_backend(1);
-        let cell = ServiceSelectorCell::new(vec![b.clone()]);
-        let sel = cell.get_or_build(PolicyKind::RoundRobin);
+        let sel = compile(PolicyKind::RoundRobin, Arc::new(vec![b.clone()]));
         let picked = sel.select(None, |_| true, 0).expect("must pick");
         assert!(Arc::ptr_eq(&picked, &b), "must return the original Arc, not a rewrap");
-    }
-
-    #[test]
-    fn replace_backends_carries_over_metrics_for_existing_addr() {
-        let a = arc_backend(1);
-        let b = arc_backend(2);
-        // Simulate accumulated metric state on backend `a`.
-        a.inc_conn();
-        a.inc_conn();
-        a.observe_latency(5_000_000, 0);
-        let cell = ServiceSelectorCell::new(vec![a.clone(), b.clone()]);
-
-        // Replace with a list that still contains backend 1 (same addr) plus a new one.
-        cell.replace_backends(vec![backend(1), backend(3)]);
-
-        let snap = cell.backends_snapshot();
-        assert_eq!(snap.len(), 2);
-
-        // The backend with the same addr as `a` must be the original Arc.
-        let carried = snap.iter().find(|eb| Arc::ptr_eq(eb, &a));
-        assert!(carried.is_some(), "Arc for existing addr must be reused");
-
-        let carried = carried.unwrap();
-        assert_eq!(carried.conn(), 2, "conn_count must survive replace_backends");
-        assert!(
-            carried.latency_estimate(0) > crate::lb::ewma::score::DEFAULT_RTT_US,
-            "the latency estimate must survive replace_backends"
-        );
-
-        // Backend 3 is new — must be a fresh Arc (not equal to a or b).
-        let fresh = snap.iter().find(|eb| !Arc::ptr_eq(eb, &a) && !Arc::ptr_eq(eb, &b));
-        assert!(fresh.is_some(), "new addr must get a fresh Arc");
-    }
-
-    #[test]
-    fn drop_cell_removes_entry() {
-        let key = "test-ns/drop-cell-removes-entry";
-        let _ = get_or_create_cell(key);
-        assert!(try_get_cell(key).is_some());
-        drop_cell(key);
-        assert!(try_get_cell(key).is_none());
     }
 }

@@ -20,19 +20,22 @@ EdgionTls is Edgion's custom-extension resource that provides richer TLS certifi
 
 1. Check that `parent_refs` exists and is non-empty; if unset, warn that it will not take effect
 2. Check the runtime-owned SecretStore for the Secret referenced by `secret_ref`; if absent, report a pending reference
-3. **Cert/private-key match check**: if the Secret is already present, extract `tls.crt` and `tls.key` and compare public-key bytes via `check_key_matches_cert()` (`x509-parser` + `rcgen`, pure Rust with no TLS-backend dependency); on mismatch, warn. When the Secret has not arrived, skip and rely on SecretRefManager requeue to retry.
+3. **Cardinality bounds**: the wire remains decodable after Kubernetes admission; Controller and Gateway runtime validation reject more than 32 `parentRefs`, more than 16 `hosts`, duplicate normalized logical parent attachments, and case-insensitive duplicate hosts. This lets an invalid update revoke an older effective generation instead of poisoning a typed watch. The CRD carries matching `maxItems` constraints, while the runtime checks also protect filesystem/etcd and forged conf-sync input.
+4. **Cert/private-key match check**: if the Secret is already present, validate the complete ordered certificate chain and supported PKCS#8, RSA PKCS#1, or EC SEC1 private key through the canonical TLS parser; on mismatch, warn. When the Secret has not arrived, skip and rely on SecretRefManager requeue to retry.
 
 ### parse
 
-1. **Clear stale references**: clear records for this EdgionTls in SecretRefManager
-2. **Resolve server-side certificate Secret**: register `spec.secret_ref`, read through
+1. **Install parent dependencies first**: atomically clear-and-replace this EdgionTls entry in GatewayRouteIndex before any Gateway lookup. This closes the publication race with Gateway `after_publish`/`after_unpublish` requeues.
+2. **Clear stale references**: clear records for this EdgionTls in SecretRefManager
+3. **Resolve server-side certificate Secret**: register `spec.secret_ref`, read through
    `ctx.runtime().secret_store`, and populate the resolved transport slot
-3. **Resolve CA certificate Secret (mTLS)**: if `spec.client_auth.ca_secret_ref` is configured, similarly register and resolve the CA Secret, populating `client_auth.ca_secret`
-4. **Resolve resolved_listeners**: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`; logic is identical to route resources: always look up the Gateway to obtain address and protocol, validate consistency when sectionName+port are both present, subject to the allowedRoutes namespace policy
+4. **Resolve CA certificate Secret (mTLS)**: if `spec.client_auth.ca_secret_ref` is configured, similarly register and resolve the CA Secret, populating `client_auth.ca_secret`
+5. **Capture listener attachment identity**: each resolved listener carries Gateway namespace/name, listener section name, `ListenerKey`, and the exact resolved Gateway proof in `resolved_listener_attachments`. The Gateway TLS callback requires an exact same-generation identity match before an EdgionTls certificate may overlay a standard Gateway frontend-validation winner.
+6. **Resolve resolved_listeners**: resolve `Vec<ListenerKey>` from parentRef; at most 2,048 resolved attachments are admitted, bounding the cold attachment×host index to 32,768 entries.
 
-### on_change
+### publication barrier
 
-Register into GatewayRouteIndex to ensure that hostname/port changes on the Gateway can requeue this EdgionTls (recomputing resolved_listeners).
+GatewayRouteIndex registration happens at the beginning of `parse`, not in `on_change`. Gateway requeues run only from `after_publish` (after the new snapshot is visible) and `after_unpublish` (after deletion is visible), so EdgionTls can never resolve the previous Gateway generation after receiving a change notification.
 
 ### on_delete
 

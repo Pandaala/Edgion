@@ -1,10 +1,14 @@
 use arc_swap::ArcSwap;
 use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
+
+use crate::backends::discovery::HealthPolicyIdentity;
 
 static HC_CONFIG_STORE: LazyLock<Arc<HealthCheckConfigStore>> =
     LazyLock::new(|| Arc::new(HealthCheckConfigStore::new()));
+static NEXT_HEALTH_POLICY_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub fn get_hc_config_store() -> Arc<HealthCheckConfigStore> {
     HC_CONFIG_STORE.clone()
@@ -17,7 +21,12 @@ pub fn get_hc_config_store() -> Arc<HealthCheckConfigStore> {
 /// winning policy per Service key and pushes the effective config via
 /// `set_service_config`. There are no source tiers anymore.
 pub struct HealthCheckConfigStore {
-    configs: ArcSwap<HashMap<String, ActiveHealthCheckConfig>>,
+    configs: ArcSwap<HashMap<String, Arc<ResolvedActiveHealthPolicy>>>,
+}
+
+pub(crate) struct ResolvedActiveHealthPolicy {
+    pub config: ActiveHealthCheckConfig,
+    pub identity: Arc<HealthPolicyIdentity>,
 }
 
 impl Default for HealthCheckConfigStore {
@@ -35,6 +44,10 @@ impl HealthCheckConfigStore {
 
     /// Resolve the active health check config for a Service key, if any.
     pub fn resolve(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
+        self.configs.load().get(service_key).map(|policy| policy.config.clone())
+    }
+
+    pub(crate) fn resolve_policy(&self, service_key: &str) -> Option<Arc<ResolvedActiveHealthPolicy>> {
         self.configs.load().get(service_key).cloned()
     }
 
@@ -43,7 +56,24 @@ impl HealthCheckConfigStore {
         let mut new_map = (**self.configs.load()).clone();
         match config {
             Some(cfg) => {
-                new_map.insert(service_key.to_string(), cfg);
+                if new_map.get(service_key).is_some_and(|current| current.config == cfg) {
+                    return;
+                }
+                let Some(generation) = NEXT_HEALTH_POLICY_GENERATION
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
+                    .ok()
+                else {
+                    new_map.remove(service_key);
+                    self.configs.store(Arc::new(new_map));
+                    return;
+                };
+                new_map.insert(
+                    service_key.to_string(),
+                    Arc::new(ResolvedActiveHealthPolicy {
+                        config: cfg,
+                        identity: Arc::new(HealthPolicyIdentity { generation }),
+                    }),
+                );
             }
             None => {
                 new_map.remove(service_key);
@@ -133,6 +163,22 @@ mod tests {
 
         let resolved = store.resolve("default/svc").expect("resolved config");
         assert_eq!(resolved.r#type, HealthCheckType::Tcp);
+    }
+
+    #[test]
+    fn identical_config_reuses_policy_identity_but_change_replaces_it() {
+        let store = HealthCheckConfigStore::new();
+        let config = test_config(HealthCheckType::Http);
+        store.set_service_config("default/svc", Some(config.clone()));
+        let first = store.resolve_policy("default/svc").unwrap();
+        store.set_service_config("default/svc", Some(config));
+        let same = store.resolve_policy("default/svc").unwrap();
+        assert!(Arc::ptr_eq(&first.identity, &same.identity));
+
+        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
+        let changed = store.resolve_policy("default/svc").unwrap();
+        assert!(!Arc::ptr_eq(&first.identity, &changed.identity));
+        assert!(changed.identity.generation > first.identity.generation);
     }
 
     #[test]

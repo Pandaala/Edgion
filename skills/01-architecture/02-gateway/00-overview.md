@@ -87,7 +87,6 @@ edgion-gateway/src/
 │   ├── discovery/ # Backend discovery: EndpointSlice / Service stores
 │   ├── health/    # Health checks, status store, manager scheduling
 │   ├── policy/    # BackendTLSPolicy + EdgionBackendTrafficPolicy
-│   ├── preload.rs # Hydrate referenced Service backend lists at startup
 │   └── validation.rs
 ├── cache/         # Retained LRU plus OIDC introspection TinyUFO TTL cache
 ├── cli/           # Startup entry (EdgionGatewayCli::run())
@@ -104,8 +103,8 @@ edgion-gateway/src/
 │   ├── selection/        # Strategy implementations: ConsistentHash, EWMA, LeastConn
 │   ├── ewma/             # EWMA metric collection
 │   ├── leastconn/        # Least-connection state and cleaner
-│   ├── compiled_selector.rs # per-Service compiled selector cells
-│   └── runtime_state/    # Runtime LB state (connection counts, draining)
+│   ├── compiled_selector.rs # immutable eager selector bundles
+│   └── runtime_state/    # Runtime LB state (connection counts, Peak-EWMA)
 ├── link_sys/      # Gateway LinkSys providers/runtime; common core + Etcd live in edgion-common
 │   ├── providers/ # Elasticsearch, Kafka, Redis, Webhook, LocalFile, OTLP
 │   └── runtime/   # ConfHandler, DataSender

@@ -60,6 +60,8 @@ impl DegradeThresholdStore {
                 self.services.remove(service_key);
             }
         }
+        crate::backends::discovery::get_service_discovery_coordinator()
+            .set_degrade_threshold(service_key, resolve_degrade_threshold(service_key));
     }
 
     fn get_override(&self, service_key: &str) -> Option<u8> {
@@ -87,6 +89,7 @@ pub fn configure_lb_degrade_default(threshold: u8) {
     };
     GLOBAL_DEFAULT.store(effective, Ordering::Relaxed);
     tracing::info!(threshold = effective, "LB global degrade threshold updated");
+    crate::backends::discovery::get_service_discovery_coordinator().refresh_all_degrade_thresholds();
 }
 
 pub fn get_lb_degrade_default() -> u8 {

@@ -47,7 +47,7 @@ fn is_direct_endpoint_backend_ref(backend_ref: &HTTPBackendRef) -> bool {
 fn is_ip_in_service_endpoints(target_ip: &IpAddr, port: u16, service_key: &str) -> bool {
     let store = get_roundrobin_store();
     if let Some(slices) = store.get_slices_for_service(service_key) {
-        for slice in &slices {
+        for slice in slices.iter() {
             if check_endpoint_slice_with_port(slice, target_ip, port) {
                 return true;
             }

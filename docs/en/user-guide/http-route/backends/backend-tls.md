@@ -10,7 +10,7 @@ By default the Gateway connects to backends over plaintext. `BackendTLSPolicy` t
 Client → [TLS] → Gateway → [TLS] → Backend
 ```
 
-`BackendTLSPolicy` is a standard Gateway API resource (it is not an Edgion extension). Edgion processes it internally as `gateway.networking.k8s.io/v1`. Clusters that only serve the older `v1alpha3` API are accepted via a fallback and converted to the same internal model; if your cluster serves both, prefer `v1`.
+`BackendTLSPolicy` is a standard Gateway API resource (it is not an Edgion extension). Edgion accepts only `gateway.networking.k8s.io/v1` for Kubernetes watches, API operations, FileSystem input, and etcd input. Migrate older manifests to v1 before loading them into Edgion.
 
 ## TLS Backend Support
 

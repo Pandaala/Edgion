@@ -215,6 +215,22 @@ fn tls_spec_has_no_uncovered_fields() {
 }
 
 #[test]
+fn tls_attachment_dimension_limits_match_runtime_and_crd() {
+    let generated = serde_json::to_value(schema_for!(edgion_resources::EdgionTlsSpec)).unwrap();
+    let actual = crd_section("edgion_tls_crd.yaml", "spec");
+    for (field, expected) in [
+        (
+            "parentRefs",
+            edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_PARENT_REFS,
+        ),
+        ("hosts", edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_HOSTS),
+    ] {
+        assert_eq!(generated["properties"][field]["maxItems"], expected);
+        assert_eq!(actual["properties"][field]["maxItems"], expected);
+    }
+}
+
+#[test]
 fn backend_traffic_policy_spec_has_no_uncovered_fields() {
     let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionBackendTrafficPolicySpec)).unwrap();
     let actual = crd_section("edgion_backend_traffic_policy_crd.yaml", "spec");

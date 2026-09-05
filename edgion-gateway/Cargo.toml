@@ -144,6 +144,7 @@ fred.workspace = true
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
 boring-sys = { workspace = true, optional = true }
 boring = { workspace = true, optional = true }
+foreign-types.workspace = true
 
 # Metrics
 metrics.workspace = true

@@ -812,11 +812,15 @@ fn sticky_candidate(
     backend: &crate::routes::http::match_unit::CompiledBackend,
 ) -> Option<session_persistence::StickyCandidate> {
     match &backend.target {
-        CompiledBackendTarget::Service { namespace, name } => Some(session_persistence::StickyCandidate {
-            slot: backend.slot,
-            service_key: format!("{namespace}/{name}"),
-            scope: None,
-        }),
+        CompiledBackendTarget::Service { namespace, name } => {
+            let section = crate::backends::service_section_key_from_port(backend.schema.port).ok()?;
+            Some(session_persistence::StickyCandidate {
+                slot: backend.slot,
+                service_key: format!("{namespace}/{name}"),
+                section,
+                scope: None,
+            })
+        }
         CompiledBackendTarget::EdgionBackend { .. } | CompiledBackendTarget::Invalid { .. } => None,
     }
 }
@@ -1330,25 +1334,38 @@ async fn try_ai_backend_peer(
     });
     ctx.ensure_ai_state().effective_policy = target.selected.effective_policy.clone();
 
-    if target.selected.backend_tls_policy.is_some() && !endpoint.use_tls {
+    if target.selected.backend_tls_policy.is_invalid() {
+        ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
+        return Err(AiPeerPredispatchFailure::Endpoint);
+    }
+    if target.selected.backend_tls_policy.effective().is_some() && !endpoint.use_tls {
         return Err(AiPeerPredispatchFailure::Endpoint);
     }
     let mut peer = match &target.selected.backend_tls_policy {
-        Some(policy) => create_tls_peer(
-            PingoraSocketAddr::Inet(addr),
-            &Some(std::sync::Arc::clone(policy)),
-            None,
-        )
-        .map_err(|status| {
-            ctx.record_error(status);
-            AiPeerPredispatchFailure::Endpoint
-        })?,
-        None => Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone())),
+        crate::backends::policy::BackendTlsPolicyLookup::Effective(effective) => {
+            create_tls_peer(PingoraSocketAddr::Inet(addr), effective, None).map_err(|status| {
+                ctx.record_error(status);
+                AiPeerPredispatchFailure::Endpoint
+            })?
+        }
+        crate::backends::policy::BackendTlsPolicyLookup::Absent => {
+            Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone()))
+        }
+        crate::backends::policy::BackendTlsPolicyLookup::Invalid => {
+            ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
+            return Err(AiPeerPredispatchFailure::Endpoint);
+        }
     };
     begin_ai_peer_attempt(ctx);
     let (use_tls, sni) = match &target.selected.backend_tls_policy {
-        Some(_) => extract_tls_config(&target.selected.backend_tls_policy),
-        None => (endpoint.use_tls, endpoint.sni.clone()),
+        crate::backends::policy::BackendTlsPolicyLookup::Effective(_) => {
+            extract_tls_config(&target.selected.backend_tls_policy)
+        }
+        crate::backends::policy::BackendTlsPolicyLookup::Absent => (endpoint.use_tls, endpoint.sni.clone()),
+        crate::backends::policy::BackendTlsPolicyLookup::Invalid => {
+            ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
+            return Err(AiPeerPredispatchFailure::Endpoint);
+        }
     };
     crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, &sni);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
@@ -3254,6 +3271,7 @@ mod tests {
             err: Vec::new(),
             lb_backend_addr: None,
             lb_edgion_backend: None,
+            lb_outlier_completion: None,
             service_key: None,
             lb_policy: None,
             tls: Some(BackendTlsInfo {

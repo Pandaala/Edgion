@@ -10,11 +10,12 @@ closed: 2026-07-18
 
 ## Conclusion
 
-`resolve_target_port_key` (`edgion-gateway/src/backends/port_resolver.rs`) no longer collapses a
-named multi-port lookup onto the first EndpointSlice that declares the port name. It now locates the
-slice the **selected endpoint** actually came from (by matching the endpoint IP) and resolves the
-port name within that slice; only when the origin is unknown does it fall back to a **deterministic**
-cross-slice match (`min`, not HashSet-iteration first-match).
+The request-path rewriter `resolve_target_port_key` is deleted. Named `targetPort` resolution now
+lives on the Service/EndpointSlice coordinator
+(`edgion-gateway/src/backends/discovery/coordinator.rs`) and is published into each section slot's
+`serving_port` before selection. A requested port cannot fall back to another section's serving
+address. The historical rewrite no longer collapses a named multi-port lookup onto the first
+EndpointSlice that declares the port name.
 
 Re-reports of the form "named port takes the first slice's number regardless of endpoint",
 "heterogeneous sibling slices misdirect traffic to the wrong pod port", or "first-match depends on
@@ -62,7 +63,7 @@ or unmatched endpoint resolves stably instead of flipping between rebuilds.
 
 Re-open this decision only if:
 
-- `resolve_target_port_key` reverts to a cross-slice first-match that ignores the selected endpoint.
+- Selection again rewrites a chosen address onto another section's or slice's port.
 - A cell-schema change starts carrying explicit per-backend port identity (then the IP-match origin
   lookup can be replaced by the carried identity).
 
@@ -71,6 +72,7 @@ Re-open this decision only if:
 - `tasks/todo/port-resolver-heterogeneous-slice-ports.md` (finding, 2026-07-17), closed 2026-07-18.
 - Sibling: [ep-slice-no-port-fail-closed.md](ep-slice-no-port-fail-closed.md) (backends-F013) — the
   2026-07-17 fail-closed fix that narrowed the bug to this rewrite site.
-- Unit test: `port_resolver::tests::named_port_resolves_against_originating_slice`.
+- Unit test: `backends::discovery::coordinator::tests::named_target_port_distinct_from_service_port_name_resolves`
+  and `backends::selector::tests::named_target_port_still_dials_slice_endpoint_port`.
 - Integration: `edgion-tests/src/client/suites/http_route/multi_port.rs` (homogeneous MultiPort path,
   stays green).

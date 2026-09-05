@@ -900,6 +900,20 @@ mod update_identity_tests {
         ))
     }
 
+    fn backend_tls_policy_body(name: &str, api_version: &str) -> Bytes {
+        Bytes::from(format!(
+            r#"{{
+                "apiVersion":"{api_version}",
+                "kind":"BackendTLSPolicy",
+                "metadata":{{"name":"{name}","namespace":"default"}},
+                "spec":{{
+                    "targetRefs":[{{"group":"","kind":"Service","name":"backend"}}],
+                    "validation":{{"hostname":"backend.default.svc","wellKnownCACertificates":"System"}}
+                }}
+            }}"#
+        ))
+    }
+
     #[tokio::test]
     async fn update_rejects_mismatched_name() {
         let (state, _tmp) = make_fs_state().await;
@@ -1026,6 +1040,58 @@ mod update_identity_tests {
         .await;
         let (status, _headers, _body) = result.expect("create should succeed on matching identity");
         assert_eq!(status, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_non_v1_backend_tls_policy_before_persistence() {
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("BackendTLSPolicy".to_string(), "default".to_string())),
+            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1alpha3"),
+        )
+        .await;
+
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        assert!(state
+            .conf_center()
+            .get_one("BackendTLSPolicy", Some("default"), "backend-tls")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn update_rejects_non_v1_backend_tls_policy_and_keeps_canonical_object() {
+        let (state, _tmp) = make_fs_state().await;
+        let (status, _headers, _response) = create_namespaced(
+            State(Arc::clone(&state)),
+            Path(("BackendTLSPolicy".to_string(), "default".to_string())),
+            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1"),
+        )
+        .await
+        .expect("canonical BackendTLSPolicy create must succeed");
+        assert_eq!(status, StatusCode::CREATED);
+
+        let result = update_namespaced(
+            State(Arc::clone(&state)),
+            Path((
+                "BackendTLSPolicy".to_string(),
+                "default".to_string(),
+                "backend-tls".to_string(),
+            )),
+            HeaderMap::new(),
+            backend_tls_policy_body("backend-tls", "gateway.networking.k8s.io/v1alpha3"),
+        )
+        .await;
+
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        let stored = state
+            .conf_center()
+            .get_one("BackendTLSPolicy", Some("default"), "backend-tls")
+            .await
+            .expect("canonical object must remain stored");
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+        assert_eq!(stored["apiVersion"], "gateway.networking.k8s.io/v1");
     }
 }
 

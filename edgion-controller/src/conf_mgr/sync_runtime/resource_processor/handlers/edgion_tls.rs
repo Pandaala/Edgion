@@ -40,6 +40,21 @@ fn cross_ns_secret_ref_denied(ctx: &HandlerContext, owner_ns: &str, secret_ref: 
     )
 }
 
+fn is_core_secret_ref(secret_ref: &SecretObjectReference) -> bool {
+    secret_ref.group.as_deref().is_none_or(str::is_empty)
+        && secret_ref.kind.as_deref().is_none_or(|kind| kind == "Secret")
+}
+
+fn invalid_secret_ref_warning(field: &str, secret_ref: &SecretObjectReference) -> Option<String> {
+    (!is_core_secret_ref(secret_ref)).then(|| {
+        format!(
+            "{field} must reference the core Secret kind (group='', kind='Secret'); got group='{}', kind='{}'",
+            secret_ref.group.as_deref().unwrap_or(""),
+            secret_ref.kind.as_deref().unwrap_or("Secret")
+        )
+    })
+}
+
 /// EdgionTls handler
 ///
 /// Features:
@@ -69,6 +84,12 @@ impl Default for EdgionTlsHandler {
 impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
     fn validate(&self, tls: &EdgionTls, ctx: &HandlerContext) -> Vec<String> {
         let mut warnings = Vec::new();
+        let owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        if let Err(reason) =
+            edgion_resources::resources::edgion_tls::validate_operator_attachment_dimensions(&tls.spec, owner_ns)
+        {
+            warnings.push(format!("Invalid EdgionTls attachment dimensions: {reason}"));
+        }
 
         // Check parent_refs
         if tls.spec.parent_refs.is_none() || tls.spec.parent_refs.as_ref().map(|v| v.is_empty()).unwrap_or(true) {
@@ -87,31 +108,93 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
 
-        if ctx
-            .runtime()
-            .secret_store
-            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
-            .is_none()
+        if let Some(warning) = invalid_secret_ref_warning("spec.secretRef", &tls.spec.secret_ref) {
+            warnings.push(warning);
+        } else if !cross_ns_secret_ref_denied(ctx, owner_ns, &tls.spec.secret_ref)
+            && ctx
+                .runtime()
+                .secret_store
+                .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+                .is_none()
         {
             let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
             warnings.push(format!("Secret '{}' not found (may arrive later)", secret_key));
+        }
+        if let Some(ca_secret_ref) = tls
+            .spec
+            .client_auth
+            .as_ref()
+            .and_then(|auth| auth.ca_secret_ref.as_ref())
+        {
+            if let Some(warning) = invalid_secret_ref_warning("spec.clientAuth.caSecretRef", ca_secret_ref) {
+                warnings.push(warning);
+            }
         }
 
         warnings
     }
 
     async fn parse(&self, mut tls: EdgionTls, ctx: &HandlerContext) -> ProcessResult<EdgionTls> {
+        // Controller-resolved transport fields are never authoritative input.
+        // Clear them before any lookup, validation branch, or early return.
+        tls.spec.secret = None;
+        tls.spec.resolved_listeners = None;
+        tls.spec.resolved_listener_attachments = None;
+        tls.spec.resolved_listener_attachment_index = Default::default();
+        if let Some(client_auth) = tls.spec.client_auth.as_mut() {
+            client_auth.ca_secret = None;
+        }
+
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionTls,
             tls.metadata.namespace.clone(),
             tls.metadata.name.clone().unwrap_or_default(),
         );
 
+        let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        let invalid_operator_dimensions =
+            edgion_resources::resources::edgion_tls::validate_operator_attachment_dimensions(&tls.spec, resource_ns)
+                .is_err();
+
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         // Clear old cross-namespace references too; they are re-registered below so a
         // later ReferenceGrant add/remove requeues this EdgionTls (mirrors GatewayHandler).
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+
+        // Runtime defense for typed objects that bypass serde/CRD admission.
+        // Revoke the previous parent set without traversing the oversized input,
+        // then stop before any Secret or Gateway lookup.
+        if invalid_operator_dimensions {
+            let dropped_gateways = update_gateway_route_index(
+                ResourceKind::EdgionTls,
+                resource_ns,
+                tls.metadata.name.as_deref().unwrap_or(""),
+                None,
+                ctx.runtime(),
+            );
+            for gateway_key in dropped_gateways {
+                ctx.requeue(ResourceKind::Gateway.as_str(), gateway_key).await;
+            }
+            return ProcessResult::Continue(tls);
+        }
+
+        // Publish the complete parent dependency set before the first Gateway
+        // lookup below. This is one atomic clear-and-replace operation in the
+        // route index, so a concurrent Gateway publish/unpublish either sees
+        // this owner and requeues it or the owner subsequently resolves the
+        // already-published Gateway snapshot during this reconciliation.
+        let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        let dropped_gateways = update_gateway_route_index(
+            ResourceKind::EdgionTls,
+            resource_ns,
+            tls.metadata.name.as_deref().unwrap_or(""),
+            tls.spec.parent_refs.as_ref(),
+            ctx.runtime(),
+        );
+        for gateway_key in dropped_gateways {
+            ctx.requeue(ResourceKind::Gateway.as_str(), gateway_key).await;
+        }
 
         // 1. Resolve server Secret from global secret store
         let secret_ns = tls
@@ -122,11 +205,6 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .or(tls.metadata.namespace.as_ref());
         let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
 
-        // Register reference relationship (critical for cascading updates)
-        // When this Secret arrives or updates, SecretHandler will trigger requeue for this EdgionTls
-        ctx.secret_ref_manager()
-            .add_ref(secret_key.clone(), resource_ref.clone());
-
         // Enforce ReferenceGrant for cross-namespace Secret refs before reading the
         // Secret, mirroring GatewayHandler's certificateRefs handling (gateway.rs).
         // The controller ServiceAccount can read Secrets cluster-wide, so this is the
@@ -135,13 +213,24 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         let owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         // Track the cross-namespace dependency so ReferenceGrant changes in the target
         // namespace requeue this EdgionTls (covers both grant-added and grant-removed).
-        if tls.spec.secret_ref.is_cross_namespace(owner_ns) {
+        if is_core_secret_ref(&tls.spec.secret_ref) {
+            // Register only a valid typed reference. Source events requeue the
+            // owner, while owner reconciliation is the sole clear-before-add path.
+            ctx.secret_ref_manager()
+                .add_ref(secret_key.clone(), resource_ref.clone());
+        }
+        if is_core_secret_ref(&tls.spec.secret_ref) && tls.spec.secret_ref.is_cross_namespace(owner_ns) {
             ctx.runtime().cross_ns_ref_mgr.add_ref(
                 tls.spec.secret_ref.effective_namespace(owner_ns).to_string(),
                 resource_ref.clone(),
             );
         }
-        if cross_ns_secret_ref_denied(ctx, owner_ns, &tls.spec.secret_ref) {
+        if !is_core_secret_ref(&tls.spec.secret_ref) {
+            tracing::info!(
+                edgion_tls = %resource_ref.key(),
+                "Invalid server Secret reference group/kind; leaving secret unresolved"
+            );
+        } else if cross_ns_secret_ref_denied(ctx, owner_ns, &tls.spec.secret_ref) {
             tracing::info!(
                 edgion_tls = %resource_ref.key(),
                 secret_key = %secret_key,
@@ -174,20 +263,25 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 let ca_ns = ca_secret_ref.namespace.as_ref().or(tls.metadata.namespace.as_ref());
                 let ca_secret_key = format_secret_key(ca_ns, &ca_secret_ref.name);
 
-                // Register CA Secret reference for cascading updates
-                ctx.secret_ref_manager()
-                    .add_ref(ca_secret_key.clone(), resource_ref.clone());
-
                 // Same cross-namespace ReferenceGrant guard as the server cert above:
                 // the mTLS CA Secret can also carry private key material.
                 let ca_owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
-                if ca_secret_ref.is_cross_namespace(ca_owner_ns) {
+                if is_core_secret_ref(ca_secret_ref) {
+                    ctx.secret_ref_manager()
+                        .add_ref(ca_secret_key.clone(), resource_ref.clone());
+                }
+                if is_core_secret_ref(ca_secret_ref) && ca_secret_ref.is_cross_namespace(ca_owner_ns) {
                     ctx.runtime().cross_ns_ref_mgr.add_ref(
                         ca_secret_ref.effective_namespace(ca_owner_ns).to_string(),
                         resource_ref.clone(),
                     );
                 }
-                if cross_ns_secret_ref_denied(ctx, ca_owner_ns, ca_secret_ref) {
+                if !is_core_secret_ref(ca_secret_ref) {
+                    tracing::info!(
+                        edgion_tls = %resource_ref.key(),
+                        "Invalid CA Secret reference group/kind; leaving ca_secret unresolved"
+                    );
+                } else if cross_ns_secret_ref_denied(ctx, ca_owner_ns, ca_secret_ref) {
                     tracing::info!(
                         edgion_tls = %resource_ref.key(),
                         ca_secret_key = %ca_secret_key,
@@ -219,18 +313,31 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // A Gateway is not expected to mix TLS-capable and non-TLS listeners, but
         // we keep this local check so the resolved spec stays clean even if upstream
         // Gateway validation ever lets a mixed configuration through.
-        let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
-        tls.spec.resolved_listeners = None;
         if let Some(parent_refs) = &tls.spec.parent_refs {
-            let listener_keys: Vec<_> = super::route_utils::resolve_listener_keys(
+            let attachments: Vec<_> = super::route_utils::resolve_listener_attachments(
                 parent_refs,
                 resource_ns,
                 tls.metadata.namespace.as_deref(),
                 ctx.runtime(),
             )
             .into_iter()
-            .filter(|k| matches!(k.protocol(), "HTTPS" | "TLS"))
+            .filter(|attachment| matches!(attachment.listener_key.protocol(), "HTTPS" | "TLS"))
             .collect();
+            if attachments.len() > edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_RESOLVED_ATTACHMENTS {
+                tracing::warn!(
+                    edgion_tls = %resource_ref.key(),
+                    attachment_count = attachments.len(),
+                    max = edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_RESOLVED_ATTACHMENTS,
+                    "Resolved listener attachment limit exceeded; leaving transport unbound"
+                );
+                return ProcessResult::Continue(tls);
+            }
+            let mut listener_keys: Vec<_> = attachments
+                .iter()
+                .map(|attachment| attachment.listener_key.clone())
+                .collect();
+            listener_keys.sort_unstable();
+            listener_keys.dedup();
             if !listener_keys.is_empty() {
                 tracing::debug!(
                     edgion_tls = %resource_ref.key(),
@@ -238,6 +345,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                     "Resolved listeners from parentRefs"
                 );
                 tls.spec.resolved_listeners = Some(listener_keys);
+                tls.spec.resolved_listener_attachments = Some(attachments);
             }
         }
 
@@ -245,28 +353,10 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
     }
 
     async fn on_change(&self, tls: &EdgionTls, ctx: &HandlerContext) {
-        let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
-        let tls_name = tls.metadata.name.as_deref().unwrap_or("");
-
-        // Register in gateway_route_index so Gateway's on_change can requeue
-        // this EdgionTls when listener hostnames or ports change. Without this,
-        // an EdgionTls processed before its Gateway would permanently have
-        // resolved_listeners = None with no mechanism to trigger re-resolution.
-        //
-        // Also requeue Gateways this EdgionTls no longer references: a coalesced
-        // delete->recreate that re-points parent_refs skips handler.on_delete for
-        // the previous generation, so the dropped Gateway would otherwise never
-        // be told this EdgionTls detached from it.
-        let dropped_gateways = update_gateway_route_index(
-            ResourceKind::EdgionTls,
-            tls_ns,
-            tls_name,
-            tls.spec.parent_refs.as_ref(),
-            ctx.runtime(),
-        );
-        for gateway_key in dropped_gateways {
-            ctx.requeue("Gateway", gateway_key).await;
-        }
+        // Parent dependencies are intentionally installed at the start of
+        // parse(), before any Gateway snapshot lookup. on_change runs too late
+        // for that lookup/requeue barrier and therefore has no index work.
+        let _ = (tls, ctx);
     }
 
     async fn on_delete(&self, tls: &EdgionTls, ctx: &HandlerContext) {
@@ -289,14 +379,32 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
     }
 
     fn update_status(&self, tls: &mut EdgionTls, ctx: &HandlerContext, validation_errors: &[String]) {
-        let generation = tls.metadata.generation;
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        if edgion_resources::resources::edgion_tls::validate_operator_attachment_dimensions(&tls.spec, resource_ns)
+            .is_err()
+        {
+            // The raw parent vector is untrusted in FS/etcd and forged sync
+            // input. Publish one fixed, bounded status shape without walking,
+            // looking up, or cloning any parent.
+            tls.status = Some(EdgionTlsStatus { parents: Vec::new() });
+            return;
+        }
+        let generation = tls.metadata.generation;
 
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         // parse() already resolved secret_ref -> spec.secret; reuse that result
         // instead of querying secret_store a second time.
-        let resolved_refs_errors: Vec<ResolvedRefsError> = if tls.spec.secret.is_some() {
+        let mut resolved_refs_errors: Vec<ResolvedRefsError> = if !is_core_secret_ref(&tls.spec.secret_ref) {
+            vec![ResolvedRefsError::InvalidKind {
+                kind: format!(
+                    "{}/{}",
+                    tls.spec.secret_ref.group.as_deref().unwrap_or(""),
+                    tls.spec.secret_ref.kind.as_deref().unwrap_or("Secret")
+                ),
+                name: tls.spec.secret_ref.name.clone(),
+            }]
+        } else if tls.spec.secret.is_some() {
             // Secret resolved: run the SAME validation the gateway runs and surface
             // cert-CONTENT failures on ResolvedRefs. Filter out the not-found variants
             // (secret/cert/key absent) — those are owned by the secret-absent branch
@@ -337,6 +445,24 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 }]
             }
         };
+
+        if let Some(ca_secret_ref) = tls
+            .spec
+            .client_auth
+            .as_ref()
+            .and_then(|auth| auth.ca_secret_ref.as_ref())
+        {
+            if !is_core_secret_ref(ca_secret_ref) {
+                resolved_refs_errors.push(ResolvedRefsError::InvalidKind {
+                    kind: format!(
+                        "{}/{}",
+                        ca_secret_ref.group.as_deref().unwrap_or(""),
+                        ca_secret_ref.kind.as_deref().unwrap_or("Secret")
+                    ),
+                    name: ca_secret_ref.name.clone(),
+                });
+            }
+        }
 
         let status = tls.status.get_or_insert_with(|| EdgionTlsStatus { parents: vec![] });
 
@@ -400,6 +526,7 @@ mod tests {
     use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use edgion_resources::prelude_resources::Gateway;
     use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
     use edgion_resources::resources::gateway::{GatewaySpec, Listener as GatewayListener, SecretObjectReference};
     use kube::api::ObjectMeta;
     use std::sync::Arc;
@@ -441,6 +568,7 @@ mod tests {
                 addresses: None,
                 tls: None,
                 resolved_inbound_proxy_protocol: Default::default(),
+                resolved_attachment_proof: None,
             },
             status: None,
         }
@@ -497,10 +625,33 @@ mod tests {
                 ciphers: None,
                 secret: None,
                 resolved_listeners: None,
+                resolved_listener_attachments: None,
+                resolved_listener_attachment_index: Default::default(),
                 resolved_log_labels: None,
             },
             status: None,
         }
+    }
+
+    #[tokio::test]
+    async fn parse_registers_parent_dependency_before_missing_gateway_lookup() {
+        let ctx = make_ctx();
+        let tls = make_tls(
+            Some(vec![make_parent_ref("not-yet-published", "test-ns")]),
+            "missing-secret",
+        );
+        let parsed = match EdgionTlsHandler::default().parse(tls, &ctx).await {
+            ProcessResult::Continue(parsed) => parsed,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(parsed.spec.resolved_listener_attachments.is_none());
+        assert_eq!(
+            ctx.runtime()
+                .gateway_route_index
+                .get_routes_for_gateway("test-ns/not-yet-published"),
+            vec![(ResourceKind::EdgionTls, "test-ns/test-tls".to_string())],
+            "the dependency edge must exist even when the Gateway snapshot is absent"
+        );
     }
 
     fn make_parent_ref(name: &str, ns: &str) -> ParentReference {
@@ -574,6 +725,18 @@ mod tests {
             status.parents.is_empty(),
             "no parent_refs means no per-parent status entries"
         );
+    }
+
+    #[test]
+    fn update_status_uses_fixed_empty_shape_for_invalid_dimensions() {
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx();
+        let parents = (0..=edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_PARENT_REFS)
+            .map(|index| make_parent_ref(&format!("gateway-{index}"), "test-ns"))
+            .collect();
+        let mut tls = make_tls(Some(parents), "missing-secret");
+        handler.update_status(&mut tls, &ctx, &["invalid dimensions".to_string()]);
+        assert!(tls.status.unwrap().parents.is_empty());
     }
 
     #[test]
@@ -884,6 +1047,64 @@ mod tests {
             tls.spec.secret.is_some(),
             "same-namespace Secret should resolve without a grant"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_group_or_kind_never_registers_grants_or_reads_secret() {
+        let ctx = make_ctx_cross_ns("test-ns", "test-secret", None);
+        let handler = EdgionTlsHandler::default();
+        let mut tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+        tls.spec.secret_ref.group = Some("core".to_string());
+        tls.spec.secret_ref.kind = Some("ConfigMap".to_string());
+
+        let warnings = handler.validate(&tls, &ctx);
+        assert!(warnings.iter().any(|warning| warning.contains("core Secret kind")));
+
+        let parsed = match handler.parse(tls, &ctx).await {
+            ProcessResult::Continue(tls) => tls,
+            ProcessResult::Skip { reason } => panic!("unexpected Skip: {reason}"),
+        };
+        assert!(parsed.spec.secret.is_none());
+        assert!(ctx.secret_ref_manager().get_refs("test-ns/test-secret").is_empty());
+        assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("test-ns").is_empty());
+
+        let mut status_tls = parsed;
+        handler.update_status(&mut status_tls, &ctx, &warnings);
+        let conditions = &status_tls.status.as_ref().unwrap().parents[0].conditions;
+        let resolved = conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "InvalidKind");
+
+        let mut tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+        tls.spec.client_auth = Some(ClientAuthConfig {
+            mode: ClientAuthMode::Mutual,
+            ca_secret_ref: Some(SecretObjectReference {
+                group: Some("core".to_string()),
+                kind: Some("ConfigMap".to_string()),
+                namespace: Some("test-ns".to_string()),
+                name: "test-secret".to_string(),
+            }),
+            verify_depth: 1,
+            ca_secret: None,
+            allowed_sans: None,
+            allowed_cns: None,
+        });
+        let warnings = handler.validate(&tls, &ctx);
+        let mut parsed = match handler.parse(tls, &ctx).await {
+            ProcessResult::Continue(tls) => tls,
+            ProcessResult::Skip { reason } => panic!("unexpected Skip: {reason}"),
+        };
+        assert!(parsed.spec.client_auth.as_ref().unwrap().ca_secret.is_none());
+        handler.update_status(&mut parsed, &ctx, &warnings);
+        assert!(parsed.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|condition| condition.type_ == "ResolvedRefs"
+                && condition.status == "False"
+                && condition.reason == "InvalidKind"));
     }
 
     #[tokio::test]

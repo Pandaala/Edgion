@@ -1,19 +1,19 @@
 use crate::observe::logs::ssl_log::log_ssl;
 use crate::observe::logs::LogBuffer;
-use crate::runtime::matching::{match_gateway_tls, GatewayTlsEntry};
+use crate::runtime::matching::tls::CompiledServingCertificate;
+use crate::runtime::matching::{match_gateway_tls, FrontendMtlsOutcome, GatewayTlsEntry};
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::tls::runtime::backend::set_mtls_verify_callback;
-use crate::tls::store::cert_matcher::match_sni;
+use crate::tls::store::cert_matcher::get_tls_cert_matcher;
 use crate::{MatchedInfo, Rsc, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
-use edgion_common::secret::get_secret_by_name;
-use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::listener_key::ListenerKey;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
-use edgion_resources::resources::gateway::FrontendValidationMode;
 use edgion_resources::ResourceMeta;
+#[cfg(feature = "boringssl")]
+use foreign_types::{ForeignType, ForeignTypeRef};
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::listeners::TlsAccept;
 use pingora_core::protocols::tls::TlsRef;
@@ -34,11 +34,46 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// Per-connection TLS context. Created in select_cb, consumed by cert_cb
 /// and handshake_complete_cb via SSL ex_data, finally moved into Pingora's
 /// digest extension.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SslCtx {
     meta: TlsConnMeta,
     matched_edgion_tls: Option<Arc<EdgionTls>>,
-    matched_gateway_tls: Option<GatewayTlsEntry>,
+    matched_gateway_tls: Option<Arc<GatewayTlsEntry>>,
+    gateway_edgion_tls_overlay: Option<Arc<EdgionTls>>,
+}
+
+#[cfg(feature = "boringssl")]
+fn install_compiled_serving_identity(ssl: &mut SslRef, certificate: &CompiledServingCertificate) -> bool {
+    unsafe {
+        // BoringSSL's implementation clears the legacy credential before it
+        // begins setting the new chain. Mirror that contract explicitly so a
+        // replacement can never fall back to an earlier identity.
+        boring_sys::SSL_certs_clear(ssl.as_ptr());
+        let installed = boring_sys::SSL_set_chain_and_key(
+            ssl.as_ptr(),
+            certificate.atomic_chain.as_ptr(),
+            certificate.atomic_chain.len(),
+            certificate.private_key.as_ptr(),
+            std::ptr::null(),
+        ) == 1;
+        if !installed {
+            boring_sys::SSL_certs_clear(ssl.as_ptr());
+            // Consume the thread-local queue here. Leaving it populated would
+            // attribute this cold identity failure to an unrelated TLS call.
+            let _ = boring::error::ErrorStack::get();
+        }
+        installed
+    }
+}
+
+fn serving_certificate_validity_error(not_before: i64, not_after: i64, now: i64) -> Option<&'static str> {
+    if now < not_before {
+        Some("cert_not_yet_valid")
+    } else if now > not_after {
+        Some("cert_expired")
+    } else {
+        None
+    }
 }
 
 impl SslCtx {
@@ -62,6 +97,7 @@ impl SslCtx {
             },
             matched_edgion_tls: None,
             matched_gateway_tls: None,
+            gateway_edgion_tls_overlay: None,
         }
     }
 }
@@ -282,6 +318,29 @@ impl TlsAccept for TlsCallback {
         // entry's take_ssl_ctx cleared it), so free_ssl_ctx will see a null ptr
         // and not double-emit. On success we finalize and let
         // handshake_complete_callback emit the single ssl.log entry.
+        if let (Some(gateway_tls), Some(edgion_tls)) = (
+            ssl_ctx.matched_gateway_tls.clone(),
+            ssl_ctx.gateway_edgion_tls_overlay.clone(),
+        ) {
+            match self.configure_gateway_frontend_mtls(ssl, &gateway_tls) {
+                Err(e) => {
+                    ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {e}"));
+                    log_ssl(&ssl_ctx.meta);
+                    return;
+                }
+                Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
+            }
+            self.apply_edgion_tls_cert(ssl, &edgion_tls, &mut ssl_ctx);
+            if ssl_ctx.meta.err_log.is_some() {
+                log_ssl(&ssl_ctx.meta);
+                return;
+            }
+            self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
+            if ssl_ctx.meta.err_log.is_some() {
+                log_ssl(&ssl_ctx.meta);
+            }
+            return;
+        }
         if let Some(edgion_tls) = ssl_ctx.matched_edgion_tls.clone() {
             self.apply_edgion_tls_cert(ssl, &edgion_tls, &mut ssl_ctx);
             if ssl_ctx.meta.err_log.is_some() {
@@ -391,6 +450,29 @@ fn map_tls_version(v: edgion_resources::resources::edgion_tls::TlsVersion) -> pi
     }
 }
 
+fn edgion_tls_attaches_to_gateway(candidate: &EdgionTls, gateway: &GatewayTlsEntry) -> bool {
+    if !gateway.attachment.gateway_proof.is_resolved() {
+        return false;
+    }
+    candidate.spec.has_resolved_listener_attachment(&gateway.attachment)
+}
+
+fn select_gateway_edgion_tls_overlay(
+    candidate: Option<Arc<EdgionTls>>,
+    gateway: &GatewayTlsEntry,
+) -> std::result::Result<Option<Arc<EdgionTls>>, ()> {
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    if !edgion_tls_attaches_to_gateway(&candidate, gateway) {
+        return Ok(None);
+    }
+    if candidate.spec.client_auth.is_some() {
+        return Err(());
+    }
+    Ok(Some(candidate))
+}
+
 impl TlsCallback {
     pub fn new(port: u16) -> Self {
         Self { port }
@@ -446,8 +528,54 @@ impl TlsCallback {
                 };
                 ssl_ctx.meta.sni = Some(sni.clone());
 
+                // Capture both matcher generations once. A Gateway frontend
+                // client-auth decision owns the connection when present; an
+                // EdgionTls certificate may overlay it only when its complete
+                // logical attachment identifies that exact winning listener.
+                let et_matcher_snapshot = get_tls_cert_matcher().snapshot();
+                let et_candidates = et_matcher_snapshot.match_sni_candidates(&lk, &sni);
+                let et = et_candidates.first().cloned();
+                let gw = match_gateway_tls(&lk, &sni);
+                if let Some(gw) = gw
+                    .as_ref()
+                    .filter(|entry| entry.frontend_mtls != FrontendMtlsOutcome::NotConfigured)
+                    .cloned()
+                {
+                    if let FrontendMtlsOutcome::StrictReject { reason } = gw.frontend_mtls {
+                        ssl_ctx.meta.err_log = Some(reason.to_string());
+                        log_ssl(&ssl_ctx.meta);
+                        return Err(SelectCertError::ERROR);
+                    }
+                    let exact_overlay = match select_gateway_edgion_tls_overlay(
+                        et_matcher_snapshot.match_attachment_sni(&gw.attachment, &sni),
+                        &gw,
+                    ) {
+                        Ok(overlay) => overlay,
+                        Err(()) => {
+                            ssl_ctx.meta.err_log = Some("frontend mTLS conflict".to_string());
+                            log_ssl(&ssl_ctx.meta);
+                            return Err(SelectCertError::ERROR);
+                        }
+                    };
+                    if let Some(candidate) = exact_overlay {
+                        if let Some(min_version) = candidate.spec.min_tls_version {
+                            if let Err(e) = ch.ssl_mut().set_min_proto_version(Some(map_tls_version(min_version))) {
+                                ssl_ctx.meta.err_log = Some(format!("min ver: {e}"));
+                                log_ssl(&ssl_ctx.meta);
+                                return Err(SelectCertError::ERROR);
+                            }
+                        }
+                        ssl_ctx.gateway_edgion_tls_overlay = Some(candidate);
+                    }
+                    ssl_ctx.matched_gateway_tls = Some(gw);
+                    if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
+                        return Err(SelectCertError::ERROR);
+                    }
+                    return Ok(());
+                }
+
                 // ── 2. Layer 1: EdgionTls ────────────────────────────────
-                if let Some(et) = match_sni(&lk, &sni) {
+                if let Some(et) = et {
                     // Only Mutual / OptionalMutual actually drive mTLS verification.
                     // Terminate mode short-circuits in configure_mtls without setting
                     // any verify mode, so flagging is_mtls=true there would mislead
@@ -472,7 +600,7 @@ impl TlsCallback {
                 }
 
                 // ── 3. Layer 2: GatewayTls ───────────────────────────────
-                if let Some(gw) = match_gateway_tls(&lk, &sni) {
+                if let Some(gw) = gw {
                     ssl_ctx.matched_gateway_tls = Some(gw);
                     if !store_ssl_ctx(ch.ssl_mut(), &ssl_ctx) {
                         return Err(SelectCertError::ERROR);
@@ -721,12 +849,19 @@ impl TlsCallback {
             sv: 0,
         });
 
-        // Collect every cert/key Secret configured for this listener: prefer the
-        // controller-resolved inline secrets, otherwise resolve every
-        // certificateRef from the global store.
-        let secrets = match &gateway_tls.secrets {
-            Some(s) if !s.is_empty() => s.clone(),
-            _ => self.resolve_secrets_from_store_or_error(gateway_tls, ssl_ctx),
+        // Controller resolution is authoritative. A missing or partial inline
+        // set fails closed; the Gateway must never bypass ReferenceGrant by
+        // consulting its global SecretStore.
+        let certificates = match &gateway_tls.compiled_serving_certificates {
+            Some(certificates)
+                if certificates.len() == gateway_tls.certificate_refs.len() && !certificates.is_empty() =>
+            {
+                certificates
+            }
+            _ => {
+                ssl_ctx.meta.err_log = Some("serving certificate set incomplete".to_string());
+                return;
+            }
         };
         if ssl_ctx.meta.err_log.is_some() {
             return;
@@ -738,8 +873,8 @@ impl TlsCallback {
         // BoringSSL/Envoy perform internally. With one configured cert this is a
         // no-op. A bad/missing selected cert fails the handshake (fail-closed)
         // rather than silently serving nothing.
-        let secret = match self.select_gateway_secret(ssl, &secrets) {
-            Some(s) => s.clone(),
+        let certificate = match self.select_gateway_certificate(ssl, certificates.as_slice()) {
+            Some(certificate) => certificate,
             None => {
                 ssl_ctx.meta.err_log = Some("no usable cert".to_string());
                 return;
@@ -753,7 +888,7 @@ impl TlsCallback {
         // On Err we stamp `err_log` and `return` with no cert bound — that is
         // what aborts the handshake. The Ok branch keeps the `is_mtls`
         // stamping contract unchanged. See tls-F011.
-        if gateway_tls.frontend_validation.is_some() {
+        if gateway_tls.frontend_mtls != FrontendMtlsOutcome::NotConfigured {
             match self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
                 Err(e) => {
                     ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e));
@@ -781,39 +916,10 @@ impl TlsCallback {
             }
         }
 
-        self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
+        self.apply_compiled_certificate_to_ssl(ssl, certificate, ssl_ctx);
         if ssl_ctx.meta.err_log.is_some() {
             return;
         }
-    }
-
-    /// Resolve every `certificate_refs` entry via the global SecretStore.
-    ///
-    /// Fallback path used when the controller has not inlined the resolved
-    /// secrets. Returns all resolved secrets; a single missing ref fails the
-    /// whole listener (fail-closed) by setting `err_log`.
-    fn resolve_secrets_from_store_or_error(
-        &self,
-        gateway_tls: &GatewayTlsEntry,
-        ssl_ctx: &mut SslCtx,
-    ) -> Vec<k8s_openapi::api::core::v1::Secret> {
-        if gateway_tls.certificate_refs.is_empty() {
-            ssl_ctx.meta.err_log = Some("no cert refs".to_string());
-            return Vec::new();
-        }
-
-        let mut secrets = Vec::with_capacity(gateway_tls.certificate_refs.len());
-        for cert_ref in &gateway_tls.certificate_refs {
-            let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
-            match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
-                Some(s) => secrets.push(s),
-                None => {
-                    ssl_ctx.meta.err_log = Some(format!("secret missing: {}/{}", secret_namespace, cert_ref.name));
-                    return Vec::new();
-                }
-            }
-        }
-        secrets
     }
 
     /// Whether the connecting client advertised an ECDSA signature algorithm in
@@ -843,17 +949,6 @@ impl TlsCallback {
         ssl.version2() == Some(pingora_core::tls::ssl::SslVersion::TLS1_3)
     }
 
-    /// Best-effort cert key-type probe: `Some(true)` for ECDSA, `Some(false)`
-    /// for any other key type (RSA), `None` when the cert cannot be parsed (the
-    /// caller then falls through in its selection).
-    #[cfg(feature = "boringssl")]
-    fn secret_is_ecdsa(secret: &k8s_openapi::api::core::v1::Secret) -> Option<bool> {
-        let cert_bytes = secret.data.as_ref()?.get(CERT)?;
-        let cert = X509::from_pem(&cert_bytes.0).ok()?;
-        let pkey = cert.public_key().ok()?;
-        Some(pkey.id() == pingora_core::tls::pkey::Id::EC)
-    }
-
     /// Select the cert/key Secret whose key type matches the connecting client.
     /// BoringSSL exposes a single cert slot per SSL, so a dual-cert listener
     /// (RSA + ECDSA) requires explicit selection — otherwise only one key type
@@ -868,74 +963,52 @@ impl TlsCallback {
     /// cipher, making sigalg-based selection safe. For TLS 1.2 we keep the
     /// legacy first-cert behavior (no regression versus the pre-fix code).
     #[cfg(feature = "boringssl")]
-    fn select_gateway_secret<'a>(
+    fn select_gateway_certificate<'a>(
         &self,
         ssl: &SslRef,
-        secrets: &'a [k8s_openapi::api::core::v1::Secret],
-    ) -> Option<&'a k8s_openapi::api::core::v1::Secret> {
-        if secrets.len() <= 1 {
-            return secrets.first();
+        certificates: &'a [Arc<CompiledServingCertificate>],
+    ) -> Option<&'a CompiledServingCertificate> {
+        if certificates.len() <= 1 {
+            return certificates.first().map(Arc::as_ref);
         }
         let prefer_ecdsa = self.negotiated_is_tls13(ssl) && self.client_supports_ecdsa(ssl);
-        let kinds: Vec<Option<bool>> = secrets.iter().map(Self::secret_is_ecdsa).collect();
-        pick_secret_index(&kinds, prefer_ecdsa).map(|i| &secrets[i])
+        if prefer_ecdsa {
+            if let Some(certificate) = certificates
+                .iter()
+                .find(|certificate| certificate.key_type == pingora_core::tls::pkey::Id::EC)
+            {
+                return Some(certificate.as_ref());
+            }
+        }
+        certificates
+            .iter()
+            .find(|certificate| certificate.key_type != pingora_core::tls::pkey::Id::EC)
+            .or_else(|| certificates.first())
+            .map(Arc::as_ref)
     }
 
     /// Non-BoringSSL fallback: no per-key-type selection primitive is wired up,
     /// so serve the first configured cert (unchanged legacy behavior).
     #[cfg(not(feature = "boringssl"))]
-    fn select_gateway_secret<'a>(
+    fn select_gateway_certificate<'a>(
         &self,
         _ssl: &SslRef,
-        secrets: &'a [k8s_openapi::api::core::v1::Secret],
-    ) -> Option<&'a k8s_openapi::api::core::v1::Secret> {
-        secrets.first()
+        certificates: &'a [Arc<CompiledServingCertificate>],
+    ) -> Option<&'a CompiledServingCertificate> {
+        certificates.first().map(Arc::as_ref)
     }
 
-    /// Helper: Extract cert/key from Secret and apply to SSL
-    fn apply_secret_to_ssl(&self, ssl: &mut SslRef, secret: &k8s_openapi::api::core::v1::Secret, ssl_ctx: &mut SslCtx) {
-        let data = match &secret.data {
-            Some(d) => d,
-            None => {
-                ssl_ctx.meta.err_log = Some("secret empty".to_string());
-                return;
-            }
-        };
-
-        let cert_pem = match data.get(CERT) {
-            Some(bytes) => match String::from_utf8(bytes.0.clone()) {
-                Ok(s) => s,
-                Err(e) => {
-                    ssl_ctx.meta.err_log = Some(format!("bad {CERT}: {e}"));
-                    return;
-                }
-            },
-            None => {
-                ssl_ctx.meta.err_log = Some(format!("no {CERT}"));
-                return;
-            }
-        };
-
-        let key_pem = match data.get(KEY) {
-            Some(bytes) => match String::from_utf8(bytes.0.clone()) {
-                Ok(s) => s,
-                Err(e) => {
-                    ssl_ctx.meta.err_log = Some(format!("bad {KEY}: {e}"));
-                    return;
-                }
-            },
-            None => {
-                ssl_ctx.meta.err_log = Some(format!("no {KEY}"));
-                return;
-            }
-        };
-
-        let cert = match X509::from_pem(cert_pem.as_bytes()) {
-            Ok(c) => c,
-            Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("bad cert: {e}"));
-                return;
-            }
+    /// Install one immutable cold-compiled serving identity. No PEM parsing,
+    /// key decoding, or secret copies occur on the handshake path.
+    fn apply_compiled_certificate_to_ssl(
+        &self,
+        ssl: &mut SslRef,
+        certificate: &CompiledServingCertificate,
+        ssl_ctx: &mut SslCtx,
+    ) {
+        let Some(_leaf) = certificate.chain.first() else {
+            ssl_ctx.meta.err_log = Some("serving certificate chain empty".to_string());
+            return;
         };
         // Runtime expiry recheck — cert may have expired between controller
         // rebuilds. Mirrors the EdgionTls path in apply_edgion_tls_cert so that
@@ -943,45 +1016,40 @@ impl TlsCallback {
         // audit signal (RFC 5280 inclusive bounds). The `&now` of the EdgionTls
         // block is dropped here on purpose — clippy::op_ref flags it, and
         // `Asn1Time`/`Asn1TimeRef` cross-compare unchanged either way.
-        #[cfg(feature = "boringssl")]
-        match boring::asn1::Asn1Time::days_from_now(0) {
-            Ok(now) => {
-                if cert.not_after() < now {
-                    ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
-                    return;
-                }
-                if cert.not_before() > now {
-                    ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
-                    return;
-                }
-            }
-            Err(_e) => {
-                // days_from_now(0) only fails on BoringSSL allocation failure
-                // (effectively impossible). Don't fail the connection — the
-                // cert was validated at load time and BoringSSL rejects
-                // genuinely broken certs during the handshake.
-                let _ = ssl_ctx
-                    .meta
-                    .log
-                    .get_or_insert_with(crate::observe::logs::LogBuffer::new)
-                    .push_err("cert_expiry_check_failed");
-            }
-        }
-        if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
-            ssl_ctx.meta.err_log = Some(format!("set cert: {e}"));
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64);
+        if let Some(error) = serving_certificate_validity_error(
+            certificate.leaf_not_before_unix,
+            certificate.leaf_not_after_unix,
+            now_unix,
+        ) {
+            ssl_ctx.meta.err_log = Some(error.to_string());
             return;
         }
-
-        let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
-            Ok(k) => k,
-            Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("bad key: {e}"));
+        #[cfg(feature = "boringssl")]
+        {
+            // The replacement contract is clear-then-set. Any failure clears
+            // again, leaving the connection without a usable identity.
+            if !install_compiled_serving_identity(ssl, certificate) {
+                ssl_ctx.meta.err_log = Some("set serving identity".to_string());
+            }
+        }
+        #[cfg(not(feature = "boringssl"))]
+        {
+            if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, _leaf) {
+                ssl_ctx.meta.err_log = Some(format!("set cert: {e}"));
                 return;
             }
-        };
-        if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
-            ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
-            return;
+            for intermediate in certificate.chain.iter().skip(1) {
+                if let Err(e) = pingora_core::tls::ext::ssl_add_chain_cert(ssl, intermediate) {
+                    ssl_ctx.meta.err_log = Some(format!("set chain: {e}"));
+                    return;
+                }
+            }
+            if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &certificate.private_key) {
+                ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
+            }
         }
     }
 
@@ -997,52 +1065,24 @@ impl TlsCallback {
         ssl: &mut SslRef,
         gateway_tls: &GatewayTlsEntry,
     ) -> Result<bool, Box<PingoraError>> {
-        let ca_secrets = match &gateway_tls.resolved_frontend_ca_secrets {
-            Some(secrets) if !secrets.is_empty() => secrets,
-            _ => return Ok(false),
-        };
-
-        let mut store_builder = X509StoreBuilder::new().map_err(|e| {
-            PingoraError::explain(ErrorType::InvalidCert, format!("Failed to create X509 store: {}", e))
-        })?;
-
-        let mut certs_added: usize = 0;
-        for secret in ca_secrets {
-            if let Some(data) = &secret.data {
-                if let Some(ca_bytes) = data.get(CA_CERT) {
-                    certs_added += add_ca_bundle_to_store(&mut store_builder, &ca_bytes.0)?;
-                }
+        match gateway_tls.frontend_mtls {
+            FrontendMtlsOutcome::NotConfigured => return Ok(false),
+            FrontendMtlsOutcome::StrictReject { reason } => {
+                return Err(PingoraError::explain(ErrorType::InvalidCert, reason));
             }
+            FrontendMtlsOutcome::StrictEffective | FrontendMtlsOutcome::InsecureFallback => {}
         }
 
-        // Symmetric with the fail-closed branch inside `add_ca_bundle_to_store`
-        // for empty/garbage PEM: if every referenced Secret lacked the `ca.crt`
-        // key, the loop body never ran and we are about to build an empty trust
-        // store. Returning Err here lets the caller stamp `err_log` instead of
-        // silently installing a barrier that rejects every client.
-        if certs_added == 0 {
-            return Err(PingoraError::explain(
-                ErrorType::InvalidCert,
-                format!(
-                    "frontendValidation references {} CA Secret(s), but none contained the `{}` key",
-                    ca_secrets.len(),
-                    CA_CERT
-                ),
-            ));
+        if gateway_tls.frontend_mtls == FrontendMtlsOutcome::StrictEffective {
+            let store = gateway_tls
+                .compiled_frontend_ca_store
+                .as_ref()
+                .ok_or_else(|| PingoraError::explain(ErrorType::InvalidCert, "frontend CA store unavailable"))?;
+            ssl.set_verify_cert_store(store.as_ref().clone())
+                .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
         }
 
-        let store = store_builder.build();
-        ssl.set_verify_cert_store(store)
-            .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
-
-        let mode = gateway_tls
-            .frontend_validation
-            .as_ref()
-            .and_then(|fv| fv.mode.as_ref())
-            .cloned()
-            .unwrap_or_default();
-
-        if matches!(mode, FrontendValidationMode::AllowInsecureFallback) {
+        if gateway_tls.frontend_mtls == FrontendMtlsOutcome::InsecureFallback {
             // InsecureFallback: request client cert but accept all results (including
             // invalid/missing certs). A plain SslVerifyMode::PEER still rejects invalid
             // certs, so we need a custom verify callback that always returns 1.
@@ -1190,16 +1230,12 @@ impl TlsCallback {
 /// unparseable bundle is rejected (fail-closed) so a misconfigured CA secret
 /// cannot silently produce an empty trust store.
 fn add_ca_bundle_to_store(store_builder: &mut X509StoreBuilder, ca_pem: &[u8]) -> Result<usize, Box<PingoraError>> {
-    let stack = X509::stack_from_pem(ca_pem)
-        .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA certificate PEM: {}", e)))?;
-    if stack.is_empty() {
-        return Err(PingoraError::explain(
-            ErrorType::InvalidCert,
-            "CA certificate PEM contained no certificates".to_string(),
-        ));
-    }
-    let count = stack.len();
-    for cert in stack {
+    let bundle = edgion_common::tls_validation::parse_canonical_ca_bundle(ca_pem)
+        .map_err(|error| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA bundle: {error:?}")))?;
+    let count = bundle.certificates_der.len();
+    for der in bundle.certificates_der {
+        let cert = X509::from_der(&der)
+            .map_err(|error| PingoraError::explain(ErrorType::InvalidCert, format!("Invalid CA DER: {error}")))?;
         store_builder.add_cert(cert).map_err(|e| {
             PingoraError::explain(ErrorType::InvalidCert, format!("Failed to add CA cert to store: {}", e))
         })?;
@@ -1213,7 +1249,7 @@ fn add_ca_bundle_to_store(store_builder: &mut X509StoreBuilder, ca_pem: &[u8]) -
 /// cert to serve. Prefers ECDSA when requested and available; otherwise the
 /// first RSA cert; otherwise the first secret. Returns `None` only for an empty
 /// list. Extracted as a free fn so the rule is unit-testable without an `SSL`.
-#[cfg(feature = "boringssl")]
+#[cfg(all(test, feature = "boringssl"))]
 fn pick_secret_index(kinds: &[Option<bool>], prefer_ecdsa: bool) -> Option<usize> {
     if kinds.is_empty() {
         return None;
@@ -1228,16 +1264,332 @@ fn pick_secret_index(kinds: &[Option<bool>], prefer_ecdsa: bool) -> Option<usize
 
 #[cfg(all(test, feature = "boringssl"))]
 mod tests {
-    use super::pick_secret_index;
+    use super::{
+        install_compiled_serving_identity, pick_secret_index, select_gateway_edgion_tls_overlay,
+        serving_certificate_validity_error,
+    };
+    use crate::runtime::matching::{FrontendMtlsOutcome, GatewayTlsEntry};
+    use edgion_resources::resources::edgion_tls::{
+        ClientAuthConfig, ClientAuthMode, EdgionTls, EdgionTlsSpec, ResolvedListenerAttachment,
+    };
+    use edgion_resources::resources::gateway::SecretObjectReference;
+    use edgion_resources::ListenerKey;
+    use kube::api::ObjectMeta;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    static HANDSHAKE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     const RSA: Option<bool> = Some(false);
     const ECDSA: Option<bool> = Some(true);
     const UNKNOWN: Option<bool> = None;
 
     #[test]
+    fn compiled_certificate_validity_bounds_are_inclusive() {
+        assert_eq!(
+            serving_certificate_validity_error(10, 20, 9),
+            Some("cert_not_yet_valid")
+        );
+        assert_eq!(serving_certificate_validity_error(10, 20, 10), None);
+        assert_eq!(serving_certificate_validity_error(10, 20, 20), None);
+        assert_eq!(serving_certificate_validity_error(10, 20, 21), Some("cert_expired"));
+    }
+
+    fn overlay_fixture(attached_gateway: &str, client_auth: bool) -> (Arc<EdgionTls>, GatewayTlsEntry) {
+        let listener_key = ListenerKey::new("0.0.0.0:443".parse::<SocketAddr>().unwrap(), "HTTPS");
+        let gateway_proof = edgion_resources::resources::edgion_tls::GatewayAttachmentProof {
+            instance: "gateway-uid".to_string(),
+            generation: 7,
+            epoch: "resource-version-9".to_string(),
+            attachment_digest: "a".repeat(64),
+        };
+        let tls = Arc::new(EdgionTls {
+            metadata: ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some("tls".to_string()),
+                ..Default::default()
+            },
+            spec: EdgionTlsSpec {
+                parent_refs: None,
+                hosts: vec!["example.com".to_string()],
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "server".to_string(),
+                    namespace: None,
+                },
+                client_auth: client_auth.then_some(ClientAuthConfig {
+                    mode: ClientAuthMode::Mutual,
+                    ca_secret_ref: None,
+                    verify_depth: 1,
+                    ca_secret: None,
+                    allowed_sans: None,
+                    allowed_cns: None,
+                }),
+                min_tls_version: None,
+                ciphers: None,
+                secret: None,
+                resolved_listeners: Some(vec![listener_key.clone()]),
+                resolved_listener_attachments: Some(vec![ResolvedListenerAttachment {
+                    gateway_namespace: "default".to_string(),
+                    gateway_name: attached_gateway.to_string(),
+                    listener_name: "https".to_string(),
+                    listener_key: listener_key.clone(),
+                    gateway_proof: gateway_proof.clone(),
+                }]),
+                resolved_listener_attachment_index: Default::default(),
+                resolved_log_labels: None,
+            },
+            status: None,
+        });
+        let gateway = GatewayTlsEntry {
+            attachment: ResolvedListenerAttachment {
+                gateway_namespace: "default".to_string(),
+                gateway_name: "winner".to_string(),
+                listener_name: "https".to_string(),
+                listener_key: listener_key.clone(),
+                gateway_proof: gateway_proof.clone(),
+            },
+            gateway_namespace: "default".to_string(),
+            gateway_name: "winner".to_string(),
+            gateway_creation_ts: None,
+            listener_name: "https".to_string(),
+            listener_key,
+            gateway_proof,
+            hostname: "example.com".to_string(),
+            certificate_refs: Vec::new(),
+            compiled_serving_certificates: None,
+            compiled_frontend_ca_store: None,
+            frontend_mtls: FrontendMtlsOutcome::StrictEffective,
+        };
+        (tls, gateway)
+    }
+
+    #[test]
+    fn gateway_overlay_requires_exact_attachment_and_rejects_dual_client_auth() {
+        let (exact, gateway) = overlay_fixture("winner", false);
+        assert!(select_gateway_edgion_tls_overlay(Some(exact.clone()), &gateway)
+            .unwrap()
+            .is_none());
+        exact.spec.warm_listener_attachment_index();
+        assert!(select_gateway_edgion_tls_overlay(Some(exact.clone()), &gateway)
+            .unwrap()
+            .is_some());
+
+        let (mismatch, _) = overlay_fixture("other", false);
+        mismatch.spec.warm_listener_attachment_index();
+        assert!(select_gateway_edgion_tls_overlay(Some(mismatch), &gateway)
+            .unwrap()
+            .is_none());
+
+        let (conflict, _) = overlay_fixture("winner", true);
+        conflict.spec.warm_listener_attachment_index();
+        assert!(select_gateway_edgion_tls_overlay(Some(conflict), &gateway).is_err());
+
+        let mut stale_value = exact.as_ref().clone();
+        stale_value.spec.resolved_listener_attachments.as_mut().unwrap()[0]
+            .gateway_proof
+            .epoch = "stale-resource-version".to_string();
+        let stale = Arc::new(stale_value);
+        stale.spec.warm_listener_attachment_index();
+        assert!(select_gateway_edgion_tls_overlay(Some(stale), &gateway)
+            .unwrap()
+            .is_none());
+
+        let selected = select_gateway_edgion_tls_overlay(Some(exact.clone()), &gateway)
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&selected, &exact));
+    }
+
+    #[test]
     fn empty_list_returns_none() {
         assert_eq!(pick_secret_index(&[], true), None);
         assert_eq!(pick_secret_index(&[], false), None);
+    }
+
+    #[cfg(feature = "boringssl")]
+    #[test]
+    fn strict_serving_parsers_preserve_chain_and_accept_supported_key_formats() {
+        use boring::asn1::{Asn1Integer, Asn1Time};
+        use boring::bn::BigNum;
+        use boring::ec::{EcGroup, EcKey};
+        use boring::hash::MessageDigest;
+        use boring::nid::Nid;
+        use boring::pkey::{PKey, Private};
+        use boring::rsa::Rsa;
+        use boring::x509::{X509NameBuilder, X509};
+
+        fn certificate(
+            cn: &str,
+            subject_key: &PKey<Private>,
+            issuer: Option<&X509>,
+            signing_key: &PKey<Private>,
+            serial: u32,
+        ) -> X509 {
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", cn).unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            let serial = Asn1Integer::from_bn(&BigNum::from_u32(serial).unwrap()).unwrap();
+            builder.set_serial_number(&serial).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder
+                .set_issuer_name(issuer.map_or(name.as_ref(), |certificate| certificate.subject_name()))
+                .unwrap();
+            builder.set_pubkey(subject_key).unwrap();
+            builder.set_not_before(&Asn1Time::days_from_now(0).unwrap()).unwrap();
+            builder.set_not_after(&Asn1Time::days_from_now(30).unwrap()).unwrap();
+            builder.sign(signing_key, MessageDigest::sha256()).unwrap();
+            builder.build()
+        }
+
+        let root_key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let root = certificate("root", &root_key, None, &root_key, 1);
+        let leaf_rsa = Rsa::generate(2048).unwrap();
+        let rsa_pkcs1 = String::from_utf8(leaf_rsa.private_key_to_pem().unwrap()).unwrap();
+        let leaf_key = PKey::from_rsa(leaf_rsa).unwrap();
+        let rsa_pkcs8 = String::from_utf8(leaf_key.private_key_to_pem_pkcs8().unwrap()).unwrap();
+        let leaf = certificate("leaf", &leaf_key, Some(&root), &root_key, 2);
+        let chain_pem = format!(
+            "{}{}",
+            String::from_utf8(leaf.to_pem().unwrap()).unwrap(),
+            String::from_utf8(root.to_pem().unwrap()).unwrap()
+        );
+        let parsed = edgion_common::tls_validation::parse_strict_certificate_chain(chain_pem.as_bytes()).unwrap();
+        assert_eq!(
+            parsed.certificates_der,
+            vec![leaf.to_der().unwrap(), root.to_der().unwrap()]
+        );
+        edgion_common::tls_validation::check_key_matches_cert(&chain_pem, &rsa_pkcs8).unwrap();
+        edgion_common::tls_validation::check_key_matches_cert(&chain_pem, &rsa_pkcs1).unwrap();
+
+        let ec = EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap()).unwrap();
+        let ec_sec1 = String::from_utf8(ec.private_key_to_pem().unwrap()).unwrap();
+        let ec_key = PKey::from_ec_key(ec).unwrap();
+        let ec_cert = certificate("ec-leaf", &ec_key, None, &ec_key, 3);
+        let ec_cert_pem = String::from_utf8(ec_cert.to_pem().unwrap()).unwrap();
+        edgion_common::tls_validation::check_key_matches_cert(&ec_cert_pem, &ec_sec1).unwrap();
+    }
+
+    #[test]
+    fn atomic_identity_rotation_sends_intermediate_and_replaces_old_chain() {
+        let _serial = HANDSHAKE_TEST_LOCK.lock().unwrap();
+        use crate::runtime::matching::tls::{CompiledBoringCertificateChain, CompiledServingCertificate};
+        use boring::pkey::PKey;
+        use boring::ssl::{Ssl, SslContext, SslMethod, SslVerifyMode};
+        use boring::x509::store::X509StoreBuilder;
+        use boring::x509::X509;
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Duration;
+
+        fn identity(prefix: &str) -> (Arc<CompiledServingCertificate>, X509) {
+            let root_key = KeyPair::generate().unwrap();
+            let mut root_params = CertificateParams::default();
+            root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            root_params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, format!("{prefix}-root"));
+            let root_issuer = Issuer::from_params(&root_params, &root_key);
+            let root = root_params.self_signed(&root_key).unwrap();
+
+            let intermediate_key = KeyPair::generate().unwrap();
+            let mut intermediate_params = CertificateParams::default();
+            intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            intermediate_params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, format!("{prefix}-intermediate"));
+            let intermediate_issuer = Issuer::from_params(&intermediate_params, &intermediate_key);
+            let intermediate = intermediate_params.signed_by(&intermediate_key, &root_issuer).unwrap();
+
+            let leaf_key = KeyPair::generate().unwrap();
+            let leaf = CertificateParams::new(vec!["localhost".to_string()])
+                .unwrap()
+                .signed_by(&leaf_key, &intermediate_issuer)
+                .unwrap();
+            let chain_der = vec![leaf.der().to_vec(), intermediate.der().to_vec()];
+            let chain = chain_der
+                .iter()
+                .map(|der| X509::from_der(der).unwrap())
+                .collect::<Vec<_>>();
+            let private_key = PKey::private_key_from_pem(leaf_key.serialize_pem().as_bytes()).unwrap();
+            let compiled = Arc::new(CompiledServingCertificate {
+                chain: Arc::new(chain),
+                atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&chain_der).unwrap()),
+                key_type: private_key.id(),
+                private_key,
+                leaf_not_before_unix: i64::MIN,
+                leaf_not_after_unix: i64::MAX,
+            });
+            (compiled, X509::from_der(root.der()).unwrap())
+        }
+
+        let (old_identity, old_root) = identity("old");
+        let (new_identity, new_root) = identity("new");
+        let invalid_replacement = Arc::new(CompiledServingCertificate {
+            chain: old_identity.chain.clone(),
+            atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&[b"not-der".to_vec()]).unwrap()),
+            private_key: old_identity.private_key.clone(),
+            key_type: old_identity.key_type,
+            leaf_not_before_unix: i64::MIN,
+            leaf_not_after_unix: i64::MAX,
+        });
+        let server_ctx = SslContext::builder(SslMethod::tls()).unwrap().build();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            tcp.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut ssl = Ssl::new(&server_ctx).unwrap();
+            assert!(install_compiled_serving_identity(ssl.as_mut(), &old_identity));
+            assert!(install_compiled_serving_identity(ssl.as_mut(), &new_identity));
+            let valid_rotation = ssl.accept(tcp).is_ok();
+
+            let (tcp, _) = listener.accept().unwrap();
+            tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            tcp.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut ssl = Ssl::new(&server_ctx).unwrap();
+            assert!(install_compiled_serving_identity(ssl.as_mut(), &old_identity));
+            assert!(!install_compiled_serving_identity(ssl.as_mut(), &invalid_replacement));
+            (valid_rotation, ssl.accept(tcp).is_err())
+        });
+
+        let mut store = X509StoreBuilder::new().unwrap();
+        store.add_cert(new_root).unwrap();
+        let mut client_builder = SslContext::builder(SslMethod::tls()).unwrap();
+        client_builder.set_verify(SslVerifyMode::PEER);
+        client_builder.set_verify_cert_store(store.build()).unwrap();
+        let client_ctx = client_builder.build();
+        let tcp = TcpStream::connect(address).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        tcp.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut client_ssl = Ssl::new(&client_ctx).unwrap();
+        client_ssl.set_hostname("localhost").unwrap();
+        let client = client_ssl.connect(tcp);
+        assert!(
+            client.is_ok(),
+            "client trusting only the new root must validate the sent intermediate"
+        );
+        let mut old_store = X509StoreBuilder::new().unwrap();
+        old_store.add_cert(old_root).unwrap();
+        let mut old_client_builder = SslContext::builder(SslMethod::tls()).unwrap();
+        old_client_builder.set_verify(SslVerifyMode::PEER);
+        old_client_builder.set_verify_cert_store(old_store.build()).unwrap();
+        let tcp = TcpStream::connect(address).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        tcp.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut old_client_ssl = Ssl::new(&old_client_builder.build()).unwrap();
+        old_client_ssl.set_hostname("localhost").unwrap();
+        assert!(
+            old_client_ssl.connect(tcp).is_err(),
+            "failed replacement must not continue serving the old identity"
+        );
+        let (valid_rotation, failed_replacement) = server.join().unwrap();
+        assert!(valid_rotation);
+        assert!(failed_replacement);
     }
 
     #[test]

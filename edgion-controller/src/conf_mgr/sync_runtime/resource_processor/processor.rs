@@ -692,6 +692,7 @@ where
 
                 // 8. Update status (handler sets Gateway API conditions)
                 self.handler.update_status(&mut parsed_obj, ctx, &all_errors);
+                self.handler.finalize_transport(&mut parsed_obj, ctx);
 
                 // 9. Check if status changed
                 let new_status = extract_status_json(&parsed_obj);
@@ -758,6 +759,10 @@ where
                     self.save(parsed_obj, None);
                 }
 
+                // Consumers of controller-owned proofs must observe the exact
+                // object just published above, never the previous cache value.
+                self.handler.after_publish(&obj_for_result, ctx).await;
+
                 WorkItemResult::Processed {
                     obj: obj_for_result,
                     status_changed,
@@ -791,6 +796,10 @@ where
 
             // 2. Remove from cache (sync_version assigned at the store)
             self.remove(&key, None);
+
+            // 3. Requeue consumers only after they can observe the absence of
+            // this exact generation in ServerCache.
+            self.handler.after_unpublish(cached_obj, ctx).await;
 
             tracing::debug!("Resource deleted from cache");
         }
@@ -958,6 +967,97 @@ mod tests {
         fn meta_mut(&mut self) -> &mut ObjectMeta {
             &mut self.metadata
         }
+    }
+
+    struct PublishOrderHandler {
+        processor: parking_lot::Mutex<Option<std::sync::Weak<ResourceProcessor<TestResource>>>>,
+        observed_final_cache: std::sync::atomic::AtomicBool,
+        observed_unpublished_cache: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<TestResource> for PublishOrderHandler {
+        fn update_status(&self, obj: &mut TestResource, _ctx: &HandlerContext, _validation_errors: &[String]) {
+            obj.spec = "status-derived".to_string();
+        }
+
+        fn finalize_transport(&self, obj: &mut TestResource, _ctx: &HandlerContext) {
+            assert_eq!(obj.spec, "status-derived");
+            obj.spec = "final-transport".to_string();
+        }
+
+        async fn after_publish(&self, obj: &TestResource, _ctx: &HandlerContext) {
+            let processor = self
+                .processor
+                .lock()
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .expect("test processor must still be alive");
+            let cached = processor
+                .get(&obj.key_name())
+                .expect("after_publish must observe cache");
+            self.observed_final_cache.store(
+                cached.spec == "final-transport" && cached.spec == obj.spec,
+                std::sync::atomic::Ordering::Release,
+            );
+        }
+
+        async fn after_unpublish(&self, obj: &TestResource, _ctx: &HandlerContext) {
+            let processor = self
+                .processor
+                .lock()
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .expect("test processor must still be alive");
+            self.observed_unpublished_cache.store(
+                processor.get(&obj.key_name()).is_none(),
+                std::sync::atomic::Ordering::Release,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn final_transport_is_published_before_post_publish_consumers_run() {
+        let handler = Arc::new(PublishOrderHandler {
+            processor: parking_lot::Mutex::new(None),
+            observed_final_cache: std::sync::atomic::AtomicBool::new(false),
+            observed_unpublished_cache: std::sync::atomic::AtomicBool::new(false),
+        });
+        let processor = Arc::new(ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler.clone(),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        *handler.processor.lock() = Some(Arc::downgrade(&processor));
+        let resource = TestResource {
+            metadata: ObjectMeta {
+                name: Some("publish-order".to_string()),
+                ..Default::default()
+            },
+            spec: "raw".to_string(),
+            status: None,
+        };
+
+        let result = processor.on_init_apply(resource, None).await;
+        let WorkItemResult::Processed { obj, .. } = result else {
+            panic!("expected processed result")
+        };
+        assert_eq!(obj.spec, "final-transport");
+        assert!(handler.observed_final_cache.load(std::sync::atomic::Ordering::Acquire));
+
+        let result = processor
+            .process_work_item(
+                "publish-order",
+                None,
+                None,
+                crate::conf_mgr::sync_runtime::workqueue::TriggerChain::default(),
+            )
+            .await;
+        assert!(matches!(result, WorkItemResult::Deleted { .. }));
+        assert!(handler
+            .observed_unpublished_cache
+            .load(std::sync::atomic::Ordering::Acquire));
     }
 
     #[tokio::test]

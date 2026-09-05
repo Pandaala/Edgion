@@ -11,7 +11,9 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
+    format_secret_key,
+    frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
+    HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use edgion_resources::ResourceKind;
 
@@ -37,7 +39,16 @@ impl SecretHandler {
 
     /// Trigger cascading requeue for all resources that depend on this secret
     async fn trigger_cascading_requeue(&self, secret_key: &str, event: &str, ctx: &HandlerContext) {
-        let refs = ctx.secret_ref_manager().get_refs(secret_key);
+        let mut refs = ctx.secret_ref_manager().get_refs(secret_key);
+        if let Some((namespace, name)) = secret_key.split_once('/') {
+            refs.extend(
+                ctx.runtime()
+                    .frontend_ca_ref_manager
+                    .get_refs(&FrontendCaSourceKey::new(FrontendCaSourceKind::Secret, namespace, name).index_key()),
+            );
+        }
+        refs.sort_by_key(ResourceRef::key);
+        refs.dedup();
 
         if !refs.is_empty() {
             tracing::info!(
@@ -205,13 +216,10 @@ impl ProcessorHandler<Secret> for SecretHandler {
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
         self.trigger_cascading_requeue(&secret_key, "deleted", ctx).await;
 
-        // 3. Purge the forward SecretRefManager entry for this secret key.
-        // Dependent resources clean up their own reverse entries when they
-        // reconcile (clear_resource_refs), but the source-side forward entry
-        // would otherwise linger until every dependent reconciles. Clearing it
-        // here closes the gap when a dependent is also deleted before it
-        // reprocesses (missed-event or simultaneous-delete scenario).
-        ctx.secret_ref_manager().clear_source_refs(&secret_key);
+        // Do not clear source-side dependency edges. A delete followed by a
+        // recreate may coalesce before the owner reconciles; both events must
+        // continue to requeue every registered owner. Only owner reconcile may
+        // clear-and-rebuild its reverse edges.
     }
 }
 
@@ -219,6 +227,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 mod tests {
     use super::{normalize_string_data, SecretHandler};
     use crate::conf_mgr::sync_runtime::resource_processor::{
+        frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
         HandlerContext, ProcessorHandler, ResourceProcessor, ResourceRef,
     };
     use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
@@ -366,6 +375,50 @@ mod tests {
             .add_ref("default/origin-token".to_string(), dependent);
         SecretHandler::new().on_delete(&secret, &ctx).await;
         assert_plugins_requeued(&processor).await;
-        assert!(runtime.secret_ref_manager.get_refs("default/origin-token").is_empty());
+        assert_eq!(runtime.secret_ref_manager.get_refs("default/origin-token").len(), 1);
+
+        SecretHandler::new().on_change(&secret, &ctx).await;
+        assert_plugins_requeued(&processor).await;
+    }
+
+    #[tokio::test]
+    async fn frontend_ca_source_delete_preserves_typed_edges_and_kind_isolation() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+        let dependent = ResourceRef::new(
+            ResourceKind::Gateway,
+            Some("default".to_string()),
+            "gateway".to_string(),
+        );
+        let secret_key = FrontendCaSourceKey::new(FrontendCaSourceKind::Secret, "default", "same-name");
+        let configmap_key = FrontendCaSourceKey::new(FrontendCaSourceKind::ConfigMap, "default", "same-name");
+        runtime
+            .frontend_ca_ref_manager
+            .add_ref(secret_key.index_key(), dependent.clone());
+        runtime
+            .frontend_ca_ref_manager
+            .add_ref(configmap_key.index_key(), dependent);
+
+        let secret = Secret {
+            metadata: ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some("same-name".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        SecretHandler::new().on_delete(&secret, &ctx).await;
+
+        assert_eq!(
+            runtime.frontend_ca_ref_manager.get_refs(&secret_key.index_key()).len(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .frontend_ca_ref_manager
+                .get_refs(&configmap_key.index_key())
+                .len(),
+            1
+        );
     }
 }

@@ -1,4 +1,4 @@
-use crate::backends::{create_ep_slice_handler, create_service_handler};
+use crate::backends::{create_ep_slice_handler, create_service_handler, get_service_discovery_coordinator};
 use crate::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::routes::create_route_manager_handler;
 use anyhow::Result;
@@ -10,6 +10,7 @@ use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 pub struct ConfigClient {
     /// Current server_id from Controller (updated on each list/watch response)
@@ -50,12 +51,13 @@ impl ConfigClient {
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
 
+        let service_discovery = get_service_discovery_coordinator();
         let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let service_handler = create_service_handler();
+        let service_handler = create_service_handler(Arc::clone(&service_discovery));
         services_cache.set_conf_processor(service_handler);
 
         let endpoint_slices_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let ep_slice_handler = create_ep_slice_handler();
+        let ep_slice_handler = create_ep_slice_handler(service_discovery);
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
 
         let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());

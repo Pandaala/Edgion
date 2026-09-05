@@ -113,6 +113,7 @@ mod tests {
             err: Vec::new(),
             lb_backend_addr: None,
             lb_edgion_backend: Some(backend),
+            lb_outlier_completion: None,
             service_key: None,
             lb_policy: policy,
             tls: None,

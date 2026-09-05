@@ -6,8 +6,6 @@ pub mod health;
 pub mod outlier_detection;
 pub(crate) mod peer_builder;
 pub mod policy;
-pub mod port_resolver;
-pub mod preload;
 pub mod runtime;
 pub mod selector;
 pub mod service_kind;
@@ -19,25 +17,23 @@ pub use degrade_threshold::{
 };
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_dns_cache,
-    get_global_service_store, get_roundrobin_store, DnsResolutionMode, EndpointSliceExt, EpSliceStore,
-    ExternalNamePath, ServiceStore, DEFAULT_DNS_CACHE_TTL,
+    get_global_service_store, get_roundrobin_store, get_service_discovery_coordinator, DnsResolutionMode,
+    EndpointSliceExt, EpSliceStore, ExternalNamePath, ServiceStore, DEFAULT_DNS_CACHE_TTL,
 };
-use edgion_resources::resources::BackendTLSPolicy;
-pub use outlier_detection::{get_outlier_detection_store, FailureClass};
+pub use outlier_detection::{get_outlier_detection_store, FailureClass, OutlierCompletionToken};
 
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
 pub(crate) use peer_builder::validate_endpoint_backend_addr;
 pub use policy::{
     create_backend_tls_policy_handler, get_global_backend_tls_policy_store,
-    query_backend_tls_policy_for_logical_backend, BackendTLSPolicyStore,
+    query_backend_tls_policy_for_logical_backend, BackendTLSPolicyStore, BackendTlsPolicyLookup,
+    EffectiveBackendTlsPolicy,
 };
-pub use port_resolver::resolve_target_port_key;
-pub use preload::preload_load_balancers;
 pub use runtime::{
     LogicalBackendHandle, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
 };
-pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
+pub use selector::{backends_for_service_section, select_service_endpoint, service_section_key_from_port};
 pub use service_kind::ServiceBackendKind;
 pub use validation::validate_endpoint_in_route;
 
@@ -57,23 +53,26 @@ use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
 use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
 use peer_builder::{
-    apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol_key, extract_tls_config,
-    record_tls_to_upstream, validate_backend_addr, BackendAppProtocol,
+    apply_backend_app_protocol, extract_tls_config, parse_backend_app_protocol, peer_from_backend_tls_lookup,
+    record_tls_to_upstream, validate_backend_addr,
 };
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use selector::{extract_hash_key, is_backend_healthy, select_from_endpoint_slice};
+#[cfg(test)]
+use std::sync::Arc;
+
+use crate::backends::discovery::ServiceSectionKey;
+use selector::{extract_hash_key, prove_service_section, resolved_endpoint_for_addr, ResolvedServiceEndpoint};
 
 #[derive(Debug)]
 struct ServicePeerInput {
     port: Option<i32>,
-    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    backend_tls_policy: BackendTlsPolicyLookup,
     service_key: String,
     service_type: ServiceBackendKind,
     lb_policy: Option<ParsedLBPolicy>,
@@ -105,7 +104,7 @@ fn selected_http_service_input(
     }
     Ok(ServicePeerInput {
         port: compiled.port,
-        backend_tls_policy: selected.backend_tls_policy().cloned(),
+        backend_tls_policy: selected.backend_tls_policy().clone(),
         lb_policy: captured_lb_policy(backend_context),
         service_key,
         service_type: service_kind,
@@ -116,13 +115,6 @@ fn captured_lb_policy(backend_context: Option<&crate::BackendContext>) -> Option
     backend_context
         .and_then(|context| context.effective_policy.as_ref())
         .and_then(|policy| policy.load_balancer.clone())
-}
-
-fn captured_degrade_override(ctx: &crate::EdgionHttpContext) -> Option<u8> {
-    ctx.backend_context
-        .as_ref()
-        .and_then(|context| context.effective_policy.as_ref())
-        .and_then(|policy| policy.degrade_threshold_override)
 }
 
 /// Internal: try to get peer, returns Result with EdgionErrorCode on error
@@ -154,7 +146,7 @@ pub(crate) async fn try_get_peer(
         let lb_policy = captured_lb_policy(ctx.backend_context.as_ref());
         ServicePeerInput {
             port: grpc_br.compiled().port,
-            backend_tls_policy: grpc_br.backend_tls_policy().cloned(),
+            backend_tls_policy: grpc_br.backend_tls_policy().clone(),
             service_key,
             lb_policy,
             service_type,
@@ -187,7 +179,7 @@ pub(crate) async fn try_get_peer(
             // Invalid targets cannot resolve a typed BackendTLSPolicy. The old
             // clone-and-mutate path also replaced any schema-local value with
             // `None` before this branch.
-            backend_tls_policy: None,
+            backend_tls_policy: BackendTlsPolicyLookup::Absent,
             service_key,
             lb_policy,
             service_type,
@@ -200,9 +192,11 @@ pub(crate) async fn try_get_peer(
         service_type,
         lb_policy,
     } = input;
+    if backend_tls_policy.is_invalid() {
+        return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
+    }
 
-    let detected_app_protocol = detect_backend_app_protocol_key(&service_key, br_port);
-    let backend_app_protocol = detected_app_protocol;
+    let section_key = service_section_key_from_port(br_port)?;
 
     match service_type {
         ServiceBackendKind::Service => {
@@ -218,13 +212,12 @@ pub(crate) async fn try_get_peer(
                 String::new()
             };
             let query = ctx.query(session.req_header());
-            let degrade_threshold_override = captured_degrade_override(ctx);
-            let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(
+            let endpoint = take_sp_target_or_select(ctx, &service_key, &section_key, || {
+                select_service_endpoint(
                     &service_key,
+                    section_key.clone(),
                     &lb_policy,
-                    degrade_threshold_override,
-                    session,
+                    Some(session),
                     &remote_ip,
                     query,
                 )
@@ -234,11 +227,9 @@ pub(crate) async fn try_get_peer(
                 ctx,
                 session,
                 &service_key,
-                br_port,
                 &lb_policy,
                 &backend_tls_policy,
-                backend,
-                backend_app_protocol,
+                endpoint,
                 gateway_key_ref,
             )
         }
@@ -255,16 +246,13 @@ pub(crate) async fn try_get_peer(
                 .and_then(|spec| spec.cluster_ip.as_ref())
                 .ok_or(EdgionErrorCode::BackendClusterIpNotFound)?;
 
-            let port = match br_port {
-                Some(p) => p as u16,
-                None => service
-                    .spec
-                    .as_ref()
-                    .and_then(|spec| spec.ports.as_ref())
-                    .and_then(|ports| ports.first())
-                    .map(|p| p.port as u16)
-                    .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?,
-            };
+            let section = prove_service_section(&service_key, &section_key)?;
+            let port = section.identity.number.get();
+            let backend_app_protocol = section
+                .identity
+                .app_protocol
+                .as_deref()
+                .and_then(parse_backend_app_protocol);
 
             // cluster_ip is a bare IP literal (no brackets). Parse it as IpAddr and
             // build the SocketAddr directly so IPv6 ClusterIP services work without
@@ -284,7 +272,7 @@ pub(crate) async fn try_get_peer(
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
-            let mut peer = create_tls_peer(addr, &backend_tls_policy, gateway_key_ref)?;
+            let mut peer = peer_from_backend_tls_lookup(addr, &backend_tls_policy, gateway_key_ref)?;
             apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
             Ok(peer)
         }
@@ -302,16 +290,13 @@ pub(crate) async fn try_get_peer(
                 .ok_or(EdgionErrorCode::BackendExternalNameNotFound)?
                 .clone();
 
-            let port = match br_port {
-                Some(p) => p as u16,
-                None => service
-                    .spec
-                    .as_ref()
-                    .and_then(|spec| spec.ports.as_ref())
-                    .and_then(|ports| ports.first())
-                    .map(|p| p.port as u16)
-                    .ok_or(EdgionErrorCode::BackendPortResolutionFailed)?,
-            };
+            let section = prove_service_section(&service_key, &section_key)?;
+            let port = section.identity.number.get();
+            let backend_app_protocol = section
+                .identity
+                .app_protocol
+                .as_deref()
+                .and_then(parse_backend_app_protocol);
 
             // Mode-first dispatch (edgion.io/dns-resolution-mode on the Service,
             // default "controller"). `controller` prefers a controller-published
@@ -342,13 +327,12 @@ pub(crate) async fn try_get_peer(
                         String::new()
                     };
                     let query = ctx.query(session.req_header());
-                    let degrade_threshold_override = captured_degrade_override(ctx);
-                    let backend = take_sp_target_or_select(ctx, &service_key, || {
-                        select_from_endpoint_slice(
+                    let endpoint = take_sp_target_or_select(ctx, &service_key, &section_key, || {
+                        select_service_endpoint(
                             &service_key,
+                            section_key.clone(),
                             &lb_policy,
-                            degrade_threshold_override,
-                            session,
+                            Some(session),
                             &remote_ip,
                             query,
                         )
@@ -357,11 +341,9 @@ pub(crate) async fn try_get_peer(
                         ctx,
                         session,
                         &service_key,
-                        br_port,
                         &lb_policy,
                         &backend_tls_policy,
-                        backend,
-                        backend_app_protocol,
+                        endpoint,
                         gateway_key_ref,
                     )
                 }
@@ -411,7 +393,7 @@ pub(crate) async fn try_get_peer(
                     let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
                     record_tls_to_upstream(ctx, use_tls, &sni);
 
-                    let mut peer = create_tls_peer(addr, &backend_tls_policy, gateway_key_ref)?;
+                    let mut peer = peer_from_backend_tls_lookup(addr, &backend_tls_policy, gateway_key_ref)?;
                     apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
                     Ok(peer)
                 }
@@ -431,13 +413,12 @@ pub(crate) async fn try_get_peer(
                 String::new()
             };
             let query = ctx.query(session.req_header());
-            let degrade_threshold_override = captured_degrade_override(ctx);
-            let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(
+            let endpoint = take_sp_target_or_select(ctx, &service_key, &section_key, || {
+                select_service_endpoint(
                     &service_key,
+                    section_key.clone(),
                     &lb_policy,
-                    degrade_threshold_override,
-                    session,
+                    Some(session),
                     &remote_ip,
                     query,
                 )
@@ -446,11 +427,9 @@ pub(crate) async fn try_get_peer(
                 ctx,
                 session,
                 &service_key,
-                br_port,
                 &lb_policy,
                 &backend_tls_policy,
-                backend,
-                backend_app_protocol,
+                endpoint,
                 gateway_key_ref,
             )
         }
@@ -506,9 +485,7 @@ fn httpdns_config_for_ref(key: &LinkSysKey) -> Option<HttpDnsResolverConfig> {
 }
 
 /// Resolve an `ExternalName` to IPs through `spec`, honoring the short-TTL
-/// data-plane cache when `cache` is set. A cached address set belongs to the
-/// exact `(service_key, external_name, resolver)` triple, so repointing a
-/// Service at a new hostname misses rather than serving the previous one.
+/// data-plane cache when `cache` is set.
 ///
 /// An IP-literal `external_name` short-circuits the resolver (and the cache):
 /// there is nothing to resolve, and running a name resolver on a literal would
@@ -559,10 +536,11 @@ async fn resolve_external_ips(
 fn take_sp_target_or_select<F>(
     ctx: &mut EdgionHttpContext,
     service_key: &str,
+    section: &ServiceSectionKey,
     select_fn: F,
-) -> Result<Arc<crate::lb::EdgionBackend>, EdgionErrorCode>
+) -> Result<ResolvedServiceEndpoint, EdgionErrorCode>
 where
-    F: FnOnce() -> Result<Arc<crate::lb::EdgionBackend>, EdgionErrorCode>,
+    F: FnOnce() -> Result<ResolvedServiceEndpoint, EdgionErrorCode>,
 {
     if let Some(target_addr) = ctx
         .session_persistence_mut()
@@ -576,18 +554,10 @@ where
         // operate on the same object that the selector tracks. Wrapping a fresh
         // EdgionBackend here would create an orphan: metric calls would be on a
         // throwaway object and the real cell backend would always show conn==0.
-        let snap = selector::get_backends_for_service_key(service_key);
-        let live = snap
-            .iter()
-            .find(|b| matches!(b.addr, SocketAddr::Inet(a) if a == target_addr))
-            .cloned();
-
-        match live {
-            Some(arc) => {
-                let health_store = get_health_status_store();
-                let outlier_store = get_outlier_detection_store();
-                if is_backend_healthy(service_key, arc.inner(), &health_store, &outlier_store) {
-                    return Ok(arc);
+        match resolved_endpoint_for_addr(service_key, section, target_addr) {
+            Some((endpoint, eligible)) => {
+                if eligible {
+                    return Ok(endpoint);
                 }
                 return Err(EdgionErrorCode::StickyBackendUnhealthy);
             }
@@ -602,26 +572,29 @@ where
 
 /// Shared logic for all three LB-based service kinds.
 ///
-/// Takes the already-selected `Arc<EdgionBackend>`, resolves the target port,
-/// validates the address, writes upstream metadata, and constructs the peer.
+/// Takes the already-selected `ResolvedServiceEndpoint`, validates the proven
+/// serving address, writes upstream metadata, and constructs the peer.
 /// Stores the `Arc<EdgionBackend>` on `upstream.lb_edgion_backend` so that
 /// `connected_to_upstream` can call `inc_conn()` and `lb_runtime_cleanup` can
 /// call `dec_conn()` / `observe_latency()` on the same live object.
-#[allow(clippy::too_many_arguments)]
 fn build_peer_from_lb_selection(
     ctx: &mut EdgionHttpContext,
     session: &Session,
     service_key: &str,
-    br_port: Option<i32>,
     lb_policy: &Option<ParsedLBPolicy>,
-    backend_tls_policy: &Option<Arc<BackendTLSPolicy>>,
-    backend: Arc<crate::lb::EdgionBackend>,
-    backend_app_protocol: Option<BackendAppProtocol>,
+    backend_tls_policy: &BackendTlsPolicyLookup,
+    endpoint: ResolvedServiceEndpoint,
     gateway_key_ref: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
+    let backend = endpoint.backend;
+    let backend_app_protocol = endpoint
+        .section
+        .identity
+        .app_protocol
+        .as_deref()
+        .and_then(parse_backend_app_protocol);
     let lb_addr = backend.addr.clone();
-    let mut peer_addr = lb_addr.clone();
-    port_resolver::resolve_target_port_key(&mut peer_addr, br_port, service_key);
+    let peer_addr = lb_addr.clone();
     if let Err(status) = validate_endpoint_backend_addr(&peer_addr, ctx.allow_loopback_upstream) {
         record_unsafe_upstream_attempt(ctx, &peer_addr, status);
         return Err(status);
@@ -643,6 +616,7 @@ fn build_peer_from_lb_selection(
     }
 
     if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.lb_outlier_completion = get_outlier_detection_store().capture_completion_token(&backend);
         upstream.lb_backend_addr = Some(lb_addr);
         upstream.lb_edgion_backend = Some(backend);
         upstream.service_key = Some(service_key.to_string());
@@ -653,7 +627,7 @@ fn build_peer_from_lb_selection(
     // outside the block above because the helper borrows `ctx` mutably.
     record_tls_to_upstream(ctx, use_tls, &sni);
 
-    let mut peer = create_tls_peer(peer_addr, backend_tls_policy, gateway_key_ref)?;
+    let mut peer = peer_from_backend_tls_lookup(peer_addr, backend_tls_policy, gateway_key_ref)?;
     apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
     Ok(peer)
 }
@@ -710,7 +684,8 @@ pub async fn get_peer(
                 EdgionErrorCode::BackendUnsupportedKind
                 | EdgionErrorCode::BackendServiceNotFound
                 | EdgionErrorCode::RefDenied
-                | EdgionErrorCode::BackendServiceImportNotImplemented => {
+                | EdgionErrorCode::BackendServiceImportNotImplemented
+                | EdgionErrorCode::BackendTlsPolicyInvalid => {
                     let _ = end_response_500(session, ctx, server_header_opts).await;
                 }
                 _ => {
@@ -748,7 +723,7 @@ mod selected_service_input_tests {
         );
         let generation = Arc::new(vec![compiled]);
         let logical = LogicalBackendHandle::new(generation, 0).unwrap();
-        SelectedServiceBackend::new(logical, None).unwrap()
+        SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap()
     }
 
     fn backend_context(service_key: &str) -> crate::BackendContext {
@@ -784,81 +759,6 @@ mod selected_service_input_tests {
         assert_eq!(
             selected_http_service_input(&selected, Some(&context)).unwrap_err(),
             EdgionErrorCode::UpstreamNotBackendRefs
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use edgion_common::dns::ResolverSpec;
-
-    /// Test TTL long enough that nothing expires mid-test.
-    const TEST_TTL: Duration = Duration::from_secs(60);
-
-    #[tokio::test]
-    async fn ip_literal_short_circuits_before_the_cache() {
-        let spec = ResolverSpec::System;
-        let service_key = "dnscache-callsite-literal/svc";
-        let got = resolve_external_ips("192.0.2.10", &spec, service_key, true, TEST_TTL)
-            .await
-            .expect("an IP literal always resolves");
-        assert_eq!(got, vec!["192.0.2.10".parse::<IpAddr>().unwrap()]);
-        // A literal is returned before the cache is consulted, so nothing was memoized.
-        assert_eq!(
-            get_global_dns_cache().get(service_key, "192.0.2.10", &spec.fingerprint(), Instant::now()),
-            None
-        );
-    }
-
-    /// The call site must put the *queried hostname* into the cache key, not
-    /// some other string it happens to have in scope.
-    ///
-    /// Both hostnames are pre-seeded, so both lookups are cache hits and the
-    /// test never touches the network. A call site that dropped `external_name`
-    /// from the key (the original defect — every parameter is a `&str`, so the
-    /// compiler cannot catch it) would miss both entries and fall through to
-    /// real resolution instead of returning these addresses.
-    #[tokio::test]
-    async fn cache_lookup_is_keyed_by_the_queried_hostname() {
-        let spec = ResolverSpec::System;
-        let fingerprint = spec.fingerprint();
-        // A key unique to this test: the DNS cache is a process-global singleton
-        // shared with every other test in the binary.
-        let service_key = "dnscache-callsite-hostname/svc";
-        let addrs_a = vec!["10.10.0.1".parse::<IpAddr>().unwrap()];
-        let addrs_b = vec!["10.10.0.2".parse::<IpAddr>().unwrap()];
-
-        let cache = get_global_dns_cache();
-        let now = Instant::now();
-        cache.insert(
-            service_key,
-            "a.example.test",
-            &fingerprint,
-            addrs_a.clone(),
-            TEST_TTL,
-            now,
-        );
-        cache.insert(
-            service_key,
-            "b.example.test",
-            &fingerprint,
-            addrs_b.clone(),
-            TEST_TTL,
-            now,
-        );
-
-        assert_eq!(
-            resolve_external_ips("a.example.test", &spec, service_key, true, TEST_TTL)
-                .await
-                .expect("seeded cache entry"),
-            addrs_a
-        );
-        assert_eq!(
-            resolve_external_ips("b.example.test", &spec, service_key, true, TEST_TTL)
-                .await
-                .expect("seeded cache entry"),
-            addrs_b
         );
     }
 }

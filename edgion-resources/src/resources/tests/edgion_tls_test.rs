@@ -18,6 +18,8 @@ fn create_tls(hosts: Vec<&str>) -> EdgionTls {
             ciphers: None,
             secret: None,
             resolved_listeners: None,
+            resolved_listener_attachments: None,
+            resolved_listener_attachment_index: Default::default(),
             resolved_log_labels: None,
         },
         status: None,
@@ -70,6 +72,39 @@ spec:
 }
 
 #[test]
+fn operator_attachment_dimensions_decode_then_validate_with_owner_namespace() {
+    let base = |parent_refs: String, hosts: String| {
+        format!(
+            "apiVersion: edgion.io/v1\nkind: EdgionTls\nmetadata:\n  name: bounded\nspec:\n  parentRefs:\n{parent_refs}  hosts:\n{hosts}  secretRef:\n    name: server\n"
+        )
+    };
+    let max_parents = (0..MAX_EDGION_TLS_PARENT_REFS)
+        .map(|index| format!("    - name: gateway-{index}\n"))
+        .collect::<String>();
+    let max_hosts = (0..MAX_EDGION_TLS_HOSTS)
+        .map(|index| format!("    - host-{index}.example.com\n"))
+        .collect::<String>();
+    let at_limit = serde_yaml::from_str::<EdgionTls>(&base(max_parents.clone(), max_hosts.clone())).unwrap();
+    assert!(validate_operator_attachment_dimensions(&at_limit.spec, "default").is_ok());
+
+    let too_many_parents = format!("{max_parents}    - name: gateway-overflow\n");
+    let decoded = serde_yaml::from_str::<EdgionTls>(&base(too_many_parents, max_hosts.clone())).unwrap();
+    assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
+    let too_many_hosts = format!("{max_hosts}    - host-overflow.example.com\n");
+    let decoded = serde_yaml::from_str::<EdgionTls>(&base(max_parents, too_many_hosts)).unwrap();
+    assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
+
+    let duplicate_parent = "    - name: gateway\n    - name: gateway\n      namespace: default\n".to_string();
+    let decoded =
+        serde_yaml::from_str::<EdgionTls>(&base(duplicate_parent, "    - example.com\n".to_string())).unwrap();
+    assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
+    let duplicate_host = "    - Example.com\n    - example.com\n".to_string();
+    let decoded =
+        serde_yaml::from_str::<EdgionTls>(&base("    - name: gateway\n".to_string(), duplicate_host)).unwrap();
+    assert!(validate_operator_attachment_dimensions(&decoded.spec, "default").is_err());
+}
+
+#[test]
 fn test_yaml_serialization_produces_camel_case() {
     // Test that serialization produces camelCase field names
     let tls = EdgionTls {
@@ -99,6 +134,8 @@ fn test_yaml_serialization_produces_camel_case() {
             ciphers: None,
             secret: None,
             resolved_listeners: None,
+            resolved_listener_attachments: None,
+            resolved_listener_attachment_index: Default::default(),
             resolved_log_labels: None,
         },
         status: None,
@@ -638,4 +675,76 @@ fn test_resolved_log_labels_skipped_in_serialization() {
         !json.contains("resolvedLogLabels") && !json.contains("resolved_log_labels"),
         "resolved_log_labels must be serde(skip): {json}"
     );
+}
+
+#[test]
+fn gateway_attachment_proof_requires_complete_strict_shape() {
+    use crate::resources::edgion_tls::GatewayAttachmentProof;
+
+    let valid = GatewayAttachmentProof {
+        instance: "uid-1".to_string(),
+        generation: 0,
+        epoch: "boot-1:7".to_string(),
+        attachment_digest: "a".repeat(64),
+    };
+    assert!(valid.is_resolved());
+
+    for invalid in [
+        GatewayAttachmentProof {
+            instance: String::new(),
+            ..valid.clone()
+        },
+        GatewayAttachmentProof {
+            instance: "unresolved".to_string(),
+            ..valid.clone()
+        },
+        GatewayAttachmentProof {
+            generation: -1,
+            ..valid.clone()
+        },
+        GatewayAttachmentProof {
+            epoch: String::new(),
+            ..valid.clone()
+        },
+        GatewayAttachmentProof {
+            attachment_digest: "a".repeat(63),
+            ..valid.clone()
+        },
+        GatewayAttachmentProof {
+            attachment_digest: "A".repeat(64),
+            ..valid
+        },
+    ] {
+        assert!(
+            !invalid.is_resolved(),
+            "handcrafted proof must be rejected: {invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn admitted_duplicate_and_oversized_dimensions_decode_then_fail_runtime_validation() {
+    use crate::resources::edgion_tls::{
+        validate_operator_attachment_dimensions, EdgionTlsSpec, MAX_EDGION_TLS_HOSTS, MAX_EDGION_TLS_PARENT_REFS,
+    };
+
+    let duplicate: EdgionTlsSpec = serde_json::from_value(serde_json::json!({
+        "parentRefs": [{"name": "gateway"}, {"name": "gateway", "namespace": "default"}],
+        "hosts": ["Example.com", "example.COM"],
+        "secretRef": {"name": "serving"}
+    }))
+    .expect("wire decoding must not poison an already-admitted object");
+    assert!(validate_operator_attachment_dimensions(&duplicate, "default").is_err());
+
+    let oversized: EdgionTlsSpec = serde_json::from_value(serde_json::json!({
+        "parentRefs": (0..=MAX_EDGION_TLS_PARENT_REFS)
+            .map(|index| serde_json::json!({"name": format!("gateway-{index}")}))
+            .collect::<Vec<_>>(),
+        "hosts": (0..=MAX_EDGION_TLS_HOSTS)
+            .map(|index| format!("host-{index}.example.com"))
+            .collect::<Vec<_>>(),
+        "secretRef": {"name": "serving"}
+    }))
+    .expect("oversized wire data remains decodable for fail-closed reconciliation");
+    assert!(validate_operator_attachment_dimensions(&oversized, "default").is_err());
 }

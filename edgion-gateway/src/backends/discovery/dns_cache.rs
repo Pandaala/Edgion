@@ -57,7 +57,7 @@ impl DnsResolutionMode {
 /// The resolution path chosen for a single `ExternalName` request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalNamePath {
-    /// Route via the controller-published EndpointSlice (`select_from_endpoint_slice`).
+    /// Route via the controller-published EndpointSlice (`select_service_endpoint`).
     EndpointSlice,
     /// Self-resolve through the effective resolver. `cache = false` for
     /// `per-request` (always re-resolve); `true` for `gateway` and the

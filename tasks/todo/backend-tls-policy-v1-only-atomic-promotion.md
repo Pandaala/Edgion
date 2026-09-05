@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-08-31 |
-| Status | pending |
+| Status | in-progress |
 | Type | refactor |
 | Priority | P1 |
 | Issue | N/A |
@@ -61,3 +61,32 @@ Remove Edgion's BackendTLSPolicy v1alpha3 compatibility path and make `gateway.n
 | Date | Decision | Reason |
 |------|----------|--------|
 | 2026-08-31 | Defer the promotion from the Gateway file audit. | The current compatibility path spans resource types, Controller startup and watchers, storage, handlers, status, fixtures, and documentation; removing only one branch would leave a mixed-version path. |
+| 2026-09-01 | Remove the v1alpha3 path atomically and keep only the canonical v1 watch, storage, status, and static-input contract. | The resource type, Controller watcher and handler, CRUD path, FileSystem/etcd parser, cross-resource registry lookup, fixtures, and current documentation now share one v1 identity; the pinned upstream CRD bundles remain unchanged. |
+
+## Implementation evidence
+
+- Removed the v1alpha3 resource type, conversions, version probe, watcher and handler branches, CRUD fallback, and dual-type registry downcast.
+- FileSystem and etcd share a parser that rejects a missing or non-v1 BackendTLSPolicy `apiVersion` before raw-store insertion; Kubernetes CRUD rejects non-v1 payloads instead of projecting them.
+- Updated current fixtures and documentation to v1 and retained the upstream Gateway API CRD bundles without modification.
+- Focused resource, Controller handler, static-input, Kubernetes storage, and version-detection tests pass. Workspace check, Clippy, formatting, CRD coverage, agent-doc validation, and repository guards pass.
+- Cluster-backed integration and Gateway API conformance verification remains before the task can be marked completed.
+
+### Independent review and correction
+
+- Initial review found that Admin create/update/validate could deserialize submitted v1alpha3
+  TypeMeta into the canonical type before the Kubernetes storage check.
+- The shared Admin parser now invokes the same raw API-version validator used by FileSystem/etcd;
+  Kubernetes DynamicObject storage invokes the same canonical primitive.
+- Added direct regressions for update-version enabled/disabled parsing, Admin create, Admin update
+  with preservation of the current v1 object, and the read-only validate endpoint.
+- Re-review closed the Must Fix and found no remaining Must Fix.
+
+### Verification record
+
+- `cargo test -p edgion-controller backend_tls_policy --lib`: 30 passed.
+- `cargo test -p edgion-resources backend_tls_policy --lib`: 12 passed.
+- `cargo test -p edgion-controller --lib api::common::tests`: 8 passed.
+- `cargo test -p edgion-controller --lib api::namespaced_handlers::update_identity_tests`: 9 passed.
+- `cargo test -p edgion-controller --lib api::validate_handlers::tests`: 9 passed.
+- `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets`, formatting,
+  CRD coverage, agent-doc, SSA, metrics, Pingora-source, and `git diff --check`: passed.

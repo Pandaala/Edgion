@@ -8,7 +8,7 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
+use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::stream::get_global_stream_plugin_store;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
@@ -174,18 +174,27 @@ impl EdgionTcpProxy {
         let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
         let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let backend = match select_roundrobin_backend_key(&service_key) {
-            Some(backend) => backend,
-            None => {
+        let section = match service_section_key_from_port(backend_ref.port) {
+            Ok(section) => section,
+            Err(_) => {
                 ctx.status = TcpStatus::NoBackendResolved;
                 return;
             }
         };
+        let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
+            Ok(endpoint) => endpoint,
+            Err(_) => {
+                ctx.status = TcpStatus::NoBackendResolved;
+                return;
+            }
+        };
+        let backend = endpoint.backend;
 
         // 6. Build upstream address
-        let mut upstream_addr = backend.inner().addr.clone();
-        resolve_target_port_key(&mut upstream_addr, backend_ref.port, &service_key);
+        let upstream_addr = backend.inner().addr.clone();
         let upstream_addr_str = upstream_addr.to_string();
+        let outlier_store = crate::backends::get_outlier_detection_store();
+        let outlier_token = outlier_store.capture_completion_token(backend.as_ref());
         ctx.upstream_addr = Some(upstream_addr_str.clone());
         if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
             ctx.status = TcpStatus::UnsafeUpstreamAddress;
@@ -216,11 +225,13 @@ impl EdgionTcpProxy {
             Err(_) => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
                 // L4 upstream connect failure — local-origin failure.
-                crate::backends::get_outlier_detection_store().record_failure_by_addr(
-                    &service_key,
-                    &upstream_addr,
-                    crate::backends::FailureClass::LocalOrigin,
-                );
+                if let Some(token) = outlier_token.as_ref() {
+                    outlier_store.record_failure_for_backend_with_token(
+                        backend.as_ref(),
+                        token,
+                        crate::backends::FailureClass::LocalOrigin,
+                    );
+                }
                 return;
             }
         };
@@ -228,7 +239,9 @@ impl EdgionTcpProxy {
         ctx.connection_established = true;
         // A successful connect is the L4 "backend reachable" success signal; it
         // resets the endpoint's outlier-detection failure counters.
-        crate::backends::get_outlier_detection_store().record_success_by_addr(&service_key, &upstream_addr);
+        if let Some(token) = outlier_token.as_ref() {
+            outlier_store.record_success_for_backend_with_token(backend.as_ref(), token);
+        }
 
         // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;

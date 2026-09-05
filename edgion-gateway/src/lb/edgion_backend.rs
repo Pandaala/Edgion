@@ -1,9 +1,9 @@
 //! `EdgionBackend` — load balancer backend wrapper.
 //!
-//! Per-backend metrics (`conn_count`, `score`) live on the wrapper itself,
-//! sharing the EP/EPS lifecycle with the backend list. All metric sharing
-//! happens via `Arc<EdgionBackend>` — the type is intentionally `!Clone`
-//! (auto-clone would silently fork atomic metric state).
+//! Per-backend metrics (`conn_count`, Peak-EWMA `score`) live on shared
+//! runtime counters so proof replacement can keep transport/EWMA state. All
+//! metric sharing happens via `Arc<BackendRuntimeCounters>` — the wrapper is
+//! intentionally `!Clone` (auto-clone would silently fork atomic metric state).
 //!
 //! Implements `Deref<Target = pingora_load_balancing::Backend>` so callers
 //! can read `addr` / `weight` / `ext` directly.
@@ -11,15 +11,53 @@
 
 use crate::lb::ewma::score::{now_units, PeakEwmaScore};
 use pingora_load_balancing::Backend;
+use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EndpointRuntimeScope {
+    Canonical([u8; 32]),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EndpointRuntimeIdentity {
+    pub service_key: Arc<str>,
+    pub scope: EndpointRuntimeScope,
+    pub socket: SocketAddr,
+    pub incarnation: u64,
+    pub proof_digest: [u8; 32],
+}
+
+#[derive(Debug)]
+pub struct BackendRuntimeCounters {
+    conn_count: AtomicUsize,
+    score: PeakEwmaScore,
+    cb_inflight: AtomicUsize,
+}
+
+impl Default for BackendRuntimeCounters {
+    fn default() -> Self {
+        Self {
+            conn_count: AtomicUsize::new(0),
+            score: PeakEwmaScore::new(now_units()),
+            cb_inflight: AtomicUsize::new(0),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct EdgionBackend {
     pub(crate) inner: Backend,
-    conn_count: AtomicUsize,
-    score: PeakEwmaScore,
-    cb_inflight: AtomicUsize,
+    counters: Arc<BackendRuntimeCounters>,
+    /// Connections selected through this exact immutable backend generation.
+    /// Transport counters may be shared across proof replacements, but drain
+    /// ownership must not be: traffic selected on a new wrapper cannot keep an
+    /// old generation resident forever.
+    owned_conn_count: AtomicUsize,
+    runtime_identity: Option<Arc<EndpointRuntimeIdentity>>,
+    runtime_membership_identity: Option<u64>,
 }
 
 impl EdgionBackend {
@@ -27,10 +65,38 @@ impl EdgionBackend {
     pub fn new(inner: Backend) -> Self {
         Self {
             inner,
-            conn_count: AtomicUsize::new(0),
-            score: PeakEwmaScore::new(now_units()),
-            cb_inflight: AtomicUsize::new(0),
+            counters: Arc::new(BackendRuntimeCounters::default()),
+            owned_conn_count: AtomicUsize::new(0),
+            runtime_identity: None,
+            runtime_membership_identity: None,
         }
+    }
+
+    pub(crate) fn with_runtime_identity(
+        inner: Backend,
+        runtime_identity: Arc<EndpointRuntimeIdentity>,
+        runtime_membership_identity: u64,
+        counters: Arc<BackendRuntimeCounters>,
+    ) -> Self {
+        Self {
+            inner,
+            counters,
+            owned_conn_count: AtomicUsize::new(0),
+            runtime_identity: Some(runtime_identity),
+            runtime_membership_identity: Some(runtime_membership_identity),
+        }
+    }
+
+    pub fn runtime_identity(&self) -> Option<&Arc<EndpointRuntimeIdentity>> {
+        self.runtime_identity.as_ref()
+    }
+
+    pub fn runtime_membership_identity(&self) -> Option<u64> {
+        self.runtime_membership_identity
+    }
+
+    pub(crate) fn runtime_counters(&self) -> Arc<BackendRuntimeCounters> {
+        Arc::clone(&self.counters)
     }
 
     #[inline]
@@ -50,7 +116,8 @@ impl EdgionBackend {
     /// so a slow-but-quiet backend is not treated as free.
     #[inline]
     pub fn inc_conn(&self) {
-        self.conn_count.fetch_add(1, Ordering::Relaxed);
+        self.counters.conn_count.fetch_add(1, Ordering::Relaxed);
+        self.owned_conn_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Decrement the in-flight connection counter, saturating at zero.
@@ -60,22 +127,20 @@ impl EdgionBackend {
     /// the `take()` discipline on the ledger.
     #[inline]
     pub fn dec_conn(&self) {
-        let mut cur = self.conn_count.load(Ordering::Relaxed);
-        while cur > 0 {
-            match self
-                .conn_count
-                .compare_exchange_weak(cur, cur - 1, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                Ok(_) => break,
-                Err(actual) => cur = actual,
-            }
-        }
+        decrement_saturating(&self.counters.conn_count);
+        decrement_saturating(&self.owned_conn_count);
     }
 
     /// Read the current in-flight connection count.
     #[inline]
     pub fn conn(&self) -> u64 {
-        self.conn_count.load(Ordering::Relaxed) as u64
+        self.counters.conn_count.load(Ordering::Relaxed) as u64
+    }
+
+    /// In-flight connections owned by this exact wrapper generation.
+    #[inline]
+    pub fn owned_conn(&self) -> u64 {
+        self.owned_conn_count.load(Ordering::Relaxed) as u64
     }
 
     /// Record a latency sample, in µs, observed at `now_units`.
@@ -85,7 +150,9 @@ impl EdgionBackend {
     /// `crate::lb::ewma::score` and `skills/12-algorithms/lb-peak-ewma.md`.
     #[inline]
     pub fn observe_latency(&self, latency_us: u64, now_units: u32) {
-        self.score.observe(latency_us.min(u32::MAX as u64) as u32, now_units);
+        self.counters
+            .score
+            .observe(latency_us.min(u32::MAX as u64) as u32, now_units);
     }
 
     /// Store a synthetic sample only if it would raise the estimate; a value
@@ -98,14 +165,15 @@ impl EdgionBackend {
     #[inline]
     #[must_use = "the caller may need to know whether the peak was actually stored"]
     pub fn observe_peak_only(&self, sample_us: u64, now_units: u32) -> bool {
-        self.score
+        self.counters
+            .score
             .observe_peak_only(sample_us.min(u32::MAX as u64) as u32, now_units)
     }
 
     /// Decayed latency estimate in µs, without the outstanding-load term.
     #[inline]
     pub fn latency_estimate(&self, now_units: u32) -> u32 {
-        self.score.read(now_units)
+        self.counters.score.read(now_units)
     }
 
     /// Full P2C selection score: decayed latency times outstanding load.
@@ -124,7 +192,8 @@ impl EdgionBackend {
     /// cap and reserves the slot, so concurrent admits can never exceed `max`.
     #[inline]
     pub fn try_acquire_cb_permit(&self, max: u32) -> bool {
-        self.cb_inflight
+        self.counters
+            .cb_inflight
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
                 if (cur as u64) < max as u64 {
                     Some(cur + 1)
@@ -139,9 +208,10 @@ impl EdgionBackend {
     /// against a stray double-release, mirroring `dec_conn`).
     #[inline]
     pub fn release_cb_permit(&self) {
-        let mut cur = self.cb_inflight.load(Ordering::Relaxed);
+        let mut cur = self.counters.cb_inflight.load(Ordering::Relaxed);
         while cur > 0 {
             match self
+                .counters
                 .cb_inflight
                 .compare_exchange_weak(cur, cur - 1, Ordering::AcqRel, Ordering::Relaxed)
             {
@@ -154,7 +224,18 @@ impl EdgionBackend {
     /// Current circuit-breaker in-flight count for this endpoint.
     #[inline]
     pub fn cb_inflight(&self) -> u64 {
-        self.cb_inflight.load(Ordering::Relaxed) as u64
+        self.counters.cb_inflight.load(Ordering::Relaxed) as u64
+    }
+}
+
+#[inline]
+fn decrement_saturating(counter: &AtomicUsize) {
+    let mut current = counter.load(Ordering::Relaxed);
+    while current > 0 {
+        match counter.compare_exchange_weak(current, current - 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
     }
 }
 

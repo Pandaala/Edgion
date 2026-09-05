@@ -693,10 +693,9 @@ impl EdgionGatewayCli {
         // 18. Wait for all resources ready (including Gateway/GatewayClass/EdgionGatewayConfig)
         runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
 
-        // 19. Preload LBs for all routes (warm-up to reduce first-request latency)
-        crate::backends::preload_load_balancers(config_client.clone());
-
-        // 20. Initialize all loggers
+        // 19. Initialize all loggers. Service selectors are compiled eagerly
+        // with each joint Service/EndpointSlice generation, so no preload pass
+        // is needed here.
         runtime.block_on(init_access_logger(&config.access_log))?;
         runtime.block_on(init_ssl_logger(&config.ssl_log))?;
         runtime.block_on(init_tcp_logger(&config.tcp_log))?;

@@ -231,7 +231,7 @@ impl PassiveEjectionState {
         }
         state.num_ejections = state.num_ejections.saturating_add(1);
         let duration = ejection_duration(config, state.num_ejections);
-        state.open_until = Some(Instant::now() + duration);
+        state.open_until = Some(instant_deadline(duration));
         state.generation = state.generation.wrapping_add(1);
         self.probe_in_flight.store(false, Ordering::Release);
         FailureTransition::Opened
@@ -240,7 +240,7 @@ impl PassiveEjectionState {
     /// Apply a bounded explicit cooldown, such as a provider Retry-After hint.
     pub fn open_for(&self, duration: Duration) {
         let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let until = Instant::now() + duration;
+        let until = instant_deadline(duration);
         state.explicit_cooldown_until = Some(
             state
                 .explicit_cooldown_until
@@ -299,6 +299,38 @@ impl PassiveEjectionState {
         (false, true)
     }
 
+    /// Atomically close an expired legacy cooldown while retaining backoff
+    /// history. Identity-bound Service runtime calls this at the same expiry
+    /// edge that clears its lock-free gate and gauge.
+    pub(crate) fn expire_legacy_ejection(&self) -> bool {
+        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(until) = state.effective_open_until() else {
+            return false;
+        };
+        if Instant::now() < until {
+            return false;
+        }
+        state.open_until = None;
+        state.explicit_cooldown_until = None;
+        state.app_failures = 0;
+        state.gateway_failures = 0;
+        state.local_origin_failures = 0;
+        state.generation = state.generation.wrapping_add(1);
+        self.probe_in_flight.store(false, Ordering::Release);
+        true
+    }
+
+    /// Remaining duration of the current legacy ejection window.
+    ///
+    /// Identity-bound Service runtime state copies this cold completion result
+    /// into an atomic deadline so request selection never locks this state.
+    pub(crate) fn legacy_ejection_remaining(&self) -> Option<Duration> {
+        let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state
+            .effective_open_until()
+            .map(|until| until.saturating_duration_since(Instant::now()))
+    }
+
     #[cfg(test)]
     pub(crate) fn num_ejections(&self) -> u32 {
         self.inner
@@ -334,7 +366,7 @@ impl PassiveEjectionState {
             state.local_origin_failures = 0;
         } else if let Some(config) = self.config.as_ref() {
             state.num_ejections = state.num_ejections.saturating_add(1);
-            state.open_until = Some(Instant::now() + ejection_duration(config, state.num_ejections));
+            state.open_until = Some(instant_deadline(ejection_duration(config, state.num_ejections)));
             if let Some(class) = class {
                 match class {
                     FailureClass::Application => state.app_failures = 1,
@@ -353,6 +385,12 @@ impl PassiveEjectionState {
             self.probe_in_flight.store(false, Ordering::Release);
         }
     }
+}
+
+#[inline]
+fn instant_deadline(duration: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(duration).unwrap_or(now)
 }
 
 #[inline]

@@ -670,7 +670,7 @@ mod e2e_tests {
             .and(path("/api/v1/debug/store-stats"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "success": true,
-                "data": { "service_store": { "count": 1 } }
+                "data": { "service_discovery": { "service_sources": 1, "service_keys": ["default/backend"] } }
             })))
             .mount(&gw)
             .await;
@@ -693,7 +693,7 @@ mod e2e_tests {
             .await
             .unwrap();
         assert_eq!(snap.residue.get("controller.secret_store"), Some(&2));
-        assert_eq!(snap.residue.get("gateway.service_store.count"), Some(&1));
+        assert_eq!(snap.residue.get("gateway.service_discovery.service_sources"), Some(&1));
         assert!(!snap
             .residue
             .contains_key("controller.event_store.next_resource_version"));
@@ -1003,7 +1003,7 @@ mod walk_tests {
     #[test]
     fn zero_values_skipped() {
         let mut snap = Snapshot::default();
-        let v = json!({ "service_store": { "count": 0 } });
+        let v = json!({ "service_discovery": { "service_sources": 0, "service_keys": [] } });
         walk_json("gateway", &v, &mut snap);
         assert!(snap.is_empty());
     }

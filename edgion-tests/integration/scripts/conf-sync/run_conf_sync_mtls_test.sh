@@ -489,11 +489,11 @@ EOF
         exit 1
     fi
 
-    # Wait for LB preload
+    # Wait for conf-sync caches (no separate LB preload pass)
     local lb_timeout=15 lb_waited=0
-    while ! grep -q "LB preload completed" "${log_dir}/gateway.log" 2>/dev/null; do
+    while ! grep -q "All caches are ready" "${log_dir}/gateway.log" 2>/dev/null; do
         if [ $lb_waited -ge $lb_timeout ]; then
-            log_warn "LB preload timeout after ${lb_timeout}s (continuing anyway)"
+            log_warn "gateway cache-ready timeout after ${lb_timeout}s (continuing anyway)"
             break
         fi
         sleep 1

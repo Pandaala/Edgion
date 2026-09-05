@@ -20,6 +20,7 @@ spec:
               properties:
                 parentRefs:
                   type: array
+                  maxItems: 32
                   description: "References to Gateway(s) that this TLS configuration belongs to"
                   items:
                     type: object
@@ -50,6 +51,7 @@ spec:
                         maximum: 65535
                 hosts:
                   type: array
+                  maxItems: 16
                   description: "List of hostnames/domains for TLS certificates. Supports wildcard prefix (e.g., *.example.com)"
                   items:
                     type: string

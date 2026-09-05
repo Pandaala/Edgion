@@ -975,7 +975,7 @@ mod tests {
                 pricing: None,
             }),
             effective_policy: None,
-            backend_tls_policy: None,
+            backend_tls_policy: crate::backends::policy::BackendTlsPolicyLookup::Absent,
             adaptive: None,
             credential_outliers,
         }];

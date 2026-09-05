@@ -170,11 +170,14 @@ pub fn upstream_response_filter(
     // return early. The corresponding HTTPStatus control-flow error is not a
     // local-origin failure and is filtered out by error_while_proxy.
     if let Some(upstream) = ctx.get_current_upstream() {
-        if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+        if let (Some(backend), Some(token)) = (
+            upstream.lb_edgion_backend.as_deref(),
+            upstream.lb_outlier_completion.as_ref(),
+        ) {
             let cb_store = crate::backends::get_outlier_detection_store();
             match crate::backends::FailureClass::from_http_status(status_code) {
-                Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
-                None => cb_store.record_success_by_addr(service_key, addr),
+                Some(class) => cb_store.record_failure_for_backend_with_token(backend, token, class),
+                None => cb_store.record_success_for_backend_with_token(backend, token),
             }
         }
     }
@@ -358,10 +361,10 @@ pub fn upstream_response_filter(
                     // `lb::runtime_state::build_sp_affinity_map`. Using the peer
                     // ip/port instead would mismatch the map in two ways: IPv6
                     // `IpAddr::to_string()` drops the brackets the map key carries
-                    // (`::1:port` vs `[::1]:port`), and `resolve_target_port_key`
-                    // may rewrite the peer port away from the cell port — either
-                    // makes every request re-issue `InjectNew` and silently
-                    // degrade stickiness to plain LB.
+                    // (`::1:port` vs `[::1]:port`). The selected slot already
+                    // carries the proven serving port, so rewriting the peer
+                    // address would make every request re-issue `InjectNew` and
+                    // silently degrade stickiness to plain LB.
                     let backend_addr = ctx.get_current_upstream().and_then(|u| match u.lb_backend_addr {
                         Some(SocketAddr::Inet(addr)) => Some(addr.to_string()),
                         _ => None,
@@ -683,6 +686,7 @@ mod lb_sample_tests {
             err: Vec::new(),
             lb_backend_addr: None,
             lb_edgion_backend: Some(backend),
+            lb_outlier_completion: None,
             service_key: None,
             lb_policy: policy,
             tls: None,

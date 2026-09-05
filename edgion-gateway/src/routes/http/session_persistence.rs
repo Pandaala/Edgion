@@ -12,6 +12,7 @@ use crate::{EdgionHttpContext, SessionPersistenceState};
 pub(crate) struct StickyCandidate {
     pub slot: usize,
     pub service_key: String,
+    pub section: crate::backends::discovery::ServiceSectionKey,
     pub scope: Option<String>,
 }
 
@@ -191,7 +192,7 @@ fn sp_apply_extracted_token(raw: Option<String>, sp_state: &mut SessionPersisten
 ///   response refreshes the token.
 pub(crate) fn sp_resolve_target_rule_scoped<'a>(
     ctx: &mut EdgionHttpContext,
-    backends: impl Iterator<Item = (&'a str, Option<&'a str>)>,
+    backends: impl Iterator<Item = (&'a str, Option<&'a str>, Option<i32>)>,
     route_ns: &str,
     token: Option<&str>,
 ) -> Option<usize> {
@@ -199,7 +200,7 @@ pub(crate) fn sp_resolve_target_rule_scoped<'a>(
         ctx,
         backends
             .enumerate()
-            .map(|(index, (name, namespace))| (index, name, namespace)),
+            .map(|(index, (name, namespace, port))| (index, name, namespace, port)),
         route_ns,
         token,
     )
@@ -209,7 +210,7 @@ pub(crate) fn sp_resolve_target_rule_scoped<'a>(
 /// must still return the original `backendRefs` position.
 pub(crate) fn sp_resolve_target_rule_scoped_indexed<'a>(
     ctx: &mut EdgionHttpContext,
-    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>)>,
+    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>, Option<i32>)>,
     route_ns: &str,
     token: Option<&str>,
 ) -> Option<usize> {
@@ -238,29 +239,32 @@ pub(crate) fn sp_resolve_target_rule_scoped_indexed<'a>(
 /// declared backendRef wins — the same ambiguity a merged Envoy cluster has.
 #[cfg(test)]
 fn sp_lookup_rule_scoped<'a>(
-    backends: impl Iterator<Item = (&'a str, Option<&'a str>)>,
+    backends: impl Iterator<Item = (&'a str, Option<&'a str>, Option<i32>)>,
     route_ns: &str,
     token: &str,
 ) -> Option<(usize, std::net::SocketAddr)> {
     sp_lookup_rule_scoped_indexed(
         backends
             .enumerate()
-            .map(|(index, (name, namespace))| (index, name, namespace)),
+            .map(|(index, (name, namespace, port))| (index, name, namespace, port)),
         route_ns,
         token,
     )
 }
 
 fn sp_lookup_rule_scoped_indexed<'a>(
-    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>)>,
+    backends: impl Iterator<Item = (usize, &'a str, Option<&'a str>, Option<i32>)>,
     route_ns: &str,
     token: &str,
 ) -> Option<(usize, std::net::SocketAddr)> {
-    for (idx, name, ns) in backends {
+    for (idx, name, ns, port) in backends {
         let ns = ns.unwrap_or(route_ns);
         let service_key = format!("{}/{}", ns, name);
-        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
-            crate::backends::selector::get_backends_for_service_key(&service_key)
+        let Ok(section) = crate::backends::service_section_key_from_port(port) else {
+            continue;
+        };
+        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, &section, || {
+            crate::backends::selector::backends_for_service_section(&service_key, &section)
         });
         if let Some(&addr) = affinity_map.get(token) {
             return Some((idx, addr));
@@ -278,8 +282,9 @@ pub(crate) fn sp_resolve_typed_candidates(
     for candidate in candidates {
         let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_scoped(
             &candidate.service_key,
+            &candidate.section,
             candidate.scope.as_deref(),
-            || crate::backends::selector::get_backends_for_service_key(&candidate.service_key),
+            || crate::backends::selector::backends_for_service_section(&candidate.service_key, &candidate.section),
         );
         if let Some(&addr) = affinity_map.get(token) {
             let persistence = ctx.ensure_session_persistence();
@@ -389,36 +394,69 @@ mod tests {
     /// might have picked Service A.
     #[test]
     fn test_sp_lookup_rule_scoped_across_services() {
-        use crate::lb::runtime_state::{remove_service, sp_affinity_get_or_build_key};
-        use crate::lb::EdgionBackend;
-        use pingora_load_balancing::Backend;
+        use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+        use crate::lb::runtime_state::sp_affinity_get_or_build_key;
+        use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+        use kube::api::ObjectMeta;
+        use std::collections::{BTreeMap, HashMap, HashSet};
         use std::net::SocketAddr as StdSocketAddr;
-        use std::sync::Arc;
 
-        let make = |addr: StdSocketAddr| {
-            Arc::new(EdgionBackend::new(Backend {
-                addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
-                weight: 1,
-                ext: Default::default(),
-            }))
+        let slice = |service: &str, name: &str, addr: StdSocketAddr| EndpointSlice {
+            metadata: ObjectMeta {
+                namespace: Some("rule-scope-test".to_string()),
+                name: Some(name.to_string()),
+                labels: Some(BTreeMap::from([(SERVICE_NAME.to_string(), service.to_string())])),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            endpoints: vec![Endpoint {
+                addresses: vec![addr.ip().to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ports: Some(vec![EndpointPort {
+                port: Some(i32::from(addr.port())),
+                ..Default::default()
+            }]),
         };
         let a_addr: StdSocketAddr = "10.1.0.1:8080".parse().unwrap();
         let b_addr: StdSocketAddr = "10.2.0.1:9090".parse().unwrap();
-        // Unique service names: SP_AFFINITY is a process-global cache.
         let svc_a = "rule-scope-test/svc-a";
         let svc_b = "rule-scope-test/svc-b";
-        let a_backends = Arc::new(vec![make(a_addr)]);
-        let b_backends = Arc::new(vec![make(b_addr)]);
-        // Pre-populate the per-service affinity maps (test stand-in for the
-        // lazy build off the live backend store).
-        sp_affinity_get_or_build_key(svc_a, || a_backends.clone());
-        sp_affinity_get_or_build_key(svc_b, || b_backends.clone());
+        get_roundrobin_store().update_data_only(
+            HashMap::from([
+                (
+                    "rule-scope-test/svc-a-sp".to_string(),
+                    slice("svc-a", "svc-a-sp", a_addr),
+                ),
+                (
+                    "rule-scope-test/svc-b-sp".to_string(),
+                    slice("svc-b", "svc-b-sp", b_addr),
+                ),
+            ]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        let section_a = crate::backends::service_section_key_from_port(Some(i32::from(a_addr.port()))).unwrap();
+        let section_b = crate::backends::service_section_key_from_port(Some(i32::from(b_addr.port()))).unwrap();
+        sp_affinity_get_or_build_key(svc_a, &section_a, || unreachable!());
+        sp_affinity_get_or_build_key(svc_b, &section_b, || unreachable!());
 
-        let refs = [("svc-a", None::<&str>), ("svc-b", None)];
+        let refs = [
+            ("svc-a", None::<&str>, Some(i32::from(a_addr.port()))),
+            ("svc-b", None, Some(i32::from(b_addr.port()))),
+        ];
         let token_b = generate_session_token(&b_addr.to_string());
         let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_b);
         assert_eq!(hit, Some((1, b_addr)), "token bound to svc-b must resolve to index 1");
-        let indexed_refs = [(0, "svc-a", None::<&str>), (2, "svc-b", None)];
+        let indexed_refs = [
+            (0, "svc-a", None::<&str>, Some(i32::from(a_addr.port()))),
+            (2, "svc-b", None, Some(i32::from(b_addr.port()))),
+        ];
         let indexed_hit = sp_lookup_rule_scoped_indexed(indexed_refs.into_iter(), "rule-scope-test", &token_b);
         assert_eq!(
             indexed_hit,
@@ -436,8 +474,14 @@ mod tests {
         let miss = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &foreign);
         assert_eq!(miss, None, "foreign token must not resolve within this rule");
 
-        remove_service(svc_a);
-        remove_service(svc_b);
+        get_roundrobin_store().update_data_only(
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::from([
+                "rule-scope-test/svc-a-sp".to_string(),
+                "rule-scope-test/svc-b-sp".to_string(),
+            ]),
+        );
     }
 
     #[test]

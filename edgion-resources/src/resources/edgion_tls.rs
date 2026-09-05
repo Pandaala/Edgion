@@ -8,6 +8,52 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Gateway API Route-compatible cardinality bounds. These keep the
+/// attachment index bounded before the Controller expands parent/listener
+/// attachments and the Gateway combines them with host patterns.
+pub const MAX_EDGION_TLS_PARENT_REFS: usize = 32;
+pub const MAX_EDGION_TLS_HOSTS: usize = 16;
+pub const MAX_EDGION_TLS_RESOLVED_ATTACHMENTS: usize = 2_048;
+
+/// Validate operator-controlled dimensions after wire decoding. This must not
+/// be a serde hook: Kubernetes may already have admitted an object before a
+/// newer controller adds a limit, and poisoning the typed watch would retain
+/// the previous data-plane generation instead of publishing a fail-closed one.
+pub fn validate_operator_attachment_dimensions(
+    spec: &EdgionTlsSpec,
+    owner_namespace: &str,
+) -> Result<(), &'static str> {
+    let parent_refs = spec.parent_refs.as_deref().unwrap_or_default();
+    if parent_refs.len() > MAX_EDGION_TLS_PARENT_REFS {
+        return Err("parentRefs exceeds the runtime limit");
+    }
+    if spec.hosts.len() > MAX_EDGION_TLS_HOSTS {
+        return Err("hosts exceeds the runtime limit");
+    }
+
+    let mut parents = HashSet::with_capacity(parent_refs.len());
+    for parent in parent_refs {
+        let identity = (
+            parent.group.as_deref().unwrap_or("gateway.networking.k8s.io"),
+            parent.kind.as_deref().unwrap_or("Gateway"),
+            parent.namespace.as_deref().unwrap_or(owner_namespace),
+            parent.name.as_str(),
+            parent.section_name.as_deref().unwrap_or(""),
+            parent.port,
+        );
+        if !parents.insert(identity) {
+            return Err("parentRefs contains a duplicate attachment");
+        }
+    }
+
+    let mut hosts = HashSet::with_capacity(spec.hosts.len());
+    if spec.hosts.iter().any(|host| !hosts.insert(host.to_ascii_lowercase())) {
+        return Err("hosts contains a duplicate hostname");
+    }
+    Ok(())
+}
 
 pub use super::allowed_san::{AllowedSan, AllowedSanMatch, AllowedSanType};
 
@@ -110,7 +156,7 @@ impl ClientAuthConfig {
     }
 }
 
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Deserialize, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -123,11 +169,15 @@ impl ClientAuthConfig {
 #[serde(rename_all = "camelCase")]
 pub struct EdgionTlsSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = MAX_EDGION_TLS_PARENT_REFS))]
     pub parent_refs: Option<Vec<ParentReference>>,
-    #[schemars(inner(
-        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
-        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
-    ))]
+    #[schemars(
+        length(max = MAX_EDGION_TLS_HOSTS),
+        inner(
+            length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+            pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+        )
+    )]
     pub hosts: Vec<String>,
     pub secret_ref: SecretObjectReference,
     /// mTLS client authentication configuration (optional)
@@ -165,6 +215,22 @@ pub struct EdgionTlsSpec {
     #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 
+    /// Controller-captured logical attachment identities for each resolved
+    /// Gateway listener. The physical `ListenerKey` alone is insufficient when
+    /// several Gateways share an address: the data plane uses this complete
+    /// identity to prevent an EdgionTls from overlaying another Gateway's
+    /// frontend client-auth policy after a collision or config generation swap.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(skip)]
+    pub resolved_listener_attachments: Option<Vec<ResolvedListenerAttachment>>,
+
+    /// Gateway-local exact attachment lookup compiled before matcher publication.
+    /// It is never serialized; conf-sync transports the ordered attachment vector
+    /// and the data plane warms this index on its cold configuration path.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_listener_attachment_index: std::sync::OnceLock<std::collections::HashSet<ResolvedListenerAttachment>>,
+
     /// Operator log labels resolved from `metadata` (annotations / labels) at
     /// `pre_parse` time, attached to `rsc.labels` in `ssl.log`. Pure in-process
     /// cache derived from metadata the gateway already holds: never part of the
@@ -174,6 +240,80 @@ pub struct EdgionTlsSpec {
     #[serde(skip)]
     #[schemars(skip)]
     pub resolved_log_labels: Option<std::sync::Arc<std::collections::BTreeMap<String, String>>>,
+}
+
+impl Clone for EdgionTlsSpec {
+    fn clone(&self) -> Self {
+        Self {
+            parent_refs: self.parent_refs.clone(),
+            hosts: self.hosts.clone(),
+            secret_ref: self.secret_ref.clone(),
+            client_auth: self.client_auth.clone(),
+            min_tls_version: self.min_tls_version,
+            ciphers: self.ciphers.clone(),
+            secret: self.secret.clone(),
+            resolved_listeners: self.resolved_listeners.clone(),
+            resolved_listener_attachments: self.resolved_listener_attachments.clone(),
+            // A clone may be mutated into another conf-sync generation. Never
+            // carry a compiled index across that generation boundary.
+            resolved_listener_attachment_index: Default::default(),
+            resolved_log_labels: self.resolved_log_labels.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedListenerAttachment {
+    pub gateway_namespace: String,
+    pub gateway_name: String,
+    pub listener_name: String,
+    pub listener_key: ListenerKey,
+    pub gateway_proof: GatewayAttachmentProof,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAttachmentProof {
+    pub instance: String,
+    pub generation: i64,
+    pub epoch: String,
+    pub attachment_digest: String,
+}
+
+impl EdgionTlsSpec {
+    pub fn warm_listener_attachment_index(&self) {
+        let _ = self.resolved_listener_attachment_index.get_or_init(|| {
+            self.resolved_listener_attachments
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .cloned()
+                .collect()
+        });
+    }
+
+    pub fn has_resolved_listener_attachment(&self, attachment: &ResolvedListenerAttachment) -> bool {
+        self.resolved_listener_attachment_index
+            .get()
+            .is_some_and(|index| index.contains(attachment))
+    }
+}
+
+impl GatewayAttachmentProof {
+    pub fn is_resolved(&self) -> bool {
+        fn valid_token(value: &str) -> bool {
+            !value.is_empty() && value != "unresolved"
+        }
+        valid_token(&self.instance)
+            && valid_token(&self.epoch)
+            && self.generation >= 0
+            && self.attachment_digest.len() == 64
+            && self
+                .attachment_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
 }
 
 /// EdgionTlsStatus describes the status of the EdgionTls resource

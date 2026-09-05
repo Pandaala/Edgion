@@ -228,7 +228,7 @@ EOF
     log_info "Generating ${BTLSP_COUNT} BackendTLSPolicy fixtures..."
     for i in $(seq 1 ${BTLSP_COUNT}); do
         cat > "${FIXTURE_DIR}/BTLSP_${i}.yaml" <<EOF
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: stress-btlsp-${i}

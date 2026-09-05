@@ -38,17 +38,17 @@ impl BackendCleaner {
                 }
 
                 for (key, backend) in runtime_state::all_draining_backends() {
-                    let count = backend.conn();
-                    let (service_key, addr_str) = key.split_once('\0').unwrap_or((&key, ""));
+                    let count = backend.owned_conn();
+                    let mut parts = key.split('\0');
+                    let service_key = parts.next().unwrap_or(&key);
+                    let addr_str = parts.next().unwrap_or("");
                     if count == 0 {
                         tracing::info!(
                             service_key = %service_key,
                             backend = %addr_str,
                             "Backend fully drained, removing state"
                         );
-                        if let Ok(addr) = addr_str.parse::<pingora_core::protocols::l4::socket::SocketAddr>() {
-                            runtime_state::remove_backend(service_key, &addr);
-                        }
+                        runtime_state::finish_draining(&key);
                     } else {
                         tracing::debug!(
                             service_key = %service_key,

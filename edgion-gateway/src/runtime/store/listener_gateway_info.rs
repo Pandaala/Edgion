@@ -484,6 +484,7 @@ mod tests {
                 addresses: None,
                 tls: None,
                 resolved_inbound_proxy_protocol: Default::default(),
+                resolved_attachment_proof: None,
             },
             status: Some(GatewayStatus {
                 addresses: None,
@@ -504,6 +505,7 @@ mod tests {
                 addresses: None,
                 tls: None,
                 resolved_inbound_proxy_protocol: Default::default(),
+                resolved_attachment_proof: None,
             },
             status: None,
         };

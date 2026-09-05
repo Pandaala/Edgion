@@ -50,8 +50,7 @@ pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
 pub use storage::KubernetesStorage;
 pub use version_detection::{
-    detect_backend_tls_policy_version, detect_reference_grant_version, detect_tls_route_version,
-    probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion, ReferenceGrantVersion,
+    detect_reference_grant_version, detect_tls_route_version, probe_tls_route_version, ReferenceGrantVersion,
     TLSRouteVersion,
 };
 

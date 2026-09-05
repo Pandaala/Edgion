@@ -5,6 +5,14 @@ metadata:
   namespace: edgion-test
 spec:
   gatewayClassName: public-gateway
+  tls:
+    frontend:
+      default:
+        validation:
+          caCertificateRefs:
+            - name: does-not-exist
+              kind: Secret
+              group: ""
   listeners:
     - name: https-invalid-ca
       hostname: "fv-mtls.example.com"
@@ -14,8 +22,3 @@ spec:
         mode: Terminate
         certificateRefs:
           - name: fv-server-cert
-        frontendValidation:
-          caCertificateRefs:
-            - name: does-not-exist
-              kind: Secret
-              group: ""

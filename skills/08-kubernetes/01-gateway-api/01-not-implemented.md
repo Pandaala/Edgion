@@ -186,9 +186,9 @@ cross-namespace targets, and Route targets remain out of scope.
 
 ## GatewayFrontendClientCertificateValidation (frontendValidation)
 
-**Decision: status conforms, data-plane enforcement does NOT yet — not declared**
+**Decision: implemented with strict fail-closed enforcement; conformance declaration awaits a fresh in-cluster run**
 
-The Controller parses `frontend_validation` CA references (Secret/ConfigMap), merges per listener, and sets listener status conditions. The Gateway data plane's `configure_gateway_frontend_mtls()` loads the CA and configures the SSL verify mode: AllowValidOnly uses `PEER | FAIL_IF_NO_PEER_CERT`, and AllowInsecureFallback uses a custom verify callback that always accepts (boringssl FFI). Fully independent from EdgionTls `client_auth`.
+The only operator surface is `Gateway.spec.tls.frontend`. The Controller projects it onto matching HTTPS listeners, resolves Secret/ConfigMap references as one complete set, and sets listener status conditions. The Gateway publishes serving and rejecting candidates in the same SNI matcher generation: AllowValidOnly uses `PEER | FAIL_IF_NO_PEER_CERT`, while missing/partial/malformed strict trust rejects before server certificate binding; AllowInsecureFallback uses a custom verify callback that always accepts.
 
 However, in-cluster conformance (image 0.3.2, 2026-06-18) shows the **enforcement** path does not yet conform:
 
@@ -196,9 +196,7 @@ However, in-cluster conformance (image 0.3.2, 2026-06-18) shows the **enforcemen
 - `GatewayFrontendClientCertificateValidation` (default + per-port enforcement) — **FAIL** (default returns 404 instead of failing the connection; per-port times out)
 - `GatewayFrontendInvalidDefaultClientCertificateValidation` (invalid default must impact the HTTPS listener) — **FAIL** (request to the HTTPS listener succeeded with 404 instead of being rejected)
 
-Because the data plane does not actually enforce the (invalid) default / per-port client-cert validation, `GatewayFrontendClientCertificateValidation` is **not declared** in `SUPPORTED_FEATURES`. Status reporting is correct; the missing piece is enforcement. Re-add it to the supported list only once the two enforcement tests pass.
-
-- File a tracking task under `tasks/` to fix frontend client-cert enforcement (default + per-port), then re-declare the feature.
+The historical failures above remain useful baseline evidence, but no longer describe the current code. Keep `GatewayFrontendClientCertificateValidation` out of `SUPPORTED_FEATURES` until the standard in-cluster conformance cases are rerun against the new image and pass; then update this record and the supported-feature declaration together.
 
 ## GRPCRoute retry.codes
 

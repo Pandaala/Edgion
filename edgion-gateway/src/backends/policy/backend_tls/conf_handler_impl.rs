@@ -172,14 +172,13 @@ mod tests {
 
         store.full_set(&data);
 
-        let policies = store.get_policies_for_target(
-            &edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
-                target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
-                namespace: "default".to_string(),
-                name: "svc1".to_string(),
-            },
-        );
-        assert_eq!(policies.len(), 2);
+        let target = edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+            target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
+            namespace: "default".to_string(),
+            name: "svc1".to_string(),
+        };
+        assert_eq!(store.count(), 2);
+        assert!(store.snapshot().lookup(&target, None).effective().is_some());
     }
 
     #[test]

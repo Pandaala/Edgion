@@ -4,10 +4,11 @@
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
 use super::version_detection::{
-    probe_backend_tls_policy_version, probe_reference_grant_version, probe_tls_route_version, BackendTLSPolicyVersion,
-    ReferenceGrantVersion, TLSRouteVersion,
+    probe_reference_grant_version, probe_tls_route_version, ReferenceGrantVersion, TLSRouteVersion,
 };
-use crate::conf_mgr::conf_center::common::{ensure_expected_resource_version_value, merge_operator_update_values};
+use crate::conf_mgr::conf_center::common::{
+    ensure_expected_resource_version_value, merge_operator_update_values, validate_backend_tls_policy_api_version,
+};
 use crate::conf_mgr::conf_center::traits::{
     CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey, ResourceKeyMeta, LAST_APPLIED_KEY,
 };
@@ -152,31 +153,14 @@ impl KubernetesStorage {
                     ))
                 }
             },
-            "BackendTLSPolicy" => match probe_backend_tls_policy_version(&self.client).await.map_err(|e| {
-                ConfWriterError::InternalError(format!("Failed to detect BackendTLSPolicy version: {}", e))
-            })? {
-                Some(BackendTLSPolicyVersion::V1) => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk(
-                        "gateway.networking.k8s.io",
-                        "v1",
-                        "BackendTLSPolicy",
-                    )),
-                    Scope::Namespaced,
-                ),
-                Some(BackendTLSPolicyVersion::V1Alpha3) => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk(
-                        "gateway.networking.k8s.io",
-                        "v1alpha3",
-                        "BackendTLSPolicy",
-                    )),
-                    Scope::Namespaced,
-                ),
-                None => {
-                    return Err(ConfWriterError::NotFound(
-                        "BackendTLSPolicy CRD not found (expected v1 or v1alpha3)".to_string(),
-                    ))
-                }
-            },
+            "BackendTLSPolicy" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk(
+                    "gateway.networking.k8s.io",
+                    "v1",
+                    "BackendTLSPolicy",
+                )),
+                Scope::Namespaced,
+            ),
             // Core resources
             "Secret" => (
                 ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Secret")),
@@ -311,7 +295,12 @@ impl KubernetesStorage {
             source: e.into(),
         })?;
 
-        if matches!(kind, "BackendTLSPolicy" | "TLSRoute" | "ReferenceGrant") {
+        if kind == "BackendTLSPolicy" {
+            validate_backend_tls_policy_api_version(value.get("apiVersion").and_then(Value::as_str))
+                .map_err(ConfWriterError::ValidationError)?;
+        }
+
+        if matches!(kind, "TLSRoute" | "ReferenceGrant") {
             project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
         }
 
@@ -1321,6 +1310,18 @@ mod tests {
                 "to": [{"group": "", "kind": "Service"}]
             }
         })
+    }
+
+    #[test]
+    fn backend_tls_policy_api_version_accepts_only_v1() {
+        let canonical = json!({"apiVersion": "gateway.networking.k8s.io/v1"});
+        assert!(validate_backend_tls_policy_api_version(canonical.get("apiVersion").and_then(Value::as_str)).is_ok());
+
+        for value in [json!({"apiVersion": "gateway.networking.k8s.io/v1alpha3"}), json!({})] {
+            let error =
+                validate_backend_tls_policy_api_version(value.get("apiVersion").and_then(Value::as_str)).unwrap_err();
+            assert!(error.contains("BackendTLSPolicy apiVersion must be gateway.networking.k8s.io/v1"));
+        }
     }
 
     #[test]

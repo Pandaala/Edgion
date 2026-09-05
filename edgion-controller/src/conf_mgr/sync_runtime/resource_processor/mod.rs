@@ -19,6 +19,7 @@ mod context;
 pub mod credential;
 pub mod credential_source_state;
 pub mod edgion_config_data_utils;
+pub mod frontend_ca_ref;
 pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
@@ -53,7 +54,7 @@ pub use status_utils::{
 };
 
 pub use handlers::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
+    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
     EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
     GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,

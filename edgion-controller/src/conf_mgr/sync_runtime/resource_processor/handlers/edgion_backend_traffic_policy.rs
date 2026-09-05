@@ -119,23 +119,14 @@ fn should_requeue_siblings(
 }
 
 /// A single BackendTLSPolicy's resource key, targetRefs, and `validation.hostname`,
-/// snapshotted once per `validate()` call regardless of resource version.
+/// snapshotted once per `validate()` call.
 struct BackendTlsPolicyRecord {
     key: String,
     target_refs: Vec<edgion_resources::resources::backend_tls_policy::BackendTLSPolicyTargetRef>,
     hostname: String,
 }
 
-/// Load every BackendTLSPolicy visible in the processor registry, v1 or v1alpha3.
-///
-/// The processor is registered under the single string key `"BackendTLSPolicy"` with a
-/// **version-dependent concrete type** decided once at controller startup (see
-/// `conf_center::kubernetes::controller`'s `BackendTLSPolicyVersion` match): a v1 cluster
-/// stores `Arc<BackendTLSPolicy>`, a v1alpha3 cluster stores `Arc<BackendTLSPolicyAlpha3>`.
-/// `Arc<dyn Any>::downcast` compares TypeIds, so a single hard-coded `downcast::<BackendTLSPolicy>()`
-/// silently returns `None` on every key on a v1alpha3 cluster — the cross-object admission rule
-/// would then see zero BackendTLSPolicies and never fire. Try both concrete types via
-/// `BtpSpecView` instead of guessing one.
+/// Load every canonical v1 BackendTLSPolicy visible in the processor registry.
 ///
 /// Empty when no BackendTLSPolicy processor is registered (test runtimes).
 ///
@@ -147,8 +138,7 @@ struct BackendTlsPolicyRecord {
 /// so the registry lookup and the full `list_keys()` scan happen once per `validate()` call, not
 /// once per `EdgionBackendTrafficPolicy` targetRef.
 fn load_backend_tls_policies(ctx: &HandlerContext) -> Vec<BackendTlsPolicyRecord> {
-    use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
-    use edgion_resources::resources::backend_tls_policy::BtpSpecView;
+    use edgion_resources::prelude_resources::BackendTLSPolicy;
 
     let Some(processor) = ctx.runtime().processor_registry.get("BackendTLSPolicy") else {
         return Vec::new();
@@ -159,21 +149,12 @@ fn load_backend_tls_policies(ctx: &HandlerContext) -> Vec<BackendTlsPolicyRecord
         .into_iter()
         .filter_map(|key| {
             let any = processor.get_raw_any(&key)?;
-            match any.downcast::<BackendTLSPolicy>() {
-                Ok(b) => Some(BackendTlsPolicyRecord {
-                    key,
-                    target_refs: b.spec.target_refs().to_vec(),
-                    hostname: b.spec.validation().hostname.clone(),
-                }),
-                Err(any) => any
-                    .downcast::<BackendTLSPolicyAlpha3>()
-                    .ok()
-                    .map(|b| BackendTlsPolicyRecord {
-                        key,
-                        target_refs: b.spec.target_refs().to_vec(),
-                        hostname: b.spec.validation().hostname.clone(),
-                    }),
-            }
+            let b = any.downcast::<BackendTLSPolicy>().ok()?;
+            Some(BackendTlsPolicyRecord {
+                key,
+                target_refs: b.spec.target_refs.clone(),
+                hostname: b.spec.validation.hostname.clone(),
+            })
         })
         .collect()
 }
@@ -1254,7 +1235,7 @@ mod tests {
         btls_proc.set_raw_store(btls_raw.clone());
 
         let btls: BackendTLSPolicy = serde_json::from_value(json!({
-            "apiVersion": "gateway.networking.k8s.io/v1alpha3",
+            "apiVersion": "gateway.networking.k8s.io/v1",
             "kind": "BackendTLSPolicy",
             "metadata": { "name": "tls", "namespace": "ns" },
             "spec": {
@@ -1296,7 +1277,7 @@ mod tests {
 
         // An in-pattern hostname is accepted.
         let btls_ok: BackendTLSPolicy = serde_json::from_value(json!({
-            "apiVersion": "gateway.networking.k8s.io/v1alpha3",
+            "apiVersion": "gateway.networking.k8s.io/v1",
             "kind": "BackendTLSPolicy",
             "metadata": { "name": "tls", "namespace": "ns" },
             "spec": {
@@ -1308,72 +1289,6 @@ mod tests {
         btls_raw.upsert("ns/tls".to_string(), Arc::new(btls_ok.clone()));
         btls_proc.save(btls_ok, None);
         assert!(handler.validate(&p, &ctx).is_empty());
-    }
-
-    /// CRITICAL regression test: on a v1alpha3 cluster the BackendTLSPolicy processor is
-    /// registered under the same string key `"BackendTLSPolicy"` but with the CONCRETE type
-    /// `BackendTLSPolicyAlpha3` (see `conf_center::kubernetes::controller`'s
-    /// `BackendTLSPolicyVersion` match, which spawns `ResourceProcessor::<BackendTLSPolicyAlpha3>`
-    /// under that key). Before the fix, `backend_tls_hostnames_for_service` did a single
-    /// `downcast::<BackendTLSPolicy>()`, which fails TypeId comparison against
-    /// `Arc<BackendTLSPolicyAlpha3>` and silently returns `None` for every key — the rule never
-    /// fires on any v1alpha3 cluster. This test registers a `BackendTLSPolicyAlpha3` processor
-    /// under `"BackendTLSPolicy"` and asserts the cross-object rule still catches an
-    /// out-of-pattern hostname.
-    #[tokio::test]
-    async fn backend_tls_hostname_outside_pattern_is_rejected_on_v1alpha3_cluster() {
-        use crate::conf_mgr::sync_runtime::resource_processor::handlers::BackendTlsPolicyAlpha3Handler;
-        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
-        use edgion_resources::prelude_resources::BackendTLSPolicyAlpha3;
-
-        let (ctx, rt) = make_ctx();
-        let handler = make_handler();
-
-        let btls_proc = Arc::new(ResourceProcessor::<BackendTLSPolicyAlpha3>::new(
-            "BackendTLSPolicy",
-            128,
-            Arc::new(BackendTlsPolicyAlpha3Handler::new(
-                crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string(),
-            )),
-            rt.clone(),
-        ));
-        rt.processor_registry.register(btls_proc.clone());
-
-        let btls_raw = Arc::new(LocalRawStore::<BackendTLSPolicyAlpha3>::new());
-        btls_proc.set_raw_store(btls_raw.clone());
-
-        let btls: BackendTLSPolicyAlpha3 = serde_json::from_value(json!({
-            "apiVersion": "gateway.networking.k8s.io/v1alpha3",
-            "kind": "BackendTLSPolicy",
-            "metadata": { "name": "tls", "namespace": "ns" },
-            "spec": {
-                "targetRefs": [ { "group": "", "kind": "Service", "name": "sandbox-gw" } ],
-                "validation": { "hostname": "stale.other.com", "wellKnownCACertificates": "System" }
-            },
-        }))
-        .expect("valid BackendTLSPolicyAlpha3 JSON");
-        btls_raw.upsert("ns/tls".to_string(), Arc::new(btls.clone()));
-        btls_proc.save(btls, None);
-
-        let mut p = make_policy("p", "sandbox-gw", "2026-01-01T00:00:00Z");
-        p.spec.upstream_authority = Some(
-            edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig {
-                pattern: "*.sandbox.internal".to_string(),
-                template: "${ctx:tenant}.sandbox.internal".to_string(),
-                health_check_host: None,
-            },
-        );
-
-        let errors = handler.validate(&p, &ctx);
-        assert_eq!(
-            errors.len(),
-            1,
-            "on a v1alpha3 cluster the cross-object rule must still see the BackendTLSPolicyAlpha3 \
-             registered under the shared \"BackendTLSPolicy\" processor key; got: {errors:?}"
-        );
-        assert!(errors[0].contains("stale.other.com"), "got: {}", errors[0]);
-        assert!(errors[0].contains("*.sandbox.internal"), "got: {}", errors[0]);
-        assert!(errors[0].contains("ns/tls"), "got: {}", errors[0]);
     }
 
     /// Minor 2: only core-group `Service` targetRefs are considered, mirroring
@@ -1468,7 +1383,7 @@ mod tests {
         let btls_raw = Arc::new(LocalRawStore::<BackendTLSPolicy>::new());
         btls_proc.set_raw_store(btls_raw.clone());
         let btls: BackendTLSPolicy = serde_json::from_value(json!({
-            "apiVersion": "gateway.networking.k8s.io/v1alpha3",
+            "apiVersion": "gateway.networking.k8s.io/v1",
             "kind": "BackendTLSPolicy",
             "metadata": { "name": "tls", "namespace": "ns" },
             "spec": {

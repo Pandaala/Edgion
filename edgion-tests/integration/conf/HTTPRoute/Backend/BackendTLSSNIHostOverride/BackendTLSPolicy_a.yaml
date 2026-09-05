@@ -3,7 +3,7 @@
 # this value as the TLS SNI extension when connecting to btls-sni-service-a.
 # The multi-SNI backend resolver returns cert A only for this exact SNI, so any
 # misconfiguration (wrong SNI or no SNI) causes a handshake failure.
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: btls-sni-policy-a

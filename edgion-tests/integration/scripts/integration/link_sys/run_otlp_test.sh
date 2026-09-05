@@ -390,10 +390,10 @@ for i in $(seq 1 60); do
     [ "$i" -eq 60 ] && { log_error "OTel Collector failed to start (health endpoint not responding)"; exit 1; }
     sleep 1
 done
-# Wait for LB preload and route sync propagation
+# Wait for conf-sync caches and route sync propagation
 for i in $(seq 1 20); do
-    if grep -q "LB preload completed" "${LOG_DIR}/gateway.log" 2>/dev/null; then
-        log_info "LB preload verified"; break
+    if grep -q "All caches are ready" "${LOG_DIR}/gateway.log" 2>/dev/null; then
+        log_info "gateway caches ready"; break
     fi
     sleep 1
 done

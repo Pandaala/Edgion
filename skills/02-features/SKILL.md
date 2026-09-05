@@ -58,7 +58,7 @@ Edgion is based on **Gateway API v1.5.0**, with the following support scope:
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
 | TLSRoute | `gateway.networking.k8s.io/v1` | Standard (compatibility with the older alpha version depends on the install manifest) |
 | UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
-| BackendTLSPolicy | `gateway.networking.k8s.io/v1` (`v1alpha3` compatible) | Standard / multi-version compatible |
+| BackendTLSPolicy | `gateway.networking.k8s.io/v1` | Standard / v1 only |
 
 Edgion extension resources (API group: `edgion.io`):
 

@@ -40,7 +40,9 @@ one onto the other.
   immutable effective snapshot. HTTP/gRPC selection reads the request-captured
   `ParsedLBPolicy`, not a live store helper. The backend selector
   (`backends/selector.rs::policy_to_kind`) maps that policy onto the
-  request-path `PolicyKind` used by `ServiceSelectorCell`.
+  request-path `PolicyKind`. Every available Service generation already owns
+  all four compiled variants; selection chooses one without compiling or
+  hydrating on the request path.
 - When not configured (no policy, or `loadBalancer.type: RoundRobin`),
   RoundRobin is used by default — the captured `load_balancer` is `None`.
 
@@ -93,7 +95,7 @@ HTTPRoute rule
        │
        └── Resolve service_key (namespace/name)
             │
-            ├── Get backend list (Backend[]) from EndpointSlice/Endpoint store
+            ├── Capture the published Service projection and active membership
             │
             ├── Apply LB strategy to select a specific backend
             │   ├── Default: RoundRobin (Pingora LoadBalancer)
@@ -138,18 +140,13 @@ ref-counting is gone). See
 [Behavior Changes](../../02-features/03-resources/20-edgion-backend-traffic-policy.md#behavior-changes-from-the-removed-mechanisms)
 in the resource schema doc.
 
-## LB Preload (warmup)
+## Eager Service selectors
 
-`preload_load_balancers()` is called after startup completes (after `wait_for_ready()`) to reduce first-request latency:
-
-1. Collect service_key values referenced by all route kinds (HTTP/gRPC/TCP/UDP/TLS) — it never
-   consumed LB policy, only the service key set, so it needed no change when LB policy moved off
-   the route.
-2. Deduplicate using HashSet.
-3. For each key, hydrate the `ServiceSelectorCell` backend list if it is empty.
-4. Algorithm-specific compiled selectors remain lazy and are built by `get_or_build` when that
-   policy is first selected. LeastConn / EWMA / ConsistentHash resolve the effective
-   `EdgionBackendTrafficPolicy` at selection time.
+The Service/EndpointSlice Coordinator builds RoundRobin, ConsistentHash, LeastConn, and EWMA
+selectors eagerly for every valid canonical section and for the temporary legacy unsectioned
+projection. A semantic source no-op retains the complete projection Arc and does not publish a new
+generation. Startup has no route scan or preload step, and request selection never populates a
+selector cache.
 
 ## Directory layout
 
@@ -169,7 +166,7 @@ edgion-gateway/src/lb/
 │   └── score.rs              # PeakEwmaScore — packed, time-decayed Peak-EWMA
 ├── leastconn/                # LeastConn state management
 │   └── cleaner.rs            # stale-state cleaner
-├── compiled_selector.rs      # ServiceSelectorCell — per-service selector cell
+├── compiled_selector.rs      # immutable eager selector bundle (multi-PolicyKind)
 ├── edgion_backend.rs         # EdgionBackend — LB-visible backend handle
 └── runtime_state/            # runtime backend state
     └── mod.rs                # backend active-state tracking

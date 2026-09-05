@@ -274,8 +274,17 @@ pub fn expected_resource_version(headers: &HeaderMap, body: &str) -> Result<Opti
 /// for create/update operations.
 pub fn parse_resource_and_update_version<T>(body: &str, update_version: bool) -> Result<T, StatusCode>
 where
-    T: serde::de::DeserializeOwned + kube::ResourceExt,
+    T: serde::de::DeserializeOwned + kube::ResourceExt + edgion_resources::ResourceMeta,
 {
+    crate::conf_mgr::conf_center::common::validate_resource_api_version::<T>(body).map_err(|e| {
+        tracing::warn!(
+            component = "unified_api",
+            error = %e,
+            "Resource API version validation failed"
+        );
+        StatusCode::BAD_REQUEST
+    })?;
+
     let mut resource = parse_resource(body)?;
 
     if update_version {
@@ -288,6 +297,38 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::prelude_resources::BackendTLSPolicy;
+
+    fn backend_tls_policy_body(api_version: &str) -> String {
+        format!(
+            r#"{{
+                "apiVersion": "{api_version}",
+                "kind": "BackendTLSPolicy",
+                "metadata": {{"name": "backend-tls", "namespace": "default"}},
+                "spec": {{
+                    "targetRefs": [{{"group": "", "kind": "Service", "name": "backend"}}],
+                    "validation": {{
+                        "hostname": "backend.default.svc",
+                        "wellKnownCACertificates": "System"
+                    }}
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn admin_parser_rejects_non_v1_backend_tls_policy_in_all_modes() {
+        let legacy = backend_tls_policy_body("gateway.networking.k8s.io/v1alpha3");
+
+        for update_version in [false, true] {
+            let result = parse_resource_and_update_version::<BackendTLSPolicy>(&legacy, update_version);
+            assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        }
+
+        let canonical = backend_tls_policy_body("gateway.networking.k8s.io/v1");
+        assert!(parse_resource_and_update_version::<BackendTLSPolicy>(&canonical, false).is_ok());
+        assert!(parse_resource_and_update_version::<BackendTLSPolicy>(&canonical, true).is_ok());
+    }
 
     #[test]
     fn not_supported_maps_to_501() {

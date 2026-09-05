@@ -3,7 +3,7 @@
 # which are created by the BackendTLS suite (generate_backend_certs.sh +
 # generate_mtls_certs.sh). Those resources are loaded when HTTPRoute/Backend/BackendTLS
 # is processed; they live in namespace edgion-test and are available to this suite.
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: h2-mtls-sp-btls

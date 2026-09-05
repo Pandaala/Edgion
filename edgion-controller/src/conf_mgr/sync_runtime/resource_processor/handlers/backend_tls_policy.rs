@@ -16,11 +16,12 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use chrono::{DateTime, Utc};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use edgion_resources::prelude_resources::BackendTLSPolicy;
 #[cfg(test)]
 use edgion_resources::prelude_resources::EdgionBackend;
-use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
 use edgion_resources::resources::backend_tls_policy::{
-    BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
+    parse_client_certificate_option, BackendTLSPolicyCACertificateRef, BackendTLSPolicySpec, BackendTLSPolicyStatus,
+    BackendTLSPolicyTargetRef,
 };
 use edgion_resources::resources::common::{is_core_api_group, ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
@@ -140,14 +141,14 @@ impl Default for BackendTlsPolicyHandler {
 }
 
 impl BackendTlsPolicyHandler {
-    fn validate_policy<S: BtpSpecView>(&self, spec: &S) -> Vec<String> {
+    fn validate_policy(&self, spec: &BackendTLSPolicySpec) -> Vec<String> {
         let mut errors = Vec::new();
 
-        if spec.target_refs().len() != 1 {
+        if spec.target_refs.len() != 1 {
             errors.push("targetRefs must contain exactly one targetRef".to_string());
         }
 
-        let validation = spec.validation();
+        let validation = &spec.validation;
         let has_ca_refs = validation
             .ca_certificate_refs
             .as_ref()
@@ -162,7 +163,7 @@ impl BackendTlsPolicyHandler {
             errors.push("must specify either caCertificateRefs or wellKnownCACertificates".to_string());
         }
 
-        if let Err(error) = spec.client_certificate_secret_ref() {
+        if let Err(error) = parse_client_certificate_option(spec.options.as_ref()) {
             errors.push(error);
         }
 
@@ -192,22 +193,22 @@ impl BackendTlsPolicyHandler {
         errors
     }
 
-    fn evaluate_target<S: BtpSpecView>(
+    fn evaluate_target(
         &self,
         meta: &ObjectMeta,
-        spec: &S,
+        spec: &BackendTLSPolicySpec,
         ctx: &HandlerContext,
     ) -> PolicyTargetEvaluation {
         let mut evaluation = PolicyTargetEvaluation {
             errors: self.validate_policy(spec),
             ..PolicyTargetEvaluation::default()
         };
-        if spec.target_refs().len() != 1 {
+        if spec.target_refs.len() != 1 {
             return evaluation;
         }
 
         let namespace = meta.namespace.as_deref().unwrap_or("default");
-        let target_ref = &spec.target_refs()[0];
+        let target_ref = &spec.target_refs[0];
         let target = match target_ref.canonical_key(namespace) {
             Ok(target) => target,
             Err(error) => {
@@ -250,9 +251,9 @@ impl BackendTlsPolicyHandler {
         evaluation
     }
 
-    fn all_runtime_refs_resolved<S: BtpSpecView>(spec: &S) -> bool {
-        let ca_resolved = spec.use_system_ca()
-            || spec.validation().ca_certificate_refs.as_ref().is_some_and(|refs| {
+    fn all_runtime_refs_resolved(spec: &BackendTLSPolicySpec) -> bool {
+        let ca_resolved = spec.use_system_ca
+            || spec.validation.ca_certificate_refs.as_ref().is_some_and(|refs| {
                 !refs.is_empty()
                     && refs.iter().all(|ca_ref| {
                         (Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref))
@@ -260,9 +261,10 @@ impl BackendTlsPolicyHandler {
                             && Self::is_ca_resolved(spec, &ca_ref.name)
                     })
             });
-        let client_resolved = match spec.client_certificate_secret_ref() {
+        let client_resolved = match parse_client_certificate_option(spec.options.as_ref()) {
             Ok(Some(_)) => spec
-                .resolved_client_certificate()
+                .resolved_client_certificate
+                .as_ref()
                 .is_some_and(Self::secret_has_client_cert_pair),
             Ok(None) => true,
             Err(_) => false,
@@ -530,10 +532,10 @@ impl BackendTlsPolicyHandler {
         requeue_dependent_ebtps(meta, target_refs, ctx).await;
     }
 
-    fn update_policy_status<S: BtpSpecView>(
+    fn update_policy_status(
         &self,
         meta: &ObjectMeta,
-        spec: &S,
+        spec: &BackendTLSPolicySpec,
         status: &mut Option<BackendTLSPolicyStatus>,
         ctx: &HandlerContext,
         validation_errors: &[String],
@@ -550,8 +552,8 @@ impl BackendTlsPolicyHandler {
         let mut ref_errors = Vec::new(); // → reason: InvalidCACertificateRef
         let mut client_cert_errors = Vec::new();
 
-        if !spec.use_system_ca() {
-            if let Some(refs) = &spec.validation().ca_certificate_refs {
+        if !spec.use_system_ca {
+            if let Some(refs) = &spec.validation.ca_certificate_refs {
                 for ca_ref in refs {
                     if Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref) {
                         if !Self::is_ca_resolved(spec, &ca_ref.name) {
@@ -570,8 +572,8 @@ impl BackendTlsPolicyHandler {
             }
         }
 
-        match spec.client_certificate_secret_ref() {
-            Ok(Some(client_ref)) => match spec.resolved_client_certificate() {
+        match parse_client_certificate_option(spec.options.as_ref()) {
+            Ok(Some(client_ref)) => match spec.resolved_client_certificate.as_ref() {
                 None => client_cert_errors.push(format!("Client certificate Secret '{}' not found", client_ref.name)),
                 Some(secret) => {
                     if !Self::secret_has_client_cert_pair(secret) {
@@ -589,9 +591,9 @@ impl BackendTlsPolicyHandler {
         // --- Check if ALL CA certificate refs are invalid (Gateway API v1.5 spec:
         // "If ALL CACertificateRefs are invalid, the implementation MUST also ensure
         //  the Accepted Condition is set to status: False, with Reason NoValidCACertificate.")
-        let all_ca_refs_invalid = if !spec.use_system_ca() {
+        let all_ca_refs_invalid = if !spec.use_system_ca {
             let total_ca_refs = spec
-                .validation()
+                .validation
                 .ca_certificate_refs
                 .as_ref()
                 .map_or(0, |refs| refs.len());
@@ -605,7 +607,7 @@ impl BackendTlsPolicyHandler {
             let policy_ns = meta.namespace.as_deref().unwrap_or("default");
             let policy_key = format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or(""));
             evaluation.target.as_ref().is_some_and(|target| {
-                let section = spec.target_refs()[0].section_name.as_deref();
+                let section = spec.target_refs[0].section_name.as_deref();
                 let target_key = make_target_conflict_key(target, section);
                 !ctx.runtime().backend_tls_policy.is_winner(&policy_key, &target_key)
             })
@@ -820,8 +822,8 @@ impl BackendTlsPolicyHandler {
     }
 
     #[inline]
-    fn is_ca_resolved<S: BtpSpecView>(spec: &S, name: &str) -> bool {
-        spec.resolved_ca_certificates().is_some_and(|secrets| {
+    fn is_ca_resolved(spec: &BackendTLSPolicySpec, name: &str) -> bool {
+        spec.resolved_ca_certificates.as_deref().is_some_and(|secrets| {
             secrets.iter().any(|secret| {
                 secret.metadata.name.as_deref() == Some(name)
                     && secret
@@ -853,68 +855,15 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
     }
 
     async fn on_change(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        self.on_change_policy(&btp.metadata, btp.spec.target_refs(), ctx).await;
+        self.on_change_policy(&btp.metadata, &btp.spec.target_refs, ctx).await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        self.on_delete_policy(&btp.metadata, btp.spec.target_refs(), ctx).await;
+        self.on_delete_policy(&btp.metadata, &btp.spec.target_refs, ctx).await;
     }
 
     fn update_status(&self, btp: &mut BackendTLSPolicy, ctx: &HandlerContext, validation_errors: &[String]) {
         self.update_policy_status(&btp.metadata, &btp.spec, &mut btp.status, ctx, validation_errors);
-    }
-}
-
-/// BackendTLSPolicy v1alpha3 compat handler.
-///
-/// Keeps the older watch endpoint working while reusing the same validation and
-/// runtime preprocessing logic as the v1 handler.
-pub struct BackendTlsPolicyAlpha3Handler {
-    inner: BackendTlsPolicyHandler,
-}
-
-impl BackendTlsPolicyAlpha3Handler {
-    pub fn new(controller_name: String) -> Self {
-        Self {
-            inner: BackendTlsPolicyHandler::new(controller_name),
-        }
-    }
-}
-
-impl Default for BackendTlsPolicyAlpha3Handler {
-    fn default() -> Self {
-        Self::new("edgion.io/gateway-controller".to_string())
-    }
-}
-
-#[async_trait::async_trait]
-impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler {
-    fn validate(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) -> Vec<String> {
-        self.inner.evaluate_target(&btp.metadata, &btp.spec, ctx).errors
-    }
-
-    async fn parse(&self, btp: BackendTLSPolicyAlpha3, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicyAlpha3> {
-        match self.inner.parse_policy(btp.into(), ctx).await {
-            ProcessResult::Continue(v1) => ProcessResult::Continue(v1.into()),
-            ProcessResult::Skip { reason } => ProcessResult::Skip { reason },
-        }
-    }
-
-    async fn on_change(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
-        self.inner
-            .on_change_policy(&btp.metadata, btp.spec.target_refs(), ctx)
-            .await;
-    }
-
-    async fn on_delete(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
-        self.inner
-            .on_delete_policy(&btp.metadata, btp.spec.target_refs(), ctx)
-            .await;
-    }
-
-    fn update_status(&self, btp: &mut BackendTLSPolicyAlpha3, ctx: &HandlerContext, validation_errors: &[String]) {
-        self.inner
-            .update_policy_status(&btp.metadata, &btp.spec, &mut btp.status, ctx, validation_errors);
     }
 }
 

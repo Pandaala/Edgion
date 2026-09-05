@@ -5,14 +5,12 @@
 //! - Uses `EtcdStatusHandler` (async) for status persistence
 //! - Worker reads from `LocalRawStore` (updated by event loop) instead of re-fetching from etcd
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use kube::Resource;
-use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinHandle;
@@ -20,7 +18,9 @@ use tokio::task::JoinHandle;
 use super::event::EtcdEvent;
 use super::status::EtcdStatusHandler;
 use super::watcher::KindEventReceiver;
-use crate::conf_mgr::conf_center::common::parse_resource_content;
+use crate::conf_mgr::conf_center::common::{
+    clear_runtime_invalid, get_runtime_invalid, parse_resource_content, store_runtime_invalid, RuntimeInvalidEnvelopes,
+};
 use crate::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 use crate::conf_mgr::sync_runtime::resource_processor::{
@@ -28,8 +28,6 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::conf_mgr::sync_runtime::ShutdownSignal;
 use edgion_resources::ResourceMeta;
-
-type PendingIdentityErrors = RwLock<HashMap<String, String>>;
 
 /// EtcdResourceController — handles events for a single resource type.
 pub struct EtcdResourceController<K>
@@ -43,7 +41,7 @@ where
     conf_prefix: Arc<str>,
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
-    pending_identity_errors: Arc<PendingIdentityErrors>,
+    invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
 }
 
 impl<K> EtcdResourceController<K>
@@ -70,7 +68,7 @@ where
             conf_prefix,
             shutdown_signal: None,
             fs_raw_store,
-            pending_identity_errors: Arc::new(RwLock::new(HashMap::new())),
+            invalid_envelopes: Arc::new(RuntimeInvalidEnvelopes::default()),
         }
     }
 
@@ -185,7 +183,7 @@ where
                             self.shutdown_signal.clone(),
                             self.fs_raw_store.clone(),
                             self.status_handler.clone(),
-                            self.pending_identity_errors.clone(),
+                            self.invalid_envelopes.clone(),
                         ));
                     }
                     EtcdEvent::Apply { key, content } => {
@@ -223,11 +221,13 @@ where
                                         Ok(rkey) => rkey,
                                         Err(EtcdIdentityError::Mismatch { key_identity }) => {
                                             let message = identity_mismatch_message(&content_key, &key_identity);
-                                            store_pending_identity_error(
-                                                &self.pending_identity_errors,
+                                            store_runtime_invalid(
+                                                &self.invalid_envelopes,
                                                 key_identity.clone(),
+                                                "IdentityMismatch",
                                                 message,
                                             );
+                                            self.fs_raw_store.remove(&key_identity);
                                             log_identity_mismatch(kind, &key, &content_key, &key_identity);
                                             self.processor.on_event_key(key_identity).await;
                                             continue;
@@ -237,14 +237,20 @@ where
                                             continue;
                                         }
                                     };
-                                    clear_pending_identity_error(&self.pending_identity_errors, &rkey);
+                                    clear_runtime_invalid(&self.invalid_envelopes, &rkey);
                                     self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
                                     self.processor.on_event_key(rkey).await;
                                 }
                                 Err(e) => {
                                     if let Some(rkey) = extract_key_from_etcd_key(&key, &self.conf_prefix, kind) {
-                                        clear_pending_identity_error(&self.pending_identity_errors, &rkey);
                                         self.fs_raw_store.remove(&rkey);
+                                        store_runtime_invalid(
+                                            &self.invalid_envelopes,
+                                            rkey.clone(),
+                                            "ParseError",
+                                            e.to_string(),
+                                        );
+                                        self.processor.on_event_key(rkey).await;
                                     }
                                     tracing::warn!(
                                         component = "etcd_resource_controller",
@@ -260,7 +266,7 @@ where
                     EtcdEvent::Delete { key } => {
                         if init_done {
                             if let Some(rkey) = extract_key_from_etcd_key(&key, &self.conf_prefix, kind) {
-                                clear_pending_identity_error(&self.pending_identity_errors, &rkey);
+                                clear_runtime_invalid(&self.invalid_envelopes, &rkey);
                                 self.fs_raw_store.remove(&rkey);
                                 self.processor.on_event_key(rkey).await;
                             } else {
@@ -343,7 +349,7 @@ fn spawn_worker<K>(
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
     status_handler: Arc<EtcdStatusHandler>,
-    pending_identity_errors: Arc<PendingIdentityErrors>,
+    invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -366,9 +372,12 @@ where
 
             match item {
                 Some(work_item) => {
-                    if let Some(message) = take_pending_identity_error(&pending_identity_errors, &work_item.key) {
+                    if let Some(invalid) = get_runtime_invalid(&invalid_envelopes, &work_item.key) {
+                        let _ = processor
+                            .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
+                            .await;
                         if let Err(e) = status_handler
-                            .write_error_status(kind, &work_item.key, "IdentityMismatch", &message)
+                            .write_error_status(kind, &work_item.key, invalid.reason, &invalid.message)
                             .await
                         {
                             tracing::warn!(
@@ -376,7 +385,7 @@ where
                                 kind = kind,
                                 key = %work_item.key,
                                 error = %e,
-                                "Failed to write identity-mismatch error status"
+                                "Failed to write runtime-invalid error status"
                             );
                         }
                         workqueue.done(&work_item.key);
@@ -425,6 +434,14 @@ where
                                             );
                                         }
                                     }
+                                } else if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                    tracing::warn!(
+                                        component = "etcd_resource_controller",
+                                        kind = kind,
+                                        key = %work_item.key,
+                                        error = %e,
+                                        "Failed to clear stale error status after repair"
+                                    );
                                 }
                             }
                         }
@@ -442,18 +459,6 @@ where
 
         tracing::info!(component = "etcd_resource_controller", kind = kind, "Worker task ended");
     })
-}
-
-fn store_pending_identity_error(pending: &PendingIdentityErrors, key: String, message: String) {
-    pending.write().insert(key, message);
-}
-
-fn clear_pending_identity_error(pending: &PendingIdentityErrors, key: &str) {
-    pending.write().remove(key);
-}
-
-fn take_pending_identity_error(pending: &PendingIdentityErrors, key: &str) -> Option<String> {
-    pending.write().remove(key)
 }
 
 /// Extract resource key ("namespace/name" or "name") from etcd key.
@@ -575,10 +580,18 @@ async fn reject_identity_mismatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        clear_pending_identity_error, store_pending_identity_error, take_pending_identity_error,
-        validate_etcd_identity, EtcdIdentityError, PendingIdentityErrors,
+    use super::{validate_etcd_identity, EtcdIdentityError};
+    use crate::conf_mgr::conf_center::common::{
+        clear_runtime_invalid, get_runtime_invalid, parse_resource_content, store_runtime_invalid,
+        RuntimeInvalidEnvelopes,
     };
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        HandlerContext, LocalRawStore, ProcessResult, ProcessorHandler, ResourceProcessor, WorkItemResult,
+    };
+    use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::prelude_resources::HTTPRoute;
+    use std::sync::Arc;
 
     const CONF_PREFIX: &str = "/edgion/conf/";
 
@@ -689,21 +702,117 @@ mod tests {
     }
 
     #[test]
-    fn valid_event_clears_pending_identity_error() {
-        let pending = PendingIdentityErrors::default();
-        store_pending_identity_error(&pending, "default/r1".to_string(), "mismatch".to_string());
-        clear_pending_identity_error(&pending, "default/r1");
-        assert_eq!(take_pending_identity_error(&pending, "default/r1"), None);
+    fn valid_event_clears_invalid_envelope() {
+        let pending = RuntimeInvalidEnvelopes::default();
+        store_runtime_invalid(
+            &pending,
+            "default/r1".to_string(),
+            "IdentityMismatch",
+            "mismatch".to_string(),
+        );
+        clear_runtime_invalid(&pending, "default/r1");
+        assert_eq!(get_runtime_invalid(&pending, "default/r1"), None);
     }
 
     #[test]
-    fn worker_takes_pending_identity_error_once() {
-        let pending = PendingIdentityErrors::default();
-        store_pending_identity_error(&pending, "default/r1".to_string(), "mismatch".to_string());
-        assert_eq!(
-            take_pending_identity_error(&pending, "default/r1"),
-            Some("mismatch".to_string())
+    fn invalid_envelope_remains_until_valid_repair() {
+        let pending = RuntimeInvalidEnvelopes::default();
+        store_runtime_invalid(
+            &pending,
+            "default/r1".to_string(),
+            "ParseError",
+            "malformed".to_string(),
         );
-        assert_eq!(take_pending_identity_error(&pending, "default/r1"), None);
+        assert_eq!(
+            get_runtime_invalid(&pending, "default/r1").unwrap().reason,
+            "ParseError"
+        );
+        assert!(get_runtime_invalid(&pending, "default/r1").is_some());
+        clear_runtime_invalid(&pending, "default/r1");
+        assert!(get_runtime_invalid(&pending, "default/r1").is_none());
+    }
+
+    struct NoopHttpRouteHandler;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<HTTPRoute> for NoopHttpRouteHandler {
+        async fn parse(&self, obj: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+            ProcessResult::Continue(obj)
+        }
+    }
+
+    #[tokio::test]
+    async fn etcd_valid_to_malformed_to_repair_revokes_and_recovers() {
+        const VALID: &str = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  hostnames:
+    - valid.example.com
+  rules: []
+"#;
+        const REPAIRED: &str = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  hostnames:
+    - repaired.example.com
+  rules: []
+"#;
+        let key = "default/r1";
+        let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+            "HTTPRoute",
+            100,
+            Arc::new(NoopHttpRouteHandler),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let raw_store = LocalRawStore::<HTTPRoute>::new();
+        let invalid = RuntimeInvalidEnvelopes::default();
+        let valid = parse_resource_content::<HTTPRoute>(VALID).unwrap();
+        raw_store.upsert(key.to_string(), Arc::new(valid.clone()));
+        assert!(matches!(
+            processor.on_init_apply(valid, None).await,
+            WorkItemResult::Processed { .. }
+        ));
+
+        // This mirrors the runtime Apply(parse error) event transition. The
+        // envelope stays authoritative until a later valid event clears it.
+        raw_store.remove(key);
+        store_runtime_invalid(
+            &invalid,
+            key.to_string(),
+            "ParseError",
+            "malformed resource".to_string(),
+        );
+        assert!(get_runtime_invalid(&invalid, key).is_some());
+        assert!(matches!(
+            processor
+                .process_work_item(key, None, None, TriggerChain::default())
+                .await,
+            WorkItemResult::Deleted { .. }
+        ));
+        assert!(processor.get(key).is_none());
+        assert!(get_runtime_invalid(&invalid, key).is_some());
+
+        let repaired = parse_resource_content::<HTTPRoute>(REPAIRED).unwrap();
+        clear_runtime_invalid(&invalid, key);
+        raw_store.upsert(key.to_string(), Arc::new(repaired.clone()));
+        assert!(matches!(
+            processor
+                .process_work_item(key, Some(repaired), None, TriggerChain::default())
+                .await,
+            WorkItemResult::Processed { .. }
+        ));
+        assert_eq!(
+            processor.get(key).unwrap().spec.hostnames.as_deref(),
+            Some(&["repaired.example.com".to_string()][..])
+        );
+        assert!(get_runtime_invalid(&invalid, key).is_none());
     }
 }

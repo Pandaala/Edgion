@@ -15,7 +15,9 @@ use super::file_watcher::KindEventReceiver;
 use super::path_registry::{PathRegistry, ResourceKey};
 use super::status::FileSystemStatusHandler;
 use super::storage::build_resource_path_from_key;
-use crate::conf_mgr::conf_center::common::parse_resource_content;
+use crate::conf_mgr::conf_center::common::{
+    clear_runtime_invalid, get_runtime_invalid, parse_resource_content, store_runtime_invalid, RuntimeInvalidEnvelopes,
+};
 use crate::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
@@ -49,6 +51,7 @@ where
     shutdown_signal: Option<ShutdownSignal>,
     /// Raw store shared with processor for cross-resource key lookups.
     fs_raw_store: Arc<LocalRawStore<K>>,
+    invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
 }
 
 impl<K> FileSystemResourceController<K>
@@ -77,6 +80,7 @@ where
             event_rx,
             shutdown_signal: None,
             fs_raw_store,
+            invalid_envelopes: Arc::new(RuntimeInvalidEnvelopes::default()),
         }
     }
 
@@ -267,6 +271,7 @@ where
                                 kind,
                                 self.shutdown_signal.clone(),
                                 self.fs_raw_store.clone(),
+                                self.invalid_envelopes.clone(),
                             ));
 
                             tracing::info!(
@@ -282,8 +287,22 @@ where
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
-                                            reject_identity_mismatch(&status_handler, kind, &path, &key, &filename_key)
-                                                .await;
+                                            self.fs_raw_store.remove(&filename_key);
+                                            store_runtime_invalid(
+                                                &self.invalid_envelopes,
+                                                filename_key.clone(),
+                                                "IdentityMismatch",
+                                                identity_mismatch_message(&key, &filename_key),
+                                            );
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                path = %path.display(),
+                                                content_key = %key,
+                                                filename_key = %filename_key,
+                                                "Rejected resource: file content identity does not match filename identity"
+                                            );
+                                            self.processor.on_event_key(filename_key).await;
                                             continue;
                                         }
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
@@ -344,8 +363,27 @@ where
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
-                                            reject_identity_mismatch(&status_handler, kind, &path, &key, &filename_key)
-                                                .await;
+                                            // The filename identity is authoritative in filesystem mode.
+                                            // Publish the invalid envelope and enqueue that same key so the
+                                            // sole worker revokes the cached generation and all derived state
+                                            // before retaining the error status. A later repaired Apply clears
+                                            // the envelope and follows this same queue.
+                                            self.fs_raw_store.remove(&filename_key);
+                                            store_runtime_invalid(
+                                                &self.invalid_envelopes,
+                                                filename_key.clone(),
+                                                "IdentityMismatch",
+                                                identity_mismatch_message(&key, &filename_key),
+                                            );
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                path = %path.display(),
+                                                content_key = %key,
+                                                filename_key = %filename_key,
+                                                "Rejected runtime resource with mismatched file identity; enqueuing authoritative tombstone"
+                                            );
+                                            self.processor.on_event_key(filename_key).await;
                                             continue;
                                         }
                                         tracing::info!(
@@ -355,15 +393,25 @@ where
                                             path = %path.display(),
                                             "Received runtime Apply event, enqueuing"
                                         );
+                                        clear_runtime_invalid(&self.invalid_envelopes, &key);
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
                                         self.processor.on_event_key(key).await;
                                     }
                                     Err(e) => {
                                         // File content is invalid — evict any stale entry from
-                                        // LocalRawStore so cross-resource lookups don't return
-                                        // a previously-valid but now-outdated version.
+                                        // LocalRawStore and enqueue the authoritative key. The
+                                        // single worker observes the tombstone and revokes the
+                                        // previously processed generation and all of its derived
+                                        // state. A later valid apply follows the same queue path.
                                         if let Some(key) = extract_key_from_path(&path, kind) {
                                             self.fs_raw_store.remove(&key);
+                                            store_runtime_invalid(
+                                                &self.invalid_envelopes,
+                                                key.clone(),
+                                                "ParseError",
+                                                e.to_string(),
+                                            );
+                                            self.processor.on_event_key(key).await;
                                         }
                                         tracing::warn!(
                                             component = "fs_resource_controller",
@@ -386,6 +434,7 @@ where
                             } else {
                                 // Parse delete info: "__DELETE__:kind:key"
                                 if let Some(key) = parse_delete_info(&info) {
+                                    clear_runtime_invalid(&self.invalid_envelopes, &key);
                                     // Remove from raw store immediately on delete.
                                     self.fs_raw_store.remove(&key);
                                     // Enqueue unconditionally: the worker re-reads the
@@ -477,6 +526,7 @@ fn spawn_worker<K>(
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
+    invalid_envelopes: Arc<RuntimeInvalidEnvelopes>,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -508,6 +558,29 @@ where
 
             match item {
                 Some(work_item) => {
+                    if let Some(invalid) = get_runtime_invalid(&invalid_envelopes, &work_item.key) {
+                        // The sole worker owns both revocation and status
+                        // publication. Do not route the Deleted result through
+                        // the ordinary delete-status arm: ParseError must stay
+                        // visible until a valid repair clears the envelope.
+                        let _ = processor
+                            .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
+                            .await;
+                        if let Err(e) = status_handler
+                            .write_error_status(kind, &work_item.key, invalid.reason, &invalid.message)
+                            .await
+                        {
+                            tracing::warn!(
+                                component = "fs_resource_controller",
+                                kind = kind,
+                                key = %work_item.key,
+                                error = %e,
+                                "Failed to persist invalid-resource status"
+                            );
+                        }
+                        workqueue.done(&work_item.key);
+                        continue;
+                    }
                     // For FileSystem mode we re-read the spec from disk. The
                     // canonical path lives in `PathRegistry` (winner of this
                     // (kind, key)); we fall back to the default nested layout
@@ -539,6 +612,21 @@ where
                                              the file or revert metadata.name/namespace to '{}'",
                                             work_item.key, work_item.key
                                         );
+                                        fs_raw_store.remove(&work_item.key);
+                                        store_runtime_invalid(
+                                            &invalid_envelopes,
+                                            work_item.key.clone(),
+                                            "IdentityMismatch",
+                                            message.clone(),
+                                        );
+                                        let _ = processor
+                                            .process_work_item(
+                                                &work_item.key,
+                                                None,
+                                                None,
+                                                work_item.trigger_chain.clone(),
+                                            )
+                                            .await;
                                         if let Err(e) = status_handler
                                             .write_error_status(kind, &work_item.key, "IdentityMismatch", &message)
                                             .await
@@ -566,10 +654,18 @@ where
                                     // re-reads the file (possibly a newer version), so we
                                     // update here to stay consistent.
                                     fs_raw_store.upsert(work_item.key.clone(), Arc::new(obj.clone()));
+                                    clear_runtime_invalid(&invalid_envelopes, &work_item.key);
                                     (Some(obj), None)
                                 }
                                 Err(e) => {
                                     let error_msg = e.to_string();
+                                    fs_raw_store.remove(&work_item.key);
+                                    store_runtime_invalid(
+                                        &invalid_envelopes,
+                                        work_item.key.clone(),
+                                        "ParseError",
+                                        error_msg.clone(),
+                                    );
                                     tracing::warn!(
                                         component = "fs_resource_controller",
                                         kind = kind,
@@ -602,6 +698,9 @@ where
 
                     // Handle parse errors by writing error status
                     if let Some(error_msg) = parse_error {
+                        let _ = processor
+                            .process_work_item(&work_item.key, None, None, work_item.trigger_chain.clone())
+                            .await;
                         if let Err(e) = status_handler
                             .write_error_status(kind, &work_item.key, "ParseError", &error_msg)
                             .await
@@ -672,12 +771,17 @@ where
                                         }
                                     }
                                     None => {
-                                        tracing::warn!(
-                                            component = "fs_resource_controller",
-                                            kind = kind,
-                                            key = %work_item.key,
-                                            "Status changed but failed to extract status value for persistence"
-                                        );
+                                        // A repaired statusless resource must
+                                        // remove the retained ParseError sidecar.
+                                        if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                error = %e,
+                                                "Failed to clear stale error status after repair"
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -760,11 +864,7 @@ async fn reject_identity_mismatch(
     content_key: &str,
     filename_key: &str,
 ) {
-    let message = format!(
-        "file content identity '{content_key}' does not match filename identity '{filename_key}'; \
-         in FileSystem mode the filename is authoritative — rename the file or revert \
-         metadata.name/namespace to '{filename_key}'"
-    );
+    let message = identity_mismatch_message(content_key, filename_key);
     if let Err(e) = status_handler
         .write_error_status(kind, filename_key, "IdentityMismatch", &message)
         .await
@@ -785,6 +885,14 @@ async fn reject_identity_mismatch(
         filename_key = %filename_key,
         "Rejected resource: file content identity does not match filename identity"
     );
+}
+
+fn identity_mismatch_message(content_key: &str, filename_key: &str) -> String {
+    format!(
+        "file content identity '{content_key}' does not match filename identity '{filename_key}'; \
+         in FileSystem mode the filename is authoritative — rename the file or revert \
+         metadata.name/namespace to '{filename_key}'"
+    )
 }
 
 /// Extract resource key from file path
@@ -868,9 +976,9 @@ mod tests {
         assert_eq!(filename_identity_mismatch(path, "HTTPRoute", "default/r2"), None);
     }
     use edgion_resources::prelude_resources::{
-        BackendTLSPolicy, BackendTLSPolicyAlpha3, BackendTLSPolicyAlpha3Spec, BackendTLSPolicySpec,
-        BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, TLSBackendRef, TLSRoute,
-        TLSRouteAlpha3, TLSRouteAlpha3Spec, TLSRouteRule, TLSRouteSpec, TLSRouteStatus,
+        BackendTLSPolicy, BackendTLSPolicySpec, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef,
+        BackendTLSPolicyValidation, TLSBackendRef, TLSRoute, TLSRouteAlpha3, TLSRouteAlpha3Spec, TLSRouteRule,
+        TLSRouteSpec, TLSRouteStatus,
     };
     use edgion_resources::resources::common::ParentReference;
 
@@ -907,32 +1015,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_backend_tls_policy_v1alpha3_into_canonical_v1() {
-        let policy = make_policy();
-        let alpha3 = BackendTLSPolicyAlpha3 {
-            metadata: policy.metadata.clone(),
-            spec: BackendTLSPolicyAlpha3Spec {
-                target_refs: policy.spec.target_refs.clone(),
-                resolved_target_class: policy.spec.resolved_target_class,
-                validation: policy.spec.validation.clone(),
-                options: policy.spec.options.clone(),
-                resolved_ca_certificates: policy.spec.resolved_ca_certificates.clone(),
-                resolved_client_certificate: policy.spec.resolved_client_certificate.clone(),
-                use_system_ca: policy.spec.use_system_ca,
-            },
-            status: policy.status.clone(),
-        };
-        let yaml = serde_yaml::to_string(&alpha3).unwrap();
-
-        let parsed: BackendTLSPolicy = parse_resource_content(&yaml).unwrap();
-        let serialized = serde_yaml::to_value(&parsed).unwrap();
-
-        assert_eq!(
-            serialized.get("apiVersion").and_then(|v| v.as_str()),
-            Some("gateway.networking.k8s.io/v1")
+    fn parse_backend_tls_policy_rejects_v1alpha3() {
+        let yaml = serde_yaml::to_string(&make_policy()).unwrap().replacen(
+            "gateway.networking.k8s.io/v1",
+            "gateway.networking.k8s.io/v1alpha3",
+            1,
         );
-        assert_eq!(parsed.spec.validation.hostname, "backend.default.svc");
-        assert_eq!(parsed.spec.target_refs[0].name, "backend");
+
+        let error = parse_resource_content::<BackendTLSPolicy>(&yaml).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("BackendTLSPolicy apiVersion must be gateway.networking.k8s.io/v1"));
+    }
+
+    #[test]
+    fn parse_backend_tls_policy_rejects_missing_api_version() {
+        let yaml = serde_yaml::to_string(&make_policy())
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("apiVersion:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let error = parse_resource_content::<BackendTLSPolicy>(&yaml).unwrap_err();
+        assert!(error.to_string().contains("found <missing>"));
     }
 
     #[test]
@@ -1028,7 +1134,8 @@ mod tests {
         assert_eq!(parsed.metadata.name.as_deref(), Some("tr"));
     }
 
-    use super::{spawn_worker, ResourceProcessor};
+    use super::{spawn_worker, FileSystemEvent, FileSystemResourceController, ResourceKey, ResourceProcessor};
+    use crate::conf_mgr::conf_center::common::{clear_runtime_invalid, store_runtime_invalid, RuntimeInvalidEnvelopes};
     use crate::conf_mgr::conf_center::file_system::path_registry::PathRegistry;
     use crate::conf_mgr::conf_center::file_system::status::FileSystemStatusHandler;
     use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ProcessorHandler};
@@ -1072,6 +1179,7 @@ mod tests {
         Arc<PathRegistry>,
         Arc<LocalRawStore<HTTPRoute>>,
         FileSystemStatusHandler,
+        Arc<RuntimeInvalidEnvelopes>,
         tokio::task::JoinHandle<()>,
     ) {
         let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
@@ -1083,6 +1191,7 @@ mod tests {
         let registry = Arc::new(PathRegistry::default());
         let raw_store = Arc::new(LocalRawStore::<HTTPRoute>::new());
         let status_handler = FileSystemStatusHandler::new(conf_dir.to_path_buf()).with_registry(registry.clone());
+        let invalid_envelopes = Arc::new(RuntimeInvalidEnvelopes::default());
         let worker = spawn_worker(
             processor.clone(),
             conf_dir.to_path_buf(),
@@ -1090,14 +1199,22 @@ mod tests {
             "HTTPRoute",
             None,
             raw_store.clone(),
+            invalid_envelopes.clone(),
         );
-        (processor, registry, raw_store, status_handler, worker)
+        (
+            processor,
+            registry,
+            raw_store,
+            status_handler,
+            invalid_envelopes,
+            worker,
+        )
     }
 
     #[tokio::test]
     async fn sole_file_delete_removes_resource_and_status() {
         let tmp = tempfile::tempdir().unwrap();
-        let (processor, _registry, _raw_store, status_handler, _worker) = fs_worker_test_harness(tmp.path());
+        let (processor, _registry, _raw_store, status_handler, _invalid, _worker) = fs_worker_test_harness(tmp.path());
 
         // Prior state: resource in cache + a persisted .status file, no spec
         // file on disk (the file was just deleted by the operator).
@@ -1132,7 +1249,7 @@ mod tests {
     #[tokio::test]
     async fn never_cached_key_delete_is_skipped_without_status_write() {
         let tmp = tempfile::tempdir().unwrap();
-        let (processor, _registry, _raw_store, status_handler, _worker) = fs_worker_test_harness(tmp.path());
+        let (processor, _registry, _raw_store, status_handler, _invalid, _worker) = fs_worker_test_harness(tmp.path());
 
         // An orphan error-status file from a resource that never parsed.
         status_handler
@@ -1160,7 +1277,7 @@ mod tests {
     #[tokio::test]
     async fn delete_then_recreate_before_dequeue_reapplies() {
         let tmp = tempfile::tempdir().unwrap();
-        let (processor, _registry, _raw_store, _status_handler, _worker) = fs_worker_test_harness(tmp.path());
+        let (processor, _registry, _raw_store, _status_handler, _invalid, _worker) = fs_worker_test_harness(tmp.path());
 
         // v1 is cached; the file is deleted (delete event pending), but a new
         // file for the same key reappears before the worker dequeues — the
@@ -1192,5 +1309,174 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "worker did not re-apply in time");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn valid_to_malformed_to_repair_revokes_then_recovers_via_worker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (processor, _registry, raw_store, status_handler, invalid, _worker) = fs_worker_test_harness(tmp.path());
+        let key = "default/r1";
+        let path = tmp.path().join("default").join("HTTPRoute_default_r1.yaml");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+
+        let v1 = make_route("default", "r1");
+        tokio::fs::write(&path, serde_yaml::to_string(&v1).unwrap())
+            .await
+            .unwrap();
+        raw_store.upsert(key.to_string(), Arc::new(v1.clone()));
+        processor.save(v1, None);
+
+        raw_store.remove(key);
+        store_runtime_invalid(
+            &invalid,
+            key.to_string(),
+            "ParseError",
+            "invalid listener structure".to_string(),
+        );
+        processor.on_event_key(key.to_string()).await;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get(key).is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not revoke malformed object"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let error_status = status_handler.read_status_json("HTTPRoute", key).await.unwrap();
+        assert!(error_status.contains("ParseError"));
+
+        let mut v2 = make_route("default", "r1");
+        v2.spec.hostnames = Some(vec!["repaired.example.com".to_string()]);
+        tokio::fs::write(&path, serde_yaml::to_string(&v2).unwrap())
+            .await
+            .unwrap();
+        clear_runtime_invalid(&invalid, key);
+        raw_store.upsert(key.to_string(), Arc::new(v2));
+        processor.on_event_key(key.to_string()).await;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if processor
+                .get(key)
+                .is_some_and(|route| route.spec.hostnames.as_deref() == Some(&["repaired.example.com".to_string()]))
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not apply repaired object"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let repaired_status = status_handler.read_status_json("HTTPRoute", key).await;
+        assert!(repaired_status.is_none_or(|status| !status.contains("ParseError")));
+    }
+
+    #[tokio::test]
+    async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+            "HTTPRoute",
+            100,
+            Arc::new(FsNoopHandler),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let registry = Arc::new(PathRegistry::default());
+        let key = "default/r1";
+        let path = tmp.path().join("default").join("HTTPRoute_default_r1.yaml");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        registry.record(ResourceKey::new("HTTPRoute", key), path.clone());
+        let status_handler = FileSystemStatusHandler::new(tmp.path().to_path_buf()).with_registry(registry.clone());
+        let (event_tx, event_rx) = tokio::sync::broadcast::channel(16);
+        let shutdown = crate::conf_mgr::sync_runtime::ShutdownHandle::new();
+        let controller = FileSystemResourceController::new(
+            "HTTPRoute",
+            processor.clone(),
+            tmp.path().to_path_buf(),
+            registry,
+            event_rx,
+        )
+        .with_shutdown(shutdown.signal());
+        let controller_task = tokio::spawn(controller.run());
+
+        let v1 = make_route("default", "r1");
+        tokio::fs::write(&path, serde_yaml::to_string(&v1).unwrap())
+            .await
+            .unwrap();
+        event_tx.send(FileSystemEvent::Init).unwrap();
+        event_tx
+            .send(FileSystemEvent::InitApply {
+                path: path.clone(),
+                content: serde_yaml::to_string(&v1).unwrap(),
+            })
+            .unwrap();
+        event_tx.send(FileSystemEvent::InitDone).unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get(key).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "controller did not apply initial object"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let mismatched = make_route("default", "other");
+        let mismatched_content = serde_yaml::to_string(&mismatched).unwrap();
+        tokio::fs::write(&path, &mismatched_content).await.unwrap();
+        // The watcher payload still describes the authoritative key, but the
+        // file is replaced before the sole worker re-reads it. This exercises
+        // the production dequeue-time identity check rather than the earlier
+        // event-parser check.
+        let mut queued = make_route("default", "r1");
+        queued.spec.hostnames = Some(vec!["queued.example.com".to_string()]);
+        event_tx
+            .send(FileSystemEvent::Apply {
+                path: path.clone(),
+                content: serde_yaml::to_string(&queued).unwrap(),
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get(key).is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not revoke identity-mismatched object"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let error_status = status_handler.read_status_json("HTTPRoute", key).await.unwrap();
+        assert!(error_status.contains("IdentityMismatch"));
+
+        let mut repaired = make_route("default", "r1");
+        repaired.spec.hostnames = Some(vec!["repaired.example.com".to_string()]);
+        let repaired_content = serde_yaml::to_string(&repaired).unwrap();
+        tokio::fs::write(&path, &repaired_content).await.unwrap();
+        event_tx
+            .send(FileSystemEvent::Apply {
+                path: path.clone(),
+                content: repaired_content,
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if processor
+                .get(key)
+                .is_some_and(|route| route.spec.hostnames.as_deref() == Some(&["repaired.example.com".to_string()]))
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not apply repaired identity"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let repaired_status = status_handler.read_status_json("HTTPRoute", key).await;
+        assert!(repaired_status.is_none_or(|status| !status.contains("IdentityMismatch")));
+        shutdown.shutdown();
+        assert!(controller_task.await.unwrap().is_ok());
     }
 }

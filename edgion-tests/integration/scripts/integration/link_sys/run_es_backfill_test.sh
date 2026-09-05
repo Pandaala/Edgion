@@ -419,7 +419,7 @@ for i in $(seq 1 60); do
 done
 
 for i in $(seq 1 20); do
-    grep -q "LB preload completed" "${LOG_DIR}/gateway.log" 2>/dev/null && { log_info "LB preload verified"; break; }
+    grep -q "All caches are ready" "${LOG_DIR}/gateway.log" 2>/dev/null && { log_info "gateway caches ready"; break; }
     sleep 1
 done
 # Let the LinkSys ConfHandler initialise the ES client + the access logger.

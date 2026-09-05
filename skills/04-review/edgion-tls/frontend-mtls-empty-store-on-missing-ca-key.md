@@ -1,6 +1,6 @@
 ---
 name: frontend-mtls-empty-store-on-missing-ca-key
-description: configure_gateway_frontend_mtls now returns Err when every referenced CA Secret lacks the `ca.crt` key, so a non-empty `resolved_frontend_ca_secrets` whose entries are all missing the conventional key no longer silently installs an empty trust store. Reject re-reports of the silent-empty-store form.
+description: configure_gateway_frontend_mtls now returns Err unless every ordered typed CA outcome contains a valid non-empty certificate bundle, so missing `ca.crt` material can no longer silently install an empty trust store. Reject re-reports of the silent-empty-store form.
 ---
 
 # tls-FB01 — Gateway `frontendValidation` silently installed empty CA store on missing `ca.crt`
@@ -10,14 +10,12 @@ description: configure_gateway_frontend_mtls now returns Err when every referenc
 
 ## Conclusion
 
-`configure_gateway_frontend_mtls` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) now
-tracks `certs_added: usize` across the per-Secret loop. When every entry in a non-empty
-`resolved_frontend_ca_secrets` lacks the `CA_CERT` (`ca.crt`) key, the loop body never runs,
-`certs_added` stays `0`, and the function returns `Err(PingoraError::explain(InvalidCert, ...))`
-instead of building an empty trust store and stamping a verify mode on top of it. The caller
-(`apply_gateway_tls_cert`) already routes that `Err` into `ssl_ctx.meta.err_log` as
-`"frontend mTLS error: ..."`, so the misconfiguration becomes a fail-closed listener with a
-diagnostic instead of a silent client-cert barrier.
+The matcher cold path validates every ordered `resolved_frontend_ca_refs` outcome with the
+shared strict PEM/X.509 parser and publishes `StrictEffective` only with a complete compiled
+`X509Store`. Missing keys, empty values, malformed bundles, trailing content, private-key
+blocks, source mismatches, and partial sets publish `StrictReject` without a store. The TLS
+handshake callback only installs that immutable store or rejects; it never parses PEM or builds
+trust state per connection.
 
 Re-reports of the form "`configure_gateway_frontend_mtls` builds an empty `X509Store` and
 calls `set_verify` on it when CA Secrets lack `ca.crt`", "`add_ca_bundle_to_store`'s

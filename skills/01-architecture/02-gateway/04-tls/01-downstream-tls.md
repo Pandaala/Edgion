@@ -90,10 +90,10 @@ Invoked after the TLS handshake completes; responsible for:
 
 `apply_gateway_tls_cert` handles certificates for Gateway Listeners:
 
-1. Collect **every** Secret: prefer `GatewayTlsEntry`'s inline `secrets` (resolved by the controller from all `certificateRefs`); fall back to `resolve_secrets_from_store_or_error`, which resolves *all* `certificateRefs` from the global SecretStore.
+1. Use the complete ordered Secret outcomes resolved by the Controller from all `certificateRefs`. Matcher rebuild verifies each index and source identity, validates each certificate chain and private key with the shared strict parser, checks key/certificate matching, and retains only an immutable compiled Secret set. The Gateway never falls back to its global SecretStore; missing, denied, partial, reordered, or identity-mismatched outcomes remain fail-closed regardless of Secret existence.
 2. Select the cert matching the client (`select_gateway_secret`). **BoringSSL exposes only a single certificate slot per `SSL` (unlike OpenSSL's per-key-type slots), so a dual-cert listener (RSA + ECDSA) cannot rely on the library to auto-pick — we select explicitly.** ECDSA is preferred only when **(a) the negotiated version is TLS 1.3** (`negotiated_is_tls13`, via the safe `SslRef::version2()`) **and (b)** the client advertised an ECDSA `signature_algorithm` (`client_supports_ecdsa`, FFI `SSL_get0_peer_verify_algorithms` + `SSL_get_signature_algorithm_key_type`); then the ECDSA cert is served, otherwise the first RSA cert. The TLS 1.3 gate is required because in TLS 1.2 the cert key type also constrains the usable cipher suites (ECDHE-ECDSA vs ECDHE-RSA) — selecting ECDSA purely from sigalgs there could break a client that offered only ECDHE-RSA ciphers, so TLS 1.2 keeps legacy first-cert behavior. TLS 1.3 decouples auth from the cipher, making sigalg-based selection safe. This mirrors BoringSSL's / Envoy's own selection. With a single cert it is a no-op. The pure selection rule is factored into `pick_secret_index` (unit-tested).
 3. Extract the certificate and private key from the selected Secret's `data["tls.crt"]` and `data["tls.key"]` and set them on the SSL connection (`apply_secret_to_ssl`). A bad/missing cert fails the handshake (fail-closed) instead of being silently dropped.
-4. If `frontend_validation` is present, call `configure_gateway_frontend_mtls()` to configure client certificate verification.
+4. Apply the matcher generation's compiled frontend outcome before binding a server certificate. Strict missing, partial, empty-key, or malformed CA sets are `StrictReject`; a reject candidate remains in the same SNI matcher slot and precedence order as a serving candidate.
 
 > **Why not iterate `SSL_use_certificate` per cert?** On OpenSSL that populates separate RSA/ECDSA slots; on BoringSSL each call *replaces* the single slot (last-wins), so iterating would serve only one key type. Explicit ClientHello-driven selection is the BoringSSL-correct approach.
 
@@ -110,11 +110,12 @@ Gateway API standard frontend client certificate validation, configured via `spe
 
 ### Configuration flow (`configure_gateway_frontend_mtls`)
 
-1. Extract CA certificates from `resolved_frontend_ca_secrets` (key: `ca.crt`) and build an `X509Store`.
-2. Pick a verify mode based on `mode`: AllowValidOnly uses standard SSL verify; AllowInsecureFallback uses `boring_sys::SSL_set_verify` + `insecure_fallback_verify_cb`.
-3. Set `verify_depth(10)`.
+1. The Controller erases raw listener projection fields, selects `spec.tls.frontend.default` or the authoritative matching `perPort` entry for HTTPS listeners, and resolves the complete Secret/ConfigMap reference set.
+2. Matcher publication validates the exact ordered CA source identities, applies shared per-reference and aggregate byte/certificate limits, globally deduplicates certificates, and compiles one immutable outcome: `NotConfigured`, `StrictEffective`, `StrictReject`, or `InsecureFallback`. Strict mode is full-set atomic; no raw CA payload or previous trust store is retained in the published entry.
+3. `configure_gateway_frontend_mtls` only installs the already-compiled trust store for an effective strict policy, or installs the insecure fallback callback without parsing or carrying CA payload. Strict rejection occurs before attachment scanning and before any server cert/key binding.
+4. An EdgionTls certificate may compose with this policy only when both sides carry resolved, exactly equal Controller proofs covering the winning Gateway namespace, name, listener section, `ListenerKey`, final eligibility, and public certificate/CA fingerprints. Dual client-auth declarations reject as a conflict; a mismatched or stale-generation EdgionTls cannot shadow or conflict with the Gateway winner.
 
-The Controller merges per-listener configuration into each listener's `GatewayTlsConfig`; no extra processing is needed on the Gateway side.
+`GatewayTLSConfig.frontend_validation`, `resolved_frontend_ca_refs`, and `frontend_matcher_eligibility` are controller-private conf_sync fields and are excluded from generated schemas. The ordered resolution vector preserves the exact Secret/ConfigMap source identity and an explicit error for every declared reference; strict mode is effective only when the complete set validates. Operators configure only `Gateway.spec.tls.frontend`.
 
 ## EdgionTls mTLS client verification
 

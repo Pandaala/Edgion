@@ -19,7 +19,7 @@ Edgion implements the Kubernetes Gateway API v1.5.0 specification, supporting HT
 | **TLSRoute** | gateway.networking.k8s.io/v1 (v1alpha3 compatible) | Standard / Experimental — served versions may differ between install manifests | TLS passthrough routing, forwards encrypted traffic directly after SNI matching |
 | **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP routing, forwarded by port |
 | **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 compatible) | Standard | Cross-namespace reference authorization, used only on the Controller side (no_sync_kinds) |
-| **BackendTLSPolicy** | gateway.networking.k8s.io/v1 (v1alpha3 compatible) | Standard / Experimental — served versions may differ between install manifests | Backend TLS policy, configures Gateway→Backend mTLS |
+| **BackendTLSPolicy** | gateway.networking.k8s.io/v1 | Standard | Backend TLS policy, configures Gateway→Backend mTLS |
 
 ## CRD Installation
 

@@ -16,11 +16,183 @@
 //! revocation/OCSP schema, no-SAN CN fallback) are emitted by a caller-side
 //! helper in the gateway.
 
+use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
 use std::fmt;
 use x509_parser::pem::Pem;
 use x509_parser::prelude::*;
 
 use edgion_resources::EdgionTls;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaBundleError {
+    Empty,
+    TooLarge,
+    TooManyCertificates,
+    InvalidUtf8,
+    UnexpectedContent,
+    TruncatedPem,
+    InvalidPem,
+    NonCertificatePem,
+    InvalidCertificate,
+}
+
+/// Immutable canonical CA bundle shared by Controller validation and Gateway
+/// cold-path trust compilation. Only complete CERTIFICATE PEM blocks are
+/// accepted; any non-whitespace prefix, suffix, private-key block, truncated
+/// block, or invalid X.509 DER rejects the whole bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalCaBundle {
+    pub certificates_der: Vec<Vec<u8>>,
+}
+
+/// Ordered serving certificate chain. The first certificate is always the
+/// leaf whose public key must match the configured private key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrictCertificateChain {
+    pub certificates_der: Vec<Vec<u8>>,
+    /// Leaf validity bounds compiled to Unix seconds for allocation-free
+    /// handshake checks.
+    pub leaf_not_before_unix: i64,
+    pub leaf_not_after_unix: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateKeyFormat {
+    Pkcs8,
+    RsaPkcs1,
+    EcSec1,
+}
+
+/// Strictly parsed private key. DER is retained so a TLS backend can compile
+/// the key once on its configuration cold path.
+pub struct StrictPrivateKey {
+    pub der: PrivateKeyDer<'static>,
+    pub format: PrivateKeyFormat,
+    public_key_spki_der: Vec<u8>,
+}
+
+pub const MAX_CA_REFERENCE_COUNT: usize = 8;
+pub const MAX_CA_BUNDLE_BYTES_PER_REF: usize = 1024 * 1024;
+pub const MAX_CA_BUNDLE_BYTES_AGGREGATE: usize = 1024 * 1024;
+pub const MAX_CA_CERTIFICATES_PER_REF: usize = 1024;
+pub const MAX_CA_CERTIFICATES_AGGREGATE: usize = 1024;
+pub const MAX_PRIVATE_KEY_BYTES: usize = 1024 * 1024;
+pub const MAX_SERVING_CERTIFICATE_REFS: usize = 64;
+
+fn parse_ordered_certificate_pem(input: &[u8]) -> Result<Vec<Vec<u8>>, CaBundleError> {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+
+    if input.len() > MAX_CA_BUNDLE_BYTES_PER_REF {
+        return Err(CaBundleError::TooLarge);
+    }
+    let text = std::str::from_utf8(input).map_err(|_| CaBundleError::InvalidUtf8)?;
+    let mut remaining = text;
+    let mut certificates_der = Vec::new();
+    loop {
+        remaining = remaining.trim_start_matches(char::is_whitespace);
+        if remaining.is_empty() {
+            break;
+        }
+        if !remaining.starts_with(BEGIN) {
+            return Err(CaBundleError::UnexpectedContent);
+        }
+        let end_offset = remaining.find(END).ok_or(CaBundleError::TruncatedPem)? + END.len();
+        let block = &remaining[..end_offset];
+        let (rest, pem) = x509_parser::pem::parse_x509_pem(block.as_bytes()).map_err(|_| CaBundleError::InvalidPem)?;
+        if !rest.iter().all(u8::is_ascii_whitespace) || pem.label != "CERTIFICATE" {
+            return Err(CaBundleError::NonCertificatePem);
+        }
+        let (der_rest, _) = X509Certificate::from_der(&pem.contents).map_err(|_| CaBundleError::InvalidCertificate)?;
+        if !der_rest.is_empty() {
+            return Err(CaBundleError::InvalidCertificate);
+        }
+        if certificates_der.len() >= MAX_CA_CERTIFICATES_PER_REF {
+            return Err(CaBundleError::TooManyCertificates);
+        }
+        certificates_der.push(pem.contents.to_vec());
+        remaining = &remaining[end_offset..];
+    }
+    if certificates_der.is_empty() {
+        return Err(CaBundleError::Empty);
+    }
+    Ok(certificates_der)
+}
+
+pub fn parse_canonical_ca_bundle(input: &[u8]) -> Result<CanonicalCaBundle, CaBundleError> {
+    let mut certificates_der = parse_ordered_certificate_pem(input)?;
+    certificates_der.sort();
+    certificates_der.dedup();
+    Ok(CanonicalCaBundle { certificates_der })
+}
+
+/// Strict complete certificate-chain parser for serving certificates.
+/// Unlike the CA-named entry point, this communicates that leaf/intermediate
+/// chains are accepted and does not assign trust-anchor semantics.
+pub fn parse_strict_certificate_chain(input: &[u8]) -> Result<StrictCertificateChain, CaBundleError> {
+    let certificates_der = parse_ordered_certificate_pem(input)?;
+    let (_, leaf) = X509Certificate::from_der(&certificates_der[0]).map_err(|_| CaBundleError::InvalidCertificate)?;
+    let leaf_not_before_unix = leaf.validity().not_before.timestamp();
+    let leaf_not_after_unix = leaf.validity().not_after.timestamp();
+    Ok(StrictCertificateChain {
+        certificates_der,
+        leaf_not_before_unix,
+        leaf_not_after_unix,
+    })
+}
+
+pub fn parse_strict_private_key_pem(input: &[u8]) -> Result<StrictPrivateKey, KeyCertMatchError> {
+    if input.len() > MAX_PRIVATE_KEY_BYTES {
+        return Err(KeyCertMatchError::KeyParse(
+            "private key exceeds the byte limit".to_string(),
+        ));
+    }
+    let text = std::str::from_utf8(input)
+        .map_err(|_| KeyCertMatchError::KeyParse("private key is not UTF-8 PEM".to_string()))?;
+    let trimmed = text.trim();
+    let labels = ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"];
+    let Some(label) = labels
+        .iter()
+        .find(|label| trimmed.starts_with(&format!("-----BEGIN {label}-----")))
+    else {
+        return Err(KeyCertMatchError::KeyParse(
+            "private key PEM has an unsupported or missing BEGIN marker".to_string(),
+        ));
+    };
+    let end = format!("-----END {label}-----");
+    let Some(end_offset) = trimmed.find(&end) else {
+        return Err(KeyCertMatchError::KeyParse("private key PEM is truncated".to_string()));
+    };
+    if !trimmed[end_offset + end.len()..].trim().is_empty() {
+        return Err(KeyCertMatchError::KeyParse(
+            "private key PEM contains trailing content".to_string(),
+        ));
+    }
+    let der = PrivateKeyDer::from_pem_slice(trimmed.as_bytes())
+        .map_err(|_| KeyCertMatchError::KeyParse("private key PEM is invalid".to_string()))?;
+    let format = match &der {
+        PrivateKeyDer::Pkcs8(_) => PrivateKeyFormat::Pkcs8,
+        PrivateKeyDer::Pkcs1(_) => PrivateKeyFormat::RsaPkcs1,
+        PrivateKeyDer::Sec1(_) => PrivateKeyFormat::EcSec1,
+        _ => {
+            return Err(KeyCertMatchError::KeyParse(
+                "private key PEM format is unsupported".to_string(),
+            ))
+        }
+    };
+    let signing_key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&der)
+        .map_err(|_| KeyCertMatchError::KeyParse("private key PEM is invalid or unsupported".to_string()))?;
+    let public_key_spki_der = signing_key
+        .public_key()
+        .ok_or_else(|| KeyCertMatchError::KeyParse("private key public key is unavailable".to_string()))?
+        .as_ref()
+        .to_vec();
+    Ok(StrictPrivateKey {
+        der,
+        format,
+        public_key_spki_der,
+    })
+}
 
 // ---------------------------------------------------------------------------
 // KeyCertMatchError + check_key_matches_cert (original helpers)
@@ -55,20 +227,14 @@ impl std::error::Error for KeyCertMatchError {}
 
 /// Verify that a PEM private key matches the public key in a PEM certificate.
 pub fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), KeyCertMatchError> {
-    let key_pair = rcgen::KeyPair::from_pem(key_pem)
-        .map_err(|e| KeyCertMatchError::KeyParse(format!("Failed to parse private key: {}", e)))?;
-
-    let pem = Pem::iter_from_buffer(cert_pem.as_bytes())
-        .next()
-        .ok_or_else(|| KeyCertMatchError::CertParse("No PEM block found in cert".to_string()))?
-        .map_err(|e| KeyCertMatchError::CertParse(format!("Cert PEM parse error: {}", e)))?;
-
-    let (_, cert) = X509Certificate::from_der(&pem.contents)
+    let chain = parse_strict_certificate_chain(cert_pem.as_bytes())
+        .map_err(|error| KeyCertMatchError::CertParse(format!("strict certificate chain rejected: {error:?}")))?;
+    let private_key = parse_strict_private_key_pem(key_pem.as_bytes())?;
+    let (_, cert) = X509Certificate::from_der(&chain.certificates_der[0])
         .map_err(|e| KeyCertMatchError::CertParse(format!("X.509 parse error: {}", e)))?;
-    let cert_pubkey_raw = &cert.public_key().subject_public_key.data;
-    let key_pubkey_raw = key_pair.public_key_raw();
+    let cert_pubkey_spki_der = cert.public_key().raw;
 
-    if cert_pubkey_raw.as_ref() != key_pubkey_raw {
+    if cert_pubkey_spki_der != private_key.public_key_spki_der {
         return Err(KeyCertMatchError::Mismatch(
             "Private key does not match certificate public key".to_string(),
         ));
@@ -708,5 +874,88 @@ mod status_determinism_tests {
         assert_eq!(m1, m2, "status_message must be stable across calls");
         assert!(m1.contains("2020-01-01") && m1.contains("2020-02-01"));
         assert_eq!(err.status_reason(), "CertExpired");
+    }
+}
+
+#[cfg(test)]
+mod canonical_ca_bundle_tests {
+    use super::{
+        parse_canonical_ca_bundle, parse_strict_private_key_pem, CaBundleError, MAX_CA_BUNDLE_BYTES_PER_REF,
+        MAX_CA_CERTIFICATES_PER_REF,
+    };
+
+    fn certificate_and_key() -> (String, String) {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["ca.example.com".to_string()]).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let cert = params.self_signed(&key).unwrap().pem();
+        (cert, key.serialize_pem())
+    }
+
+    #[test]
+    fn accepts_only_complete_certificate_blocks_and_canonicalizes_duplicates() {
+        let (cert, _) = certificate_and_key();
+        let bundle = format!("\n{cert}\n{cert}\n");
+        let parsed = parse_canonical_ca_bundle(bundle.as_bytes()).unwrap();
+        assert_eq!(parsed.certificates_der.len(), 1);
+    }
+
+    #[test]
+    fn rejects_trailing_garbage_private_key_and_truncated_certificate() {
+        let (cert, key) = certificate_and_key();
+        assert_eq!(
+            parse_canonical_ca_bundle(format!("{cert}garbage").as_bytes()),
+            Err(CaBundleError::UnexpectedContent)
+        );
+        assert_eq!(
+            parse_canonical_ca_bundle(format!("{cert}{key}").as_bytes()),
+            Err(CaBundleError::UnexpectedContent)
+        );
+        let truncated = cert.replace("-----END CERTIFICATE-----", "");
+        assert_eq!(
+            parse_canonical_ca_bundle(truncated.as_bytes()),
+            Err(CaBundleError::TruncatedPem)
+        );
+    }
+
+    #[test]
+    fn rejects_empty_non_certificate_and_invalid_utf8_inputs() {
+        assert_eq!(parse_canonical_ca_bundle(b" \n\t"), Err(CaBundleError::Empty));
+        assert_eq!(
+            parse_canonical_ca_bundle(b"-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----\n"),
+            Err(CaBundleError::UnexpectedContent)
+        );
+        assert_eq!(parse_canonical_ca_bundle(&[0xff]), Err(CaBundleError::InvalidUtf8));
+    }
+
+    #[test]
+    fn enforces_per_reference_byte_limit_at_exact_boundary() {
+        let (cert, _) = certificate_and_key();
+        let mut exact = vec![b' '; MAX_CA_BUNDLE_BYTES_PER_REF - cert.len()];
+        exact.extend_from_slice(cert.as_bytes());
+        assert!(parse_canonical_ca_bundle(&exact).is_ok());
+        exact.push(b' ');
+        assert_eq!(parse_canonical_ca_bundle(&exact), Err(CaBundleError::TooLarge));
+    }
+
+    #[test]
+    fn enforces_unique_certificate_count_before_push() {
+        let mut bundle = String::new();
+        for index in 0..=MAX_CA_CERTIFICATES_PER_REF {
+            let key = rcgen::KeyPair::generate().unwrap();
+            let params = rcgen::CertificateParams::new(vec![format!("ca-{index}.example.com")]).unwrap();
+            bundle.push_str(&params.self_signed(&key).unwrap().pem());
+        }
+        assert_eq!(
+            parse_canonical_ca_bundle(bundle.as_bytes()),
+            Err(CaBundleError::TooManyCertificates)
+        );
+    }
+
+    #[test]
+    fn strict_private_key_rejects_trailing_certificate_content() {
+        let (cert, key) = certificate_and_key();
+        assert!(parse_strict_private_key_pem(key.as_bytes()).is_ok());
+        assert!(parse_strict_private_key_pem(format!("{key}{cert}").as_bytes()).is_err());
     }
 }

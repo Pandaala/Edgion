@@ -1,126 +1,116 @@
-use arc_swap::ArcSwap;
 use k8s_openapi::api::core::v1::Service;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-static GLOBAL_SERVICE_STORE: LazyLock<Arc<ServiceStore>> = LazyLock::new(|| Arc::new(ServiceStore::new()));
+use crate::backends::discovery::{
+    get_service_discovery_coordinator, ServiceDiscoveryCoordinator, ServicePublishedState,
+};
+
+static GLOBAL_SERVICE_STORE: LazyLock<Arc<ServiceStore>> =
+    LazyLock::new(|| Arc::new(ServiceStore::new(get_service_discovery_coordinator())));
 
 pub fn get_global_service_store() -> Arc<ServiceStore> {
     GLOBAL_SERVICE_STORE.clone()
 }
 
-/// Type alias for the service map
-type ServiceMap = HashMap<String, Service>;
-
+/// Read-only compatibility facade over the joint Service selector generation.
+///
+/// Production mutation is owned exclusively by `ServiceDiscoveryCoordinator`.
+/// The facade performs one generation load and never exposes unavailable raw
+/// Service input.
 pub struct ServiceStore {
-    services: ArcSwap<ServiceMap>,
-}
-
-impl Default for ServiceStore {
-    fn default() -> Self {
-        Self::new()
-    }
+    coordinator: Arc<ServiceDiscoveryCoordinator>,
 }
 
 impl ServiceStore {
-    pub fn new() -> Self {
-        Self {
-            services: ArcSwap::from_pointee(HashMap::new()),
-        }
+    pub fn new(coordinator: Arc<ServiceDiscoveryCoordinator>) -> Self {
+        Self { coordinator }
     }
 
-    /// Check if a service exists
     pub fn contains(&self, key: &str) -> bool {
-        let map = self.services.load();
-        map.contains_key(key)
+        matches!(
+            self.coordinator.load_generation().service(key),
+            Some(ServicePublishedState::Available(_))
+        )
     }
 
-    /// Get a service by key
-    pub fn get(&self, key: &str) -> Option<Service> {
-        let map = self.services.load();
-        map.get(key).cloned()
+    pub fn get(&self, key: &str) -> Option<Arc<Service>> {
+        self.coordinator
+            .load_generation()
+            .available(key)
+            .map(|service| Arc::clone(&service.raw.service))
     }
 
-    /// Execute a function with the service reference
     pub fn with_service<F, R>(&self, key: &str, f: F) -> Option<R>
     where
         F: FnOnce(&Service) -> R,
     {
-        let map = self.services.load();
-        map.get(key).map(f)
+        let generation = self.coordinator.load_generation();
+        generation.available(key).map(|service| f(&service.raw.service))
     }
 
-    /// Replace all services atomically
-    pub fn replace_all(&self, services: HashMap<String, Service>) {
-        self.services.store(Arc::new(services));
-    }
-
-    /// Update services atomically (clone map + modify + swap)
-    pub fn update(&self, add_or_update: HashMap<String, Service>, remove: &HashSet<String>) {
-        let current = self.services.load();
-        let current_map: &ServiceMap = &current;
-        let mut new_map: ServiceMap = current_map.clone();
-
-        for key in remove {
-            new_map.remove(key);
-        }
-        for (key, service) in add_or_update {
-            new_map.insert(key, service);
-        }
-
-        self.services.store(Arc::new(new_map));
-    }
-
-    /// Number of services currently in the store.
     pub fn count(&self) -> usize {
-        self.services.load().len()
+        self.coordinator.load_generation().stats.service_sources
     }
 
-    /// Keys currently in the store (snapshot copy). Used by leak detection.
     pub fn keys(&self) -> Vec<String> {
-        self.services.load().keys().cloned().collect()
+        let generation = self.coordinator.load_generation();
+        let mut keys: Vec<String> = generation
+            .services
+            .iter()
+            .filter_map(|(key, state)| matches!(state, ServicePublishedState::Available(_)).then_some(key.clone()))
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[cfg(test)]
+    pub fn update(&self, add: std::collections::HashMap<String, Service>, remove: &std::collections::HashSet<String>) {
+        self.coordinator.update_services(
+            add.into_iter().map(|(key, value)| (key, Arc::new(value))).collect(),
+            std::collections::HashMap::new(),
+            remove.clone(),
+        );
     }
 }
 
 #[cfg(test)]
-mod stats_tests {
+mod tests {
     use super::*;
-    use k8s_openapi::api::core::v1::Service;
-
-    fn svc(name: &str) -> Service {
-        Service {
-            metadata: kube::api::ObjectMeta {
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
+    use kube::api::ObjectMeta;
+    use std::collections::HashMap;
 
     #[test]
-    fn count_returns_zero_when_empty() {
-        let store = ServiceStore::new();
-        assert_eq!(store.count(), 0);
-        assert!(store.keys().is_empty());
-    }
-
-    #[test]
-    fn count_and_keys_track_inserts_and_removes() {
-        let store = ServiceStore::new();
-        let mut add = HashMap::new();
-        add.insert("default/a".to_string(), svc("a"));
-        add.insert("default/b".to_string(), svc("b"));
-        store.update(add, &HashSet::new());
+    fn unavailable_source_counts_in_inventory_but_is_not_exposed_as_routable_raw() {
+        let coordinator = Arc::new(ServiceDiscoveryCoordinator::new());
+        coordinator.set_next_epoch_for_test(u64::MAX);
+        coordinator.replace_services(&HashMap::from([
+            (
+                "default/backend".to_string(),
+                Arc::new(Service {
+                    metadata: ObjectMeta {
+                        namespace: Some("default".to_string()),
+                        name: Some("backend".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
+            (
+                "default/other".to_string(),
+                Arc::new(Service {
+                    metadata: ObjectMeta {
+                        namespace: Some("default".to_string()),
+                        name: Some("other".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ),
+        ]));
+        let store = ServiceStore::new(coordinator);
         assert_eq!(store.count(), 2);
-        let mut keys = store.keys();
-        keys.sort();
-        assert_eq!(keys, vec!["default/a".to_string(), "default/b".to_string()]);
-
-        let mut remove = HashSet::new();
-        remove.insert("default/a".to_string());
-        store.update(HashMap::new(), &remove);
-        assert_eq!(store.count(), 1);
-        assert_eq!(store.keys(), vec!["default/b".to_string()]);
+        assert!(!store.contains("default/backend"));
+        assert!(store.get("default/backend").is_none());
+        assert!(store.keys().is_empty());
     }
 }

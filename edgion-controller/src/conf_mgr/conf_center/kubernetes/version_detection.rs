@@ -1,7 +1,7 @@
 //! Kubernetes version detection for Gateway API CRDs.
 //!
 //! Performs preflight checks for Gateway API CRD availability and probes
-//! API versions for ReferenceGrant, TLSRoute, and BackendTLSPolicy.
+//! API versions for ReferenceGrant and TLSRoute.
 
 use anyhow::Result;
 use kube::core::GroupVersionKind;
@@ -39,13 +39,6 @@ async fn is_kind_served(client: &Client, gvk: &GroupVersionKind) -> Result<bool,
         Err(error) if is_api_unavailable(&error) => Ok(false),
         Err(error) => Err(error),
     }
-}
-
-/// The API version detected for BackendTLSPolicy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendTLSPolicyVersion {
-    V1,
-    V1Alpha3,
 }
 
 /// Detect which ReferenceGrant API version the cluster supports.
@@ -97,63 +90,6 @@ pub async fn probe_reference_grant_version(client: &Client) -> Result<Option<Ref
     tracing::warn!(
         component = "k8s_controller",
         "Neither ReferenceGrant v1 nor v1beta1 available"
-    );
-    Ok(None)
-}
-
-/// Detect which BackendTLSPolicy API version the cluster supports.
-///
-/// Tries v1 first (GA in newer Gateway API releases). Falls back to v1alpha3
-/// for clusters that still expose the legacy served version.
-pub async fn detect_backend_tls_policy_version(client: &Client) -> Option<BackendTLSPolicyVersion> {
-    match probe_backend_tls_policy_version(client).await {
-        Ok(version) => version,
-        Err(err) => {
-            tracing::warn!(
-                component = "k8s_controller",
-                error = %err,
-                "Failed to detect BackendTLSPolicy API version"
-            );
-            None
-        }
-    }
-}
-
-/// Probe served BackendTLSPolicy versions.
-///
-/// Returns `Ok(Some(...))` when any supported version is available, `Ok(None)`
-/// when the CRD is absent, and `Err(...)` for non-404 failures such as RBAC or
-/// connectivity problems.
-pub async fn probe_backend_tls_policy_version(client: &Client) -> Result<Option<BackendTLSPolicyVersion>> {
-    for (version, detected) in [
-        ("v1", BackendTLSPolicyVersion::V1),
-        ("v1alpha3", BackendTLSPolicyVersion::V1Alpha3),
-    ] {
-        let gvk = GroupVersionKind::gvk("gateway.networking.k8s.io", version, "BackendTLSPolicy");
-        match is_kind_served(client, &gvk).await {
-            Ok(true) => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    version = version,
-                    "BackendTLSPolicy API detected"
-                );
-                return Ok(Some(detected));
-            }
-            Ok(false) => continue,
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to probe BackendTLSPolicy API version {}: {}. \
-                     Check RBAC permissions and network connectivity.",
-                    version,
-                    e
-                ));
-            }
-        }
-    }
-
-    tracing::warn!(
-        component = "k8s_controller",
-        "Neither BackendTLSPolicy v1 nor v1alpha3 available"
     );
     Ok(None)
 }
@@ -340,40 +276,6 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
             continue;
         }
 
-        if res.kind == "BackendTLSPolicy" {
-            match probe_backend_tls_policy_version(client).await? {
-                Some(BackendTLSPolicyVersion::V1) => {
-                    tracing::debug!(
-                        component = "k8s_controller",
-                        kind = res.kind,
-                        group = res.group,
-                        version = "v1",
-                        "CRD available"
-                    );
-                }
-                Some(BackendTLSPolicyVersion::V1Alpha3) => {
-                    tracing::debug!(
-                        component = "k8s_controller",
-                        kind = res.kind,
-                        group = res.group,
-                        version = "v1alpha3",
-                        "CRD available"
-                    );
-                }
-                None => {
-                    tracing::warn!(
-                        component = "k8s_controller",
-                        kind = res.kind,
-                        group = res.group,
-                        versions = "v1,v1alpha3",
-                        "CRD not found"
-                    );
-                    missing.push(res);
-                }
-            }
-            continue;
-        }
-
         if res.kind == "ReferenceGrant" {
             match probe_reference_grant_version(client).await? {
                 Some(version) => {
@@ -476,7 +378,7 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
     let missing_list: Vec<String> = missing
         .iter()
         .map(|r| {
-            if r.kind == "BackendTLSPolicy" || r.kind == "TLSRoute" {
+            if r.kind == "TLSRoute" {
                 format!("{} ({}/v1 or v1alpha3)", r.kind, r.group)
             } else if r.kind == "ReferenceGrant" {
                 format!("{} ({}/v1 or v1beta1)", r.kind, r.group)
@@ -491,7 +393,7 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
         "Gateway API CRDs not found: {}\n\n\
          Install missing CRDs:\n  \
          kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml\n  \
-         # Or, if you need legacy served versions such as BackendTLSPolicy v1alpha3:\n  \
+         # Or, if you need the experimental Gateway API resources:\n  \
          kubectl apply --server-side=true -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml\n\n\
          Or skip these resources in config:\n  \
          conf_center.kubernetes.no_watch_kinds: {:?}",

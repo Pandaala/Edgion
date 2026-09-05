@@ -12,6 +12,7 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::{EdgionPlugins, Gateway};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
+use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
 use edgion_resources::ResourceKind;
@@ -510,6 +511,12 @@ pub fn lookup_gateway(namespace: &str, name: &str, runtime: &ControllerRuntime) 
     processor.get_raw_any(&key)?.downcast::<Gateway>().ok()
 }
 
+fn lookup_projected_gateway(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<Arc<Gateway>> {
+    let processor = runtime.processor_registry.get("Gateway")?;
+    let key = format!("{}/{}", namespace, name);
+    processor.get_cached_any(&key)?.downcast::<Gateway>().ok()
+}
+
 /// Resolve listener keys from parentRefs for per-listener route isolation.
 ///
 /// For each parentRef, looks up the referenced Gateway and resolves matching
@@ -533,7 +540,7 @@ pub fn resolve_listener_keys(
     fallback_namespace: Option<&str>,
     runtime: &ControllerRuntime,
 ) -> Vec<ListenerKey> {
-    let (mut keys, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime);
+    let (mut keys, _, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime, None);
     keys.sort_unstable();
     keys.dedup();
     keys
@@ -547,7 +554,39 @@ pub fn resolve_listener_keys_with_hostnames(
     fallback_namespace: Option<&str>,
     runtime: &ControllerRuntime,
 ) -> (Vec<ListenerKey>, Vec<Option<String>>) {
-    resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime)
+    let (keys, hostnames, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime, None);
+    (keys, hostnames)
+}
+
+/// Resolve complete Gateway listener attachment identities for EdgionTls.
+pub fn resolve_listener_attachments(
+    parent_refs: &[ParentReference],
+    route_namespace: &str,
+    fallback_namespace: Option<&str>,
+    runtime: &ControllerRuntime,
+) -> Vec<ResolvedListenerAttachment> {
+    let (_, _, mut attachments) = resolve_listeners_inner(
+        parent_refs,
+        route_namespace,
+        fallback_namespace,
+        runtime,
+        Some(edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_RESOLVED_ATTACHMENTS),
+    );
+    // Raw-store Gateways intentionally carry no controller instance proof.
+    // They remain usable for ordinary route status/listener-key resolution,
+    // but must never mint an EdgionTls overlay attachment. The Gateway
+    // on-change path requeues EdgionTls after the projected object is cached.
+    attachments.retain(|attachment| attachment.gateway_proof.is_resolved());
+    attachments.sort_by(|a, b| {
+        (&a.gateway_namespace, &a.gateway_name, &a.listener_name, &a.listener_key).cmp(&(
+            &b.gateway_namespace,
+            &b.gateway_name,
+            &b.listener_name,
+            &b.listener_key,
+        ))
+    });
+    attachments.dedup();
+    attachments
 }
 
 fn resolve_listeners_inner(
@@ -555,9 +594,11 @@ fn resolve_listeners_inner(
     route_namespace: &str,
     fallback_namespace: Option<&str>,
     runtime: &ControllerRuntime,
-) -> (Vec<ListenerKey>, Vec<Option<String>>) {
+    attachment_limit: Option<usize>,
+) -> (Vec<ListenerKey>, Vec<Option<String>>, Vec<ResolvedListenerAttachment>) {
     let mut listener_keys = Vec::new();
     let mut listener_hostnames: Vec<Option<String>> = Vec::new();
+    let mut listener_attachments = Vec::new();
 
     for parent_ref in parent_refs {
         // Only Gateway parentRefs bind to listeners. Delegation parentRefs
@@ -574,7 +615,9 @@ fn resolve_listeners_inner(
             .or(fallback_namespace)
             .unwrap_or("default");
 
-        let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name, runtime) else {
+        let Some(gateway) = lookup_projected_gateway(gw_ns, &parent_ref.name, runtime)
+            .or_else(|| lookup_gateway(gw_ns, &parent_ref.name, runtime))
+        else {
             // Parent Gateway not in the store at compute time (e.g. the route
             // was processed before its parent Gateway). The route gets no
             // resolved listeners for this parentRef until the Gateway is
@@ -595,6 +638,16 @@ fn resolve_listeners_inner(
             );
             continue;
         };
+        if listeners.len() > edgion_resources::resources::gateway::MAX_GATEWAY_LISTENERS {
+            tracing::warn!(
+                component = "resolve_listener_keys",
+                gateway = %format!("{}/{}", gw_ns, parent_ref.name),
+                listener_count = listeners.len(),
+                max = edgion_resources::resources::gateway::MAX_GATEWAY_LISTENERS,
+                "Ignoring Gateway whose listener count exceeds the runtime limit"
+            );
+            continue;
+        }
         tracing::debug!(
             component = "resolve_listener_keys",
             gateway = %format!("{}/{}", gw_ns, parent_ref.name),
@@ -605,10 +658,21 @@ fn resolve_listeners_inner(
         );
 
         let mut collect = |l: &edgion_resources::resources::gateway::Listener| {
+            if attachment_limit.is_some_and(|limit| listener_attachments.len() > limit) {
+                return;
+            }
             if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns, runtime) {
                 let addr = resolve_listener_addr(gw_addresses, l.port);
-                listener_keys.push(ListenerKey::new(addr, &l.protocol));
+                let listener_key = ListenerKey::new(addr, &l.protocol);
+                listener_keys.push(listener_key.clone());
                 listener_hostnames.push(l.hostname.clone());
+                listener_attachments.push(ResolvedListenerAttachment {
+                    gateway_namespace: gw_ns.to_string(),
+                    gateway_name: parent_ref.name.clone(),
+                    listener_name: l.name.clone(),
+                    listener_key,
+                    gateway_proof: edgion_resources::resources::gateway::gateway_attachment_proof(&gateway),
+                });
             }
         };
 
@@ -634,7 +698,7 @@ fn resolve_listeners_inner(
         }
     }
 
-    (listener_keys, listener_hostnames)
+    (listener_keys, listener_hostnames, listener_attachments)
 }
 
 /// Compute effective hostnames = intersection of route hostnames with listener hostnames.

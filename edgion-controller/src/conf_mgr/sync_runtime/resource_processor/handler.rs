@@ -118,6 +118,31 @@ where
     /// Default: no-op
     async fn on_change(&self, _obj: &K, _ctx: &HandlerContext) {}
 
+    /// Finalize controller-owned transport fields after status derivation but
+    /// before the object is atomically published to `ServerCache`.
+    ///
+    /// This hook is synchronous and must not perform IO. It is intended for
+    /// proofs or projections whose input includes fields derived by
+    /// `update_status`.
+    fn finalize_transport(&self, _obj: &mut K, _ctx: &HandlerContext) {}
+
+    /// Post-publication processing.
+    ///
+    /// Called only after the final object is visible in `ServerCache`. Use it
+    /// for requeues whose consumer must read that exact published generation.
+    /// This worker hook may enqueue dependents, but must not perform API IO,
+    /// start timers, or sleep; the single per-kind worker must remain serial
+    /// and non-blocking.
+    async fn after_publish(&self, _obj: &K, _ctx: &HandlerContext) {}
+
+    /// Post-unpublication processing.
+    ///
+    /// Called only after the deleted object is absent from `ServerCache`.
+    /// This worker hook may enqueue dependents, but must not perform API IO,
+    /// start timers, or sleep; the single per-kind worker must remain serial
+    /// and non-blocking.
+    async fn after_unpublish(&self, _obj: &K, _ctx: &HandlerContext) {}
+
     /// Called when the init LIST phase completes (all resources have been parsed).
     ///
     /// Use this to perform authoritative full-sync operations such as

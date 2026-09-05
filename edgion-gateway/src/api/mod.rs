@@ -400,8 +400,7 @@ struct StoreStatsResponse {
     gateway_class_store: SimpleCountStats,
     edgion_gateway_config_store: SimpleCountStats,
     client_caches: ClientCachesStats,
-    service_store: SimpleCountStats,
-    ep_slice_store: EpSliceStoreStats,
+    service_discovery: crate::backends::discovery::ServiceDiscoveryStatsSnapshot,
     health_status_store: SimpleCountStats,
     outlier_detection_store: SimpleCountStats,
     health_check_config_store: SimpleCountStats,
@@ -475,12 +474,6 @@ struct ClientCachesStats {
 }
 
 #[derive(Serialize)]
-struct EpSliceStoreStats {
-    slice_count: usize,
-    service_index_count: usize,
-}
-
-#[derive(Serialize)]
 struct LinkSysRuntimeStats {
     redis_clients: usize,
     etcd_clients: usize,
@@ -541,16 +534,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         by_kind: client.client_cache_stats(),
     };
 
-    let svc_store_g = crate::backends::get_global_service_store();
-    let service_store = SimpleCountStats {
-        count: svc_store_g.count(),
-    };
-
-    let eps_g = crate::backends::get_roundrobin_store();
-    let ep_slice_store = EpSliceStoreStats {
-        slice_count: eps_g.slice_count(),
-        service_index_count: eps_g.service_index_count(),
-    };
+    let service_discovery = crate::backends::get_service_discovery_coordinator().stats();
 
     let hs_g = crate::backends::health::check::status_store::get_health_status_store();
     let health_status_store = SimpleCountStats {
@@ -618,8 +602,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         gateway_class_store,
         edgion_gateway_config_store,
         client_caches,
-        service_store,
-        ep_slice_store,
+        service_discovery,
         health_status_store,
         outlier_detection_store,
         health_check_config_store,
@@ -1705,6 +1688,8 @@ mod edgion_tls_scrub_tests {
                 ciphers: None,
                 secret: Some(tls_secret(b"LEAF-PRIVATE-KEY")),
                 resolved_listeners: None,
+                resolved_listener_attachments: None,
+                resolved_listener_attachment_index: Default::default(),
                 resolved_log_labels: None,
             },
             status: None,
@@ -1942,17 +1927,14 @@ mod store_stats_tests {
             backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats {
                 policies: 0,
                 reverse_index_targets: 0,
+                invalid_index_targets: 0,
             },
             gateway_class_store: SimpleCountStats { count: 0 },
             edgion_gateway_config_store: SimpleCountStats { count: 0 },
             client_caches: ClientCachesStats {
                 by_kind: std::collections::BTreeMap::new(),
             },
-            service_store: SimpleCountStats { count: 0 },
-            ep_slice_store: EpSliceStoreStats {
-                slice_count: 0,
-                service_index_count: 0,
-            },
+            service_discovery: crate::backends::discovery::ServiceDiscoveryStatsSnapshot::default(),
             health_status_store: SimpleCountStats { count: 0 },
             outlier_detection_store: SimpleCountStats { count: 0 },
             health_check_config_store: SimpleCountStats { count: 0 },
@@ -1981,6 +1963,9 @@ mod store_stats_tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.is_object());
         assert!(json.get("client_caches").is_some());
+        assert!(json.get("service_discovery").is_some());
+        assert!(json.get("service_store").is_none());
+        assert!(json.get("ep_slice_store").is_none());
         assert!(json.get("edgion_backend_store").is_some());
         assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
         assert_eq!(json["adaptive_telemetry_store"]["count"], 0);

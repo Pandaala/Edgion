@@ -198,6 +198,11 @@ pub enum EdgionErrorCode {
     /// to the system trust store when the operator opted out of it.
     BackendTlsCaInvalid,
 
+    /// An applicable BackendTLSPolicy exists but is invalid or the Service
+    /// section required to decide applicability cannot be proven. Fail-closed:
+    /// the gateway must not construct a plaintext peer.
+    BackendTlsPolicyInvalid,
+
     /// The dynamic `upstreamAuthority` template rendered to an empty label, or
     /// the rendered label failed DNS-label validation. Fail-closed: silently
     /// keeping the static SNI/Host would present the right TLS identity to the
@@ -399,6 +404,7 @@ impl EdgionErrorCode {
             Self::StickyBackendUnhealthy => "StickyBackendUnhealthy",
             Self::BackendTlsSanValidationFailed => "BackendTlsSanValidationFailed",
             Self::BackendTlsCaInvalid => "BackendTlsCaInvalid",
+            Self::BackendTlsPolicyInvalid => "BackendTlsPolicyInvalid",
             Self::UpstreamAuthorityRejected => "UpstreamAuthorityRejected",
             Self::PluginTerminateWithoutResponse => "PluginTerminateWithoutResponse",
             Self::CredentialExpired => "CredentialExpired",
@@ -557,6 +563,7 @@ mod tests {
                 "BackendTlsSanValidationFailed",
             ),
             (EdgionErrorCode::BackendTlsCaInvalid, "BackendTlsCaInvalid"),
+            (EdgionErrorCode::BackendTlsPolicyInvalid, "BackendTlsPolicyInvalid"),
             (EdgionErrorCode::UpstreamAuthorityRejected, "UpstreamAuthorityRejected"),
             (
                 EdgionErrorCode::PluginTerminateWithoutResponse,

@@ -8,11 +8,7 @@ spec:
   tls:
     frontend:
       default:
-        validation:
-          caCertificateRefs:
-          - name: fv-client-ca
-            kind: Secret
-            group: ''
+        {}
       perPort:
       - port: 31340
         tls:

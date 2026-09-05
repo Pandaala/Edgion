@@ -110,4 +110,4 @@ spec:
 | TLS version control | ❌ | ✅ minTlsVersion |
 | Cipher suite control | ❌ | ✅ ciphers |
 
-When using EdgionTls, set `tls.options.edgion.io/cert-provider: "edgion-tls"` on the Gateway Listener.
+When using EdgionTls, set the exact case-sensitive value `tls.options.edgion.io/cert-provider: "EdgionTls"` on the Gateway Listener.

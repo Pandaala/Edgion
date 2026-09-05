@@ -62,7 +62,7 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 | EdgionTls | `edgiontls` | TlsStore (entries), TlsCertMatcher (listener_count) |
 | EdgionPlugins | `edgionplugins` | PluginStore (plugins) |
 | EdgionStreamPlugins | `edgionstreamplugins` | StreamPluginStore (plugins) |
-| BackendTLSPolicy | `backendtlspolicy` | BackendTLSPolicyStore (policies, reverse_index_targets) |
+| BackendTLSPolicy | `backendtlspolicy` | BackendTLSPolicyStore (policies, reverse_index_targets, invalid_index_targets) |
 | Service | `service` | PolicyStore (total_services) |
 | EndpointSlice | `endpointslice` | — (used by LB at runtime) |
 
@@ -97,7 +97,7 @@ Returns counts from all derived stores. Key fields:
   "tls_store":   { "entries": 0 },
   "plugin_store_v2":        { "total": 0, "by_kind": {} },
   "stream_plugin_store_v2": { "total": 0, "by_kind": {} },
-  "backend_tls_policy": { "policies": 0, "reverse_index_targets": 0 },
+  "backend_tls_policy": { "policies": 0, "reverse_index_targets": 0, "invalid_index_targets": 0 },
   "policy_store": { "total_services": 0 }
 }
 ```

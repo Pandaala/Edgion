@@ -336,7 +336,7 @@ fn resolve_endpoints(
     let eps_store = get_roundrobin_store();
     if let Some(slices) = eps_store.get_slices_for_service(&service_key) {
         let mut backends = BTreeSet::new();
-        for slice in &slices {
+        for slice in slices.iter() {
             backends.extend(slice.build_backends(backend_port));
         }
         if !backends.is_empty() {

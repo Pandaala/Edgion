@@ -61,7 +61,7 @@ use edgion_resources::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
+    BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionBackendHandler,
     EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
     GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
@@ -509,9 +509,7 @@ impl KubernetesController {
         // Resolve every multi-version API before spawning any watcher. Returning
         // after JoinHandles exist would detach the already-started tasks and a
         // lifecycle retry could then create duplicate watchers.
-        use super::version_detection::{
-            probe_backend_tls_policy_version, probe_reference_grant_version, probe_tls_route_version,
-        };
+        use super::version_detection::{probe_reference_grant_version, probe_tls_route_version};
         let reference_grant_version = if self.should_watch("ReferenceGrant") {
             Some(
                 probe_reference_grant_version(&self.client)
@@ -530,16 +528,6 @@ impl KubernetesController {
         } else {
             None
         };
-        let backend_tls_policy_version = if self.should_watch("BackendTLSPolicy") {
-            Some(
-                probe_backend_tls_policy_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("BackendTLSPolicy API disappeared after preflight"))?,
-            )
-        } else {
-            None
-        };
-
         let mut h = Vec::new();
 
         // ==================== Phase 1: Provider Resources ====================
@@ -755,25 +743,12 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("BackendTLSPolicy") {
-            use super::version_detection::BackendTLSPolicyVersion;
-            match backend_tls_policy_version.expect("BackendTLSPolicy version is preflighted when watched") {
-                BackendTLSPolicyVersion::V1 => {
-                    h.push(spawn::<BackendTLSPolicy, _>(
-                        self,
-                        "BackendTLSPolicy",
-                        BackendTlsPolicyHandler::new(self.controller_name.clone()),
-                        &ctx,
-                    ));
-                }
-                BackendTLSPolicyVersion::V1Alpha3 => {
-                    h.push(spawn::<BackendTLSPolicyAlpha3, _>(
-                        self,
-                        "BackendTLSPolicy",
-                        BackendTlsPolicyAlpha3Handler::new(self.controller_name.clone()),
-                        &ctx,
-                    ));
-                }
-            }
+            h.push(spawn::<BackendTLSPolicy, _>(
+                self,
+                "BackendTLSPolicy",
+                BackendTlsPolicyHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
         }
 
         // Plugin resources

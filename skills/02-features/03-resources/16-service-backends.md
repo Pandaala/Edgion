@@ -22,6 +22,18 @@ backendRefs:
 
 Service changes (e.g., port updates) automatically trigger reprocessing of dependent routes via ServiceRefManager.
 
+The Gateway publishes Service and EndpointSlice input as one immutable generation. A route port
+selects a canonical Service section by exact number or name; a missing port is invalid rather than
+falling back to another Service port. Equivalent EndpointSlice origins for one socket are merged,
+and all supported load-balancer selectors are compiled before the generation becomes visible.
+Invalid or unidentified input has no legacy raw Service/EndpointSlice projection, so other gateway
+readers cannot route around the unavailable state.
+
+Source and endpoint identities are transaction-scoped. Kubernetes UID recreation, authoritative
+delete/recreate, any membership-affecting Service-port change, and EndpointSlice proof changes
+publish a fresh membership. Health probes and passive-outlier attempt results are accepted only
+when both that membership and the captured policy generation are still current.
+
 ## Health Checks, Circuit Breaking, and Load Balancing
 
 These are no longer Service annotations or route-level `ExtensionRef` filters —

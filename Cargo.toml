@@ -98,7 +98,7 @@ tonic-build = "0.12"
 prost = "0.13"
 
 # TLS / certificates
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23", features = ["aws_lc_rs", "ring"] }
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 webpki-roots = "1"
@@ -109,6 +109,7 @@ instant-acme = "0.8.4"
 # `boringssl` feature of the crates that hold the callback code.
 boring = "5"
 boring-sys = "5"
+foreign-types = "0.5"
 
 # Pingora — the Gateway builds exclusively against the Edgion fork family so
 # public types never cross a source boundary. Development follows the fork's

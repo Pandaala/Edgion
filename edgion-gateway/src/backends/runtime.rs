@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use crate::ai::{AdaptiveTelemetryState, AiCredentialOutlierHandle, RuntimeAiBackend};
 use crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy;
+use crate::backends::policy::BackendTlsPolicyLookup;
 use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
-use edgion_resources::resources::BackendTLSPolicy;
 
 /// One immutable, gateway-compiled HTTPRoute backend slot.
 #[derive(Clone)]
@@ -95,23 +95,20 @@ impl fmt::Debug for LogicalBackendHandle {
 #[derive(Clone)]
 pub struct SelectedServiceBackend {
     logical: LogicalBackendHandle,
-    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    backend_tls_policy: BackendTlsPolicyLookup,
 }
 
 impl fmt::Debug for SelectedServiceBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SelectedServiceBackend")
             .field("logical", &self.logical)
-            .field("backend_tls_policy", &self.backend_tls_policy.is_some())
+            .field("backend_tls_policy", &self.backend_tls_policy.debug_label())
             .finish()
     }
 }
 
 impl SelectedServiceBackend {
-    pub(crate) fn new(
-        logical: LogicalBackendHandle,
-        backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
-    ) -> Option<Self> {
+    pub(crate) fn new(logical: LogicalBackendHandle, backend_tls_policy: BackendTlsPolicyLookup) -> Option<Self> {
         (logical.is_authorized() && matches!(logical.target(), CompiledBackendTarget::Service { .. })).then_some(Self {
             logical,
             backend_tls_policy,
@@ -124,8 +121,8 @@ impl SelectedServiceBackend {
     }
 
     #[inline]
-    pub fn backend_tls_policy(&self) -> Option<&Arc<BackendTLSPolicy>> {
-        self.backend_tls_policy.as_ref()
+    pub fn backend_tls_policy(&self) -> &BackendTlsPolicyLookup {
+        &self.backend_tls_policy
     }
 }
 
@@ -136,7 +133,7 @@ pub struct SelectedAiBackend {
     pub backend: Arc<RuntimeAiBackend>,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
     /// Request-stable TLS policy selected for this logical backend.
-    pub backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    pub backend_tls_policy: BackendTlsPolicyLookup,
     pub adaptive: Option<Arc<AdaptiveTelemetryState>>,
     pub credential_outlier: Option<AiCredentialOutlierHandle>,
     pub credential_index: usize,
@@ -150,7 +147,7 @@ impl SelectedAiBackend {
         logical: LogicalBackendHandle,
         backend: Arc<RuntimeAiBackend>,
         effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
-        backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+        backend_tls_policy: BackendTlsPolicyLookup,
         adaptive: Option<Arc<AdaptiveTelemetryState>>,
         credential_outlier: Option<AiCredentialOutlierHandle>,
         credential_index: usize,
@@ -184,7 +181,7 @@ impl fmt::Debug for SelectedAiBackend {
             .field("logical", &self.logical)
             .field("runtime_available", &true)
             .field("effective_policy", &self.effective_policy.is_some())
-            .field("backend_tls_policy", &self.backend_tls_policy.is_some())
+            .field("backend_tls_policy", &self.backend_tls_policy.debug_label())
             .field("adaptive", &self.adaptive.is_some())
             .field("credential_index", &self.credential_index)
             .field("effective_weight", &self.effective_weight)
@@ -281,6 +278,7 @@ mod tests {
         BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
     };
     use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
+    use edgion_resources::resources::BackendTLSPolicy;
     use edgion_resources::HTTPBackendRef;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::HashMap;
@@ -366,7 +364,7 @@ mod tests {
         backend.target = CompiledBackendTarget::Invalid {
             classified_kind: edgion_resources::HTTPBackendRefKind::Unsupported,
         };
-        assert!(SelectedServiceBackend::new(logical(backend), None).is_none());
+        assert!(SelectedServiceBackend::new(logical(backend), BackendTlsPolicyLookup::Absent).is_none());
     }
 
     #[test]
@@ -379,7 +377,7 @@ mod tests {
         });
         let logical = logical(backend);
         assert!(logical.policy_target_key().is_none());
-        assert!(SelectedServiceBackend::new(logical, None).is_none());
+        assert!(SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).is_none());
     }
 
     #[test]
@@ -394,7 +392,7 @@ mod tests {
     #[test]
     fn compact_backend_state_stays_within_hot_path_budget() {
         assert_eq!(std::mem::size_of::<LogicalBackendHandle>(), 16);
-        assert_eq!(std::mem::size_of::<SelectedServiceBackend>(), 24);
+        assert_eq!(std::mem::size_of::<SelectedServiceBackend>(), 32);
         assert_eq!(std::mem::size_of::<Option<SelectedHttpBackend>>(), 32);
     }
 
@@ -403,7 +401,9 @@ mod tests {
         let generation = Arc::new(vec![compiled("api", 0, None)]);
         let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
-            let selected = SelectedHttpBackend::Service(SelectedServiceBackend::new(logical, None).unwrap());
+            let selected = SelectedHttpBackend::Service(
+                SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap(),
+            );
             let runtime = selected.plugin_runtime();
             drop(runtime);
             selected
@@ -434,7 +434,8 @@ mod tests {
             Arc::clone(&old_runtime),
         )]);
         let logical = LogicalBackendHandle::new(Arc::clone(&old_generation), 0).unwrap();
-        let selected = SelectedHttpBackend::Service(SelectedServiceBackend::new(logical, None).unwrap());
+        let selected =
+            SelectedHttpBackend::Service(SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap());
 
         let replacement = Arc::new(vec![compiled("new", 0, None)]);
         drop(old_generation);
@@ -456,18 +457,26 @@ mod tests {
         let generation = Arc::new(vec![compiled("api", 0, None)]);
         let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
         let target = logical.policy_target_key().unwrap();
-        let captured = store.snapshot().get_policy(&target, None).unwrap();
-        let selected = SelectedServiceBackend::new(logical, Some(captured)).unwrap();
+        let captured = store.snapshot().lookup(&target, None);
+        let selected = SelectedServiceBackend::new(logical, captured).unwrap();
 
         let new_policy = tls_policy("new", "new.example.com");
         store.replace_all(HashMap::from([("backend-ns/new".to_string(), Arc::clone(&new_policy))]));
-        let current = store.snapshot().get_policy(&target, None).unwrap();
+        let current = store
+            .snapshot()
+            .lookup(&target, None)
+            .effective()
+            .expect("replacement policy must stay effective")
+            .clone();
 
-        let retained = selected.backend_tls_policy().unwrap();
-        assert!(Arc::ptr_eq(retained, &old_policy));
-        assert!(Arc::ptr_eq(&current, &new_policy));
-        assert_eq!(retained.spec.validation.hostname, "old.example.com");
-        assert_eq!(current.spec.validation.hostname, "new.example.com");
+        let retained = selected
+            .backend_tls_policy()
+            .effective()
+            .expect("captured policy must stay effective");
+        assert!(Arc::ptr_eq(&retained.policy, &old_policy));
+        assert!(Arc::ptr_eq(&current.policy, &new_policy));
+        assert_eq!(retained.policy.spec.validation.hostname, "old.example.com");
+        assert_eq!(current.policy.spec.validation.hostname, "new.example.com");
         assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
     }
 
@@ -484,11 +493,14 @@ mod tests {
         policy.spec.resolved_ca_certificates = Some(vec![secret.clone()]);
         policy.spec.resolved_client_certificate = Some(secret);
 
-        let selected = SelectedServiceBackend::new(logical(compiled("api", 0, None)), Some(Arc::new(policy)))
-            .expect("authorized Service fixture must be selectable");
+        let selected = SelectedServiceBackend::new(
+            logical(compiled("api", 0, None)),
+            BackendTlsPolicyLookup::effective_from_policy(Arc::new(policy)),
+        )
+        .expect("authorized Service fixture must be selectable");
         let debug = format!("{:?}", SelectedHttpBackend::Service(selected));
 
-        assert!(debug.contains("backend_tls_policy: true"));
+        assert!(debug.contains("backend_tls_policy: \"effective\""));
         assert!(!debug.contains("PRIVATE-KEY-SENTINEL"));
         assert!(!debug.contains("resolved_ca_certificates"));
         assert!(!debug.contains("resolved_client_certificate"));

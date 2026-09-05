@@ -202,6 +202,7 @@ mod tests {
                 addresses: None,
                 tls: None,
                 resolved_inbound_proxy_protocol: state,
+                resolved_attachment_proof: None,
             },
         );
         gateway.metadata.namespace = Some("default".to_string());

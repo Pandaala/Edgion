@@ -155,7 +155,7 @@ pub async fn validate_kind(
 /// `api::common::validate_resource` does internally for the write path.
 fn parse_and_serialize<T>(content: &str) -> Result<serde_json::Value, StatusCode>
 where
-    T: serde::de::DeserializeOwned + kube::ResourceExt + serde::Serialize,
+    T: serde::de::DeserializeOwned + kube::ResourceExt + edgion_resources::ResourceMeta + serde::Serialize,
 {
     let obj: T = parse_resource_and_update_version(content, false)?;
     serde_json::to_value(&obj).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -362,6 +362,26 @@ mod tests {
         )
         .await;
         assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+    }
+
+    #[tokio::test]
+    async fn backend_tls_policy_validation_rejects_non_v1_before_typed_parse() {
+        let (state, tmp) = make_state().await;
+        let body = Bytes::from(
+            r#"{
+                "apiVersion":"gateway.networking.k8s.io/v1alpha3",
+                "kind":"BackendTLSPolicy",
+                "metadata":{"name":"backend-tls","namespace":"default"},
+                "spec":{
+                    "targetRefs":[{"group":"","kind":"Service","name":"backend"}],
+                    "validation":{"hostname":"backend.default.svc","wellKnownCACertificates":"System"}
+                }
+            }"#,
+        );
+
+        let result = validate_kind(State(state), Path("BackendTLSPolicy".to_string()), body).await;
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        assert!(std::fs::read_dir(tmp.path()).expect("read conf dir").next().is_none());
     }
 
     #[tokio::test]

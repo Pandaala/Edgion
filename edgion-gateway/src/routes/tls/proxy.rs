@@ -12,7 +12,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
+use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
 use crate::observe::log_tls;
 use crate::observe::logs::LogBuffer;
 use crate::observe::AccessLogger;
@@ -273,17 +273,26 @@ impl EdgionTlsTcpProxy {
             let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
             let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-            let backend = match select_roundrobin_backend_key(&service_key) {
-                Some(b) => b,
-                None => {
+            let section = match service_section_key_from_port(backend_ref.port) {
+                Ok(section) => section,
+                Err(_) => {
+                    last_err = format!("no proven section: {}", service_key);
+                    continue;
+                }
+            };
+            let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
+                Ok(endpoint) => endpoint,
+                Err(_) => {
                     last_err = format!("no endpoint: {}", service_key);
                     continue;
                 }
             };
+            let backend = endpoint.backend;
 
-            let mut upstream_addr = backend.inner().addr.clone();
-            resolve_target_port_key(&mut upstream_addr, backend_ref.port, &service_key);
+            let upstream_addr = backend.inner().addr.clone();
             let upstream_addr_str = upstream_addr.to_string();
+            let outlier_store = crate::backends::get_outlier_detection_store();
+            let outlier_token = outlier_store.capture_completion_token(backend.as_ref());
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 
             ctx.upstream_info.push(TlsUpstreamInfo {
@@ -339,17 +348,21 @@ impl EdgionTlsTcpProxy {
                     }
                     // A successful connect is the L4 "backend reachable" success
                     // signal; it resets the endpoint's outlier-detection counters.
-                    crate::backends::get_outlier_detection_store().record_success_by_addr(&service_key, &upstream_addr);
+                    if let Some(token) = outlier_token.as_ref() {
+                        outlier_store.record_success_for_backend_with_token(backend.as_ref(), token);
+                    }
                     upstream = Some((stream, upstream_addr_str));
                     break;
                 }
                 Err(e) => {
                     // TLS upstream connect failure — local-origin failure.
-                    crate::backends::get_outlier_detection_store().record_failure_by_addr(
-                        &service_key,
-                        &upstream_addr,
-                        crate::backends::FailureClass::LocalOrigin,
-                    );
+                    if let Some(token) = outlier_token.as_ref() {
+                        outlier_store.record_failure_for_backend_with_token(
+                            backend.as_ref(),
+                            token,
+                            crate::backends::FailureClass::LocalOrigin,
+                        );
+                    }
                     last_err = format!("connect failed: {upstream_addr_str}: {e}");
                     if attempt + 1 < max_attempts {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));

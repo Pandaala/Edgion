@@ -89,7 +89,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         grpc_route_unit
             .backends
             .iter()
-            .map(|b| (b.schema.name.as_str(), b.schema.namespace.as_deref())),
+            .map(|b| (b.schema.name.as_str(), b.schema.namespace.as_deref(), b.schema.port)),
         &grpc_route_unit.matched_info.rsc.ns,
         sp_token.as_deref(),
     );

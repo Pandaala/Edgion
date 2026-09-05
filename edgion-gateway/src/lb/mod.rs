@@ -16,7 +16,5 @@ pub use attempt::{commit_attempt, finalize_attempt, LbCommitGuard};
 pub use backend_selector::{
     BackendSelector, WeightedRoundRobin, WrrError, ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS, ERR_WRR_BUILD_FAILED,
 };
-pub use compiled_selector::{
-    drop_cell, get_or_create_cell, try_get_cell, CompiledSelector, PolicyKind, ServiceSelectorCell,
-};
-pub use edgion_backend::EdgionBackend;
+pub use compiled_selector::{CompiledSelector, PolicyKind};
+pub use edgion_backend::{BackendRuntimeCounters, EdgionBackend, EndpointRuntimeIdentity, EndpointRuntimeScope};

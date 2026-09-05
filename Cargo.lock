@@ -1737,6 +1737,7 @@ dependencies = [
  "expect-test",
  "filetime",
  "flate2",
+ "foreign-types",
  "fred",
  "futures",
  "h2",

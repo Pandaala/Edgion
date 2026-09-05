@@ -1,10 +1,10 @@
+use crate::backends::policy::BackendTlsPolicyLookup;
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
 use crate::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
-use edgion_resources::resources::BackendTLSPolicy;
 use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
@@ -72,11 +72,11 @@ impl std::fmt::Debug for GrpcBackendHandle {
 #[derive(Clone, Debug)]
 pub struct SelectedGrpcBackend {
     logical: GrpcBackendHandle,
-    backend_tls_policy: Option<Arc<BackendTLSPolicy>>,
+    backend_tls_policy: BackendTlsPolicyLookup,
 }
 
 impl SelectedGrpcBackend {
-    pub(crate) fn new(logical: GrpcBackendHandle, backend_tls_policy: Option<Arc<BackendTLSPolicy>>) -> Self {
+    pub(crate) fn new(logical: GrpcBackendHandle, backend_tls_policy: BackendTlsPolicyLookup) -> Self {
         Self {
             logical,
             backend_tls_policy,
@@ -99,8 +99,8 @@ impl SelectedGrpcBackend {
     }
 
     #[inline]
-    pub fn backend_tls_policy(&self) -> Option<&Arc<BackendTLSPolicy>> {
-        self.backend_tls_policy.as_ref()
+    pub fn backend_tls_policy(&self) -> &BackendTlsPolicyLookup {
+        &self.backend_tls_policy
     }
 
     #[inline]
@@ -562,6 +562,7 @@ mod backend_handle_tests {
     use edgion_resources::resources::backend_tls_policy::{
         BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
     };
+    use edgion_resources::resources::BackendTLSPolicy;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     fn compiled(name: &str, weight: i32, runtime: Arc<PluginRuntime>) -> CompiledGrpcBackend {
@@ -614,8 +615,8 @@ mod backend_handle_tests {
     #[test]
     fn grpc_backend_handles_stay_within_hot_path_budget() {
         assert_eq!(std::mem::size_of::<GrpcBackendHandle>(), 16);
-        assert_eq!(std::mem::size_of::<SelectedGrpcBackend>(), 24);
-        assert_eq!(std::mem::size_of::<Option<SelectedGrpcBackend>>(), 24);
+        assert_eq!(std::mem::size_of::<SelectedGrpcBackend>(), 32);
+        assert_eq!(std::mem::size_of::<Option<SelectedGrpcBackend>>(), 32);
     }
 
     #[test]
@@ -626,7 +627,7 @@ mod backend_handle_tests {
             compiled("api", 1, Arc::clone(&old_runtime)),
         ]);
         let logical = GrpcBackendHandle::new(Arc::clone(&generation), 1).unwrap();
-        let selected = SelectedGrpcBackend::new(logical, None);
+        let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent);
         let replacement = Arc::new(vec![compiled("new", 1, Arc::new(PluginRuntime::new()))]);
         drop(generation);
 
@@ -662,20 +663,24 @@ mod backend_handle_tests {
         let old_policy = tls_policy("old", "old.example.com");
         let current_policy = tls_policy("new", "new.example.com");
 
-        let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        let captured = BackendTlsPolicyLookup::effective_from_policy(Arc::clone(&old_policy));
+        let logical = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
+        let selected = SelectedGrpcBackend::new(logical, captured);
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             let logical = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
-            let selected = SelectedGrpcBackend::new(logical, Some(Arc::clone(&old_policy)));
+            let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent);
             let projected_runtime = selected.plugin_runtime();
             drop(projected_runtime);
             selected
         });
 
-        assert!(Arc::ptr_eq(selected.backend_tls_policy().unwrap(), &old_policy));
-        assert!(!Arc::ptr_eq(selected.backend_tls_policy().unwrap(), &current_policy));
-        assert_eq!(
-            selected.backend_tls_policy().unwrap().spec.validation.hostname,
-            "old.example.com"
-        );
+        let retained = selected
+            .backend_tls_policy()
+            .effective()
+            .expect("fixture policy must stay effective");
+        assert!(Arc::ptr_eq(&retained.policy, &old_policy));
+        assert!(!Arc::ptr_eq(&retained.policy, &current_policy));
+        assert_eq!(retained.policy.spec.validation.hostname, "old.example.com");
         assert!(selected.logical().compiled().schema.backend_tls_policy.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

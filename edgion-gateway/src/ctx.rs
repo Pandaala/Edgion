@@ -1614,13 +1614,18 @@ pub struct UpstreamInfo {
     /// so that selection reads and request-completion writes are consistent.
     #[serde(skip)]
     pub lb_backend_addr: Option<SocketAddr>,
-    /// Live `EdgionBackend` shared with the `ServiceSelectorCell` snapshot.
+    /// Live `EdgionBackend` captured from the joint Service selector generation.
     /// Set by `build_peer_from_lb_selection`; read by `connected_to_upstream`
     /// to call `inc_conn()` and by other attempt hooks for endpoint metadata.
     /// Sticky selection restores the same live Arc; bypass and non-LB paths
     /// leave this field as `None`.
     #[serde(skip)]
     pub lb_edgion_backend: Option<Arc<EdgionBackend>>,
+    /// Outlier policy identity captured with this upstream attempt. Completion
+    /// must present the same token so a policy rotation cannot accept a late
+    /// result from the previous policy generation.
+    #[serde(skip)]
+    pub lb_outlier_completion: Option<crate::backends::OutlierCompletionToken>,
     /// Service key (`"namespace/name"`) that owns this backend, needed by
     /// service-scoped LB runtime state.
     #[serde(skip)]
@@ -1675,6 +1680,7 @@ mod upstream_info_tests {
             err: Vec::new(),
             lb_backend_addr: None,
             lb_edgion_backend: None,
+            lb_outlier_completion: None,
             service_key: None,
             lb_policy: None,
             tls: None,
@@ -3969,6 +3975,7 @@ impl EdgionHttpContext {
                 err: Vec::new(),
                 lb_backend_addr: None,
                 lb_edgion_backend: None,
+                lb_outlier_completion: None,
                 service_key: None,
                 lb_policy: None,
                 tls: None,

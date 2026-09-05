@@ -22,7 +22,6 @@ use crate::ai::{
     AdaptiveTelemetryStore, AiAttemptPlan, AiBackendStore, AiCandidateModel, AiPlanCandidate, AiPlanError,
     AiProxyError, ReadyAiAttemptPlan,
 };
-use crate::backends::policy::backend_tls::get_global_backend_tls_policy_store;
 use crate::backends::policy::backend_traffic::get_backend_traffic_policy_store;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::routes::http::match_unit::CompiledBackendTarget;
@@ -333,7 +332,6 @@ impl AiProxy {
 
         let policy_store = get_backend_traffic_policy_store();
         let policy_snapshot = policy_store.snapshot();
-        let backend_tls_snapshot = get_global_backend_tls_policy_store().snapshot();
         let adaptive_store = get_adaptive_telemetry_store();
         let candidate_specs: Vec<_> = backends
             .iter()
@@ -364,7 +362,8 @@ impl AiProxy {
                 let effective_policy = target.as_ref().and_then(|target| policy_snapshot.get_effective(target));
                 let backend_tls_policy = target
                     .as_ref()
-                    .and_then(|target| backend_tls_snapshot.get_policy(target, None));
+                    .map(|target| crate::backends::policy::query_backend_tls_policy_for_target(target, None))
+                    .unwrap_or(crate::backends::policy::BackendTlsPolicyLookup::Absent);
                 let outlier_generation = effective_policy
                     .as_ref()
                     .and_then(|policy| policy.ai_credential_outlier.clone())
@@ -1188,7 +1187,7 @@ mod tests {
             backend: Some(backend),
             model: None,
             effective_policy: None,
-            backend_tls_policy: None,
+            backend_tls_policy: crate::backends::policy::BackendTlsPolicyLookup::Absent,
             adaptive: None,
             credential_outliers: Vec::new(),
         }];

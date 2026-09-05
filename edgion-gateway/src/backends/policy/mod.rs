@@ -3,46 +3,84 @@ pub mod backend_traffic;
 
 pub use backend_tls::{
     create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore,
-    BackendTLSPolicyStoreStats,
+    BackendTLSPolicyStoreStats, BackendTlsPolicyLookup, BackendTlsProfileIdentity, EffectiveBackendTlsPolicy,
 };
 pub use backend_traffic::{create_backend_traffic_policy_handler, get_backend_traffic_policy_store};
 
-use crate::backends::port_resolver::resolve_port_name;
+use crate::backends::discovery::{get_service_discovery_coordinator, ServicePublishedState, ServiceSectionKey};
+use crate::backends::policy::backend_tls::BackendTLSPolicySnapshot;
 use crate::backends::LogicalBackendHandle;
-use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
-#[cfg(test)]
-use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind;
-#[cfg(test)]
-use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
-use edgion_resources::resources::BackendTLSPolicy;
-use std::sync::Arc;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use std::num::NonZeroU16;
 
 /// Query BackendTLSPolicy from the proof-carrying logical backend selected by
 /// the route runtime. Denied and invalid slots cannot yield a policy key.
 pub fn query_backend_tls_policy_for_logical_backend(
     logical: &LogicalBackendHandle,
     port: Option<i32>,
-) -> Option<Arc<BackendTLSPolicy>> {
-    let target = logical.policy_target_key()?;
-    query_backend_tls_policy_for_target(&target, port)
+) -> BackendTlsPolicyLookup {
+    match logical.policy_target_key() {
+        Some(target) => query_backend_tls_policy_for_target(&target, port),
+        None => BackendTlsPolicyLookup::Absent,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ServiceTlsSectionMapping<'a> {
+    Named(&'a str),
+    NumberOnly,
+    Unproven,
+}
+
+fn lookup_for_service_mapping(
+    snapshot: &BackendTLSPolicySnapshot,
+    target: &PolicyTargetKey,
+    mapping: ServiceTlsSectionMapping<'_>,
+) -> BackendTlsPolicyLookup {
+    match mapping {
+        ServiceTlsSectionMapping::Named(name) => snapshot.lookup(target, Some(name)),
+        ServiceTlsSectionMapping::NumberOnly => snapshot.lookup(target, None),
+        ServiceTlsSectionMapping::Unproven if snapshot.any_section_scoped(target) => BackendTlsPolicyLookup::Invalid,
+        ServiceTlsSectionMapping::Unproven => snapshot.lookup(target, None),
+    }
 }
 
 /// Typed policy lookup shared by canonical HTTP and gRPC backend proofs.
 pub(crate) fn query_backend_tls_policy_for_target(
     target: &PolicyTargetKey,
     port: Option<i32>,
-) -> Option<Arc<BackendTLSPolicy>> {
-    let port_name = port.and_then(|port| resolve_port_name(&target.name, Some(&target.namespace), port));
-    get_global_backend_tls_policy_store()
-        .snapshot()
-        .get_policy(target, port_name.as_deref())
+) -> BackendTlsPolicyLookup {
+    let snapshot = get_global_backend_tls_policy_store().snapshot();
+    if target.target_kind == PolicyTargetKind::EdgionBackend {
+        return snapshot.lookup(target, None);
+    }
+
+    let generation = get_service_discovery_coordinator().load_generation();
+    let service_key = format!("{}/{}", target.namespace, target.name);
+    let requested = port.and_then(|port| u16::try_from(port).ok()).and_then(NonZeroU16::new);
+    match (requested, generation.service(&service_key)) {
+        (Some(number), Some(ServicePublishedState::Available(available))) => {
+            match available.resolve_section(&ServiceSectionKey::Number(number)) {
+                Ok(section) => match section.identity.name.clone() {
+                    Some(name) => {
+                        lookup_for_service_mapping(&snapshot, target, ServiceTlsSectionMapping::Named(name.as_ref()))
+                    }
+                    None => lookup_for_service_mapping(&snapshot, target, ServiceTlsSectionMapping::NumberOnly),
+                },
+                Err(_) => lookup_for_service_mapping(&snapshot, target, ServiceTlsSectionMapping::Unproven),
+            }
+        }
+        _ => lookup_for_service_mapping(&snapshot, target, ServiceTlsSectionMapping::Unproven),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use edgion_resources::resources::backend_tls_policy::*;
+    use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::sync::Arc;
 
     /// Build a policy named `name` with the given `(target_service, section_name)` refs.
     fn policy(name: &str, refs: &[(&str, Option<&str>)]) -> Arc<BackendTLSPolicy> {
@@ -78,21 +116,25 @@ mod tests {
         })
     }
 
-    fn selected_name(candidates: &[Arc<BackendTLSPolicy>], name: &str, port_name: Option<&str>) -> Option<String> {
+    fn selected_name(
+        candidates: &[std::sync::Arc<BackendTLSPolicy>],
+        name: &str,
+        port_name: Option<&str>,
+    ) -> Option<String> {
         let snapshot = BackendTLSPolicyStore::new();
         let data = candidates
             .iter()
             .map(|policy| {
                 (
                     format!("default/{}", policy.metadata.name.as_deref().unwrap_or("")),
-                    Arc::clone(policy),
+                    std::sync::Arc::clone(policy),
                 )
             })
             .collect();
         snapshot.replace_all(data);
         snapshot
             .snapshot()
-            .get_policy(
+            .lookup(
                 &PolicyTargetKey {
                     target_kind: PolicyTargetKind::Service,
                     namespace: "default".to_string(),
@@ -100,7 +142,8 @@ mod tests {
                 },
                 port_name,
             )
-            .and_then(|p| p.metadata.name.clone())
+            .effective()
+            .and_then(|policy| policy.policy.metadata.name.clone())
     }
 
     // A policy whose only "svc-a" ref is section-scoped must not win the whole-Service
@@ -149,6 +192,75 @@ mod tests {
         assert_eq!(
             selected_name(&candidates, "svc-a", Some("https")).as_deref(),
             Some("https-a")
+        );
+    }
+
+    fn store_snapshot(
+        candidates: &[Arc<BackendTLSPolicy>],
+    ) -> crate::backends::policy::backend_tls::BackendTLSPolicySnapshot {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(
+            candidates
+                .iter()
+                .map(|policy| {
+                    (
+                        format!("default/{}", policy.metadata.name.as_deref().unwrap_or("")),
+                        Arc::clone(policy),
+                    )
+                })
+                .collect(),
+        );
+        store.snapshot()
+    }
+
+    fn service_target(name: &str) -> PolicyTargetKey {
+        PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: "default".to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn unproven_mapping_with_section_scoped_candidate_is_invalid() {
+        let snapshot = store_snapshot(&[policy("https-a", &[("svc-a", Some("https"))])]);
+        let target = service_target("svc-a");
+        assert!(lookup_for_service_mapping(&snapshot, &target, ServiceTlsSectionMapping::Unproven).is_invalid());
+    }
+
+    #[test]
+    fn number_only_mapping_ignores_unrelated_named_section() {
+        let snapshot = store_snapshot(&[policy("https-a", &[("svc-a", Some("https"))])]);
+        let target = service_target("svc-a");
+        assert!(lookup_for_service_mapping(&snapshot, &target, ServiceTlsSectionMapping::NumberOnly).is_absent());
+    }
+
+    #[test]
+    fn named_mapping_uses_exact_section() {
+        let snapshot = store_snapshot(&[
+            policy("https-a", &[("svc-a", Some("https"))]),
+            policy("whole-a", &[("svc-a", None)]),
+        ]);
+        let target = service_target("svc-a");
+        assert_eq!(
+            lookup_for_service_mapping(&snapshot, &target, ServiceTlsSectionMapping::Named("https"))
+                .effective()
+                .and_then(|policy| policy.policy.metadata.name.clone())
+                .as_deref(),
+            Some("https-a")
+        );
+    }
+
+    #[test]
+    fn number_only_mapping_still_takes_whole_target() {
+        let snapshot = store_snapshot(&[policy("whole-a", &[("svc-a", None)])]);
+        let target = service_target("svc-a");
+        assert_eq!(
+            lookup_for_service_mapping(&snapshot, &target, ServiceTlsSectionMapping::NumberOnly)
+                .effective()
+                .and_then(|policy| policy.policy.metadata.name.clone())
+                .as_deref(),
+            Some("whole-a")
         );
     }
 }

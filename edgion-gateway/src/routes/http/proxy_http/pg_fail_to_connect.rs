@@ -54,12 +54,15 @@ pub fn fail_to_connect(
 
     // Record outlier detection failure
     if let Some(upstream) = ctx.get_current_upstream() {
-        if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+        if let (Some(backend), Some(token)) = (
+            upstream.lb_edgion_backend.as_deref(),
+            upstream.lb_outlier_completion.as_ref(),
+        ) {
             // Connect failure / connect timeout / TLS-handshake timeout — the data plane
             // never got a usable HTTP response, so this is a local-origin failure.
-            crate::backends::get_outlier_detection_store().record_failure_by_addr(
-                service_key,
-                addr,
+            crate::backends::get_outlier_detection_store().record_failure_for_backend_with_token(
+                backend,
+                token,
                 crate::backends::FailureClass::LocalOrigin,
             );
         }

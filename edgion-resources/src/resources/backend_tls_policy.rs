@@ -72,59 +72,6 @@ pub struct BackendTLSPolicySpec {
     pub use_system_ca: bool,
 }
 
-/// BackendTLSPolicy (v1alpha3 — legacy, converted to/from v1 when needed)
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[kube(
-    group = "gateway.networking.k8s.io",
-    version = "v1alpha3",
-    kind = "BackendTLSPolicyAlpha3",
-    plural = "backendtlspolicies",
-    shortname = "btlspolicy",
-    namespaced,
-    status = "BackendTLSPolicyStatus"
-)]
-#[serde(rename_all = "camelCase")]
-pub struct BackendTLSPolicyAlpha3Spec {
-    /// TargetRefs identifies the API object(s) to apply the policy to.
-    pub target_refs: Vec<BackendTLSPolicyTargetRef>,
-
-    /// Controller-resolved target capability used to gate runtime publication.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub resolved_target_class: Option<ResolvedPolicyTargetClass>,
-
-    /// Validation contains backend TLS validation configuration.
-    pub validation: BackendTLSPolicyValidation,
-
-    /// Options are a list of key/value pairs to enable extended TLS configuration.
-    /// Implementation-specific field for configuring TLS options like minimum TLS version or cipher suites.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<HashMap<String, String>>,
-
-    /// Resolved CA certificate Secrets (runtime only, filled by controller).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    #[schemars(skip)]
-    pub resolved_ca_certificates: Option<Vec<Secret>>,
-
-    /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    #[schemars(skip)]
-    pub resolved_client_certificate: Option<Secret>,
-
-    /// Whether to use system CA certificates for backend TLS verification (runtime only, filled by controller).
-    #[serde(default, skip_serializing_if = "crate::resources::common::is_false")]
-    #[schemars(skip)]
-    pub use_system_ca: bool,
-}
-
 /// BackendTLSPolicyTargetRef identifies an API object to apply policy to.
 /// Note: Per Gateway API spec, targetRef can only reference resources in the same namespace.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -356,72 +303,6 @@ fn valid_kube_name(value: &str) -> bool {
         })
 }
 
-/// Read-only view over the fields shared by `BackendTLSPolicySpec` and
-/// `BackendTLSPolicyAlpha3Spec`. Lets handler code operate on either version
-/// via borrowed access, so the v1alpha3 compat path does not have to clone the
-/// whole spec (including resolved CA Secret PEM bundles) on every reconcile.
-pub trait BtpSpecView {
-    fn target_refs(&self) -> &[BackendTLSPolicyTargetRef];
-    fn validation(&self) -> &BackendTLSPolicyValidation;
-    fn options(&self) -> Option<&HashMap<String, String>>;
-    fn resolved_ca_certificates(&self) -> Option<&[Secret]>;
-    fn resolved_client_certificate(&self) -> Option<&Secret>;
-    fn use_system_ca(&self) -> bool;
-    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass>;
-
-    fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
-        parse_client_certificate_option(self.options())
-    }
-}
-
-impl BtpSpecView for BackendTLSPolicySpec {
-    fn target_refs(&self) -> &[BackendTLSPolicyTargetRef] {
-        &self.target_refs
-    }
-    fn validation(&self) -> &BackendTLSPolicyValidation {
-        &self.validation
-    }
-    fn options(&self) -> Option<&HashMap<String, String>> {
-        self.options.as_ref()
-    }
-    fn resolved_ca_certificates(&self) -> Option<&[Secret]> {
-        self.resolved_ca_certificates.as_deref()
-    }
-    fn resolved_client_certificate(&self) -> Option<&Secret> {
-        self.resolved_client_certificate.as_ref()
-    }
-    fn use_system_ca(&self) -> bool {
-        self.use_system_ca
-    }
-    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass> {
-        self.resolved_target_class
-    }
-}
-
-impl BtpSpecView for BackendTLSPolicyAlpha3Spec {
-    fn target_refs(&self) -> &[BackendTLSPolicyTargetRef] {
-        &self.target_refs
-    }
-    fn validation(&self) -> &BackendTLSPolicyValidation {
-        &self.validation
-    }
-    fn options(&self) -> Option<&HashMap<String, String>> {
-        self.options.as_ref()
-    }
-    fn resolved_ca_certificates(&self) -> Option<&[Secret]> {
-        self.resolved_ca_certificates.as_deref()
-    }
-    fn resolved_client_certificate(&self) -> Option<&Secret> {
-        self.resolved_client_certificate.as_ref()
-    }
-    fn use_system_ca(&self) -> bool {
-        self.use_system_ca
-    }
-    fn resolved_target_class(&self) -> Option<ResolvedPolicyTargetClass> {
-        self.resolved_target_class
-    }
-}
-
 impl BackendTLSPolicy {
     /// Parse implementation-specific client certificate Secret reference from options.
     pub fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
@@ -436,42 +317,6 @@ impl BackendTLSPolicy {
     /// Get the name of this resource
     pub fn name(&self) -> &str {
         self.metadata.name.as_deref().unwrap_or("")
-    }
-}
-
-impl From<BackendTLSPolicyAlpha3> for BackendTLSPolicy {
-    fn from(alpha3: BackendTLSPolicyAlpha3) -> Self {
-        Self {
-            metadata: alpha3.metadata,
-            spec: BackendTLSPolicySpec {
-                target_refs: alpha3.spec.target_refs,
-                resolved_target_class: alpha3.spec.resolved_target_class,
-                validation: alpha3.spec.validation,
-                options: alpha3.spec.options,
-                resolved_ca_certificates: alpha3.spec.resolved_ca_certificates,
-                resolved_client_certificate: alpha3.spec.resolved_client_certificate,
-                use_system_ca: alpha3.spec.use_system_ca,
-            },
-            status: alpha3.status,
-        }
-    }
-}
-
-impl From<BackendTLSPolicy> for BackendTLSPolicyAlpha3 {
-    fn from(v1: BackendTLSPolicy) -> Self {
-        Self {
-            metadata: v1.metadata,
-            spec: BackendTLSPolicyAlpha3Spec {
-                target_refs: v1.spec.target_refs,
-                resolved_target_class: v1.spec.resolved_target_class,
-                validation: v1.spec.validation,
-                options: v1.spec.options,
-                resolved_ca_certificates: v1.spec.resolved_ca_certificates,
-                resolved_client_certificate: v1.spec.resolved_client_certificate,
-                use_system_ca: v1.spec.use_system_ca,
-            },
-            status: v1.status,
-        }
     }
 }
 
@@ -712,35 +557,5 @@ mod tests {
         let schema = schemars::schema_for!(BackendTLSPolicySpec);
         let schema_json = serde_json::to_value(schema).unwrap();
         assert!(!schema_json.to_string().contains("resolvedTargetClass"));
-    }
-
-    #[test]
-    fn test_alpha3_roundtrip_conversion_preserves_runtime_fields() {
-        let mut policy = make_policy(Some(HashMap::from([(
-            OPTION_CLIENT_CERTIFICATE_REF.to_string(),
-            "client-cert".to_string(),
-        )])));
-        policy.spec.use_system_ca = true;
-        policy.status = Some(BackendTLSPolicyStatus { ancestors: vec![] });
-
-        let alpha3: BackendTLSPolicyAlpha3 = policy.clone().into();
-        let restored: BackendTLSPolicy = alpha3.into();
-
-        assert_eq!(restored.spec.target_refs, policy.spec.target_refs);
-        assert_eq!(restored.spec.validation, policy.spec.validation);
-        assert_eq!(restored.spec.options, policy.spec.options);
-        assert_eq!(restored.spec.use_system_ca, policy.spec.use_system_ca);
-        assert_eq!(restored.status.as_ref().unwrap().ancestors.len(), 0);
-    }
-
-    #[test]
-    fn test_v1_type_can_deserialize_alpha3_payload() {
-        let policy = make_policy(None);
-        let alpha3: BackendTLSPolicyAlpha3 = policy.into();
-        let json = serde_json::to_string(&alpha3).unwrap();
-
-        let restored: BackendTLSPolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.spec.target_refs.len(), 1);
-        assert_eq!(restored.spec.validation.hostname, "backend.example.com");
     }
 }

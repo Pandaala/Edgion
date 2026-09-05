@@ -1,8 +1,15 @@
-mod conf_handler_common;
+mod coordinator;
 pub mod dns_cache;
 pub mod endpoint_slice;
 pub mod services;
 
+pub use coordinator::{
+    get_service_discovery_coordinator, AvailableServiceProjection, LegacyRawProjection, ResolvedBackendSlot,
+    ResolvedServiceSection, ServiceDiscoveryCoordinator, ServiceDiscoveryStatsSnapshot, ServicePublishedState,
+    ServiceRuntimeCell, ServiceRuntimeSnapshot, ServiceSectionInvalid, ServiceSectionKey, ServiceSectionOutcome,
+    ServiceSelectorGeneration,
+};
+pub(crate) use coordinator::{HealthPolicyIdentity, OutlierPolicyIdentity};
 pub use dns_cache::{
     decide_external_name_path, get_global_dns_cache, DnsCache, DnsResolutionMode, ExternalNamePath,
     DEFAULT_DNS_CACHE_TTL,

@@ -37,7 +37,7 @@ mod tcp_route;
 mod tls_route;
 mod udp_route;
 
-pub use backend_tls_policy::{BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler};
+pub use backend_tls_policy::BackendTlsPolicyHandler;
 pub use configmap::ConfigMapHandler;
 pub use edgion_acme::EdgionAcmeHandler;
 pub use edgion_backend::EdgionBackendHandler;

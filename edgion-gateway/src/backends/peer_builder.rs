@@ -1,6 +1,7 @@
-use crate::backends::discovery::get_global_service_store;
 #[cfg(any(feature = "boringssl", test))]
 use crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
+use crate::backends::policy::backend_tls::backend_tls_policy_store::BACKEND_TLS_PROFILE_DOMAIN;
+use crate::backends::policy::{BackendTlsPolicyLookup, BackendTlsProfileIdentity, EffectiveBackendTlsPolicy};
 use crate::util::net::{classify_backend_addr, BlockedBackendReason};
 use crate::EdgionHttpContext;
 #[cfg(feature = "boringssl")]
@@ -17,6 +18,7 @@ use pingora_core::tls::pkey::PKey;
 use pingora_core::tls::x509::X509;
 #[cfg(feature = "boringssl")]
 use pingora_core::utils::tls::CertKey;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +27,7 @@ pub(crate) enum BackendAppProtocol {
     WebSocket,
 }
 
-fn parse_backend_app_protocol(value: &str) -> Option<BackendAppProtocol> {
+pub(crate) fn parse_backend_app_protocol(value: &str) -> Option<BackendAppProtocol> {
     if value.eq_ignore_ascii_case("kubernetes.io/h2c") || value.eq_ignore_ascii_case("h2c") {
         Some(BackendAppProtocol::H2c)
     } else if value.eq_ignore_ascii_case("kubernetes.io/ws")
@@ -37,18 +39,6 @@ fn parse_backend_app_protocol(value: &str) -> Option<BackendAppProtocol> {
     } else {
         None
     }
-}
-
-pub(crate) fn detect_backend_app_protocol_key(
-    service_key: &str,
-    backend_port: Option<i32>,
-) -> Option<BackendAppProtocol> {
-    let service = get_global_service_store().get(service_key)?;
-    let ports = service.spec.as_ref()?.ports.as_ref()?;
-
-    let target_port = backend_port.or_else(|| ports.first().map(|p| p.port))?;
-    let port = ports.iter().find(|p| p.port == target_port).or_else(|| ports.first())?;
-    parse_backend_app_protocol(port.app_protocol.as_deref()?)
 }
 
 pub(crate) fn apply_backend_app_protocol(
@@ -70,17 +60,16 @@ pub(crate) fn apply_backend_app_protocol(
     }
 }
 
-/// Extract TLS configuration from BackendTLSPolicy
+/// Extract TLS configuration from a usable BackendTLSPolicy lookup.
 ///
-/// Returns (use_tls, sni) tuple:
-/// - If policy exists: (true, hostname from policy)
-/// - Otherwise: (false, empty string)
+/// `Invalid` is rejected before this helper is called.
 #[inline]
-pub(crate) fn extract_tls_config(policy: &Option<Arc<BackendTLSPolicy>>) -> (bool, String) {
-    policy
-        .as_ref()
-        .map(|p| (true, p.spec.validation.hostname.clone()))
-        .unwrap_or((false, String::new()))
+pub(crate) fn extract_tls_config(lookup: &BackendTlsPolicyLookup) -> (bool, String) {
+    match lookup {
+        BackendTlsPolicyLookup::Effective(effective) => (true, effective.policy.spec.validation.hostname.clone()),
+        BackendTlsPolicyLookup::Absent => (false, String::new()),
+        BackendTlsPolicyLookup::Invalid => (false, String::new()),
+    }
 }
 
 #[cfg(any(feature = "boringssl", test))]
@@ -161,15 +150,24 @@ fn build_ca_chain(_policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionE
     Ok(None)
 }
 
-pub(crate) fn create_tls_peer(
+pub(crate) fn peer_from_backend_tls_lookup(
     addr: SocketAddr,
-    policy: &Option<Arc<BackendTLSPolicy>>,
+    lookup: &BackendTlsPolicyLookup,
     gateway_key: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
-    let Some(policy) = policy.as_ref() else {
-        return Ok(Box::new(HttpPeer::new(addr, false, String::new())));
-    };
+    match lookup {
+        BackendTlsPolicyLookup::Absent => Ok(Box::new(HttpPeer::new(addr, false, String::new()))),
+        BackendTlsPolicyLookup::Effective(effective) => create_tls_peer(addr, effective, gateway_key),
+        BackendTlsPolicyLookup::Invalid => Err(EdgionErrorCode::BackendTlsPolicyInvalid),
+    }
+}
 
+pub(crate) fn create_tls_peer(
+    addr: SocketAddr,
+    effective: &EffectiveBackendTlsPolicy,
+    gateway_key: Option<&str>,
+) -> Result<Box<HttpPeer>, EdgionErrorCode> {
+    let policy = &effective.policy;
     let sni = policy.spec.validation.hostname.clone();
 
     #[cfg(feature = "boringssl")]
@@ -202,7 +200,7 @@ pub(crate) fn create_tls_peer(
     };
 
     #[cfg(not(feature = "boringssl"))]
-    let peer = {
+    let mut peer = {
         let _ = gateway_key;
         HttpPeer::new(addr, true, sni)
     };
@@ -218,36 +216,64 @@ pub(crate) fn create_tls_peer(
     }
 
     #[cfg(feature = "boringssl")]
-    if let Some(ref policy_sans) = policy.spec.validation.subject_alt_names {
-        if !policy_sans.is_empty() {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            for san in policy_sans.iter() {
-                match san.san_type {
-                    edgion_resources::resources::backend_tls_policy::SubjectAltNameType::Hostname => {
-                        "H".hash(&mut hasher);
-                        san.hostname.hash(&mut hasher);
-                    }
-                    edgion_resources::resources::backend_tls_policy::SubjectAltNameType::URI => {
-                        "U".hash(&mut hasher);
-                        san.uri.hash(&mut hasher);
-                    }
-                }
+    {
+        peer.group_key = backend_tls_group_key(&effective.profile, gateway_identity.as_deref());
+        if let Some(ref policy_sans) = policy.spec.validation.subject_alt_names {
+            if !policy_sans.is_empty() {
+                let policy_sans = policy_sans.clone();
+                peer.options.upstream_tls_handshake_complete_hook = Some(std::sync::Arc::new(
+                    move |ssl: &pingora_core::tls::ssl::SslRef| -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+                        let cert_sans = crate::tls::runtime::backend::cert_extractor::extract_sans_from_ssl(ssl);
+                        let result = crate::tls::validation::backend_san::validate_backend_sans(&cert_sans, &policy_sans);
+                        Some(std::sync::Arc::new(result))
+                    },
+                ));
             }
-            peer.group_key = hasher.finish();
-
-            let policy_sans = policy_sans.clone();
-            peer.options.upstream_tls_handshake_complete_hook = Some(std::sync::Arc::new(
-                move |ssl: &pingora_core::tls::ssl::SslRef| -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
-                    let cert_sans = crate::tls::runtime::backend::cert_extractor::extract_sans_from_ssl(ssl);
-                    let result = crate::tls::validation::backend_san::validate_backend_sans(&cert_sans, &policy_sans);
-                    Some(std::sync::Arc::new(result))
-                },
-            ));
         }
     }
 
+    #[cfg(not(feature = "boringssl"))]
+    {
+        peer.group_key = effective.profile.group_key();
+    }
+
     Ok(Box::new(peer))
+}
+
+fn backend_tls_group_key(
+    profile: &BackendTlsProfileIdentity,
+    gateway_secret: Option<&k8s_openapi::api::core::v1::Secret>,
+) -> u64 {
+    let Some(secret) = gateway_secret else {
+        return profile.group_key();
+    };
+    let mut digest = Sha256::new();
+    digest.update(BACKEND_TLS_PROFILE_DOMAIN);
+    digest.update(profile.fingerprint);
+    let secret_fp = secret_data_fingerprint(secret);
+    digest.update((secret_fp.len() as u64).to_be_bytes());
+    digest.update(secret_fp);
+    let out: [u8; 32] = digest.finalize().into();
+    u64::from_be_bytes(out[..8].try_into().expect("sha256 is 32 bytes"))
+}
+
+fn secret_data_fingerprint(secret: &k8s_openapi::api::core::v1::Secret) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    if let Some(data) = secret.data.as_ref() {
+        let mut keys: Vec<_> = data.keys().collect();
+        keys.sort();
+        digest.update((keys.len() as u64).to_be_bytes());
+        for key in keys {
+            digest.update((key.len() as u64).to_be_bytes());
+            digest.update(key.as_bytes());
+            let value = &data[key].0;
+            digest.update((value.len() as u64).to_be_bytes());
+            digest.update(value);
+        }
+    } else {
+        digest.update(0u64.to_be_bytes());
+    }
+    digest.finalize().into()
 }
 
 /// Record TLS configuration to upstream context.
@@ -501,9 +527,9 @@ mod tests {
         let store = get_global_gateway_backend_tls_store();
         store.set(gateway_key.to_string(), Arc::new(Secret::default()));
 
-        let result = create_tls_peer(
+        let result = peer_from_backend_tls_lookup(
             SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
-            &None,
+            &BackendTlsPolicyLookup::Absent,
             Some(gateway_key),
         );
         store.remove(gateway_key);
@@ -511,5 +537,58 @@ mod tests {
         let peer = result.expect("Gateway identity must not be parsed without a BackendTLSPolicy");
         assert!(!peer.is_tls());
         assert!(peer.client_cert_key.is_none());
+    }
+
+    #[test]
+    fn invalid_lookup_does_not_build_a_plaintext_peer() {
+        let err = peer_from_backend_tls_lookup(
+            SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+            &BackendTlsPolicyLookup::Invalid,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, EdgionErrorCode::BackendTlsPolicyInvalid);
+    }
+
+    #[test]
+    fn effective_peer_sets_profile_group_key_without_sans() {
+        use edgion_resources::resources::backend_tls_policy::{
+            BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
+        };
+        use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let policy = Arc::new(BackendTLSPolicy {
+            metadata: ObjectMeta {
+                namespace: Some("tenant".to_string()),
+                name: Some("tls".to_string()),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "backend".to_string(),
+                    section_name: None,
+                }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: "backend.example.com".to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: None,
+                },
+                options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                use_system_ca: true,
+            },
+            status: None,
+        });
+        let effective = EffectiveBackendTlsPolicy::from_policy(policy);
+        let peer = create_tls_peer(SocketAddr::Inet("127.0.0.1:443".parse().unwrap()), &effective, None)
+            .expect("system-CA policy must build a TLS peer");
+        assert!(peer.is_tls());
+        assert_eq!(peer.group_key, effective.profile.group_key());
     }
 }

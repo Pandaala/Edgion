@@ -8,7 +8,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
+use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
 use crate::observe::{log_udp, UdpLogEntry};
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
@@ -244,9 +244,22 @@ impl EdgionUdpProxy {
         let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
         let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let backend = match select_roundrobin_backend_key(&service_key) {
-            Some(backend) => backend,
-            None => {
+        let section = match service_section_key_from_port(backend_ref.port) {
+            Ok(section) => section,
+            Err(_) => {
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    direct_peer_ip,
+                    direct_peer_port,
+                    "NoBackendResolved",
+                ))
+                .await;
+                return;
+            }
+        };
+        let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
+            Ok(endpoint) => endpoint,
+            Err(_) => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
                     direct_peer_ip,
@@ -258,8 +271,7 @@ impl EdgionUdpProxy {
             }
         };
 
-        let mut upstream_pingora_addr = backend.inner().addr.clone();
-        resolve_target_port_key(&mut upstream_pingora_addr, backend_ref.port, &service_key);
+        let upstream_pingora_addr = endpoint.backend.inner().addr.clone();
         let upstream_addr = match upstream_pingora_addr {
             PingoraSocketAddr::Inet(sockaddr) => sockaddr,
             PingoraSocketAddr::Unix(_) => return,

@@ -84,7 +84,7 @@ mod tests {
             "draining ledger must contain the registered backend"
         );
 
-        runtime_state::remove_backend(svc, &addr);
+        runtime_state::remove_backend_exact(svc, &addr, &arc);
         let listed = runtime_state::all_draining_backends();
         assert!(
             !listed.iter().any(|(k, _)| k.starts_with(&format!("{}\0", svc))),

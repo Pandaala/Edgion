@@ -10,7 +10,7 @@
 Client → [TLS] → Gateway → [TLS] → Backend
 ```
 
-`BackendTLSPolicy` 是标准 Gateway API 资源（非 Edgion 扩展）。Edgion 内部将其作为 `gateway.networking.k8s.io/v1` 处理。对于只提供旧版 `v1alpha3` API 的集群，会通过回退机制接受并转换为同一内部模型；如果集群同时提供两个版本，建议优先使用 `v1`。
+`BackendTLSPolicy` 是标准 Gateway API 资源（非 Edgion 扩展）。Edgion 的 Kubernetes watch、API 操作、FileSystem 输入和 etcd 输入都只接受 `gateway.networking.k8s.io/v1`。请先将旧版清单迁移到 v1，再加载到 Edgion。
 
 ## TLS 后端支持
 

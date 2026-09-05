@@ -1,7 +1,15 @@
 //! Unit tests for `tls.rs` (see `super`).
 use super::*;
-use edgion_resources::resources::gateway::{GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener};
+use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT as TLS_CERT, KEY as TLS_KEY};
+use edgion_resources::resources::gateway::{
+    FrontendCACertificateRef, FrontendCASourceIdentity, FrontendCASourceKind, FrontendTLSValidation,
+    FrontendValidationMode, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener, ResolvedFrontendCAReference,
+    ResolvedServingCertificateReference, ServingCertificateSourceIdentity,
+};
+use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Helper: build a ListenerKey for test gateways (no addresses -> 0.0.0.0).
@@ -22,6 +30,7 @@ fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) ->
             addresses: None,
             tls: None,
             resolved_inbound_proxy_protocol: Default::default(),
+            resolved_attachment_proof: None,
         },
         status: None,
     }
@@ -57,9 +66,421 @@ fn make_tls_config(cert_name: &str, cert_ns: Option<&str>) -> GatewayTLSConfig {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
+    }
+}
+
+fn frontend_ref(name: &str) -> FrontendCACertificateRef {
+    FrontendCACertificateRef {
+        group: String::new(),
+        kind: "ConfigMap".to_string(),
+        name: name.to_string(),
+        namespace: None,
+    }
+}
+
+fn ca_secret(pem: &[u8]) -> Secret {
+    Secret {
+        data: Some(BTreeMap::from([(CA_CERT.to_string(), ByteString(pem.to_vec()))])),
+        ..Default::default()
+    }
+}
+
+fn valid_ca_secret() -> Secret {
+    ca_secret(&valid_ca_pem())
+}
+
+fn valid_ca_pem() -> Vec<u8> {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::new(vec!["client.example.com".to_string()]).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.self_signed(&key).unwrap().pem().into_bytes()
+}
+
+fn valid_server_secret() -> Secret {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let params = rcgen::CertificateParams::new(vec!["server.example.com".to_string()]).unwrap();
+    let cert = params.self_signed(&key).unwrap().pem();
+    Secret {
+        metadata: ObjectMeta {
+            name: Some("expected".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        data: Some(BTreeMap::from([
+            (TLS_CERT.to_string(), ByteString(cert.into_bytes())),
+            (TLS_KEY.to_string(), ByteString(key.serialize_pem().into_bytes())),
+        ])),
+        ..Default::default()
+    }
+}
+
+fn with_frontend(
+    mut tls: GatewayTLSConfig,
+    mode: Option<FrontendValidationMode>,
+    refs: Vec<FrontendCACertificateRef>,
+    resolved: Option<Vec<Secret>>,
+) -> GatewayTLSConfig {
+    // Frontend outcome tests use the EdgionTls certificate-provider shape so
+    // serving-certificate resolution is not an unrelated variable.
+    tls.certificate_refs = None;
+    tls.resolved_certificate_refs = None;
+    tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::RequireExactEdgionTlsCertificate);
+    tls.frontend_validation = Some(FrontendTLSValidation {
+        ca_certificate_refs: refs,
+        mode,
+    });
+    tls.resolved_frontend_ca_refs = resolved.map(|secrets| {
+        secrets
+            .into_iter()
+            .enumerate()
+            .map(|(index, secret)| ResolvedFrontendCAReference {
+                index: index as u8,
+                source: FrontendCASourceIdentity {
+                    kind: FrontendCASourceKind::ConfigMap,
+                    namespace: "default".to_string(),
+                    name: tls.frontend_validation.as_ref().unwrap().ca_certificate_refs[index]
+                        .name
+                        .clone(),
+                },
+                ca_certificate: secret.data.and_then(|mut data| data.remove(CA_CERT)),
+                error: None,
+            })
+            .collect()
+    });
+    tls
+}
+
+#[test]
+fn strict_frontend_outcome_requires_complete_valid_ca_set() {
+    let matcher = GatewayTlsMatcher::new();
+    let cases = [
+        (
+            vec![frontend_ref("one")],
+            None,
+            FrontendMtlsOutcome::StrictReject {
+                reason: "ca unresolved",
+            },
+        ),
+        (
+            vec![frontend_ref("one"), frontend_ref("two")],
+            Some(vec![valid_ca_secret()]),
+            FrontendMtlsOutcome::StrictReject {
+                reason: "ca set incomplete",
+            },
+        ),
+        (
+            vec![frontend_ref("one")],
+            Some(vec![ca_secret(b"garbage")]),
+            FrontendMtlsOutcome::StrictReject {
+                reason: "ca pem invalid",
+            },
+        ),
+        (
+            vec![frontend_ref("one")],
+            Some(vec![valid_ca_secret()]),
+            FrontendMtlsOutcome::StrictEffective,
+        ),
+    ];
+    for (refs, resolved, expected) in cases {
+        let tls = with_frontend(make_tls_config("server", None), None, refs, resolved);
+        let gateway = create_test_gateway(
+            "gw",
+            "default",
+            vec![create_test_listener("https", Some("strict.example.com"), Some(tls))],
+        );
+        matcher.rebuild_from_gateways(&[gateway]);
+        assert_eq!(
+            matcher
+                .match_sni(&test_listener_key(443), "strict.example.com")
+                .unwrap()
+                .frontend_mtls,
+            expected
+        );
+    }
+}
+
+#[test]
+fn strict_frontend_deduplicates_ca_certificates_across_refs() {
+    let matcher = GatewayTlsMatcher::new();
+    let ca = valid_ca_secret();
+    let tls = with_frontend(
+        make_tls_config("server", None),
+        None,
+        vec![frontend_ref("one"), frontend_ref("two")],
+        Some(vec![ca.clone(), ca]),
+    );
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener("https", Some("dedupe.example.com"), Some(tls))],
+    )]);
+    assert_eq!(
+        matcher
+            .match_sni(&test_listener_key(443), "dedupe.example.com")
+            .unwrap()
+            .frontend_mtls,
+        FrontendMtlsOutcome::StrictEffective
+    );
+}
+
+#[test]
+fn strict_frontend_enforces_aggregate_byte_and_certificate_limits() {
+    let matcher = GatewayTlsMatcher::new();
+    let mut padded_pem = valid_ca_pem();
+    padded_pem.resize(edgion_common::tls_validation::MAX_CA_BUNDLE_BYTES_PER_REF, b'\n');
+    let refs = (0..5)
+        .map(|index| frontend_ref(&format!("bytes-{index}")))
+        .collect::<Vec<_>>();
+    let tls = with_frontend(
+        make_tls_config("server", None),
+        None,
+        refs,
+        Some((0..5).map(|_| ca_secret(&padded_pem)).collect()),
+    );
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener("https", Some("bytes.example.com"), Some(tls))],
+    )]);
+    assert_eq!(
+        matcher
+            .match_sni(&test_listener_key(443), "bytes.example.com")
+            .unwrap()
+            .frontend_mtls,
+        FrontendMtlsOutcome::StrictReject {
+            reason: "ca aggregate bytes exceeded"
+        }
+    );
+
+    let refs = (0..8)
+        .map(|index| frontend_ref(&format!("count-{index}")))
+        .collect::<Vec<_>>();
+    let resolved = (0..8)
+        .map(|_| {
+            let bundle = (0..129).flat_map(|_| valid_ca_pem()).collect::<Vec<_>>();
+            ca_secret(&bundle)
+        })
+        .collect();
+    let tls = with_frontend(make_tls_config("server", None), None, refs, Some(resolved));
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener("https", Some("count.example.com"), Some(tls))],
+    )]);
+    assert_eq!(
+        matcher
+            .match_sni(&test_listener_key(443), "count.example.com")
+            .unwrap()
+            .frontend_mtls,
+        FrontendMtlsOutcome::StrictReject {
+            reason: "ca aggregate certificate count exceeded"
+        }
+    );
+}
+
+#[test]
+fn insecure_fallback_replaces_prior_strict_ca_generation() {
+    let matcher = GatewayTlsMatcher::new();
+    let strict = with_frontend(
+        make_tls_config("server", None),
+        None,
+        vec![frontend_ref("one")],
+        Some(vec![valid_ca_secret()]),
+    );
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener("https", Some("rotate.example.com"), Some(strict))],
+    )]);
+    assert_eq!(
+        matcher
+            .match_sni(&test_listener_key(443), "rotate.example.com")
+            .unwrap()
+            .frontend_mtls,
+        FrontendMtlsOutcome::StrictEffective
+    );
+
+    let insecure = with_frontend(
+        make_tls_config("server", None),
+        Some(FrontendValidationMode::AllowInsecureFallback),
+        vec![frontend_ref("missing")],
+        None,
+    );
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener(
+            "https",
+            Some("rotate.example.com"),
+            Some(insecure),
+        )],
+    )]);
+    let entry = matcher
+        .match_sni(&test_listener_key(443), "rotate.example.com")
+        .unwrap();
+    assert_eq!(entry.frontend_mtls, FrontendMtlsOutcome::InsecureFallback);
+    assert!(entry.compiled_frontend_ca_store.is_none());
+}
+
+#[test]
+fn frontend_eligibility_without_projected_validation_rejects() {
+    let mut tls = make_tls_config("server", None);
+    tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::RequireExactEdgionTlsCertificate);
+    let matcher = GatewayTlsMatcher::new();
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener(
+            "https",
+            Some("inconsistent.example.com"),
+            Some(tls),
+        )],
+    )]);
+    assert_eq!(
+        matcher
+            .match_sni(&test_listener_key(443), "inconsistent.example.com")
+            .unwrap()
+            .frontend_mtls,
+        FrontendMtlsOutcome::StrictReject {
+            reason: "frontend projection inconsistent"
+        }
+    );
+}
+
+#[test]
+fn insecure_mode_cannot_bypass_authoritative_strict_reject() {
+    let mut tls = with_frontend(
+        make_tls_config("server", None),
+        Some(FrontendValidationMode::AllowInsecureFallback),
+        vec![frontend_ref("ca")],
+        Some(vec![valid_ca_secret()]),
+    );
+    tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
+    let matcher = GatewayTlsMatcher::new();
+    matcher.rebuild_from_gateways(&[create_test_gateway(
+        "gw",
+        "default",
+        vec![create_test_listener("https", Some("reject.example.com"), Some(tls))],
+    )]);
+    assert_eq!(
+        matcher
+            .match_sni(&test_listener_key(443), "reject.example.com")
+            .unwrap()
+            .frontend_mtls,
+        FrontendMtlsOutcome::StrictReject {
+            reason: "controller rejected gateway tls transport"
+        }
+    );
+}
+
+#[test]
+fn serving_certificate_outcome_requires_exact_ordered_source_identity() {
+    let references = vec![SecretObjectReference {
+        group: None,
+        kind: None,
+        namespace: None,
+        name: "expected".to_string(),
+    }];
+    let wrong_source = vec![ResolvedServingCertificateReference {
+        index: 0,
+        source: ServingCertificateSourceIdentity {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            namespace: "default".to_string(),
+            name: "same-sized".to_string(),
+        },
+        secret: Some(valid_server_secret()),
+        error: None,
+    }];
+    assert!(compile_serving_certificates(&references, Some(&wrong_source), "default").is_none());
+
+    let mut wrong_payload = valid_server_secret();
+    wrong_payload.metadata.name = Some("different-secret".to_string());
+    let forged_identity = vec![ResolvedServingCertificateReference {
+        index: 0,
+        source: ServingCertificateSourceIdentity {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            namespace: "default".to_string(),
+            name: "expected".to_string(),
+        },
+        secret: Some(wrong_payload),
+        error: None,
+    }];
+    assert!(compile_serving_certificates(&references, Some(&forged_identity), "default").is_none());
+
+    let exact = vec![ResolvedServingCertificateReference {
+        index: 0,
+        source: ServingCertificateSourceIdentity {
+            group: String::new(),
+            kind: "Secret".to_string(),
+            namespace: "default".to_string(),
+            name: "expected".to_string(),
+        },
+        secret: Some(valid_server_secret()),
+        error: None,
+    }];
+    assert!(
+        compile_serving_certificates(&references, Some(&exact), "default").is_some(),
+        "a real matching certificate/private-key pair must compile"
+    );
+
+    let mut missing_namespace = valid_server_secret();
+    missing_namespace.metadata.namespace = None;
+    let missing_namespace = vec![ResolvedServingCertificateReference {
+        secret: Some(missing_namespace),
+        ..exact[0].clone()
+    }];
+    assert!(compile_serving_certificates(&references, Some(&missing_namespace), "default").is_none());
+}
+
+#[test]
+fn strict_reject_and_serve_candidates_share_collision_precedence() {
+    let reject = create_test_gateway(
+        "alpha",
+        "team-a",
+        vec![create_test_listener(
+            "https",
+            Some("collision.example.com"),
+            Some(with_frontend(
+                make_tls_config("alpha-cert", None),
+                None,
+                vec![frontend_ref("missing")],
+                None,
+            )),
+        )],
+    );
+    let serve = create_test_gateway(
+        "beta",
+        "team-b",
+        vec![create_test_listener(
+            "https",
+            Some("collision.example.com"),
+            Some(with_frontend(
+                make_tls_config("beta-cert", None),
+                None,
+                vec![frontend_ref("valid")],
+                Some(vec![valid_ca_secret()]),
+            )),
+        )],
+    );
+    for gateways in [vec![reject.clone(), serve.clone()], vec![serve.clone(), reject.clone()]] {
+        let matcher = GatewayTlsMatcher::new();
+        matcher.rebuild_from_gateways(&gateways);
+        let winner = matcher
+            .match_sni(&test_listener_key(443), "collision.example.com")
+            .unwrap();
+        assert_eq!(winner.gateway_name, "alpha");
+        assert_eq!(
+            winner.frontend_mtls,
+            FrontendMtlsOutcome::StrictReject {
+                reason: "ca unresolved"
+            }
+        );
     }
 }
 
@@ -116,9 +537,10 @@ fn test_no_hostname() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     let listener = create_test_listener("https", None, Some(tls_config));
@@ -152,9 +574,10 @@ fn test_wildcard_match() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     // Gateway with wildcard hostname
@@ -201,9 +624,10 @@ fn test_multiple_gateways_multiple_listeners() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
     let listener1 = create_test_listener("api-https", Some("api.example.com"), Some(tls_config1));
     let gateway1 = create_test_gateway("api-gateway", "prod", vec![listener1]);
@@ -218,9 +642,10 @@ fn test_multiple_gateways_multiple_listeners() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
     let tls_config3 = GatewayTLSConfig {
         mode: Some(GatewayTlsMode::Terminate),
@@ -231,9 +656,10 @@ fn test_multiple_gateways_multiple_listeners() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
     let listener2 = create_test_listener("www-https", Some("www.example.com"), Some(tls_config2));
     let listener3 = create_test_listener("admin-https", Some("admin.example.com"), Some(tls_config3));
@@ -284,9 +710,10 @@ fn test_certificate_ref_namespace_fallback() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     let listener = create_test_listener("https", Some("test.example.com"), Some(tls_config));
@@ -348,9 +775,10 @@ fn test_has_entries_flag_transitions() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
     let listener = create_test_listener("https", Some("example.com"), Some(tls_config));
     let gateway = create_test_gateway("test-gw", "default", vec![listener]);
@@ -390,9 +818,10 @@ fn test_listener_dimension_matching() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     let tls_config_8443 = GatewayTLSConfig {
@@ -404,9 +833,10 @@ fn test_listener_dimension_matching() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     let listener_443 = create_test_listener_with_port("https-443", 443, Some("api.example.com"), Some(tls_config_443));
@@ -451,9 +881,10 @@ fn test_multiple_listeners_different_hostnames() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     let tls_config_admin = GatewayTLSConfig {
@@ -465,9 +896,10 @@ fn test_multiple_listeners_different_hostnames() {
             kind: None,
         }]),
         options: None,
-        secrets: None,
+        resolved_certificate_refs: None,
         frontend_validation: None,
-        resolved_frontend_ca_secrets: None,
+        resolved_frontend_ca_refs: None,
+        frontend_matcher_eligibility: Some(FrontendMatcherEligibility::Programmed),
     };
 
     // Port 443: api.example.com
@@ -533,14 +965,15 @@ fn test_catchall_with_hostname_priority() {
 }
 
 #[test]
-fn test_programmed_false_listener_not_registered() {
+fn test_programmed_false_without_explicit_transport_outcome_is_omitted() {
     use edgion_resources::resources::common::Condition;
     use edgion_resources::resources::gateway::{GatewayStatus, ListenerStatus};
 
     let matcher = GatewayTlsMatcher::new();
     let key = test_listener_key(443);
 
-    let tls_config = make_tls_config("server-cert", Some("default"));
+    let mut tls_config = make_tls_config("server-cert", Some("default"));
+    tls_config.frontend_matcher_eligibility = None;
     let listener = create_test_listener("https", Some("api.example.com"), Some(tls_config));
 
     let mut gateway = create_test_gateway("test-gw", "default", vec![listener]);
@@ -564,13 +997,9 @@ fn test_programmed_false_listener_not_registered() {
 
     matcher.rebuild_from_gateways(&[gateway]);
 
-    // Programmed=False listener must not be in the TLS matcher
-    let result = matcher.match_sni(&key, "api.example.com");
-    assert!(result.is_none(), "Programmed=False listener should not serve TLS");
-    assert!(
-        matcher.is_empty(),
-        "matcher should be empty when only listener is invalid"
-    );
+    // Gateway status is not an authoritative transport signal. Only the
+    // Controller-private typed outcome may retain a StrictReject slot.
+    assert!(matcher.match_sni(&key, "api.example.com").is_none());
 }
 
 #[test]
@@ -783,7 +1212,8 @@ fn test_programmed_false_does_not_shadow_valid_listener() {
     let key = test_listener_key(443);
 
     // Invalid gateway: Programmed=False, catch-all (no hostname), valid cert
-    let invalid_tls = make_tls_config("invalid-cert", Some("default"));
+    let mut invalid_tls = make_tls_config("invalid-cert", Some("default"));
+    invalid_tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
     let invalid_listener = create_test_listener("https", None, Some(invalid_tls));
     let mut invalid_gw = create_test_gateway("invalid-gw", "default", vec![invalid_listener]);
     invalid_gw.status = Some(GatewayStatus {
@@ -816,10 +1246,15 @@ fn test_programmed_false_does_not_shadow_valid_listener() {
     assert!(result.is_some(), "valid listener should still be registered");
     assert_eq!(result.unwrap().gateway_name, "valid-gw");
 
-    // Invalid listener's cert should NOT appear as catch-all fallback
-    let fallback = matcher.match_sni(&key, "unknown.example.com");
-    assert!(
-        fallback.is_none() || fallback.as_ref().map(|e| e.gateway_name.as_str()) == Some("valid-gw"),
-        "catch-all should not use the invalid gateway's cert"
-    );
+    // The invalid catch-all remains an explicit rejection entry, never a
+    // serving fallback and never an opportunity for EdgionTls rescue.
+    let fallback = matcher
+        .match_sni(&key, "unknown.example.com")
+        .expect("invalid catch-all should remain fail-closed");
+    assert!(matches!(
+        fallback.frontend_mtls,
+        FrontendMtlsOutcome::StrictReject {
+            reason: "controller rejected gateway tls transport"
+        }
+    ));
 }

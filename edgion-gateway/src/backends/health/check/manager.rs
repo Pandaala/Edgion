@@ -1,15 +1,15 @@
-use super::backend_hash;
 use super::config_store::{get_hc_config_store, HealthCheckConfigStore};
 use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp, ProbeError};
 use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+use crate::backends::discovery::get_service_discovery_coordinator;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
+use crate::lb::EdgionBackend;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use parking_lot::RwLock;
-use pingora_load_balancing::Backend;
+use parking_lot::{Mutex, RwLock};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -39,6 +39,7 @@ pub struct HealthCheckManager {
     tasks: RwLock<HashMap<String, JoinHandle<()>>>,
     health_store: Arc<HealthStatusStore>,
     config_store: Arc<HealthCheckConfigStore>,
+    reconcile_lock: Mutex<()>,
 }
 
 impl Default for HealthCheckManager {
@@ -53,27 +54,31 @@ impl HealthCheckManager {
             tasks: RwLock::new(HashMap::new()),
             health_store: get_health_status_store(),
             config_store: get_hc_config_store(),
+            reconcile_lock: Mutex::new(()),
         }
     }
 
     /// Reconcile a service after annotation/config changes.
     pub fn reconcile_service(&self, service_key: &str) {
-        match self.config_store.resolve(service_key) {
-            Some(config) => {
-                self.upsert_task(service_key.to_string(), config);
+        let _reconcile_guard = self.reconcile_lock.lock();
+        match self.config_store.resolve_policy(service_key) {
+            Some(policy) => {
+                get_service_discovery_coordinator().set_health_policy(service_key, Some(Arc::clone(&policy.identity)));
+                self.upsert_task(service_key.to_string(), policy);
                 tracing::info!(
                     service = %service_key,
                     "Health check reconciled"
                 );
             }
             None => {
+                get_service_discovery_coordinator().set_health_policy(service_key, None);
                 self.cancel_task(service_key);
                 self.health_store.unregister_service(service_key);
             }
         }
     }
 
-    fn upsert_task(&self, service_key: String, config: ActiveHealthCheckConfig) {
+    fn upsert_task(&self, service_key: String, policy: Arc<super::config_store::ResolvedActiveHealthPolicy>) {
         let Ok(runtime_handle) = tokio::runtime::Handle::try_current() else {
             tracing::warn!(
                 service = %service_key,
@@ -86,8 +91,10 @@ impl HealthCheckManager {
 
         let health_store = self.health_store.clone();
         let task_service_key = service_key.clone();
+        let config = policy.config.clone();
+        let policy_identity = Arc::clone(&policy.identity);
         let handle = runtime_handle.spawn(async move {
-            health_check_loop(task_service_key, config, health_store).await;
+            health_check_loop(task_service_key, config, policy_identity, health_store).await;
         });
 
         // Atomically swap the per-service handle: the single write-locked insert
@@ -125,7 +132,12 @@ fn resolve_probe_host(service_key: &str, config_host: Option<String>) -> Option<
         .or(config_host)
 }
 
-async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig, health_store: Arc<HealthStatusStore>) {
+async fn health_check_loop(
+    service_key: String,
+    config: ActiveHealthCheckConfig,
+    policy_identity: Arc<crate::backends::discovery::HealthPolicyIdentity>,
+    health_store: Arc<HealthStatusStore>,
+) {
     let interval = parse_probe_duration(&config.interval, Duration::from_secs(10)).max(Duration::from_secs(1));
     let timeout = parse_probe_duration(&config.timeout, Duration::from_secs(3)).max(Duration::from_millis(100));
     let http_path = config.path.clone().unwrap_or_else(|| "/".to_string());
@@ -192,8 +204,11 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
         ticker.tick().await;
 
         let backends = get_service_backends(&service_key);
-        let hashes: Vec<u64> = backends.iter().map(backend_hash).collect();
-        health_store.register_service(&service_key, hashes);
+        // Keep the service marker for panic-threshold gating, but do not put
+        // address hashes on the production write path. Routing health lives in
+        // the Coordinator's identity-keyed runtime state; hash-keyed methods
+        // remain only for isolated compatibility tests.
+        health_store.register_service(&service_key, Vec::new());
 
         // Best-effort: rebuild the shared HTTP client once per cycle if it could
         // not be built earlier. Hoisting the retry here (instead of doing it
@@ -213,7 +228,8 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
         // preserved. Mirrors Envoy's per-host parallel active health checking.
         let mut probes = FuturesUnordered::new();
         for backend in backends {
-            let hash = backend_hash(&backend);
+            let runtime_identity = backend.runtime_identity().cloned();
+            let membership_identity = backend.runtime_membership_identity();
             let Some(addr) = backend.addr.as_inet().copied() else {
                 tracing::debug!(
                     service = %service_key,
@@ -221,13 +237,16 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                     "Skipping health check for non-IP backend address"
                 );
                 // No permit acquired and no probe issued for non-IP backends.
-                health_store.record_check(
-                    &service_key,
-                    hash,
-                    false,
-                    config.healthy_threshold,
-                    config.unhealthy_threshold,
-                );
+                if let (Some(identity), Some(membership)) = (runtime_identity.as_deref(), membership_identity) {
+                    get_service_discovery_coordinator().record_health_completion(
+                        &policy_identity,
+                        membership,
+                        identity,
+                        false,
+                        config.healthy_threshold,
+                        config.unhealthy_threshold,
+                    );
+                }
                 continue;
             };
 
@@ -238,23 +257,25 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 let permit = semaphore.acquire().await.expect("probe semaphore closed");
                 let result = probe_backend(&params, client.as_ref(), addr).await;
                 drop(permit);
-                (hash, addr, result)
+                (addr, runtime_identity, membership_identity, result)
             });
         }
 
-        // Apply results sequentially as each probe completes. record_check is a
-        // cheap counter update under a per-service lock; keeping it single-writer
-        // here avoids contending on the unhealthy_backends RCU in HealthStatusStore
-        // (which is not lock-protected against concurrent transitions on different
-        // backends of the same service).
-        while let Some((hash, addr, result)) = probes.next().await {
-            health_store.record_check(
-                &service_key,
-                hash,
-                result.is_ok(),
-                config.healthy_threshold,
-                config.unhealthy_threshold,
-            );
+        // Apply results sequentially as each probe completes. The Coordinator
+        // rechecks membership and endpoint identity under the endpoint-local
+        // completion lock, so an old probe cannot mutate a replacement that
+        // reused the same socket.
+        while let Some((addr, runtime_identity, membership_identity, result)) = probes.next().await {
+            if let (Some(identity), Some(membership)) = (runtime_identity.as_deref(), membership_identity) {
+                get_service_discovery_coordinator().record_health_completion(
+                    &policy_identity,
+                    membership,
+                    identity,
+                    result.is_ok(),
+                    config.healthy_threshold,
+                    config.unhealthy_threshold,
+                );
+            }
 
             if let Err(err) = result {
                 tracing::debug!(
@@ -337,11 +358,11 @@ fn derive_startup_jitter(service_key: &str, max_jitter: Duration) -> Duration {
 /// Returns the set of backends for a service, sourced exclusively from the
 /// EndpointSlice discovery store. The store already deduplicates and orders
 /// its result, so no further dedup is needed here.
-fn get_service_backends(service_key: &str) -> Vec<Backend> {
+fn get_service_backends(service_key: &str) -> Vec<Arc<EdgionBackend>> {
     get_roundrobin_store()
         .get_backends_for_service(service_key)
-        .into_iter()
-        .map(|b| b.into_inner())
+        .iter()
+        .cloned()
         .collect()
 }
 

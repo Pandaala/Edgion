@@ -319,12 +319,14 @@ impl MtlsFailcloseTestSuite {
                                     ),
                                 );
                             }
-                            match assert_ssl_log_err_log(&ctx, hostname, "frontend mTLS error:") {
+                            match assert_ssl_log_err_log(&ctx, hostname, "frontend mTLS error:").or_else(|_| {
+                                assert_ssl_log_err_log(&ctx, hostname, "controller rejected gateway tls transport")
+                            }) {
                                 Ok(_) => TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
                                         "Handshake aborted (Protocol={}, Cipher={}) and ssl.log recorded \
-                                         err_log starting with 'frontend mTLS error:'",
+                                         a fail-closed frontend CA rejection",
                                         info.protocol, info.cipher
                                     ),
                                 ),

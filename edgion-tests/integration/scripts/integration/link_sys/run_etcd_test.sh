@@ -440,8 +440,8 @@ done
 
 # Wait for LB preload
 for i in $(seq 1 15); do
-    if grep -q "LB preload completed" "${LOG_DIR}/gateway.log" 2>/dev/null; then
-        log_info "LB preload verified (waited ${i}s)"
+    if grep -q "All caches are ready" "${LOG_DIR}/gateway.log" 2>/dev/null; then
+        log_info "gateway caches ready (waited ${i}s)"
         break
     fi
     sleep 1

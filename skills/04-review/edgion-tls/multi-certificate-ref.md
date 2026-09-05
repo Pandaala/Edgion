@@ -23,9 +23,10 @@ silently dropped" are **not accepted** — selection landed in `apply_gateway_tl
 
 ## Code shape today
 
-- `tls_pingora.rs::apply_gateway_tls_cert` — collects all secrets (inline
-  `GatewayTlsEntry.secrets`, or fallback `resolve_secrets_from_store_or_error`),
-  then `select_gateway_secret` picks one and `apply_secret_to_ssl` applies it.
+- `tls_pingora.rs::apply_gateway_tls_cert` — consumes the matcher-cold-path
+  `GatewayTlsEntry.compiled_serving_secrets`; each ordered outcome has already
+  been checked against its exact group/kind/namespace/name/index before
+  `select_gateway_secret` picks one and `apply_secret_to_ssl` applies it.
 - `tls_pingora.rs::select_gateway_secret` (boringssl) — single secret: no-op;
   multiple: prefer ECDSA only when `negotiated_is_tls13(ssl)` **and**
   `client_supports_ecdsa(ssl)` and an ECDSA cert exists, else first RSA, else
@@ -35,10 +36,8 @@ silently dropped" are **not accepted** — selection landed in `apply_gateway_tl
 - `tls_pingora.rs::negotiated_is_tls13` — safe `SslRef::version2() == Some(SslVersion::TLS1_3)`.
 - `tls_pingora.rs::client_supports_ecdsa` — FFI `SSL_get0_peer_verify_algorithms`
   + `SSL_get_signature_algorithm_key_type` == `EVP_PKEY_EC`.
-- `tls_pingora.rs::resolve_secrets_from_store_or_error` — fallback path now
-  resolves *all* `certificate_refs` from the SecretStore (previously `.first()`).
-- Controller side (`handlers/gateway.rs`) already resolved all refs into
-  `Vec<Secret>`; only the runtime consumer was lagging.
+- Controller side (`handlers/gateway.rs`) resolves every declared ref into a
+  complete ordered typed outcome. The Gateway has no global SecretStore fallback.
 
 ## Why not iterate SSL_use_certificate per cert
 
@@ -94,10 +93,9 @@ cert_cb fail-closed convention and the "do not silently drop" intent.
 - **Ed25519/Ed448 leaf certs** classify as non-ECDSA (`secret_is_ecdsa` checks
   `Id::EC` only), so they land in the RSA bucket. Out of scope for the RSA+ECDSA
   feature; revisit if Ed25519 dual-cert is ever requested.
-- **Secret sync window**: `apply_gateway_tls_cert` uses the inline
-  `GatewayTlsEntry.secrets` verbatim; during the eventual-consistency window
-  before all refs resolve, a listener may transiently serve a single key type.
-  Self-heals on the next requeue.
+- **Secret sync window**: matcher publication is complete-set atomic. During an
+  incomplete resolution window the listener does not serve a partial subset;
+  it becomes usable after the owner is requeued with all ordered outcomes.
 
 ## Re-evaluation triggers
 

@@ -52,13 +52,8 @@ spec:
             namespace: default                   # Optional: cross-namespace requires ReferenceGrant
             kind: Secret                         # Default Secret
             group: ""                            # Default core group
-        frontendValidation:                      # Optional: Gateway API standard mTLS client certificate validation
-          caCertificateRefs:                     # CA certificate Secret reference (must contain a ca.crt key)
-            - name: client-ca
-              kind: Secret
-              group: ""
         options:                                 # Edgion extension options
-          edgion.io/cert-provider: "edgion-tls"  # Certificate source: "secret" (default) | "edgion-tls"
+          edgion.io/cert-provider: "EdgionTls"  # Certificate source: "Secret" (default) | "EdgionTls"
 
     - name: tcp
       port: 9000
@@ -78,6 +73,15 @@ spec:
   addresses:                                     # Optional: addresses assigned for requests
     - type: IPAddress                            # IPAddress | Hostname
       value: "10.0.0.1"
+
+  tls:                                           # Gateway API v1.5 gateway-level TLS policy
+    frontend:                                    # The only operator-facing frontend mTLS surface
+      default:
+        validation:
+          caCertificateRefs:                     # Required non-empty Secret/ConfigMap references
+            - name: client-ca
+              kind: Secret
+              group: ""
 ```
 
 ## Listener Configuration Details
@@ -103,7 +107,7 @@ tls:
       kind: String?      # Default "Secret"
       group: String?     # Default "" (core group)
   options:               # Implementation-specific options (JSON)
-    edgion.io/cert-provider: String   # "secret" | "edgion-tls"
+    edgion.io/cert-provider: String   # "Secret" | "EdgionTls"
   # secrets: [...]       # Runtime-populated (injected by Controller after resolution; users do not fill this in)
 ```
 

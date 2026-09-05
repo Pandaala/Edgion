@@ -101,8 +101,8 @@ SAN-mirror logic), the ordering decision must be revisited.
 - `..::test_mtls_ca_garbage_pem_failclosed` drives the EdgionTls path with
   `ca.crt = 'not a pem'`, asserting the same shape via the
   `add_ca_bundle_to_store` Err leg.
-- `..::test_frontend_mtls_garbage_ca_pem_failclosed` drives the Gateway
-  listener `frontendValidation` path with a garbage `ca.crt`, asserting
+- `..::test_frontend_mtls_garbage_ca_pem_failclosed` drives the standard Gateway
+  `spec.tls.frontend.perPort` path with a garbage `ca.crt`, asserting
   the handshake aborts and `ssl.log` `err_log` starts with `frontend mTLS error:`.
 
 Pre-fix, all three tests would have failed (handshake completed with a real
@@ -120,7 +120,7 @@ cipher); the reorder is what flips them green.
 ## Out-of-scope follow-up (not done in this fix)
 
 Controller-side admission validation for `client_auth.ca_secret_ref` /
-listener `frontendValidation.caCertificateRefs` Secret existence and PEM
+standard `Gateway.spec.tls.frontend` CA-reference existence and PEM
 parseability would let admission reject typos with a clear status condition
 instead of failing per-connection. It is independent of the fail-closed
 contract above; if added later, this skill entry stays valid (the runtime

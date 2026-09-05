@@ -3,8 +3,10 @@
 //! This module contains types that are used by both FileSystem and Kubernetes modes.
 
 use edgion_common::time::now_rfc3339;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::conf_mgr::conf_center::traits::ConfWriterError;
 
@@ -16,6 +18,28 @@ use edgion_resources::resources::common::Condition;
 
 /// Default controller name used by FileSystem and Etcd backends.
 pub const DEFAULT_CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeInvalidEnvelope {
+    pub reason: &'static str,
+    pub message: String,
+}
+
+pub type RuntimeInvalidEnvelopes = RwLock<HashMap<String, RuntimeInvalidEnvelope>>;
+
+pub fn store_runtime_invalid(envelopes: &RuntimeInvalidEnvelopes, key: String, reason: &'static str, message: String) {
+    envelopes
+        .write()
+        .insert(key, RuntimeInvalidEnvelope { reason, message });
+}
+
+pub fn clear_runtime_invalid(envelopes: &RuntimeInvalidEnvelopes, key: &str) {
+    envelopes.write().remove(key);
+}
+
+pub fn get_runtime_invalid(envelopes: &RuntimeInvalidEnvelopes, key: &str) -> Option<RuntimeInvalidEnvelope> {
+    envelopes.read().get(key).cloned()
+}
 
 // ============================================================================
 // Shared status types (used by both FileSystem and Etcd backends)
@@ -96,32 +120,44 @@ impl ErrorStatus {
 // Shared resource parsing (used by both FileSystem and Etcd backends)
 // ============================================================================
 
-use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, TLSRoute, TLSRouteAlpha3};
+use edgion_resources::prelude_resources::{TLSRoute, TLSRouteAlpha3};
 use edgion_resources::{ResourceKind, ResourceMeta};
 use kube::Resource;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, Error as _};
 use std::fmt::Debug;
 
-/// Parse YAML content into a resource, with legacy API version support.
+pub const BACKEND_TLS_POLICY_API_VERSION: &str = "gateway.networking.k8s.io/v1";
+
+/// Enforce the single canonical BackendTLSPolicy API version at every raw
+/// document ingress before typed deserialization can discard TypeMeta.
+pub fn validate_backend_tls_policy_api_version(api_version: Option<&str>) -> Result<(), String> {
+    if api_version == Some(BACKEND_TLS_POLICY_API_VERSION) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "BackendTLSPolicy apiVersion must be {BACKEND_TLS_POLICY_API_VERSION}; found {}",
+        api_version.unwrap_or("<missing>")
+    ))
+}
+
+/// Parse YAML content into a resource.
 ///
-/// Handles transparent conversion of `v1alpha3` resources (BackendTLSPolicy, TLSRoute)
-/// to their canonical `v1` types.
+/// BackendTLSPolicy is accepted only at the canonical v1 boundary. TLSRoute
+/// retains its separately-scoped legacy conversion until its own atomic
+/// promotion is implemented.
 pub fn parse_resource_content<K>(content: &str) -> serde_yaml::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
 {
     let kind = K::resource_kind();
 
-    let mut parsed = if kind != ResourceKind::BackendTLSPolicy && kind != ResourceKind::TLSRoute {
+    validate_resource_api_version::<K>(content)?;
+
+    let mut parsed = if kind != ResourceKind::TLSRoute {
         serde_yaml::from_str::<K>(content)?
     } else {
         match extract_api_version(content).as_deref() {
-            Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::BackendTLSPolicy => {
-                let legacy: BackendTLSPolicyAlpha3 = serde_yaml::from_str(content)?;
-                let canonical: BackendTLSPolicy = legacy.into();
-                let normalized = serde_yaml::to_string(&canonical)?;
-                serde_yaml::from_str::<K>(&normalized)?
-            }
             Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
                 let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
                 let canonical: TLSRoute = legacy.into();
@@ -149,6 +185,24 @@ where
     }
 
     Ok(parsed)
+}
+
+/// Validate API-version contracts that must be enforced before typed
+/// deserialization can discard the submitted TypeMeta.
+///
+/// This is shared by FileSystem/etcd ingestion and the Admin create, update,
+/// and validate endpoints so every ingress applies the same atomic API
+/// promotion boundary.
+pub fn validate_resource_api_version<K>(content: &str) -> serde_yaml::Result<()>
+where
+    K: ResourceMeta,
+{
+    if K::resource_kind() == ResourceKind::BackendTLSPolicy {
+        let api_version = extract_api_version(content);
+        validate_backend_tls_policy_api_version(api_version.as_deref()).map_err(serde_yaml::Error::custom)?;
+    }
+
+    Ok(())
 }
 
 fn extract_api_version(content: &str) -> Option<String> {

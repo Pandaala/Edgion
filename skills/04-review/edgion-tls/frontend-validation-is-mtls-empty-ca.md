@@ -25,15 +25,12 @@ accepted** — verify the caller stamps `is_mtls` from the callee's bool before 
 
 ## What was wrong (before the fix)
 
-A Gateway listener with `tls.frontendValidation: Some` but `caCertificateRefs: None`/`Some([])`
-is **not** fenced by the controller: `has_all_ca_refs_invalid`
-(`controller/.../handlers/gateway.rs`) returns `false` for zero refs, so the listener is
-`Accepted=True` and reaches the data plane with `resolved_frontend_ca_secrets = None`.
-`configure_gateway_frontend_mtls` then early-returned `Ok(())` without calling `set_verify`,
-yet the caller's `else` arm set `is_mtls = true`. The flag propagated to `tls.log` and the
-`tls_route` plugin context (`ctx.is_mtls`) while `extract_client_cert_info` returned `None`
-(no peer cert was ever requested) — the label and the data disagreed, and a custom tls_route
-plugin keying off `is_mtls` would be misled.
+Before the standard frontend projection existed, a controller-private listener
+`tls.frontendValidation` value with empty refs could reach the data plane without installing a
+verify mode, while the caller still marked the connection as mTLS. The only operator-facing path
+is now `Gateway.spec.tls.frontend.default/perPort`; the controller projects it into the
+schema-hidden listener field. Empty or incomplete strict projections compile to a matched
+`StrictReject` entry, while an explicitly absent standard validation remains ordinary one-way TLS.
 
 ## Why the fix is correct
 

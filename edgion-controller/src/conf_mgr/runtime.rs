@@ -6,7 +6,7 @@
 //! controller restart. All state is held as struct fields (compiler-tracked).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -19,6 +19,7 @@ use super::sync_runtime::resource_processor::{
     configmap_utils::ConfigMapStore,
     credential_source_state::CredentialSourceRegistry,
     edgion_config_data_utils::{EdgionConfigDataRefManager, EdgionConfigDataStore},
+    frontend_ca_ref::FrontendCaRefManager,
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
     namespace_store::NamespaceStore,
@@ -51,6 +52,7 @@ pub struct ControllerRuntime {
     /// targets cannot collide with same-named core Services.
     pub(crate) backend_ref_mgr: BidirectionalRefManager<ResourceRef>,
     pub(crate) secret_ref_manager: SecretRefManager,
+    pub(crate) frontend_ca_ref_manager: FrontendCaRefManager,
     pub(crate) secret_store: SecretStore,
     pub(crate) gateway_route_index: GatewayRouteIndex,
     /// child HTTPRoute → delegating parent HTTPRoutes reverse index; a child
@@ -98,6 +100,8 @@ pub struct ControllerRuntime {
     /// True when this replica is the sole credential publisher (leader-only or
     /// a non-Kubernetes single-process center). False under Kubernetes all-serve.
     single_publisher: AtomicBool,
+    gateway_attachment_epoch: AtomicU64,
+    gateway_attachment_boot_nonce: String,
     /// Optional conf_writer injected by the ConfCenter implementation.
     /// Used by handlers to auto-create resources (e.g., EdgionConfigData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
@@ -115,6 +119,7 @@ impl ControllerRuntime {
             service_ref_mgr: new_service_ref_manager(),
             backend_ref_mgr: BidirectionalRefManager::with_component("backend_ref_mgr"),
             secret_ref_manager: new_secret_ref_manager(),
+            frontend_ca_ref_manager: BidirectionalRefManager::with_component("frontend_ca_ref_manager"),
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
             route_delegation_index: RouteDelegationIndex::new(),
@@ -134,6 +139,8 @@ impl ControllerRuntime {
             credential_memory: CredentialMemoryStore::new(),
             managed_credentials_supported: AtomicBool::new(true),
             single_publisher: AtomicBool::new(true),
+            gateway_attachment_epoch: AtomicU64::new(1),
+            gateway_attachment_boot_nonce: uuid::Uuid::new_v4().to_string(),
             conf_writer: RwLock::new(None),
         }
     }
@@ -152,6 +159,14 @@ impl ControllerRuntime {
 
     pub fn single_publisher(&self) -> bool {
         self.single_publisher.load(Ordering::Acquire)
+    }
+
+    pub fn next_gateway_attachment_epoch(&self) -> u64 {
+        self.gateway_attachment_epoch.fetch_add(1, Ordering::AcqRel)
+    }
+
+    pub fn gateway_attachment_boot_nonce(&self) -> &str {
+        &self.gateway_attachment_boot_nonce
     }
 
     /// Inject a conf_writer so handlers can auto-create resources.
@@ -193,6 +208,9 @@ impl ControllerRuntime {
 
         self.secret_ref_manager.clear();
         tracing::info!(component = "controller_runtime", "Cleared SecretRefManager");
+
+        self.frontend_ca_ref_manager.clear();
+        tracing::info!(component = "controller_runtime", "Cleared FrontendCaRefManager");
 
         self.ref_grant_store.replace_all(HashMap::new());
         tracing::info!(component = "controller_runtime", "Cleared ReferenceGrantStore");

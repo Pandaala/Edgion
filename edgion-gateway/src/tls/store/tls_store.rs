@@ -2,9 +2,29 @@ use crate::tls::validation::cert::{validate_cert, CertValidationResult};
 use arc_swap::ArcSwap;
 use edgion_resources::listener_key::ListenerKey;
 use edgion_resources::matcher::HashHost;
+use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
+
+pub(crate) const MAX_EDGION_TLS_COLLISION_LOG_PARTICIPANTS: usize = 64;
+
+#[derive(Default)]
+struct AttachmentCandidateBuild {
+    total: usize,
+    candidates: Option<Vec<Arc<EdgionTls>>>,
+}
+
+impl AttachmentCandidateBuild {
+    fn add(&mut self, tls: Arc<EdgionTls>) {
+        self.total = self.total.saturating_add(1);
+        if self.total > super::cert_matcher::MAX_ATTACHMENT_CANDIDATES {
+            self.candidates = None;
+            return;
+        }
+        self.candidates.get_or_insert_with(Vec::new).push(tls);
+    }
+}
 
 /// Internal entry for TLS certificate with validation status
 #[derive(Clone)]
@@ -45,10 +65,22 @@ fn add_canonical_hosts(host_map: &mut HashMap<String, Vec<Arc<EdgionTls>>>, tls:
     added
 }
 
+fn dimensions_are_bounded(tls: &EdgionTls) -> bool {
+    edgion_resources::resources::edgion_tls::validate_operator_attachment_dimensions(
+        &tls.spec,
+        tls.metadata.namespace.as_deref().unwrap_or("default"),
+    )
+    .is_ok()
+        && tls.spec.resolved_listener_attachments.as_ref().map_or(0, Vec::len)
+            <= edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_RESOLVED_ATTACHMENTS
+        && tls.spec.resolved_listeners.as_ref().map_or(0, Vec::len)
+            <= edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_RESOLVED_ATTACHMENTS
+}
+
 /// Warn (config-sync path only — never the handshake path) when several EdgionTls
 /// resources serve the same host on one listener. `tls_list` must already be sorted
 /// by [`edgion_tls_precedence`], so `first()` is the selected certificate.
-fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &[Arc<EdgionTls>]) {
+fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &[Arc<EdgionTls>], total: usize) {
     let fmt = |t: &Arc<EdgionTls>| {
         format!(
             "{}/{}",
@@ -61,7 +93,8 @@ fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &
         component = "tls_store",
         host = %host,
         listener_key = %listener_key,
-        candidate_count = tls_list.len(),
+        candidate_count = total,
+        omitted = total.saturating_sub(tls_list.len()),
         selected = %selected,
         "Multiple EdgionTls resources serve the same hostname on one listener; \
          selecting the certificate deterministically by (creationTimestamp, namespace, name)"
@@ -153,13 +186,29 @@ pub struct TlsStore {
     // Key: namespace/name (or name for cluster-scoped).
     // Single writer (config-sync). Readers are lock-free.
     tls_data: ArcSwap<HashMap<String, TlsEntry>>,
+    #[cfg(test)]
+    isolated_matcher: Option<Arc<super::cert_matcher::TlsCertMatcher>>,
 }
 
 impl TlsStore {
     pub fn new() -> Self {
         Self {
             tls_data: ArcSwap::from_pointee(HashMap::new()),
+            #[cfg(test)]
+            isolated_matcher: None,
         }
+    }
+
+    #[cfg(test)]
+    fn new_isolated() -> (Self, Arc<super::cert_matcher::TlsCertMatcher>) {
+        let matcher = Arc::new(super::cert_matcher::TlsCertMatcher::new());
+        (
+            Self {
+                tls_data: ArcSwap::from_pointee(HashMap::new()),
+                isolated_matcher: Some(matcher.clone()),
+            },
+            matcher,
+        )
     }
 
     /// Insert `tls` under `key`, optionally retaining the existing valid entry
@@ -172,11 +221,15 @@ impl TlsStore {
         tls: Arc<EdgionTls>,
         retain_last_known_good: bool,
     ) {
+        let dimensions_valid = dimensions_are_bounded(&tls);
+        if dimensions_valid {
+            tls.spec.warm_listener_attachment_index();
+        }
         warn_cert_advisories(&key, &tls);
         let tls = compile_allowed_sans_for_runtime(tls);
         let validation = validate_cert(&tls);
         if !validation.is_valid {
-            if retain_last_known_good {
+            if retain_last_known_good && dimensions_valid {
                 if let Some(existing) = new_map.get(&key) {
                     if existing.validation.is_valid {
                         if !existing.rejected_active {
@@ -230,12 +283,16 @@ impl TlsStore {
         let mut new_map: HashMap<String, TlsEntry> = HashMap::with_capacity(cert_count);
 
         for (key, tls) in data {
+            let dimensions_valid = dimensions_are_bounded(&tls);
+            if dimensions_valid {
+                tls.spec.warm_listener_attachment_index();
+            }
             warn_cert_advisories(&key, &tls);
             let tls = compile_allowed_sans_for_runtime(tls);
             let validation = validate_cert(&tls);
             if !validation.is_valid {
-                if let Some(existing) = current.get(&key) {
-                    if existing.validation.is_valid {
+                if dimensions_valid {
+                    if let Some(existing) = current.get(&key).filter(|existing| existing.validation.is_valid) {
                         if !existing.rejected_active {
                             record_rejected(&key, &validation);
                         }
@@ -323,6 +380,7 @@ impl TlsStore {
     /// * `tls_data` - Reference to the TLS data map
     fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) {
         let mut listener_host_map: HashMap<ListenerKey, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
+        let mut attachment_candidates: HashMap<ResolvedListenerAttachment, AttachmentCandidateBuild> = HashMap::new();
         let mut total_hosts = 0;
         let mut valid_certs = 0;
         let mut invalid_certs = 0;
@@ -340,6 +398,29 @@ impl TlsStore {
             }
 
             let tls = &entry.tls;
+
+            if !dimensions_are_bounded(tls) {
+                tracing::warn!(
+                    component = "tls_store",
+                    key = %key,
+                    "Skipping EdgionTls whose attachment dimensions exceed runtime limits"
+                );
+                invalid_certs += 1;
+                continue;
+            }
+
+            if let Some(attachments) = tls.spec.resolved_listener_attachments.as_deref() {
+                let mut seen_attachments = HashSet::with_capacity(attachments.len());
+                for attachment in attachments {
+                    if !attachment.gateway_proof.is_resolved() || !seen_attachments.insert(attachment) {
+                        continue;
+                    }
+                    attachment_candidates
+                        .entry(attachment.clone())
+                        .or_default()
+                        .add(tls.clone());
+                }
+            }
 
             match &tls.spec.resolved_listeners {
                 Some(listeners) if !listeners.is_empty() => {
@@ -374,14 +455,42 @@ impl TlsStore {
                     // API precedence (oldest creationTimestamp wins, then namespace/name) so
                     // the selection is deterministic, and warn the operator.
                     tls_list.sort_by(edgion_tls_precedence);
-                    warn_edgion_tls_collision(&host, &listener_key, &tls_list);
+                    let total = tls_list.len();
+                    warn_edgion_tls_collision(
+                        &host,
+                        &listener_key,
+                        &tls_list[..tls_list.len().min(MAX_EDGION_TLS_COLLISION_LOG_PARTICIPANTS)],
+                        total,
+                    );
                 }
-                matcher.insert(&host, tls_list);
+                matcher.insert(&host, Arc::new(tls_list));
             }
             listener_matcher.insert(listener_key, matcher);
         }
 
-        super::cert_matcher::get_tls_cert_matcher().set(listener_matcher);
+        let mut attachment_matcher = HashMap::new();
+        for (attachment, build) in attachment_candidates {
+            let slot = if let Some(mut candidates) = build.candidates {
+                candidates.sort_by(edgion_tls_precedence);
+                super::cert_matcher::AttachmentMatchSlot::Ready(Arc::new(candidates))
+            } else {
+                tracing::warn!(
+                    component = "tls_store",
+                    candidate_count = build.total,
+                    max = super::cert_matcher::MAX_ATTACHMENT_CANDIDATES,
+                    "Exact EdgionTls attachment candidate limit exceeded; omitting the complete overlay group"
+                );
+                super::cert_matcher::AttachmentMatchSlot::Overflow
+            };
+            attachment_matcher.insert(attachment, slot);
+        }
+
+        #[cfg(test)]
+        if let Some(matcher) = &self.isolated_matcher {
+            matcher.set(listener_matcher, attachment_matcher);
+            return;
+        }
+        super::cert_matcher::get_tls_cert_matcher().set(listener_matcher, attachment_matcher);
 
         tracing::info!(
             component = "tls_store",
@@ -492,6 +601,8 @@ mod tests {
                 ciphers: None,
                 secret: None,
                 resolved_listeners: None,
+                resolved_listener_attachments: None,
+                resolved_listener_attachment_index: Default::default(),
                 resolved_log_labels: None,
             },
             status: None,
@@ -549,6 +660,8 @@ mod tests {
                     ..Default::default()
                 }),
                 resolved_listeners: Some(vec![listener_key]),
+                resolved_listener_attachments: None,
+                resolved_listener_attachment_index: Default::default(),
                 resolved_log_labels: None,
             },
             status: None,
@@ -595,6 +708,8 @@ mod tests {
                     ..Default::default()
                 }),
                 resolved_listeners: Some(vec![listener_key]),
+                resolved_listener_attachments: None,
+                resolved_listener_attachment_index: Default::default(),
                 resolved_log_labels: None,
             },
             status: None,
@@ -621,6 +736,88 @@ mod tests {
 
         let v = store.get_validation_status("ns/foo").expect("entry must remain");
         assert!(v.is_valid, "bad update must not overwrite the last-known-good cert");
+    }
+
+    #[test]
+    fn invalid_attachment_dimensions_revoke_old_matcher_generation_then_repair() {
+        let (store, matcher) = TlsStore::new_isolated();
+        let listener = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let good = make_valid_tls("ns", "bounded", &["bounded.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::from([("ns/bounded".to_string(), good)]),
+            std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+        assert!(matcher.match_sni(&listener, "bounded.example.com").is_some());
+
+        let forged = make_valid_tls("ns", "bounded", &["bounded.example.com", "BOUNDED.EXAMPLE.COM"]);
+        store.apply_partial_update(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::from([("ns/bounded".to_string(), forged)]),
+            &std::collections::HashSet::new(),
+        );
+        let snapshot = store.tls_data.load();
+        assert_eq!(snapshot["ns/bounded"].tls.spec.hosts.len(), 2);
+        assert!(
+            !dimensions_are_bounded(&snapshot["ns/bounded"].tls),
+            "the forged generation must replace, rather than retain, the old valid object and is excluded on rebuild"
+        );
+        drop(snapshot);
+        assert!(matcher.match_sni(&listener, "bounded.example.com").is_none());
+
+        let repaired = make_valid_tls("ns", "bounded", &["bounded.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::from([("ns/bounded".to_string(), repaired)]),
+            &std::collections::HashSet::new(),
+        );
+        assert!(matcher.match_sni(&listener, "bounded.example.com").is_some());
+    }
+
+    #[test]
+    fn overflowing_exact_attachment_omits_entire_group_independent_of_input_order() {
+        use edgion_resources::resources::edgion_tls::{GatewayAttachmentProof, ResolvedListenerAttachment};
+
+        let listener = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let attachment = ResolvedListenerAttachment {
+            gateway_namespace: "ns".to_string(),
+            gateway_name: "gateway".to_string(),
+            listener_name: "https".to_string(),
+            listener_key: listener.clone(),
+            gateway_proof: GatewayAttachmentProof {
+                instance: "uid-1".to_string(),
+                generation: 1,
+                epoch: "boot:1".to_string(),
+                attachment_digest: "a".repeat(64),
+            },
+        };
+        let shared = make_valid_tls("ns", "template", &["shared.example.com"]);
+        let unique = make_valid_tls("ns", "winner", &["unique.example.com"]);
+        let mut resources = (0..super::super::cert_matcher::MAX_ATTACHMENT_CANDIDATES)
+            .map(|index| {
+                let mut tls = (*shared).clone();
+                tls.metadata.name = Some(format!("shared-{index}"));
+                tls.spec.resolved_listener_attachments = Some(vec![attachment.clone()]);
+                (format!("ns/shared-{index}"), Arc::new(tls))
+            })
+            .collect::<Vec<_>>();
+        let mut highest_precedence_unique = (*unique).clone();
+        highest_precedence_unique.metadata.name = Some("aaa-oldest".to_string());
+        highest_precedence_unique.metadata.creation_timestamp =
+            Some(Time(Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap()));
+        highest_precedence_unique.spec.resolved_listener_attachments = Some(vec![attachment.clone()]);
+        resources.push(("ns/aaa-oldest".to_string(), Arc::new(highest_precedence_unique)));
+
+        for ordered in [resources.clone(), resources.into_iter().rev().collect()] {
+            let (store, matcher) = TlsStore::new_isolated();
+            store.replace_all_tls(ordered.into_iter().collect());
+            assert!(matcher
+                .match_attachment_sni(&attachment, "shared.example.com")
+                .is_none());
+            assert!(matcher
+                .match_attachment_sni(&attachment, "unique.example.com")
+                .is_none());
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 name: gateway-backends
-description: Backend discovery and health checks — three discovery sources, BackendStore, the health-check system, BackendTLSPolicy, preload, and endpoint validation.
+description: Backend discovery and health checks — joint Service/EndpointSlice generations, runtime identity, the health-check system, BackendTLSPolicy, and endpoint validation.
 ---
 
 # Backend discovery and health checks
@@ -22,18 +22,36 @@ Controller (K8s Watch)
   │
   ├── gRPC ConfigSync
   │
-  ├── ConfHandler<EndpointSlice>  →  EpSliceStore
-  │                                    └── RoundRobin Store (DashMap)
-  │                                         └── Pingora LoadBalancer (per service_key)
-  │
-  └── ConfHandler<Service>        →  ServiceStore (DashMap)
-                                       └── Service metadata (ports, annotations)
+  ├── ConfHandler<EndpointSlice> ─┐
+  └── ConfHandler<Service>       ─┴─► ServiceDiscoveryCoordinator
+                                         └── ServiceSelectorGeneration (ArcSwap)
+                                              ├── availability-gated raw projection
+                                              ├── canonical port sections
+                                              └── eager per-section selector variants
 ```
 
-Each discovery source implements:
-- `conf_handler_impl.rs` — ConfHandler trait implementation, handling full_set / partial_update.
-- `discovery_impl.rs` — discovery logic, converting K8s resources into a Pingora Backend list.
-- `*_store.rs` — data store (EpSliceStore / ServiceStore).
+`ServiceDiscoveryCoordinator` is the only production mutation owner. Service and EndpointSlice
+handlers call one of its four full/partial transaction methods; one transaction serially mutates
+both source views, stages the complete source/membership/incarnation demand, reserves the checked
+epoch range once, rebuilds all affected Services, and publishes at most one joint generation.
+An exhausted reservation still applies deletes and semantic no-ops, but every affected item that
+needs a new identity is published unavailable; source identities are never partially committed.
+`ServiceStore` and `EpSliceStore` are read-only compatibility facades over that generation, so an
+unavailable or unidentified Service has no raw view that a consumer can use to bypass the
+fail-closed projection.
+
+Canonical section keys are only Service port number or name. Every valid section contains exact
+all/ready endpoint slots plus eagerly compiled RoundRobin, ConsistentHash, LeastConn, and EWMA
+selectors. Equivalent same-socket origins merge into a deterministic sorted origin set. The
+request path calls `select_service_endpoint` with `ServiceSectionKey::Number` from
+`backendRef.port`; missing or non-`NonZeroU16` ports fail closed as
+`BackendPortResolutionFailed` and never pick the Service's first port, a leftover slice port, or
+another section. FileSystem/etcd have no CEL "must have port" rule, so this path is reachable
+outside Kubernetes. The selected slot already carries `serving_port` on `backend.addr`; there is
+no request-path port rewriter. `appProtocol` is published on `ServicePortIdentity` and read from
+the proven section, not a live ServiceStore scan. Health probes use
+`AvailableServiceProjection::canonical_probe_backends()` (union of Resolved `all_slots`,
+deduped by runtime identity). Session persistence is keyed per section.
 
 ## Health-check system
 
@@ -73,16 +91,19 @@ health/
 | TCP | `probe_tcp()` | TCP connection check |
 | gRPC | `probe_grpc()` | gRPC Health Check Protocol (grpc.health.v1.Health/Check), implemented with hand-written prost structs, no proto file needed |
 
-### Health status
+### Runtime health identity
 
-- `HealthStatusStore` stores the health status of each backend per service.
-- Unhealthy backends are filtered out during LB selection (via the `health_filter` callback).
-- Backends are automatically re-added to the selection pool after recovery.
-- `unregister_service()` cleans up state when the check configuration is removed.
-
-### backend_hash
-
-Used to compute the key for health status and circuit-breaker state: a DefaultHasher hash of the Backend's `addr`.
+Every live canonical slot has an immutable `EndpointRuntimeIdentity` containing its Service,
+section proof, socket, membership incarnation, and endpoint proof. Same-socket different-section
+identities stay isolated. A same-socket proof change creates a fresh
+runtime state and may reuse only the connection-count, EWMA, and circuit-breaker-inflight counters.
+Health and outlier eligibility are new identity-bound state. Probe and request completions carry
+the expected membership and endpoint identities plus the exact health/outlier policy identity;
+the Coordinator rejects late writes after an endpoint or policy update. Activation and completion
+share the endpoint-local completion lock, so retirement waits for an already-linearized write and
+then freezes it. Detached old state keeps its last eligibility, never auto-recovers, and is never
+widened for an in-flight request. A membership change always creates a new wrapper and runtime
+state; only its three transport counters may be shared with the same socket.
 
 ## Circuit Breaker
 
@@ -133,9 +154,9 @@ circuit_breaker/
   `spec.outlierDetection`, normalized) — see
   [Backend Traffic Policy](#backend-traffic-policy-edgionbackendtrafficpolicy)
   below. There is no annotation parsing anymore.
-- During EndpointSlice `cleanup_removed_backends` → `remove_backend` cleans
-  per-backend ejection state (this stays owned by the Service/EndpointSlice
-  handlers — only the per-service *policy config* moved).
+- Coordinator activation revokes removed or proof-replaced endpoint identities before exposing the
+  new complete membership. Identity-keyed cleanup prevents a late completion for the old socket
+  occupant from mutating the replacement.
 - A Service/EndpointSlice `full_set` resync (e.g. every gateway reconnect)
   must **not** delete the per-service CB/HC/panic/LB policy config — that
   would wipe policy-written entries with nothing to re-apply them. Only the
@@ -194,7 +215,7 @@ request-visible DashMaps.
 - **EPS rebuild on LB change**: when a Service winner's LB algorithm changes,
   publication triggers
   `config_client.trigger_endpoint_slice_update_event(service_key)` so
-  `ServiceSelectorCell`s rebuild against the new algorithm.
+  the affected Service generation rebuilds against the new algorithm.
 - Admin `/store/stats` exposes the resolved LB map as `lb_policies` (a
   `service_key → algorithm` map) from the current snapshot — this is the field
   that replaced the old `policy_store` stat.
@@ -226,15 +247,31 @@ policy/
 
 - Get the global instance via `get_global_backend_tls_policy_store()` and
   capture its immutable, generation-bearing `BackendTLSPolicySnapshot`.
-- Lookup accepts a typed `PolicyTargetKey`, never a bare backend name. Service
-  targets use exact-section first and then whole-target fallback; another
-  section never wins. EdgionBackend AI targets are whole-target only.
+- Lookup returns a tri-state: `Absent`, `Effective`, or `Invalid`. Occupancy
+  of the most specific attachment bucket wins: a valid exact-section winner is
+  used; any exact-section candidate (including an invalid one) blocks
+  whole-target fallback; otherwise the whole-target bucket is consulted the
+  same way. `get_policy` is gone so callers cannot collapse invalid into
+  plaintext.
+- Service section input comes from the published discovery generation
+  (`ServiceSectionKey::Number` → `identity.name`), not `resolve_port_name`.
+  A number-only resolved port (`identity.name = None`) uses whole-target only
+  and does not apply the `any_section_scoped ⇒ Invalid` penalty. An unproven
+  mapping (missing/unavailable Service, invalid section, missing port, or
+  `port is None`) is `Invalid` when any section-scoped candidate names that
+  target. `port is None` is reachable on FileSystem/etcd because those modes
+  have no CEL "must have port" rule; guessing a section from the Service spec
+  would validate a different port than the one actually dialed.
+- EdgionBackend AI targets ignore port and look up whole-target only.
+- HTTP, gRPC, and AI carry `BackendTlsPolicyLookup` on the selected backend.
+  `Invalid` fails closed (`EdgionErrorCode::BackendTlsPolicyInvalid`) before
+  peer construction. `Absent` keeps the previous no-policy behavior (HTTP/gRPC
+  plaintext; AI may still use endpoint `use_tls` / SNI). `Effective` builds
+  the TLS peer and always sets Pingora `group_key` from the profile
+  fingerprint (first 8 bytes of SHA-256), including when the SAN list is empty.
 - The Controller publishes `resolvedTargetClass` only after target and TLS
-  references are valid. The Gateway indexes only resources whose marker,
-  canonical key, and target capability agree.
-- HTTP and gRPC Service paths project the key from the compiled logical backend
-  proof at the existing late lookup point. AI captures the TLS policy with the
-  request-stable candidate plan.
+  references are valid. Marker-absent, class-mismatch, multi-`targetRef`,
+  identity errors, and incomplete custom CA are invalid-applicable, not omitted.
 - Configure the HttpPeer's TLS connection parameters. Custom CA certificates and
   client certificate/key identity are applied only by the BoringSSL build; they
   are outside the current rustls support boundary.
@@ -242,15 +279,13 @@ policy/
   rewrite the HTTP Host authority.
 - Secret key constants: `CA_CERT`, `CERT`, `KEY`.
 
-## LB preload
+## Publication and sticky state
 
-`preload_load_balancers()` is invoked after all configuration sync completes:
-
-1. Iterate all route kinds (HTTP/gRPC/TCP/UDP/TLS) and collect referenced Service keys.
-2. Deduplicate using HashSet.
-3. Hydrate each `ServiceSelectorCell` backend list if empty; algorithm-specific compiled selectors
-   remain lazy.
-4. Log the preload result.
+There is no load-balancer preload, selector hydration, or lazy selector cache. Reconciliation
+eagerly compiles all selector variants before publishing the generation. Each available projection
+also owns a stable per-Service runtime cell whose active membership is one lock-free ArcSwap
+snapshot. Sticky-affinity hits are lock-free; a miss builder takes only the cell's miss lock and
+rechecks both the published generation and membership before installing its snapshot.
 
 ## Endpoint validation
 
@@ -269,7 +304,8 @@ edgion-gateway/src/backends/
 ├── mod.rs                    # module exports
 ├── discovery/                # backend discovery
 │   ├── endpoint_slice/       # EndpointSlice discovery
-│   └── services/             # Service metadata
+│   ├── services/             # Service compatibility facade
+│   └── coordinator.rs        # Joint source, selector, proof, and runtime generation
 ├── health/                   # health checks
 │   └── check/                # check system
 ├── circuit_breaker/          # circuit breaker (passive ejection)
@@ -277,6 +313,5 @@ edgion-gateway/src/backends/
 ├── policy/                   # backend policies
 │   ├── backend_tls/          # BackendTLSPolicy (upstream mTLS)
 │   └── backend_traffic/      # EdgionBackendTrafficPolicy (HC/CB/panic/LB arbitration)
-├── preload.rs                # LB preload
 └── validation.rs             # endpoint validation (SSRF prevention)
 ```
