@@ -11,7 +11,7 @@
 JwtAuth and OpenID Connect represent claim-to-header mappings as HashMaps. The shared request helper iterates that nondeterministic order, replaces destination headers, and stops after the aggregate 64 KiB cap. Duplicate case-insensitive destinations can therefore produce a nondeterministic final value, and oversized configurations can produce a nondeterministic accepted subset.
 
 ## Why deferred
-The correction needs one construction-time ordered projection plan, normalized unique destination ownership, and coordinated resource validation for both JwtAuth and OpenID Connect. Sorting only in the request path would add hot-path work without resolving duplicate ownership. This does not duplicate D0037, which owns authentication identity-header spoofing and multi-plugin sanitization.
+The correction needs one construction-time ordered projection plan, normalized unique destination ownership, and coordinated resource validation for both JwtAuth and OpenID Connect. Sorting only in the request path would add hot-path work without resolving duplicate ownership. This does not reopen D0037/D0038: those closed as overwrite-written-names only. Skip-write leftovers on a configured claim destination remain in this task's scope if they are pursued.
 
 ## Integration-test impact
 No integration-test issue is required. Resource validation, shared-helper mocks, and deterministic cross-consumer unit tests can prove order, uniqueness, and byte-cap behavior while existing integration tests remain unchanged.

@@ -40,8 +40,6 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0034 — Fail closed on denied L7 named jumps | needs-implementation | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
 | D0035 — Add borrowed Authorization header access | needs-discussion | [campaign finding](D0035-auth-borrowed-authorization-header.md) |
 | D0036 — Audit auth credential-copy lifetimes | needs-discussion | [campaign finding](D0036-auth-credential-copy-lifetime-audit.md) |
-| D0037 — Unify auth identity-header sanitization | needs-discussion | [campaign finding](D0037-auth-identity-header-sanitization.md) |
-| D0038 — Add auth identity-header spoofing integration coverage | blocked | [campaign finding](D0038-auth-identity-header-integration-coverage.md) |
 | D0039 — Harden auth challenge realm quoted strings | needs-implementation | [campaign finding](D0039-auth-challenge-realm-quoted-string.md) |
 | D0040 — Unify CORS validation and header precomputation | needs-implementation | [campaign finding](D0040-cors-validation-header-precomputation.md) |
 | D0041 — Adjudicate CSRF duration-string migration | needs-discussion | [campaign finding](D0041-csrf-duration-string-migration.md) |
@@ -108,8 +106,6 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Fail closed on denied L7 named jumps | pending | [task](../../../todo/fail-closed-on-denied-l7-named-jumps.md) |
 | Add borrowed Authorization header access | pending | [task](../../../todo/add-borrowed-authorization-header-access.md) |
 | Audit auth credential-copy lifetimes | pending | [task](../../../todo/audit-auth-credential-copy-lifetimes.md) |
-| Unify auth identity-header sanitization | pending | [task](../../../todo/unify-auth-identity-header-sanitization/unify-auth-identity-header-sanitization.md) |
-| Add auth identity-header spoofing integration coverage | blocked | [task](../../../todo/add-auth-identity-header-spoofing-integration-coverage.md) |
 | Harden auth challenge realm quoted strings | pending | [task](../../../todo/harden-auth-challenge-realm-quoted-strings.md) |
 | Unify CORS validation and header precomputation | pending | [task](../../../todo/unify-cors-validation-and-header-precomputation.md) |
 | Adjudicate CSRF duration-string migration | pending | [task](../../../todo/migrate-csrf-expires-to-duration-string.md) |
