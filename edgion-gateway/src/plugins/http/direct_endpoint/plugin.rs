@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::net::{IpAddr, Ipv6Addr};
 
 use crate::backends::{validate_endpoint_backend_addr, validate_endpoint_in_route};
@@ -9,9 +10,9 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{DirectEndpointConfig, UpstreamFallback};
 use edgion_resources::HTTPBackendRef;
 
-const MISSING_TARGET_ENDPOINT_BODY: &str = "Missing target endpoint";
-const INVALID_TARGET_ENDPOINT_BODY: &str = "Invalid target endpoint";
-const TARGET_ENDPOINT_NOT_ALLOWED_BODY: &str = "Target endpoint not allowed";
+const MISSING_TARGET_ENDPOINT_BODY: Bytes = Bytes::from_static(b"Missing target endpoint");
+const INVALID_TARGET_ENDPOINT_BODY: Bytes = Bytes::from_static(b"Invalid target endpoint");
+const TARGET_ENDPOINT_NOT_ALLOWED_BODY: Bytes = Bytes::from_static(b"Target endpoint not allowed");
 
 pub struct DirectEndpoint {
     config: DirectEndpointConfig,
@@ -117,7 +118,7 @@ impl RequestFilter for DirectEndpoint {
                     log.push("no value 400");
                     return PluginRunningResult::ErrResponse {
                         status: 400,
-                        body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
+                        body: Some(MISSING_TARGET_ENDPOINT_BODY),
                     };
                 }
             },
@@ -168,7 +169,7 @@ impl RequestFilter for DirectEndpoint {
                         session.record_outcome(DyeOutcome::Reject, "on-missing");
                         PluginRunningResult::ErrResponse {
                             status: 400,
-                            body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
+                            body: Some(MISSING_TARGET_ENDPOINT_BODY),
                         }
                     }
                 }
@@ -189,7 +190,7 @@ impl RequestFilter for DirectEndpoint {
                         };
                         PluginRunningResult::ErrResponse {
                             status,
-                            body: Some(body.to_string()),
+                            body: Some(body),
                         }
                     }
                 }
@@ -491,7 +492,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
+                body: Some(MISSING_TARGET_ENDPOINT_BODY),
             }
         );
     }
@@ -534,7 +535,7 @@ mod tests {
                 UpstreamFallback::Reject,
                 PluginRunningResult::ErrResponse {
                     status: 400,
-                    body: Some(MISSING_TARGET_ENDPOINT_BODY.to_string()),
+                    body: Some(MISSING_TARGET_ENDPOINT_BODY),
                 },
             ),
             (UpstreamFallback::Fallback, PluginRunningResult::GoodNext),
@@ -593,7 +594,7 @@ mod tests {
             plugin.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some(INVALID_TARGET_ENDPOINT_BODY.to_string()),
+                body: Some(INVALID_TARGET_ENDPOINT_BODY),
             }
         );
         assert!(log.contains("endpoint invalid"));
@@ -622,7 +623,7 @@ mod tests {
             plugin.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(TARGET_ENDPOINT_NOT_ALLOWED_BODY.to_string()),
+                body: Some(TARGET_ENDPOINT_NOT_ALLOWED_BODY),
             }
         );
     }
@@ -657,7 +658,7 @@ mod tests {
             plugin.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(TARGET_ENDPOINT_NOT_ALLOWED_BODY.to_string()),
+                body: Some(TARGET_ENDPOINT_NOT_ALLOWED_BODY),
             }
         );
     }

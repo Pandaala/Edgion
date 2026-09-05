@@ -16,12 +16,13 @@ use async_trait::async_trait;
 
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{PluginSession, RequestFilter};
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 
 /// Response body returned to the client when a route is sealed fail-closed
 /// because its EdgionPlugins carries an invalid plugin config. Intentionally
 /// generic — the offending plugin names go to the access log, not the client.
-const REJECT_BODY: &str = r#"{"message":"plugin configuration error"}"#;
+const REJECT_BODY: Bytes = Bytes::from_static(br#"{"message":"plugin configuration error"}"#);
 
 /// Request-stage filter that unconditionally rejects the request with 500.
 ///
@@ -51,7 +52,7 @@ impl RequestFilter for RejectFilter {
         }
         PluginRunningResult::ErrResponse {
             status: 500,
-            body: Some(REJECT_BODY.to_string()),
+            body: Some(REJECT_BODY),
         }
     }
 }

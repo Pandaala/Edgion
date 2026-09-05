@@ -310,6 +310,17 @@ not in-process checks.
   (`edgion-resources/src/filters.rs`). The runtime renders it at a single
   point, draining the pending response-header queue (dye rules, CORS, ...)
   and recording an `EdgionErrorCode` diagnostic in the access log.
+- **Body representation**: `Option<bytes::Bytes>` — one clone-cheap immutable
+  type for every `ErrResponse` producer. (The request-body filter's own
+  `ChunkVerdict::Terminate` → `write_terminate_reply` path is a separate
+  local-reply writer and still carries `Option<String>`; its bodies are either
+  absent or an already-owned ext_proc body, so it pays no extra copy.) A fixed literal uses `Bytes::from_static` (no
+  allocation); a generation-owned configured body is prepared as `Bytes` at
+  plugin construction and clones as a refcount bump; a per-request body uses
+  `Bytes::from(String)`, which is a move. The enum deliberately derives no
+  `Serialize`/`Deserialize`/`JsonSchema` — it is a process-local return value,
+  never a config or wire type. Do not add a second body representation, a
+  plugin-local body wrapper, or a response-side cache.
 - **Exception**: `ErrTerminateRequest` — only when the response shape is
   inherently dynamic (e.g. forward_auth forwarding the auth service's full
   response, rate_limit_redis's own reject write), and the plugin MUST have

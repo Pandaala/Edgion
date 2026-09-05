@@ -1,5 +1,6 @@
 //! OpenAI-compatible local error replies for AI request handling.
 
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use serde::Serialize;
 
@@ -117,7 +118,7 @@ pub fn openai_error_response(session: &mut dyn PluginSession, error: AiProxyErro
     let _ = session.set_response_header("content-type", "application/json");
     PluginRunningResult::ErrResponse {
         status,
-        body: Some(body),
+        body: Some(Bytes::from(body)),
     }
 }
 
@@ -180,7 +181,7 @@ pub fn content_filter_response(session: &mut dyn PluginSession, model: &str, str
     let _ = session.set_response_header("content-type", content_type);
     PluginRunningResult::ErrResponse {
         status: 200,
-        body: Some(body),
+        body: Some(Bytes::from(body)),
     }
 }
 
@@ -200,7 +201,7 @@ mod tests {
             PluginRunningResult::ErrResponse {
                 status,
                 body: Some(body),
-            } => (status, serde_json::from_str(&body).unwrap()),
+            } => (status, serde_json::from_slice(&body).unwrap()),
             other => panic!("unexpected result: {other:?}"),
         }
     }

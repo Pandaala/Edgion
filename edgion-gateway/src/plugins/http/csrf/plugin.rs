@@ -11,6 +11,7 @@
 //! - Token must match and have valid signature (stateless)
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use cookie::time::Duration;
 use cookie::{CookieBuilder, SameSite};
 
@@ -98,7 +99,7 @@ impl RequestFilter for Csrf {
                 plugin_log.push("Deny missing token");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
-                    body: Some(r#"{"error_msg":"no csrf token in headers"}"#.to_string()),
+                    body: Some(Bytes::from_static(br#"{"error_msg":"no csrf token in headers"}"#)),
                 };
             }
         };
@@ -110,7 +111,7 @@ impl RequestFilter for Csrf {
                 plugin_log.push("Deny missing token");
                 return PluginRunningResult::ErrResponse {
                     status: 401,
-                    body: Some(r#"{"error_msg":"no csrf cookie"}"#.to_string()),
+                    body: Some(Bytes::from_static(br#"{"error_msg":"no csrf cookie"}"#)),
                 };
             }
         };
@@ -120,7 +121,7 @@ impl RequestFilter for Csrf {
             plugin_log.push("Deny bad token");
             return PluginRunningResult::ErrResponse {
                 status: 401,
-                body: Some(r#"{"error_msg":"csrf token mismatch"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"error_msg":"csrf token mismatch"}"#)),
             };
         }
 
@@ -134,7 +135,9 @@ impl RequestFilter for Csrf {
                     plugin_log.push("Deny bad token");
                     PluginRunningResult::ErrResponse {
                         status: 401,
-                        body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
+                        body: Some(Bytes::from_static(
+                            br#"{"error_msg":"Failed to verify the csrf token signature"}"#,
+                        )),
                     }
                 }
             }
@@ -142,7 +145,9 @@ impl RequestFilter for Csrf {
                 plugin_log.push("Deny bad token");
                 PluginRunningResult::ErrResponse {
                     status: 401,
-                    body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
+                    body: Some(Bytes::from_static(
+                        br#"{"error_msg":"Failed to verify the csrf token signature"}"#,
+                    )),
                 }
             }
         }
@@ -275,7 +280,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 401,
-                body: Some(r#"{"error_msg":"no csrf token in headers"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"error_msg":"no csrf token in headers"}"#)),
             }
         );
         assert!(plugin_log.contains("Deny missing token"));
@@ -304,7 +309,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 401,
-                body: Some(r#"{"error_msg":"no csrf cookie"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"error_msg":"no csrf cookie"}"#)),
             }
         );
         assert!(plugin_log.contains("Deny missing token"));
@@ -333,7 +338,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 401,
-                body: Some(r#"{"error_msg":"csrf token mismatch"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"error_msg":"csrf token mismatch"}"#)),
             }
         );
         assert!(plugin_log.contains("Deny bad token"));
@@ -358,7 +363,9 @@ mod tests {
             csrf.run_request(&mut mock_session, &mut plugin_log).await,
             PluginRunningResult::ErrResponse {
                 status: 401,
-                body: Some(r#"{"error_msg":"Failed to verify the csrf token signature"}"#.to_string()),
+                body: Some(Bytes::from_static(
+                    br#"{"error_msg":"Failed to verify the csrf token signature"}"#
+                )),
             }
         );
         assert!(plugin_log.contains("Deny bad token"));

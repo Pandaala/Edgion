@@ -669,7 +669,7 @@ fn immediate_reply(
     }
     PluginRunningResult::ErrResponse {
         status: imm.status,
-        body: imm.body,
+        body: imm.body.map(Bytes::from),
     }
 }
 
@@ -1654,7 +1654,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some("denied".to_string())
+                body: Some(Bytes::from_static(b"denied"))
             }
         );
 
@@ -1675,7 +1675,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some("mapped".to_string())
+                body: Some(Bytes::from_static(b"mapped"))
             }
         );
     }

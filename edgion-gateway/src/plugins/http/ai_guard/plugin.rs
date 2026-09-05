@@ -536,6 +536,7 @@ mod tests {
             PluginRunningResult::ErrResponse { status, body } => {
                 assert_eq!(status, 403);
                 let body = body.expect("error body");
+                let body = std::str::from_utf8(&body).expect("error body is utf-8");
                 assert!(body.contains("content_filter_error"));
                 assert!(body.contains("content_policy_violation"));
                 // The matched rule name and the prompt itself never leak.
@@ -569,6 +570,7 @@ mod tests {
                     // A degraded completion, not an error status.
                     assert_eq!(status, 200);
                     let body = body.expect("refusal body");
+                    let body = std::str::from_utf8(&body).expect("refusal body is utf-8");
                     assert!(body.contains(expected), "streaming={streaming} body={body}");
                     assert!(body.contains(r#""finish_reason":"content_filter""#));
                     assert!(body.contains("gpt-x"));

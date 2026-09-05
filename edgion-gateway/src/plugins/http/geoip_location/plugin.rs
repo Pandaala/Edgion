@@ -18,6 +18,7 @@
 //! `geo` block plus this plugin's log line.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::net::IpAddr;
 
 use crate::geoip::{GeoInfo, GeoLookup};
@@ -28,7 +29,7 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{
 };
 
 const PLUGIN_NAME: &str = "GeoIpLocation";
-const DENY_BODY: &str = r#"{"message":"Access denied"}"#;
+const DENY_BODY: Bytes = Bytes::from_static(br#"{"message":"Access denied"}"#);
 
 fn default_status() -> u16 {
     403
@@ -128,7 +129,7 @@ impl GeoIpLocation {
         let _ = session.set_response_header("content-type", "application/json");
         PluginRunningResult::ErrResponse {
             status: default_status(),
-            body: Some(DENY_BODY.to_owned()),
+            body: Some(DENY_BODY),
         }
     }
 }
@@ -332,7 +333,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"message":"Access denied"}"#)),
             }
         );
         assert_eq!(log.render_for_test(), "err: db:unavailable fail-closed");
@@ -382,7 +383,7 @@ mod tests {
             denied,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"message":"Access denied"}"#)),
             }
         );
         assert_eq!(log2.render_for_test(), "deny");
@@ -421,7 +422,7 @@ mod tests {
             denied,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"message":"Access denied"}"#)),
             }
         );
         assert_eq!(log2.render_for_test(), "deny");
@@ -446,7 +447,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"message":"Access denied"}"#)),
             }
         );
         assert_eq!(log.render_for_test(), "err: init fail: fail-closed");
@@ -477,7 +478,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some(r#"{"message":"Access denied"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"message":"Access denied"}"#)),
             }
         );
         assert_eq!(log.render_for_test(), "err: lookup:failed fail-closed");

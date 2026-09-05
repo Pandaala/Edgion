@@ -483,6 +483,34 @@ If the plugin cannot write a response at its current stage (e.g. a sync hook
 where `await` is unavailable), use `ErrResponse { status, body }` instead —
 the runtime writes the response on the plugin's behalf.
 
+#### Building the `ErrResponse` body
+
+`body` is `Option<bytes::Bytes>`, not `Option<String>`, so a local reply never
+copies its bytes on the way to the wire. Pick the constructor by where the
+bytes come from:
+
+| Body source | Construct it as | Cost per request |
+|---|---|---|
+| A fixed literal | `Some(Bytes::from_static(b"..."))` | zero — no allocation |
+| A configured value the plugin owns | store `Option<Bytes>` on the plugin struct at construction, then `self.body.clone()` | refcount bump |
+| Built per request | `Some(Bytes::from(built_string))` | the one allocation you already made (`from` is a move) |
+| No body at all | `None` | — |
+
+Do **not** write `Some(Bytes::from("literal".to_string()))` — that allocates on
+every request for a constant. And do not store a configured body as `String`
+and convert it in `run_request`: that is the per-request deep copy this
+representation exists to remove.
+
+`None` and `Some(Bytes::new())` take different write paths — `None` ends the
+response on the header write, `Some(empty)` follows it with a zero-length body
+write — but both frame as `content-length: 0`, so the client sees the same
+message. Prefer `None` when the reply has no body.
+
+The body is raw bytes, so a binary local reply survives verbatim — but on a
+gRPC route the body doubles as the `grpc-message` trailer, and a non-UTF-8 body
+there falls back to the status-mapped default message instead of emitting
+invalid header bytes.
+
 **Runtime fail-safe**: a plugin that violates this convention receives a 502
 Bad Gateway fallback from the runtime, and `PluginTerminateWithoutResponse`
 appears in the ordered access-log `diagnostics` array as

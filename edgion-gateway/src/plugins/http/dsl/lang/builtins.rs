@@ -1894,6 +1894,7 @@ mod body_tests {
     use crate::plugins::http::dsl::runtime::DslRuntime;
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
     use crate::plugins::runtime::{PluginLog, PluginSession};
+    use bytes::Bytes;
     use edgion_resources::filters::PluginRunningResult;
 
     use super::RuntimeError;
@@ -1958,7 +1959,7 @@ mod body_tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 500,
-                body: Some("Request body processing failed".to_string()),
+                body: Some(Bytes::from_static(b"Request body processing failed")),
             }
         );
     }

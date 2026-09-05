@@ -586,7 +586,7 @@ impl ProxyRewrite {
     fn reject(status: u16, body: Option<&'static str>) -> PluginRunningResult {
         PluginRunningResult::ErrResponse {
             status,
-            body: body.map(str::to_owned),
+            body: body.map(|b| Bytes::from_static(b.as_bytes())),
         }
     }
 }
@@ -867,7 +867,7 @@ mod tests {
             plugin.modify_json_body(&mut session, &mut log).await,
             Err(PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some(INVALID_REQUEST_BODY.to_string()),
+                body: Some(Bytes::from_static(INVALID_REQUEST_BODY.as_bytes())),
             })
         );
     }
@@ -950,7 +950,7 @@ mod tests {
             plugin.modify_json_body(&mut media, &mut log).await,
             Err(PluginRunningResult::ErrResponse {
                 status: 415,
-                body: Some(UNSUPPORTED_MEDIA_TYPE.to_string()),
+                body: Some(Bytes::from_static(UNSUPPORTED_MEDIA_TYPE.as_bytes())),
             })
         );
     }

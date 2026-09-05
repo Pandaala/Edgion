@@ -8,11 +8,12 @@ use async_trait::async_trait;
 use crate::observe::metrics::registry::{record_plugin_policy_blocked, record_plugin_policy_bypassed};
 use crate::plugins::runtime::log::{la, PluginLog};
 use crate::plugins::runtime::traits::{PluginSession, RequestFilter};
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 
 /// Body returned on a policy block. Intentionally generic: the plugin name
 /// goes to the access log and metrics, never to the client.
-const BLOCK_BODY: &str = r#"{"message":"plugin disabled by policy"}"#;
+const BLOCK_BODY: Bytes = Bytes::from_static(br#"{"message":"plugin disabled by policy"}"#);
 
 /// Unconditionally rejects requests on a chain that contains a Block-stamped
 /// plugin entry. Prepended AHEAD of the fail-closed RejectFilter, so the
@@ -46,7 +47,7 @@ impl RequestFilter for PolicyBlockFilter {
         record_plugin_policy_blocked(&self.plugin);
         PluginRunningResult::ErrResponse {
             status: self.status,
-            body: Some(BLOCK_BODY.to_string()),
+            body: Some(BLOCK_BODY),
         }
     }
 }

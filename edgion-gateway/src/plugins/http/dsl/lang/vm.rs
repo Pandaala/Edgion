@@ -1398,13 +1398,13 @@ impl Vm {
                         }
                         _ => 500,
                     };
-                    let body_str = match body {
+                    let body_bytes = match body {
                         Value::Nil => None,
-                        other => Some(other.runtime_string()?),
+                        other => Some(Bytes::from(other.runtime_string()?)),
                     };
                     return Ok(PluginRunningResult::ErrResponse {
                         status: status_code,
-                        body: body_str,
+                        body: body_bytes,
                     });
                 }
                 OpCode::ReturnTerminate => {
@@ -1477,7 +1477,7 @@ pub async fn execute_safe(
                 session.record_outcome(DyeOutcome::FailClose, "request-body-access-error");
                 return PluginRunningResult::ErrResponse {
                     status: 500,
-                    body: Some("Request body processing failed".to_string()),
+                    body: Some(Bytes::from_static(b"Request body processing failed")),
                 };
             }
             let kind: &'static str = match &runtime_err {
@@ -1524,7 +1524,7 @@ fn apply_error_policy(session: &mut dyn PluginSession, policy: &DslErrorPolicy) 
             session.record_outcome(DyeOutcome::FailClose, "script-error");
             PluginRunningResult::ErrResponse {
                 status: 500,
-                body: Some("DSL execution error".to_string()),
+                body: Some(Bytes::from_static(b"DSL execution error")),
             }
         }
         DslErrorPolicy::DenyWith { status, body } => {
@@ -1533,7 +1533,7 @@ fn apply_error_policy(session: &mut dyn PluginSession, policy: &DslErrorPolicy) 
                 status: edgion_resources::http_status::is_valid_final_http_status(*status)
                     .then_some(*status)
                     .unwrap_or(500),
-                body: body.clone(),
+                body: body.clone().map(Bytes::from),
             }
         }
     }

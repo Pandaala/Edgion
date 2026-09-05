@@ -10,6 +10,7 @@
 //! - Creating test environments without real backends
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::{collections::HashMap, time::Duration};
 use tokio::time::sleep;
 
@@ -21,7 +22,9 @@ const PLUGIN_NAME: &str = "Mock";
 
 pub struct Mock {
     status_code: u16,
-    body: Option<String>,
+    /// Prepared once per generation so the per-request clone is a refcount
+    /// bump instead of a full copy of the configured response body.
+    body: Option<Bytes>,
     headers: Option<HashMap<String, String>>,
     content_type: String,
     delay: Option<Duration>,
@@ -34,7 +37,7 @@ impl Mock {
     pub fn new(config: &MockConfig) -> Self {
         Mock {
             status_code: config.status_code,
-            body: config.body.clone(),
+            body: config.body.clone().map(Bytes::from),
             headers: config.headers.clone(),
             content_type: config.content_type.clone(),
             delay: config.delay.map(Duration::from_millis),
@@ -125,7 +128,7 @@ mod tests {
         let second = Mock::new(&config(202, "second", false));
 
         assert_eq!(first.status_code, 201);
-        assert_eq!(first.body.as_deref(), Some("first"));
+        assert_eq!(first.body.as_deref(), Some(&b"first"[..]));
         assert_eq!(first.headers.as_ref().unwrap().len(), 1);
         assert_eq!(first.content_type, "text/plain");
         assert_eq!(first.delay, Some(Duration::from_millis(25)));
@@ -133,7 +136,7 @@ mod tests {
         assert_eq!(first.status_log, "mock served 201");
 
         assert_eq!(second.status_code, 202);
-        assert_eq!(second.body.as_deref(), Some("second"));
+        assert_eq!(second.body.as_deref(), Some(&b"second"[..]));
         assert!(!second.terminate);
         assert_eq!(second.status_log, "mock served 202");
     }
@@ -162,11 +165,42 @@ mod tests {
         match result {
             PluginRunningResult::ErrResponse { status, body } => {
                 assert_eq!(status, 201);
-                assert_eq!(body.as_deref(), Some("created"));
+                assert_eq!(body.as_deref(), Some(&b"created"[..]));
             }
             other => panic!("unexpected result: {other:?}"),
         }
         assert_eq!(log.render_for_test(), "mock served 201");
+    }
+
+    /// The point of the `Bytes` body: a generation-owned configured body is
+    /// shared across requests, not copied. Two independent invocations must
+    /// hand out views over the *same* allocation the plugin prepared once.
+    ///
+    /// The pointer comparison is only sound while `mock` (and therefore the
+    /// prepared allocation) is alive for the whole test — a live allocation
+    /// cannot be aliased by a fresh one, so allocator reuse cannot fake a pass.
+    /// Do not restructure this to drop `mock` before the assertions.
+    #[tokio::test]
+    async fn terminating_body_is_shared_across_requests_not_copied() {
+        let mock = Mock::new(&config(200, "a stable configured body", true));
+        let prepared = mock.body.as_ref().expect("configured body").as_ptr();
+
+        let mut bodies = Vec::new();
+        for _ in 0..2 {
+            let mut session = MockPluginSession::new();
+            session.expect_set_response_header().returning(|_, _| Ok(()));
+            let mut log = PluginLog::new(PLUGIN_NAME);
+            match mock.run_request(&mut session, &mut log).await {
+                PluginRunningResult::ErrResponse { body: Some(b), .. } => bodies.push(b),
+                other => panic!("unexpected result: {other:?}"),
+            }
+        }
+
+        assert_eq!(bodies[0].as_ref(), b"a stable configured body");
+        assert_eq!(bodies[0], bodies[1]);
+        // Same backing buffer as the prepared field, for every request.
+        assert_eq!(bodies[0].as_ptr(), prepared);
+        assert_eq!(bodies[1].as_ptr(), prepared);
     }
 
     #[tokio::test]

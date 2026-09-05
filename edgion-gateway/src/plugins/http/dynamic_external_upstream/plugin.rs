@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{DynamicExternalUpstreamConfig, UpstreamFallback};
 
@@ -45,7 +46,7 @@ impl RequestFilter for DynamicExternalUpstream {
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
-                            body: Some("Missing routing key for external upstream".to_string()),
+                            body: Some(Bytes::from_static(b"Missing routing key for external upstream")),
                         }
                     }
                 };
@@ -69,7 +70,7 @@ impl RequestFilter for DynamicExternalUpstream {
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
                                     status: 400,
-                                    body: Some("Routing key regex extraction failed".to_string()),
+                                    body: Some(Bytes::from_static(b"Routing key regex extraction failed")),
                                 }
                             }
                         };
@@ -97,7 +98,7 @@ impl RequestFilter for DynamicExternalUpstream {
                         log.push_err("no upstream available");
                         PluginRunningResult::ErrResponse {
                             status: 400,
-                            body: Some("No matching domain for routing key".to_string()),
+                            body: Some(Bytes::from_static(b"No matching domain for routing key")),
                         }
                     }
                 };
@@ -332,7 +333,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some("Missing routing key for external upstream".to_string()),
+                body: Some(Bytes::from_static(b"Missing routing key for external upstream")),
             }
         );
     }

@@ -662,6 +662,7 @@ mod lb_sample_tests {
     ) -> EdgionHttpContext {
         let mut ctx = EdgionHttpContext::new();
         ctx.backend_context = Some(BackendContext {
+            effective_policy: None,
             source: None,
             rsc: None,
             service_key: None,

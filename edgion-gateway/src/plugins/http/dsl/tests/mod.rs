@@ -10,6 +10,7 @@ pub(super) use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 pub(super) use super::runtime::DslRuntime;
 pub(super) use crate::plugins::runtime::traits::session::{MockPluginSession, PluginSession};
 pub(super) use crate::plugins::runtime::PluginLog;
+pub(super) use bytes::Bytes;
 pub(super) use edgion_resources::filters::PluginRunningResult;
 
 mod api_errors;
@@ -220,7 +221,7 @@ pub(super) fn good_next() -> PluginRunningResult {
 pub(super) fn err_response_body(status: u16, body: &str) -> PluginRunningResult {
     PluginRunningResult::ErrResponse {
         status,
-        body: Some(body.to_string()),
+        body: Some(Bytes::from(body.to_string())),
     }
 }
 

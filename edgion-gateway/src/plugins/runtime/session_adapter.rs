@@ -353,7 +353,7 @@ pub struct PingoraSessionAdapter<'a> {
 pub(crate) fn build_response_local_reply(
     ctx: &mut EdgionHttpContext,
     status: u16,
-    body: Option<String>,
+    body: Option<Bytes>,
     is_head: bool,
 ) -> bool {
     if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
@@ -366,7 +366,7 @@ pub(crate) fn build_response_local_reply(
     let Ok(mut fresh) = ResponseHeader::build(code, None) else {
         return false;
     };
-    let body_bytes = body.map(bytes::Bytes::from).unwrap_or_default();
+    let body_bytes = body.unwrap_or_default();
     if !bodyless {
         let _ = fresh.insert_header("content-type", "text/plain");
     }
@@ -380,7 +380,7 @@ pub(crate) fn build_response_local_reply(
         let _ = fresh.remove_header(&http::header::TRANSFER_ENCODING);
         let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
     }
-    ctx.stage_response_local_reply(Box::new(fresh), if bodyless { bytes::Bytes::new() } else { body_bytes });
+    ctx.stage_response_local_reply(Box::new(fresh), if bodyless { Bytes::new() } else { body_bytes });
     true
 }
 
@@ -495,7 +495,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// upstream response unmodified. `CONNECT` is refused only once the tunnel is
     /// actually established (2xx); an upstream-rejected CONNECT is an ordinary
     /// replaceable response.
-    pub fn apply_response_local_reply(&mut self, status: u16, body: Option<String>) -> bool {
+    pub fn apply_response_local_reply(&mut self, status: u16, body: Option<Bytes>) -> bool {
         let Some(resp_status) = self.response_header.as_deref().map(|h| h.status) else {
             return false;
         };
@@ -508,6 +508,18 @@ impl<'a> PingoraSessionAdapter<'a> {
             return false;
         }
         build_response_local_reply(self.ctx, status, body, is_head)
+    }
+
+    /// Record that a request-phase `ErrResponse` body on a gRPC route was not
+    /// valid UTF-8 and so could not be carried as `grpc-message`.
+    ///
+    /// Not a termination marker — the denial still goes out with the mapped
+    /// gRPC status. This records what the translation cost: the plugin's body
+    /// is replaced by the status-mapped default message. Without it the drop is
+    /// invisible, and the access log cannot tell a dropped binary body apart
+    /// from a plugin that returned no body at all.
+    pub fn note_grpc_message_body_not_utf8(&mut self) {
+        self.ctx.record_error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8);
     }
 
     /// Record that a response-phase `ErrResponse` on a gRPC route could not be
@@ -2008,7 +2020,12 @@ mod local_reply_tests {
     #[test]
     fn build_stashes_status_and_framed_body() {
         let mut ctx = EdgionHttpContext::default();
-        let applied = build_response_local_reply(&mut ctx, 403, Some("{\"error\":\"forbidden\"}".to_string()), false);
+        let applied = build_response_local_reply(
+            &mut ctx,
+            403,
+            Some(Bytes::from_static(br#"{"error":"forbidden"}"#)),
+            false,
+        );
         assert!(applied);
         let (h, body) = ctx
             .take_pending_response_local_reply()
@@ -2027,6 +2044,71 @@ mod local_reply_tests {
         let (h, body) = ctx.take_pending_response_local_reply().unwrap();
         assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "0");
         assert!(body.is_empty());
+    }
+
+    /// The response-stage builder deliberately erases the absent/empty
+    /// distinction: it resolves the body with `unwrap_or_default()`, so a
+    /// replacement reply frames identically either way. Pinned because the
+    /// request-stage writer does NOT erase it (`None` ends the response on the
+    /// header write, `Some(empty)` adds a zero-length body write), and that
+    /// asymmetry is easy to "fix" in the wrong direction here.
+    #[test]
+    fn build_collapses_empty_and_absent_body_to_one_framing() {
+        let mut absent_ctx = EdgionHttpContext::default();
+        assert!(build_response_local_reply(&mut absent_ctx, 500, None, false));
+        let (absent_h, absent_body) = absent_ctx.take_pending_response_local_reply().unwrap();
+
+        let mut empty_ctx = EdgionHttpContext::default();
+        assert!(build_response_local_reply(
+            &mut empty_ctx,
+            500,
+            Some(Bytes::new()),
+            false
+        ));
+        let (empty_h, empty_body) = empty_ctx.take_pending_response_local_reply().unwrap();
+
+        assert_eq!(empty_h.status.as_u16(), 500);
+        assert_eq!(absent_h.status, empty_h.status);
+        // Assert the literal framing, not merely that the two agree — equality
+        // alone would still pass if `content-length` vanished from both.
+        assert_eq!(empty_h.headers.get("content-length").unwrap().to_str().unwrap(), "0");
+        assert_eq!(absent_h.headers.get("content-length").unwrap().to_str().unwrap(), "0");
+        assert!(empty_body.is_empty());
+        assert!(absent_body.is_empty());
+    }
+
+    /// The body is raw `Bytes`, so a non-UTF-8 local reply reaches the wire
+    /// verbatim. The former `String` representation could not express this
+    /// without a lossy round-trip.
+    #[test]
+    fn build_preserves_non_utf8_body_bytes() {
+        const RAW: &[u8] = &[0x00, 0xff, 0xfe, 0x80, 0x41];
+        let mut ctx = EdgionHttpContext::default();
+        assert!(build_response_local_reply(
+            &mut ctx,
+            418,
+            Some(Bytes::from_static(RAW)),
+            false
+        ));
+        let (h, body) = ctx.take_pending_response_local_reply().unwrap();
+        assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "5");
+        assert_eq!(body.as_ref(), RAW);
+    }
+
+    /// A `from_static` body is forwarded without copying: the staged reply
+    /// points at the original static buffer.
+    #[test]
+    fn build_forwards_static_body_without_copying() {
+        static BODY: &[u8] = b"a fixed fail-close body";
+        let mut ctx = EdgionHttpContext::default();
+        assert!(build_response_local_reply(
+            &mut ctx,
+            403,
+            Some(Bytes::from_static(BODY)),
+            false
+        ));
+        let (_, body) = ctx.take_pending_response_local_reply().unwrap();
+        assert_eq!(body.as_ptr(), BODY.as_ptr());
     }
 
     #[test]
@@ -2643,7 +2725,7 @@ mod record_outcome_tests {
         assert!(build_response_local_reply(
             &mut ctx,
             403,
-            Some("denied".to_string()),
+            Some(Bytes::from_static(b"denied")),
             false
         ));
         let (reply, _) = ctx.take_pending_response_local_reply().unwrap();
@@ -3961,7 +4043,7 @@ mod record_outcome_tests {
         let mut response_header = ResponseHeader::build(upstream_status, None).unwrap();
         let applied = {
             let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
-            adapter.apply_response_local_reply(403, Some("denied".to_string()))
+            adapter.apply_response_local_reply(403, Some(Bytes::from_static(b"denied")))
         };
         (applied, ctx)
     }
@@ -4042,7 +4124,7 @@ mod record_outcome_tests {
         let mut response_header = ResponseHeader::build(upstream_status, None).unwrap();
         let result = PluginRunningResult::ErrResponse {
             status: 403,
-            body: Some("denied".to_string()),
+            body: Some(Bytes::from_static(b"denied")),
         };
         let terminate = {
             let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);

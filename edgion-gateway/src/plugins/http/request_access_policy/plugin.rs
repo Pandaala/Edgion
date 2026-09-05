@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder};
@@ -19,6 +20,9 @@ use crate::ctx::NormalizedHostname;
 use crate::plugins::runtime::conditions::{CompiledConditionSet, MatchState};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+
+/// Fallback deny body used when the operator configured no `message`.
+const DEFAULT_DENY_BODY: Bytes = Bytes::from_static(b"Access denied");
 
 struct RuntimeIpSet(Option<IpRadixMatcher>);
 
@@ -335,7 +339,9 @@ pub struct RequestAccessPolicy {
     profiles: HashMap<String, RuntimeProfile>,
     active_profile_ref_key: Option<String>,
     status: u16,
-    message: Option<String>,
+    /// Prepared once per generation; `None` falls back to
+    /// [`DEFAULT_DENY_BODY`], which never allocates.
+    message: Option<Bytes>,
     init_failed: bool,
 }
 
@@ -390,7 +396,7 @@ impl RequestAccessPolicy {
             profiles,
             active_profile_ref_key,
             status: config.status,
-            message: config.message,
+            message: config.message.map(Bytes::from),
             init_failed,
         })
     }
@@ -422,7 +428,7 @@ impl RequestAccessPolicy {
     fn deny(&self) -> PluginRunningResult {
         PluginRunningResult::ErrResponse {
             status: self.status,
-            body: self.message.clone().or_else(|| Some("Access denied".to_string())),
+            body: Some(self.message.clone().unwrap_or(DEFAULT_DENY_BODY)),
         }
     }
 }

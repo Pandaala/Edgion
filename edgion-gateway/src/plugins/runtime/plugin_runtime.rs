@@ -1906,13 +1906,21 @@ impl PluginRuntime {
                     // those ops itself and re-asserts the gRPC content-type
                     // contract.
                     let (grpc_status, default_msg) = http_to_grpc_status(status);
-                    let message = body.as_deref().or(Some(default_msg));
+                    // `grpc-message` is a trailer value, so only a valid UTF-8
+                    // body can carry it. A non-UTF-8 body (reachable now that
+                    // the body is raw `Bytes`, e.g. from a Wasm guest) falls
+                    // back to the mapped default rather than putting invalid
+                    // bytes into a header.
+                    let body_msg = body.as_deref().and_then(|b| std::str::from_utf8(b).ok());
+                    if body.is_some() && body_msg.is_none() {
+                        session_adapter.note_grpc_message_body_not_utf8();
+                    }
+                    let message = body_msg.or(Some(default_msg));
                     let _ = session_adapter.send_grpc_error_direct(grpc_status, message).await;
                 } else if let Ok(status_code) = http::StatusCode::from_u16(status) {
                     if let Ok(mut resp) = ResponseHeader::build(status_code, Some(2)) {
                         let _ = resp.insert_header("content-type", "text/plain");
-                        let body_bytes = body.map(bytes::Bytes::from);
-                        let len = body_bytes.as_ref().map(|b| b.len()).unwrap_or(0);
+                        let len = body.as_ref().map(|b| b.len()).unwrap_or(0);
                         // Apply queued ops first so plugin-set values (e.g. Mock's
                         // Content-Type) override the runtime defaults, THEN re-assert
                         // framing so a queued Content-Length / Transfer-Encoding (now
@@ -1923,9 +1931,9 @@ impl PluginRuntime {
                         let _ = resp.insert_header("content-length", len.to_string());
 
                         let _ = session_adapter
-                            .write_response_header(Box::new(resp), body_bytes.is_none())
+                            .write_response_header(Box::new(resp), body.is_none())
                             .await;
-                        if let Some(b) = body_bytes {
+                        if let Some(b) = body {
                             let _ = session_adapter.write_response_body(Some(b), true).await;
                         }
                     }
@@ -2176,6 +2184,7 @@ mod tests {
     use super::*;
     use crate::observe::RequestDiagnostic;
     use async_trait::async_trait;
+    use bytes::Bytes;
     use edgion_resources::resources::edgion_plugins::DslConfig;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
     use edgion_resources::EdgionErrorCode;
@@ -2256,13 +2265,98 @@ mod tests {
         let mut runtime = PluginRuntime::new();
         runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
             status: 403,
-            body: Some("denied".to_string()),
+            body: Some(Bytes::from_static(b"denied")),
         })));
 
         runtime.run_request_plugins(&mut session, &mut ctx).await;
 
         assert_eq!(ctx.final_downstream_status(), Some(403));
         assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    /// Read whatever the gateway wrote to the duplex client end. The gRPC
+    /// trailers-only reply is a single HTTP/1 header block, so the raw bytes
+    /// are enough to assert what reached the wire.
+    async fn read_client_response(client: &mut tokio::io::DuplexStream) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(Duration::from_secs(1), client.read(&mut buf))
+            .await
+            .expect("gateway wrote a response")
+            .expect("read succeeds");
+        buf.truncate(n);
+        buf
+    }
+
+    /// A UTF-8 `ErrResponse` body on a gRPC route is carried verbatim as
+    /// `grpc-message`, exactly as before the body became raw `Bytes`.
+    #[tokio::test]
+    async fn err_response_on_grpc_route_carries_utf8_body_as_message() {
+        let (mut session, mut client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some(Bytes::from_static(b"tenant quota exhausted")),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+        let raw = String::from_utf8_lossy(&read_client_response(&mut client).await).into_owned();
+
+        assert_eq!(ctx.request_info.grpc_status(), Some(http_to_grpc_status(403).0));
+        assert!(
+            raw.contains("grpc-message: tenant quota exhausted"),
+            "plugin body must reach grpc-message verbatim; got: {raw}"
+        );
+        assert!(
+            !ctx.diagnostics
+                .entries()
+                .iter()
+                .any(|e| *e == RequestDiagnostic::Error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8)),
+            "a valid UTF-8 body must not raise the not-utf8 marker"
+        );
+    }
+
+    /// A non-UTF-8 body cannot be a `grpc-message` header value. It must fall
+    /// back to the status-mapped default rather than emitting raw bytes or a
+    /// U+FFFD-mangled decode, and the drop must be visible in the access log.
+    #[tokio::test]
+    async fn err_response_on_grpc_route_replaces_non_utf8_body_and_marks_it() {
+        let (mut session, mut client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some(Bytes::from_static(&[0x89, 0x50, 0x4e, 0x47, 0xff, 0x00])),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+        let bytes = read_client_response(&mut client).await;
+        let raw = String::from_utf8_lossy(&bytes).into_owned();
+
+        let (expected_status, default_msg) = http_to_grpc_status(403);
+        assert_eq!(ctx.request_info.grpc_status(), Some(expected_status));
+        assert!(
+            raw.contains(&format!("grpc-message: {default_msg}")),
+            "non-utf8 body must fall back to the mapped default; got: {raw}"
+        );
+        // Neither the raw bytes nor a lossy decode may reach the wire.
+        assert!(
+            !bytes.windows(4).any(|w| w == [0x89, 0x50, 0x4e, 0x47]),
+            "raw body bytes must not reach the trailer"
+        );
+        assert!(!raw.contains('\u{FFFD}'), "no lossy replacement characters on the wire");
+        assert_eq!(
+            ctx.diagnostics
+                .entries()
+                .iter()
+                .filter(|e| **e == RequestDiagnostic::Error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8))
+                .count(),
+            1,
+            "the dropped body must be recorded exactly once"
+        );
     }
 
     #[tokio::test]
@@ -2490,7 +2584,7 @@ mod tests {
             filter.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some("Invalid request body".to_string()),
+                body: Some(Bytes::from_static(b"Invalid request body")),
             }
         );
     }

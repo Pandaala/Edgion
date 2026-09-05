@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use rand::Rng;
 
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -26,7 +27,9 @@ enum DelayKind {
 struct CompiledAbort {
     ratio: f64,
     status_code: u16,
-    body: Option<String>,
+    /// Prepared once per generation: the configured abort body clones as a
+    /// refcount bump on every injected fault.
+    body: Option<Bytes>,
     content_type: String,
     headers: Vec<(String, String)>,
 }
@@ -53,7 +56,7 @@ impl FaultInjection {
         let abort = config.abort.as_ref().map(|a| CompiledAbort {
             ratio: a.ratio,
             status_code: a.status_code,
-            body: a.body.clone(),
+            body: a.body.clone().map(Bytes::from),
             content_type: a.content_type.clone(),
             headers: a
                 .headers
@@ -323,7 +326,7 @@ mod tests {
             plugin.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrResponse {
                 status: 503,
-                body: Some("injected fault".to_string()),
+                body: Some(Bytes::from_static(b"injected fault")),
             }
         );
         assert_eq!(

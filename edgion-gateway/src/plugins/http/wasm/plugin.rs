@@ -2,6 +2,7 @@
 //! request-body (buffer mode, gated by an operator `body:` block), and
 //! response-header phases. See mod.rs docs for scope and limitations.
 
+use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
@@ -122,7 +123,7 @@ impl WasmPlugin {
             session.record_outcome(DyeOutcome::FailClose, &cause);
             PluginRunningResult::ErrResponse {
                 status: 500,
-                body: Some("wasm plugin error".to_string()),
+                body: Some(Bytes::from_static(b"wasm plugin error")),
             }
         }
     }
@@ -270,7 +271,7 @@ impl WasmPlugin {
                 log.push_err("wasm body-refused");
                 return PluginRunningResult::ErrResponse {
                     status: 500,
-                    body: Some("body unavailable".to_string()),
+                    body: Some(Bytes::from_static(b"body unavailable")),
                 };
             }
             Err(BodyReadError::BufferLimitExceeded { .. }) => {
@@ -655,7 +656,7 @@ fn finish_local_response(
         };
     }
     log.push_fmt("wasm local {}", la![local.status.to_string().as_str()]);
-    let body = (!local.body.is_empty()).then(|| String::from_utf8_lossy(&local.body).into_owned());
+    let body = (!local.body.is_empty()).then(|| Bytes::from(local.body));
     PluginRunningResult::ErrResponse {
         status: local.status,
         body,
@@ -1021,6 +1022,56 @@ mod tests {
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert!(matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }));
+    }
+
+    /// The guest writes raw bytes over the Proxy-Wasm ABI, so a binary local
+    /// response must reach the client verbatim. The previous `String` body
+    /// round-tripped through `from_utf8_lossy`, which both copied the buffer
+    /// and replaced every invalid sequence with U+FFFD.
+    #[test]
+    fn local_response_forwards_non_utf8_body_verbatim() {
+        const RAW: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0xff, 0x00];
+
+        let mut session = MockPluginSession::new();
+        session.expect_set_response_header().returning(|_, _| Ok(()));
+        session.expect_append_response_header().returning(|_, _| Ok(()));
+
+        let local = LocalResponse {
+            status: 200,
+            body: RAW.to_vec(),
+            headers: vec![("content-type".to_string(), "image/png".to_string())],
+        };
+        let mut log = PluginLog::new("Wasm");
+        match finish_local_response(&mut session, &mut log, local) {
+            PluginRunningResult::ErrResponse { status, body } => {
+                assert_eq!(status, 200);
+                assert_eq!(body.expect("binary body").as_ref(), RAW);
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    /// An empty guest body stays *absent*, not a present zero-length body, so
+    /// the runtime writes a bodyless response header.
+    #[test]
+    fn local_response_empty_guest_body_is_absent() {
+        let mut session = MockPluginSession::new();
+        session.expect_set_response_header().returning(|_, _| Ok(()));
+        session.expect_append_response_header().returning(|_, _| Ok(()));
+
+        let local = LocalResponse {
+            status: 204,
+            body: Vec::new(),
+            headers: Vec::new(),
+        };
+        let mut log = PluginLog::new("Wasm");
+        match finish_local_response(&mut session, &mut log, local) {
+            PluginRunningResult::ErrResponse { status, body } => {
+                assert_eq!(status, 204);
+                assert!(body.is_none());
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
     }
 
     /// A WASM guest local response that repeats a header name (two Set-Cookie

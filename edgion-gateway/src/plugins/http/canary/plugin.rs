@@ -14,6 +14,7 @@ use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_s
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::routes::http::routes_mgr::RouteRules;
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
 use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
@@ -156,7 +157,7 @@ impl RequestFilter for Canary {
                     session.record_outcome(DyeOutcome::Reject, "on-invalid");
                     PluginRunningResult::ErrResponse {
                         status: 403,
-                        body: Some("Target backend not allowed".to_string()),
+                        body: Some(Bytes::from_static(b"Target backend not allowed")),
                     }
                 }
                 UpstreamFallback::Fallback => {
@@ -598,7 +599,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some("Target backend not allowed".to_string()),
+                body: Some(Bytes::from_static(b"Target backend not allowed")),
             }
         );
     }
@@ -630,7 +631,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 403,
-                body: Some("Target backend not allowed".to_string()),
+                body: Some(Bytes::from_static(b"Target backend not allowed")),
             }
         );
         assert!(log.contains("backend ref not found"));

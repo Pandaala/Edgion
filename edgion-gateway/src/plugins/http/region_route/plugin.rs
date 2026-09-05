@@ -512,6 +512,7 @@ mod tests {
     use crate::plugins::http::plugin_store::compile_plugins;
     use crate::plugins::runtime::log::PluginLog;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use bytes::Bytes;
     use edgion_resources::common::{KeyGet, KeySet};
     use edgion_resources::resources::edgion_plugins::{
         EdgionPlugin, EdgionPlugins, HashCalcConfig, RegionDef, RegionRouteConfig, RequestFilterEntry,
@@ -691,7 +692,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 500,
-                body: Some(r#"{"message":"plugin configuration error"}"#.to_string()),
+                body: Some(Bytes::from_static(br#"{"message":"plugin configuration error"}"#)),
             }
         );
         assert_eq!(log.render_for_test(), "err: invalid plugin config\nerr: RegionRoute");

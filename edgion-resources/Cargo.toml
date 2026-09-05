@@ -17,6 +17,9 @@ workspace = true
 edgion-dsl.workspace = true
 edgion-waf.workspace = true
 
+# Local-response body representation shared with the Gateway response writer
+bytes.workspace = true
+
 # Serialization / schema
 serde.workspace = true
 serde_json.workspace = true

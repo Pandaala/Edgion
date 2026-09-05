@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +23,12 @@ pub enum PluginRunningStage {
 }
 
 /// Filter running result
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// Deliberately NOT `Serialize`/`Deserialize`/`JsonSchema`: this is a
+/// process-local plugin return value, never a configuration or wire type. Not
+/// deriving them is what lets [`Self::ErrResponse`] carry a clone-cheap
+/// [`Bytes`] body instead of an owned `String`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginRunningResult {
     /// Just nothing, continue to run other plugins
     Nothing,
@@ -47,15 +53,23 @@ pub enum PluginRunningResult {
     /// document explicitly why a naked terminate is acceptable in that path.
     ErrTerminateRequest,
     /// Filter returns an error response with custom status and body
-    ErrResponse {
-        status: u16,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        body: Option<String>,
-    },
+    ///
+    /// The body is [`Bytes`] rather than `String` so a generation-owned static
+    /// body crosses this boundary without a per-request copy: a configured body
+    /// prepared once at plugin construction clones as a refcount bump, and a
+    /// fixed literal body is built with `Bytes::from_static` and never
+    /// allocates. Dynamically built bodies stay a single allocation —
+    /// `Bytes::from(String)` and `Bytes::from(Vec<u8>)` are moves. The response
+    /// writer already sinks into `Bytes`, so the whole path is copy-free.
+    ///
+    /// `None` and `Some` of an empty `Bytes` take different write paths — `None`
+    /// ends the response on the header write, `Some(empty)` follows it with a
+    /// zero-length body write — but both frame as `content-length: 0`, so the
+    /// message the client sees is the same. Prefer `None` when there is no body.
+    ErrResponse { status: u16, body: Option<Bytes> },
     /// Filter returns a gRPC error (HTTP 200 + grpc-status/grpc-message trailers)
-    ErrGrpcError {
-        grpc_status: u16,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        message: Option<String>,
-    },
+    ///
+    /// The message stays a `String`: it is emitted as the `grpc-message`
+    /// trailer, which is a header value, not a response body.
+    ErrGrpcError { grpc_status: u16, message: Option<String> },
 }

@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use async_trait::async_trait;
@@ -31,7 +32,7 @@ impl JsonSchemaValidation {
     fn reject(status: u16, body: Option<&'static str>) -> PluginRunningResult {
         PluginRunningResult::ErrResponse {
             status,
-            body: body.map(str::to_owned),
+            body: body.map(|b| Bytes::from_static(b.as_bytes())),
         }
     }
 }

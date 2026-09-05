@@ -62,7 +62,7 @@ impl FormJsonTransform {
     fn reject(status: u16, body: Option<&'static str>) -> PluginRunningResult {
         PluginRunningResult::ErrResponse {
             status,
-            body: body.map(str::to_owned),
+            body: body.map(|b| Bytes::from_static(b.as_bytes())),
         }
     }
 

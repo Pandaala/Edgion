@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
+use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{DynamicInternalUpstreamConfig, UpstreamFallback};
 use edgion_resources::HTTPBackendRefKind;
@@ -46,7 +47,7 @@ impl RequestFilter for DynamicInternalUpstream {
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
-                            body: Some("Missing routing key for backend selection".to_string()),
+                            body: Some(Bytes::from_static(b"Missing routing key for backend selection")),
                         }
                     }
                 };
@@ -70,7 +71,7 @@ impl RequestFilter for DynamicInternalUpstream {
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
                                     status: 400,
-                                    body: Some("Routing key regex extraction failed".to_string()),
+                                    body: Some(Bytes::from_static(b"Routing key regex extraction failed")),
                                 }
                             }
                         };
@@ -99,7 +100,7 @@ impl RequestFilter for DynamicInternalUpstream {
                         log.push_err("no matching rule");
                         PluginRunningResult::ErrResponse {
                             status: 400,
-                            body: Some("No matching backend rule for routing key".to_string()),
+                            body: Some(Bytes::from_static(b"No matching backend rule for routing key")),
                         }
                     }
                 };
@@ -147,7 +148,7 @@ impl RequestFilter for DynamicInternalUpstream {
                     session.record_outcome(DyeOutcome::Reject, "on-invalid");
                     PluginRunningResult::ErrResponse {
                         status: 403,
-                        body: Some("Target backend not allowed".to_string()),
+                        body: Some(Bytes::from_static(b"Target backend not allowed")),
                     }
                 }
                 UpstreamFallback::Fallback => {
@@ -471,7 +472,7 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 400,
-                body: Some("Missing routing key for backend selection".to_string()),
+                body: Some(Bytes::from_static(b"Missing routing key for backend selection")),
             }
         );
     }

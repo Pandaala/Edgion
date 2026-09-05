@@ -3,6 +3,7 @@
 //! string constants loaded multiple times.
 
 use super::*;
+use bytes::Bytes;
 
 // ---------------------------------------------------------------------------
 // split() list-length limit enforcement
@@ -39,7 +40,7 @@ fn test_split_exceeds_list_limit() {
         result,
         PluginRunningResult::ErrResponse {
             status: 500,
-            body: Some("DSL execution error".to_string())
+            body: Some(Bytes::from_static(b"DSL execution error"))
         },
     );
 }
@@ -58,7 +59,7 @@ fn test_split_empty_delim_exceeds_limit() {
         result,
         PluginRunningResult::ErrResponse {
             status: 500,
-            body: Some("DSL execution error".to_string())
+            body: Some(Bytes::from_static(b"DSL execution error"))
         },
     );
 }
@@ -78,7 +79,7 @@ fn test_split_empty_delim_bypass_is_closed() {
         result,
         PluginRunningResult::ErrResponse {
             status: 500,
-            body: Some("DSL execution error".to_string())
+            body: Some(Bytes::from_static(b"DSL execution error"))
         },
     );
 }

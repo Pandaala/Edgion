@@ -831,7 +831,7 @@ mod tests {
                 result,
                 PluginRunningResult::ErrResponse {
                     status: 500,
-                    body: Some(r#"{"message":"plugin configuration error"}"#.to_string()),
+                    body: Some(Bytes::from_static(br#"{"message":"plugin configuration error"}"#)),
                 }
             );
             assert_eq!(log.render_for_test(), "err: invalid plugin config\nerr: JweDecrypt");

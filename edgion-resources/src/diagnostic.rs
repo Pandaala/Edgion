@@ -319,6 +319,19 @@ pub enum EdgionErrorCode {
     /// succeeds, otherwise the request surfaces as 504.
     BackendRequestTimeoutRetry,
 
+    /// A request-phase plugin returned an `ErrResponse` on a gRPC route whose
+    /// body is not valid UTF-8, so it could not be carried as `grpc-message`.
+    ///
+    /// The denial is still enforced with the mapped gRPC status; what is LOST
+    /// is the plugin's body, replaced by the status-mapped default message.
+    /// `grpc-message` is a header value and cannot hold arbitrary bytes, so
+    /// emitting the body verbatim is not an option and a lossy decode would put
+    /// U+FFFD sequences in front of the client. A plugin that needs a specific
+    /// message should return `ErrGrpcError`, or keep its `ErrResponse` body
+    /// UTF-8. Reachable only from a producer that can emit raw bytes (today,
+    /// a Wasm guest's `proxy_send_local_response`).
+    PluginGrpcMessageBodyNotUtf8,
+
     /// A response-phase plugin returned `ErrResponse` on a gRPC route, where a
     /// response replacement cannot be expressed: a gRPC error is HTTP 200 plus
     /// trailers, not a status-and-body response.
@@ -423,6 +436,7 @@ impl EdgionErrorCode {
             Self::BodyMutationConflict => "BodyMutationConflict",
             Self::GrpcClientDeadlineExceeded => "GrpcClientDeadlineExceeded",
             Self::BackendRequestTimeoutRetry => "BackendRequestTimeoutRetry",
+            Self::PluginGrpcMessageBodyNotUtf8 => "PluginGrpcMessageBodyNotUtf8",
             Self::PluginResponseReplaceUnsupportedGrpc => "PluginResponseReplaceUnsupportedGrpc",
             Self::PluginResponseDenyAborted => "PluginResponseDenyAborted",
             Self::OutboundTlsVerifyUnsupported => "OutboundTlsVerifyUnsupported",
@@ -593,6 +607,10 @@ mod tests {
             (
                 EdgionErrorCode::BackendRequestTimeoutRetry,
                 "BackendRequestTimeoutRetry",
+            ),
+            (
+                EdgionErrorCode::PluginGrpcMessageBodyNotUtf8,
+                "PluginGrpcMessageBodyNotUtf8",
             ),
             (
                 EdgionErrorCode::PluginResponseReplaceUnsupportedGrpc,
