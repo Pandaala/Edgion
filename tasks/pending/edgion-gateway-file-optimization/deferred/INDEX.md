@@ -1,6 +1,6 @@
 # Deferred Findings Index
 
-These entries are backlinks only. Each linked `tasks/todo` file remains the single editable source of truth for its issue.
+These entries are backlinks only. A linked `tasks/todo` file is the editable source of truth when it exists. Closed or finding-canonical rows point at their review rule or campaign finding instead.
 
 | Finding | Status | Canonical task |
 |---------|--------|----------------|
@@ -34,7 +34,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | D0028 — Define the Redis rate-limiter numeric domain | needs-discussion | [campaign finding](D0028-redis-rate-limiter-numeric-domain.md) |
 | D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
 | D0030 — Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
-| D0031 — Add EdgionPlugins LKG identity integration coverage | blocked | [campaign finding](D0031-edgionplugins-lkg-identity-integration-coverage.md) |
+| D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/edgionplugins-lkg-identity-coverage-not-standalone.md) |
 | D0032 — Add BackendTLSPolicy-aware AllEndpointStatus probes | needs-discussion | [campaign finding](D0032-all-endpoint-status-backend-tls-policy.md) |
 | D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | D0034 — Fail closed on denied L7 named jumps | needs-implementation | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
@@ -99,8 +99,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Add ACME gatewayRef isolation integration coverage | blocked | [task](../../../todo/add-acme-gatewayref-isolation-integration-coverage.md) |
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
 | Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
-| Retain EdgionPlugins last-known-good only for the same resource identity | pending | [task](../../../todo/retain-edgionplugins-last-known-good-resource-identity/retain-edgionplugins-last-known-good-resource-identity.md) |
-| Add EdgionPlugins LKG identity integration coverage | blocked | [task](../../../todo/add-edgionplugins-lkg-identity-integration-coverage.md) |
+| Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
 | Add BackendTLSPolicy-aware AllEndpointStatus probes | pending | [task](../../../todo/add-all-endpoint-status-backend-tls-policy-support/add-all-endpoint-status-backend-tls-policy-support.md) |
 | Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
 | Fail closed on denied L7 named jumps | pending | [task](../../../todo/fail-closed-on-denied-l7-named-jumps.md) |
