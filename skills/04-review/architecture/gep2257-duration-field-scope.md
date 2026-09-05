@@ -28,8 +28,10 @@ GEP-2257 string for consistency" are **not accepted** without new evidence.
 
 **1. The converted set is the operator-ergonomic CR surface**
 
-These seven are the only fields where a human writes a duration into a CR and
-the unit was previously implicit (or baked into a `*_seconds`/`*_days` name).
+These seven were the selected CR-surface conversions: a human writes a
+duration into a CR and the unit was previously implicit (or baked into a
+`*_seconds`/`*_days` name). Other existing operator-facing integer lifetimes
+were retained by recorded decision (see the not-converted set below).
 Conversion used the existing shared infrastructure:
 `edgion-resources/src/duration.rs` (`GEP2257_PATTERN` + `parse_duration`),
 schemars `pattern(...)` on the field, CRD `pattern:` + string `default:`, and
@@ -41,10 +43,14 @@ schemars `pattern(...)` on the field, CRD `pattern:` + string `default:`, and
 Remaining integer durations keep integer form for: third-party/spec parity
 (Kafka `linger.ms`, etcd clientv3, Pingora `ServerConf`, Gateway API / RFC
 integer-seconds fields), bounded ms-granularity knobs with `MAX_*` caps,
-family consistency around those anchors, or process-local config / internal
-resolved structs that are not the CR ergonomic surface. The gateway-internal
-`CircuitBreakerConfig` twin deliberately stays `u64` seconds — it is resolved
-once at `normalize()` and consumed on the data plane.
+family consistency around those anchors, process-local config / internal
+resolved structs that are not the CR ergonomic surface, or existing plugin
+token/session lifetimes that already used integer seconds at conversion time
+(CSRF `expires`, OIDC `sessionLifetime`, JWT `lifetimeGracePeriod`). CSRF
+B0070 does not reopen this set — see
+[csrf-expires-integer-seconds-retained.md](csrf-expires-integer-seconds-retained.md).
+The gateway-internal `CircuitBreakerConfig` twin deliberately stays `u64`
+seconds — it is resolved once at `normalize()` and consumed on the data plane.
 
 **3. Parse-failure handling follows the lenient-admission pattern**
 
@@ -81,3 +87,5 @@ Re-open this decision only if:
   closed 2026-07-19) and the integer-duration decision task it followed.
 - Sibling conversion: commit `7e18faee` (health-check / backend-traffic
   string-side fields).
+- CSRF `expires` adjudication (D0041, 2026-09-05, accepted tradeoff):
+  [csrf-expires-integer-seconds-retained.md](csrf-expires-integer-seconds-retained.md).

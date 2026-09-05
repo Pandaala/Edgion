@@ -19,7 +19,7 @@ Supports auto-detection of the issue directory, issue ID lookup, or explicit pat
 |-------|----------------------|
 | **Security iron rules** (timing, weak passwords, cache keys — cross-feature) | [security/iron-rules.md](security/iron-rules.md) |
 | **Authentication** (basic / key / jwt / JWE / hmac / ldap / oidc / cert / forward / webhook) | [auth-timing/](auth-timing/), [basic-auth/](basic-auth/), [key-auth/](key-auth/), [jwt-auth/](jwt-auth/), [jwe-decrypt/](jwe-decrypt/), [hmac-auth/](hmac-auth/), [ldap-auth/](ldap-auth/), [oidc/](oidc/), [header-cert-auth/](header-cert-auth/), [forward-auth/](forward-auth/), [webhook-key/](webhook-key/), [admin-cors/](admin-cors/), [cors/](cors/), [gateway-admin-auth/](gateway-admin-auth/); identity-header overwrite (not global sanitize): [security/auth-identity-headers-overwrite-written-names.md](security/auth-identity-headers-overwrite-written-names.md) |
-| **CSRF** (token cookie attributes) | [csrf/](csrf/) |
+| **CSRF** (token cookie attributes; integer `expires` lifetime) | [csrf/](csrf/); `expires` stays positive integer seconds: [architecture/csrf-expires-integer-seconds-retained.md](architecture/csrf-expires-integer-seconds-retained.md) |
 | **Network access control** | [ip-restriction/](ip-restriction/), [request-restriction/](request-restriction/), [real-ip/](real-ip/), [ssrf/](ssrf/) |
 | **TLS** (downstream / upstream / EdgionTls) | [edgion-tls/](edgion-tls/), [ssl/](ssl/) |
 | **Backends** (health / circuit-breaker / consistent-hash / IPv6 addressing) | [backends/](backends/) |
@@ -213,6 +213,8 @@ some legacy rows without a topic file keep their rationale in the index itself.
 - When reviewing IPv4-mapped IPv6 SSRF bypass of `classify_backend_addr` / `::ffff:127.0.0.1` or `::ffff:169.254.169.254` not blocked / IPv6 branch only matches `::1` + `fe80::/10` (backends-F003): **fixed (backends-F003)** — [ssrf/ipv4-mapped-ipv6.md](ssrf/ipv4-mapped-ipv6.md). Re-reports of the `::ffff:` mapped form not accepted; a re-report scoped to the `::a.b.c.d` compat form is an accepted-tradeoff close, not a code fix.
 
 - When reviewing `append_request_header` first-existing-value-only / drops additional same-name request header entries / multi-value collapsed to `first-value,appended` (F-001): **fixed (F-001)** — [http1/append-request-header-multi-value.md](http1/append-request-header-multi-value.md). Re-reports not accepted; verify `append_request_header` uses `append_header`.
+
+- When reviewing CSRF `expires` integer-vs-GEP-2257 findings / migrate token lifetime to `"2h"` for consistency / B0070 expiry work implies a duration-string conversion (D0041): **accepted tradeoff (D0041, 2026-09-05)** — [architecture/csrf-expires-integer-seconds-retained.md](architecture/csrf-expires-integer-seconds-retained.md). B0070 already requires a positive integer-second lifetime; representation migration, dual-accept, and deleting the field in that close-out are not accepted. Verify `CsrfConfig.expires: i64` and `expires > 0` before re-reporting.
 
 - When reviewing plugin Set-Cookie via `set_response_header` / CSRF/OIDC/DSL `ctx.set` cookie wipes upstream Set-Cookie / `PendingHeaderOp::Set::apply` insert_header replace-all / two cookie writers overwrite (gateway-plugins-02): **fixed (gateway-plugins-02)** — [csrf/set-cookie-append.md](csrf/set-cookie-append.md). Response-side sibling of F-001. Re-reports not accepted; verify the four writers use `append_response_header`.
 
