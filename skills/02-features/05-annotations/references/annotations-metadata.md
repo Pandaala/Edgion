@@ -216,9 +216,9 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits Gateway / EGC / system | Per-Service httpdns LinkSys resolver reference (most specific; applies to **both** planes). Explicit namespace required (bare names rejected). A cross-namespace ref is ReferenceGrant-gated (from-kind `Service`, to-kind `edgion.io/LinkSys`); a denied ref is logged and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 
 Active health checks, outlier detection (passive ejection / circuit breaking), and
-the per-Service panic-threshold override are **not** Service annotations anymore —
+the per-Service degrade-threshold override are **not** Service annotations anymore —
 they moved to the `EdgionBackendTrafficPolicy` CRD (`spec.healthCheck` /
-`spec.outlierDetection` / `spec.loadBalancer.panicThreshold`, attached via
+`spec.outlierDetection` / `spec.loadBalancer.degradeThreshold`, attached via
 `targetRefs`). See
 [03-resources/20-edgion-backend-traffic-policy.md](../../03-resources/20-edgion-backend-traffic-policy.md)
 for the schema and `edgion-resources/src/resources/edgion_backend_traffic_policy.rs`

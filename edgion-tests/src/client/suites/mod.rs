@@ -17,17 +17,16 @@ pub mod udp_route;
 // Re-export all test suites for convenience
 pub use http_route::{
     BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DanglingExtensionRefTestSuite,
-    DelegationDynamicInitialTestSuite, DelegationDynamicUpdateTestSuite, DelegationTestSuite, DnsFlapFailingTestSuite,
-    DnsFlapWorkingTestSuite, DnsResolutionFailureTestSuite, DnsResolutionTestSuite, FilterConflictTestSuite,
-    GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite, H2TrailerMalformedTestSuite, H2cTestSuite,
-    HeaderModifierTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, HttpMatchTestSuite,
-    HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite, LBConsistentHashTestSuite,
-    LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite,
-    LBRoundRobinTestSuite, MultiPortTestSuite, PanicThresholdTestSuite, PartiallyInvalidTestSuite,
-    PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
-    SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite, SpWeightedInitialTestSuite,
-    SpWeightedZeroWeightTestSuite, SseStreamingTestSuite, TimeoutTestSuite, TransportTestSuite, WebSocketTestSuite,
-    WeightedBackendTestSuite,
+    DegradeThresholdTestSuite, DelegationDynamicInitialTestSuite, DelegationDynamicUpdateTestSuite,
+    DelegationTestSuite, DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite, DnsResolutionFailureTestSuite,
+    DnsResolutionTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite,
+    H2TrailerMalformedTestSuite, H2cTestSuite, HeaderModifierTestSuite, HealthCheckTestSuite,
+    HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite,
+    LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite,
+    LBLeastConnTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite, PartiallyInvalidTestSuite, PerTryTimeoutTestSuite,
+    PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite,
+    SpChangeInitialTestSuite, SpWeightedFinalTestSuite, SpWeightedInitialTestSuite, SpWeightedZeroWeightTestSuite,
+    SseStreamingTestSuite, TimeoutTestSuite, TransportTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use edgion_backend_traffic_policy::{

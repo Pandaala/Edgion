@@ -1,5 +1,5 @@
 //! EdgionBackendTrafficPolicy — per-destination traffic policy (LB algorithm,
-//! active health check, outlier detection, panic threshold) attached to
+//! active health check, outlier detection, degrade threshold) attached to
 //! Services or EdgionBackend resources via targetRefs. Design:
 //! docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md
 
@@ -243,9 +243,9 @@ pub struct LoadBalancerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consistent_hash: Option<ConsistentHashConfig>,
     /// Percent 0-100. Overrides the global
-    /// EdgionGatewayConfig.spec.loadBalancing.panicThreshold for the target.
+    /// EdgionGatewayConfig.spec.loadBalancing.degradeThreshold for the target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub panic_threshold: Option<u8>,
+    pub degrade_threshold: Option<u8>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -373,9 +373,9 @@ impl EdgionBackendTrafficPolicySpec {
                 }
                 _ => {}
             }
-            if let Some(pt) = lb.panic_threshold {
+            if let Some(pt) = lb.degrade_threshold {
                 if pt > 100 {
-                    errors.push("loadBalancer.panicThreshold must be 0-100".to_string());
+                    errors.push("loadBalancer.degradeThreshold must be 0-100".to_string());
                 }
             }
         }
@@ -525,7 +525,7 @@ loadBalancer:
   consistentHash:
     hashOn: header
     key: x-user-id
-  panicThreshold: 30
+  degradeThreshold: 30
 outlierDetection:
   consecutiveErrors: 3
 "#
@@ -540,7 +540,7 @@ outlierDetection:
         let ch = lb.consistent_hash.as_ref().expect("ch");
         assert_eq!(ch.hash_on, HashOn::Header);
         assert_eq!(ch.key.as_deref(), Some("x-user-id"));
-        assert_eq!(lb.panic_threshold, Some(30));
+        assert_eq!(lb.degrade_threshold, Some(30));
         assert!(spec.get_validation_errors().is_empty());
     }
 
@@ -668,7 +668,7 @@ outlierDetection:
         let mk = |t, ch| LoadBalancerConfig {
             r#type: t,
             consistent_hash: ch,
-            panic_threshold: None,
+            degrade_threshold: None,
         };
         assert_eq!(mk(LoadBalancerType::RoundRobin, None).to_parsed(), None);
         assert_eq!(
@@ -762,9 +762,9 @@ outlierDetection:
             serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash")
                 .unwrap();
         assert!(!no_ch.get_validation_errors().is_empty());
-        // panicThreshold > 100
+        // degradeThreshold > 100
         let big_pt: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
-            "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: RoundRobin\n  panicThreshold: 101",
+            "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: RoundRobin\n  degradeThreshold: 101",
         )
         .unwrap();
         assert!(!big_pt.get_validation_errors().is_empty());

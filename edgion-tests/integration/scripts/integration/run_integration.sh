@@ -1874,7 +1874,7 @@ run_all_tests() {
         run_test "HTTPRoute_MultiPort" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i MultiPort" || test_failed=true
         run_test "HTTPRoute_Backend_LBEwma" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/LBEwma" || test_failed=true
         run_test "HTTPRoute_Backend_LBEwmaRetryOnStatus" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/LBEwmaRetryOnStatus" || test_failed=true
-        run_test "HTTPRoute_Backend_PanicThreshold" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/PanicThreshold" || test_failed=true
+        run_test "HTTPRoute_Backend_DegradeThreshold" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/DegradeThreshold" || test_failed=true
         run_test "HTTPRoute_DanglingExtensionRef" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i DanglingExtensionRef" || test_failed=true
         run_test "HTTPRoute_Filters_PercentMirror" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Filters/PercentMirror" || test_failed=true
 

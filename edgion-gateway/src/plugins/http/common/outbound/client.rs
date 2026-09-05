@@ -224,18 +224,18 @@ impl ManagedOutboundClient {
         // `AnchorPinnedResolver`, regardless of whether an `upstreamAuthority`
         // policy currently exists for it. This is deliberate: `outbound_call`
         // decides, per request, whether to rewrite the URL host to a
-        // request-composed authority via a FRESH `get_authority` lookup against
-        // the same mutable policy store. If resolver installation here were
-        // gated on that SAME lookup at build time, a client built before a
-        // policy existed would carry no pinned resolver — and a policy attached
-        // later would make `outbound_call` rewrite the host to a
-        // request-influenced hostname with nothing but the system DNS resolver
-        // behind it (a split-brain SSRF: two decisions about the same store,
-        // made at two different times, can disagree). Installing the resolver
-        // unconditionally for every Service-pool target closes that window
-        // structurally: "has a pinned resolver" and "`authority_service_key()`
-        // is `Some`" are now provably the same set, since both are derived from
-        // `resolved_target` being `ResolvedTarget::Service`.
+        // request-composed authority via a fresh snapshot `get_effective`
+        // lookup. If resolver installation here were gated on that SAME lookup
+        // at build time, a client built before a policy existed would carry no
+        // pinned resolver — and a policy attached later would make
+        // `outbound_call` rewrite the host to a request-influenced hostname
+        // with nothing but the system DNS resolver behind it (a split-brain
+        // SSRF: two decisions about the same store, made at two different
+        // times, can disagree). Installing the resolver unconditionally for
+        // every Service-pool target closes that window structurally: "has a
+        // pinned resolver" and "`authority_service_key()` is `Some`" are now
+        // provably the same set, since both are derived from `resolved_target`
+        // being `ResolvedTarget::Service`.
         //
         // It costs nothing when no policy is active: the URL host stays an IP
         // literal from `pick_url()`, and reqwest/hyper-util skips the injected
@@ -598,10 +598,10 @@ async fn run_active_health_check(
         // A Service anchor carrying an `upstreamAuthority` policy dispatches by
         // Host/SNI; the active probe has no request to render a per-request
         // label from, so it sends the static `healthCheckHost` instead. Looked
-        // up fresh every tick (not cached at task-spawn time) so a policy
-        // attached or detached after this task started still takes effect on
-        // the very next probe — mirrors the per-call fresh `get_authority`
-        // lookup in `outbound_call` against the same mutable policy store.
+        // up from the current snapshot every tick (not cached at task-spawn
+        // time) so a policy attached or detached after this task started still
+        // takes effect on the very next probe — mirrors the per-call snapshot
+        // `get_effective` lookup in `outbound_call`.
         let base = resolve_probe_base(base, service_key.as_deref());
 
         let check_url = match &active.path {
@@ -640,7 +640,14 @@ async fn run_active_health_check(
 /// is returned unchanged, exactly as before this override existed.
 fn resolve_probe_base(base: String, service_key: Option<&str>) -> String {
     match service_key
-        .and_then(|key| get_backend_traffic_policy_store().get_authority(key))
+        .and_then(|key| {
+            let target =
+                crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(key);
+            get_backend_traffic_policy_store()
+                .snapshot()
+                .get_effective(&target)
+                .and_then(|policy| policy.upstream_authority.clone())
+        })
         .and_then(|compiled| compiled.health_check_host.clone())
     {
         Some(host) => replace_url_host(&base, &host),
@@ -1124,9 +1131,9 @@ mod tests {
         );
 
         // ── Step 3: the client built in step 1 must ALREADY be safe. ────────
-        // If resolver installation were still gated on `get_authority` at
-        // build time (the bug), this client would alias the shared global
-        // client — which has no injected resolver at all — and the host
+        // If resolver installation were still gated on a live authority
+        // lookup at build time (the bug), this client would alias the shared
+        // global client — which has no injected resolver at all — and the host
         // rewrite `outbound_call` now performs would resolve through the real
         // system DNS resolver.
         assert!(

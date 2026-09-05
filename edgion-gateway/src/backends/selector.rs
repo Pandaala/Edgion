@@ -25,7 +25,7 @@ fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_
     cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))
 }
 
-/// Health predicate without rejection accounting. Used by the panic-threshold
+/// Health predicate without rejection accounting. Used by the degrade-threshold
 /// counting pass so it does not double-count outlier-detection rejections.
 /// Lazy outlier recovery may still decrement the ejected-endpoint gauge.
 #[inline]
@@ -65,20 +65,51 @@ pub(crate) fn is_backend_healthy(
     true
 }
 
-/// Decide whether panic mode should engage for this selection. Gated so the
+/// Decide whether degrade mode should engage for this selection. Gated so the
 /// O(n) survivor count only runs for services that actually have health-check
-/// or outlier-detection state (otherwise every backend passes and panic can never
-/// trigger). Records the `lb_panic_mode` gauge when it evaluates.
-fn panic_engaged(
+/// or outlier-detection state (otherwise every backend passes and degrade can
+/// never trigger). Records the `lb_degrade_mode` gauge when it evaluates.
+fn degrade_engaged_http(
+    service_key: &str,
+    selector: &compiled_selector::CompiledSelector,
+    health_store: &health::check::HealthStatusStore,
+    outlier_store: &OutlierDetectionStore,
+    degrade_threshold_override: Option<u8>,
+) -> bool {
+    degrade_engaged_with_threshold(
+        service_key,
+        selector,
+        health_store,
+        outlier_store,
+        degrade_threshold_override.unwrap_or_else(crate::backends::degrade_threshold::get_lb_degrade_default),
+    )
+}
+
+fn degrade_engaged_l4(
     service_key: &str,
     selector: &compiled_selector::CompiledSelector,
     health_store: &health::check::HealthStatusStore,
     outlier_store: &OutlierDetectionStore,
 ) -> bool {
+    degrade_engaged_with_threshold(
+        service_key,
+        selector,
+        health_store,
+        outlier_store,
+        crate::backends::degrade_threshold::resolve_degrade_threshold(service_key),
+    )
+}
+
+fn degrade_engaged_with_threshold(
+    service_key: &str,
+    selector: &compiled_selector::CompiledSelector,
+    health_store: &health::check::HealthStatusStore,
+    outlier_store: &OutlierDetectionStore,
+    threshold: u8,
+) -> bool {
     if !health_store.has_service(service_key) && !outlier_store.has_service(service_key) {
         return false;
     }
-    let threshold = crate::backends::panic_threshold::resolve_panic_threshold(service_key);
     if threshold == 0 {
         return false;
     }
@@ -86,11 +117,11 @@ fn panic_engaged(
     if total == 0 {
         return false;
     }
-    let floor = crate::backends::panic_threshold::panic_floor(threshold, total);
-    let engaged = selector.panic_should_engage(floor, |b| {
+    let floor = crate::backends::degrade_threshold::degrade_floor(threshold, total);
+    let engaged = selector.degrade_should_engage(floor, |b| {
         is_backend_healthy_quiet(service_key, b.inner(), health_store, outlier_store)
     });
-    crate::observe::metrics::record_lb_panic_mode(service_key, engaged);
+    crate::observe::metrics::record_lb_degrade_mode(service_key, engaged);
     engaged
 }
 
@@ -118,7 +149,7 @@ pub fn select_roundrobin_backend_key(service_key: &str) -> Option<Arc<EdgionBack
     let selector = cell.get_or_build(PolicyKind::RoundRobin);
     let health_store = get_health_status_store();
     let outlier_store = get_outlier_detection_store();
-    if panic_engaged(service_key, &selector, &health_store, &outlier_store) {
+    if degrade_engaged_l4(service_key, &selector, &health_store, &outlier_store) {
         return selector.select(None, |_| true);
     }
     selector.select(None, |b| {
@@ -232,6 +263,7 @@ impl NotFoundMap {
 fn pick(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
+    degrade_threshold_override: Option<u8>,
     session: &Session,
     remote_ip: &str,
     query: Option<&str>,
@@ -257,7 +289,13 @@ fn pick(
 
     let health_store = get_health_status_store();
     let outlier_store = get_outlier_detection_store();
-    let result = if panic_engaged(service_key, &selector, &health_store, &outlier_store) {
+    let result = if degrade_engaged_http(
+        service_key,
+        &selector,
+        &health_store,
+        &outlier_store,
+        degrade_threshold_override,
+    ) {
         selector.select(hash_key, |_| true)
     } else {
         selector.select(hash_key, |b| {
@@ -270,6 +308,7 @@ fn pick(
 pub(crate) fn select_from_endpoint_slice(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
+    degrade_threshold_override: Option<u8>,
     session: &Session,
     remote_ip: &str,
     query: Option<&str>,
@@ -277,6 +316,7 @@ pub(crate) fn select_from_endpoint_slice(
     pick(
         service_key,
         lb_policy,
+        degrade_threshold_override,
         session,
         remote_ip,
         query,
@@ -291,10 +331,10 @@ pub(crate) fn select_from_endpoint_slice(
 }
 
 #[cfg(test)]
-mod panic_tests {
+mod degrade_tests {
     use super::*;
+    use crate::backends::degrade_threshold::{configure_lb_degrade_default, get_degrade_threshold_store};
     use crate::backends::health::get_health_status_store;
-    use crate::backends::panic_threshold::{configure_lb_panic_default, get_panic_threshold_store};
     use crate::lb::compiled_selector;
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
     use pingora_load_balancing::Backend;
@@ -341,24 +381,54 @@ mod panic_tests {
     }
 
     #[test]
-    fn panic_off_all_unhealthy_returns_none() {
-        let _guard = crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK.lock();
-        let svc = "default/panic-off";
-        configure_lb_panic_default(0);
-        get_panic_threshold_store().set_service_threshold(svc, None);
+    fn degrade_off_all_unhealthy_returns_none() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
+        let svc = "default/degrade-off";
+        configure_lb_degrade_default(0);
+        get_degrade_threshold_store().set_service_threshold(svc, None);
         seed_cell(svc, 4);
         mark_all_unhealthy(svc, 4);
         assert!(select_roundrobin_backend_key(svc).is_none());
     }
 
     #[test]
-    fn panic_on_all_unhealthy_selects_backend() {
-        let _guard = crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK.lock();
-        let svc = "default/panic-on";
-        get_panic_threshold_store().set_service_threshold(svc, Some(50));
+    fn degrade_on_all_unhealthy_selects_backend() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
+        let svc = "default/degrade-on";
+        get_degrade_threshold_store().set_service_threshold(svc, Some(50));
         seed_cell(svc, 4);
         mark_all_unhealthy(svc, 4);
         assert!(select_roundrobin_backend_key(svc).is_some());
-        get_panic_threshold_store().set_service_threshold(svc, None);
+        get_degrade_threshold_store().set_service_threshold(svc, None);
+    }
+
+    #[test]
+    fn http_pick_uses_captured_degrade_override_not_store() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
+        let svc = "default/degrade-captured-http";
+        configure_lb_degrade_default(0);
+        get_degrade_threshold_store().set_service_threshold(svc, Some(100));
+        seed_cell(svc, 4);
+        mark_all_unhealthy(svc, 4);
+        let cell = compiled_selector::get_or_create_cell(svc);
+        let selector = cell.get_or_build(PolicyKind::RoundRobin);
+        let health_store = get_health_status_store();
+        let outlier_store = get_outlier_detection_store();
+        assert!(
+            !degrade_engaged_http(svc, &selector, &health_store, &outlier_store, None),
+            "HTTP/gRPC pick must use the EGC default when no override was captured, not DegradeThresholdStore"
+        );
+        assert!(degrade_engaged_http(
+            svc,
+            &selector,
+            &health_store,
+            &outlier_store,
+            Some(100)
+        ));
+        assert!(
+            degrade_engaged_l4(svc, &selector, &health_store, &outlier_store),
+            "L4 residual still reads the live degrade store"
+        );
+        get_degrade_threshold_store().set_service_threshold(svc, None);
     }
 }

@@ -419,6 +419,7 @@ mod tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
         ctx.push_upstream(None, None);
         ctx

@@ -52,8 +52,8 @@ pub mod names {
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
     pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
-    // Load-balancing panic mode: 1 = engaged, 0 = normal (per service)
-    pub const LB_PANIC_MODE: &str = "edgion_lb_panic_mode";
+    // Load-balancing degrade mode: 1 = engaged, 0 = normal (per service)
+    pub const LB_DEGRADE_MODE: &str = "edgion_lb_degrade_mode";
     // ACME HTTP-01 challenge lookup metrics
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
@@ -630,17 +630,17 @@ pub fn record_cb_rejection(service_key: &str) {
     counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
-/// Set the panic-mode gauge for a service: 1.0 when panic mode is engaged
+/// Set the degrade-mode gauge for a service: 1.0 when degrade mode is engaged
 /// (health filtering bypassed), 0.0 when selecting normally. Called from the
 /// selection path; cheap (atomic gauge set), no logging — Iron Rule 3 safe.
-pub fn record_lb_panic_mode(service_key: &str, engaged: bool) {
-    gauge!(names::LB_PANIC_MODE, "service" => service_key.to_string()).set(if engaged { 1.0 } else { 0.0 });
+pub fn record_lb_degrade_mode(service_key: &str, engaged: bool) {
+    gauge!(names::LB_DEGRADE_MODE, "service" => service_key.to_string()).set(if engaged { 1.0 } else { 0.0 });
 }
 
 /// Set the link-sys provider health gauge: 1.0 = healthy, 0.0 = unhealthy.
 ///
 /// Called on a healthy<->unhealthy transition and once at init() to establish a
-/// `=1` baseline. Free-function `gauge!` (like `record_lb_panic_mode`) keeps the
+/// `=1` baseline. Free-function `gauge!` (like `record_lb_degrade_mode`) keeps the
 /// series absent from `/metrics` until first emit. `link` cardinality = provider count.
 pub fn record_link_sys_health(name: &str, healthy: bool) {
     gauge!(names::LINK_SYS_HEALTH, "link" => name.to_string()).set(if healthy { 1.0 } else { 0.0 });
@@ -1004,7 +1004,7 @@ pub fn record_cb_shed(service_key: &str) {
 // and `record_geoip_denied` are not on the per-request hot path (the first two
 // are process-lifecycle state, the latter two fire from the background updater
 // and from an L4 connection-filter deny path respectively), so all four follow
-// the cold free-function `gauge!`/`counter!` pattern (like `record_lb_panic_mode`
+// the cold free-function `gauge!`/`counter!` pattern (like `record_lb_degrade_mode`
 // / `record_link_sys_health` above): the series is absent from `/metrics` until
 // the first call. `record_geoip_lookup_panic`, below, is the one exception in
 // this block — it fires from `GeoIpProvider::lookup`, which every geo-consuming
@@ -1305,14 +1305,14 @@ mod tests {
 }
 
 #[cfg(test)]
-mod lb_panic_metric_tests {
+mod lb_degrade_metric_tests {
     use super::*;
 
     #[test]
-    fn record_lb_panic_mode_does_not_panic() {
+    fn record_lb_degrade_mode_does_not_panic() {
         // Smoke test: the gauge set path is callable for engaged/cleared.
-        record_lb_panic_mode("default/svc", true);
-        record_lb_panic_mode("default/svc", false);
+        record_lb_degrade_mode("default/svc", true);
+        record_lb_degrade_mode("default/svc", false);
     }
 }
 
@@ -1323,7 +1323,7 @@ mod link_sys_health_metric_tests {
 
     #[test]
     fn record_link_sys_health_sets_gauge_and_does_not_panic() {
-        // Smoke: gauge set path is callable for both states (mirrors lb_panic smoke test).
+        // Smoke: gauge set path is callable for both states (mirrors lb_degrade smoke test).
         record_link_sys_health("default/kafka-main", true);
         record_link_sys_health("default/kafka-main", false);
     }

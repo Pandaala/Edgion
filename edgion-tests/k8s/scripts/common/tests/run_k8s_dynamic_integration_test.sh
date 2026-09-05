@@ -227,7 +227,7 @@ for triple in \
   'HTTPRoute/Backend/DnsResolution|HTTPRoute|Backend/DnsResolution' \
   'HTTPRoute/Backend/LBEwma|HTTPRoute|Backend/LBEwma' \
   'HTTPRoute/Backend/LBEwmaRetryOnStatus|HTTPRoute|Backend/LBEwmaRetryOnStatus' \
-  'HTTPRoute/Backend/PanicThreshold|HTTPRoute|Backend/PanicThreshold' \
+  'HTTPRoute/Backend/DegradeThreshold|HTTPRoute|Backend/DegradeThreshold' \
   'HTTPRoute/DanglingExtensionRef|HTTPRoute|DanglingExtensionRef' \
   'HTTPRoute/Delegation|HTTPRoute|Delegation' \
   'HTTPRoute/Filters/PercentMirror|HTTPRoute|Filters/PercentMirror' \

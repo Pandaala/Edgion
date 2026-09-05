@@ -325,9 +325,9 @@ spec:
                   type: object
                   description: "Gateway-wide load-balancing configuration"
                   properties:
-                    panicThreshold:
+                    degradeThreshold:
                       type: integer
-                      description: "Panic threshold percent (0-100); 0 disables panic mode"
+                      description: "Degrade threshold percent (0-100); 0 disables degrade mode"
                       format: int32
                       default: 0
                       minimum: 0

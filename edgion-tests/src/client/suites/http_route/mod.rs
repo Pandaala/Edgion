@@ -23,11 +23,11 @@ pub use sse_streaming::SseStreamingTestSuite;
 
 // Export sub-module tests
 pub use backend::{
-    BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite,
-    DnsResolutionFailureTestSuite, DnsResolutionTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite,
-    HealthCheckTestSuite, HealthCheckTransitionTestSuite, LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite,
-    LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite,
-    PanicThresholdTestSuite, PartiallyInvalidTestSuite, PerTryTimeoutTestSuite, RetryOnStatusTestSuite,
+    BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DegradeThresholdTestSuite, DnsFlapFailingTestSuite,
+    DnsFlapWorkingTestSuite, DnsResolutionFailureTestSuite, DnsResolutionTestSuite, GrpcHealthCheckTestSuite,
+    H2MtlsPersistenceTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite, LBConsistentHashTestSuite,
+    LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite,
+    LBRoundRobinTestSuite, PartiallyInvalidTestSuite, PerTryTimeoutTestSuite, RetryOnStatusTestSuite,
     SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite,
     SpWeightedInitialTestSuite, SpWeightedZeroWeightTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
 };

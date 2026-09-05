@@ -43,7 +43,7 @@ carry the same rules, graded into the three standard Prometheus severities:
   expiry < 7d, cert-rotation failing.
 - `warning` = **TICKET** (business hours) — cert expiry < 30d, abnormal resources,
   schema drift, FIPS host/module mismatch, TLS SAN mismatch, blacklist holes, LinkSys
-  unhealthy, wasm guest failing, LB panic, and the other operator-actionable sentinels.
+  unhealthy, wasm guest failing, LB degrade, and the other operator-actionable sentinels.
 - `info` = **log-only / board** (never pages) — high metric cardinality, cardinality
   guard active, SSRF egress blocks, outbound template fallback.
 
@@ -62,7 +62,7 @@ Every Edgion metric is classified `self` (gateway/controller own health) or `bus
 (tenant traffic outcomes) in the inventory. The split is documentation only — there is
 no runtime `category` label. Dashboards mirror the split (self vs business boards). A few
 `business` metrics (`ip_deny_entries_skipped`, `connection_rate_limit_redis_failure`,
-`lb_panic_mode`) are alerted as operational health — the category label is documentation,
+`lb_degrade_mode`) are alerted as operational health — the category label is documentation,
 not an alerting boundary.
 
 ## Deploy decision (is it shipped with Edgion?)

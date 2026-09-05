@@ -17,8 +17,8 @@
 //                                ejection+restore covered by CircuitBreaker suite.
 //   (3) LB algorithm select   -> lb_store_mapping (LeastConn/Ewma/ConsistentHash
 //                                + no-policy -> RoundRobin default = absent entry).
-//   (4) panic threshold       -> config round-trip asserted here; data-plane panic
-//                                behavior covered by PanicThreshold suite.
+//   (4) degrade threshold     -> config round-trip asserted here; data-plane degrade
+//                                behavior covered by DegradeThreshold suite.
 //   (5) hot reload            -> hot_reload_create_edit_delete.
 //   (6) conflict oldest-wins  -> conflict_oldest_wins_and_promotion.
 //   (7) resync survival       -> resync_service_churn (Service delete+recreate with

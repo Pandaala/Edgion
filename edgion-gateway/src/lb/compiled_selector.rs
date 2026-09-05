@@ -183,7 +183,7 @@ pub enum CompiledSelector {
 }
 
 impl CompiledSelector {
-    /// Borrow this selector's own backend list. Used by the panic-threshold
+    /// Borrow this selector's own backend list. Used by the degrade-threshold
     /// counting pass so the count and the selection walk operate on the exact
     /// same list (no `replace_backends` TOCTOU skew).
     fn backends_slice(&self) -> &[Arc<EdgionBackend>] {
@@ -195,12 +195,12 @@ impl CompiledSelector {
         }
     }
 
-    /// Decide whether panic mode should engage: count how many backends pass
+    /// Decide whether degrade mode should engage: count how many backends pass
     /// the (side-effect-free) `quiet` predicate, returning `true` when fewer
     /// than `floor` survive. Early-exits as soon as `floor` survivors are seen,
     /// so the common healthy case scans at most `floor` backends. `floor == 0`
-    /// disables panic (returns `false`).
-    pub fn panic_should_engage(&self, floor: usize, quiet: impl Fn(&EdgionBackend) -> bool) -> bool {
+    /// disables degrade mode (returns `false`).
+    pub fn degrade_should_engage(&self, floor: usize, quiet: impl Fn(&EdgionBackend) -> bool) -> bool {
         if floor == 0 {
             return false;
         }
@@ -466,7 +466,7 @@ pub fn try_get_cell(service_key: &str) -> Option<Arc<ServiceSelectorCell>> {
 }
 
 #[cfg(test)]
-mod panic_should_engage_tests {
+mod degrade_should_engage_tests {
     use super::*;
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
     use pingora_load_balancing::Backend;
@@ -491,10 +491,10 @@ mod panic_should_engage_tests {
     #[test]
     fn engages_when_survivors_below_floor() {
         let sel = rr_selector(10);
-        // floor for 50% of 10 = 5; only 4 healthy → panic.
+        // floor for 50% of 10 = 5; only 4 healthy → degrade mode.
         // Cell<u32> allows interior mutation through an Fn closure.
         let healthy = std::cell::Cell::new(0u32);
-        let engaged = sel.panic_should_engage(5, |_| {
+        let engaged = sel.degrade_should_engage(5, |_| {
             let h = healthy.get() + 1;
             healthy.set(h);
             h <= 4
@@ -505,15 +505,15 @@ mod panic_should_engage_tests {
     #[test]
     fn does_not_engage_when_survivors_reach_floor() {
         let sel = rr_selector(10);
-        // 6 healthy >= floor 5 → no panic; early-exit after the 5th survivor.
-        let engaged = sel.panic_should_engage(5, |_| true);
+        // 6 healthy >= floor 5 → no degrade; early-exit after the 5th survivor.
+        let engaged = sel.degrade_should_engage(5, |_| true);
         assert!(!engaged);
     }
 
     #[test]
     fn floor_zero_never_engages() {
         let sel = rr_selector(3);
-        assert!(!sel.panic_should_engage(0, |_| false));
+        assert!(!sel.degrade_should_engage(0, |_| false));
     }
 }
 

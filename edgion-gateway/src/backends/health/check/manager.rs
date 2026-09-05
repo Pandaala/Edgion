@@ -115,8 +115,12 @@ impl HealthCheckManager {
 /// `BackendTrafficPolicyStore` so the precedence rule can be unit-tested
 /// without spawning a `health_check_loop` task.
 fn resolve_probe_host(service_key: &str, config_host: Option<String>) -> Option<String> {
+    let target =
+        crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(service_key);
     get_backend_traffic_policy_store()
-        .get_authority(service_key)
+        .snapshot()
+        .get_effective(&target)
+        .and_then(|policy| policy.upstream_authority.clone())
         .and_then(|compiled| compiled.health_check_host.clone())
         .or(config_host)
 }
@@ -472,6 +476,49 @@ mod tests {
 
             let resolved = resolve_probe_host(&service_key, Some("configured-host".to_string()));
             assert_eq!(resolved, Some("probe.sandbox.internal".to_string()));
+        }
+
+        #[test]
+        fn publish_then_probe_sees_new_host() {
+            let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+            let ns = "hcresolve-d";
+            let svc = "svc";
+            let service_key = format!("{ns}/{svc}");
+            let policy_key = format!("{ns}/p1");
+
+            let first = policy_with_authority(
+                ns,
+                "p1",
+                svc,
+                Some(UpstreamAuthorityConfig {
+                    pattern: "*.sandbox.internal".to_string(),
+                    template: "${ctx:tenant}.sandbox.internal".to_string(),
+                    health_check_host: Some("probe-old.sandbox.internal".to_string()),
+                }),
+            );
+            let _installed = InstalledPolicy::install(&policy_key, &service_key, first);
+            assert_eq!(
+                resolve_probe_host(&service_key, Some("configured-host".to_string())),
+                Some("probe-old.sandbox.internal".to_string())
+            );
+
+            let second = policy_with_authority(
+                ns,
+                "p1",
+                svc,
+                Some(UpstreamAuthorityConfig {
+                    pattern: "*.sandbox.internal".to_string(),
+                    template: "${ctx:tenant}.sandbox.internal".to_string(),
+                    health_check_host: Some("probe-new.sandbox.internal".to_string()),
+                }),
+            );
+            let mut update = HashMap::new();
+            update.insert(policy_key, second);
+            get_backend_traffic_policy_store().partial_update_policies(HashMap::new(), update, HashSet::new());
+            assert_eq!(
+                resolve_probe_host(&service_key, Some("configured-host".to_string())),
+                Some("probe-new.sandbox.internal".to_string())
+            );
         }
 
         // No policy attached to the Service: the helper falls back to the

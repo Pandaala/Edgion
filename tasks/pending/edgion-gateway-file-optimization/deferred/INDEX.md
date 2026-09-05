@@ -84,7 +84,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
 | Conf-Sync rotation transactional address selection | pending | [task](../../../todo/conf-sync-rotation-transactional-address-selection.md) |
 | Fail closed on denied L4 backend references | pending | [task](../../../todo/l4-backend-ref-denied-fail-closed.md) |
-| Keep the load-balancer panic-mode gauge current across lifecycle exits | pending | [task](../../../todo/lb-panic-mode-metric-lifecycle.md) |
+| Keep the load-balancer degrade-mode gauge current across lifecycle exits | pending | [task](../../../todo/lb-degrade-mode-metric-lifecycle.md) |
 | Capture Service runtime health state once per load-balancer selection | pending | [task](../../../todo/lb-selection-service-runtime-state-capture.md) |
 | Run mTLS whitelist verification once for the leaf certificate | pending | [task](../../../todo/mtls-leaf-only-whitelist-verification.md) |
 | Define typed mTLS allowed SAN semantics | pending | [task](../../../todo/mtls-typed-allowed-san-semantics.md) |

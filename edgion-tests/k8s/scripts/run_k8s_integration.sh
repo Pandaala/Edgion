@@ -2376,7 +2376,7 @@ run_all_selected_suites() {
     "HTTPRoute/Backend/GrpcHealthCheck|HTTPRoute|Backend/GrpcHealthCheck"
     "HTTPRoute/Backend/DnsResolution|HTTPRoute|Backend/DnsResolution"
     "HTTPRoute/Backend/DnsResolutionFailure|HTTPRoute|Backend/DnsResolutionFailure"
-    "HTTPRoute/Backend/PanicThreshold|HTTPRoute|Backend/PanicThreshold"
+    "HTTPRoute/Backend/DegradeThreshold|HTTPRoute|Backend/DegradeThreshold"
     "HTTPRoute/DanglingExtensionRef|HTTPRoute|DanglingExtensionRef"
     "HTTPRoute/Delegation|HTTPRoute|Delegation"
     "HTTPRoute/Filters|HTTPRoute|Filters"

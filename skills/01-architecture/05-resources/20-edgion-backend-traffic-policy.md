@@ -26,6 +26,9 @@ arbitrates conflicts by oldest creation timestamp then policy name. Apply/delete
 affected policies through the EBTP workqueue.
 
 The Gateway publishes one immutable ArcSwap snapshot keyed by typed target. AI requests capture the
-complete effective-policy Arc for the selected backend; core Service retains its existing
-per-attempt lookups. HTTPRoute retry configuration authorizes retries, while
-`retryConstraint` only limits aggregate retry volume.
+complete effective-policy Arc for the selected backend at plan time. Core Service HTTP/gRPC
+requests capture the same Arc once at first `begin_upstream_attempt` onto
+`BackendContext.effective_policy` and reuse it for later attempts of that request. Health-check
+and outlier **status** stay live; only configuration (including the outlier handle Arc) is
+captured. HTTPRoute retry configuration authorizes retries, while `retryConstraint` only limits
+aggregate retry volume.

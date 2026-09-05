@@ -1747,6 +1747,12 @@ pub struct BackendContext {
     /// hot metric path falls back to the dynamic lookup when this is `None`.
     #[serde(skip)]
     pub backend_ref_idx: Option<usize>,
+    /// Captured Service `EdgionBackendTrafficPolicy` generation. Set once at
+    /// first `begin_upstream_attempt` and reused for retries. AI keeps its
+    /// own capture on `AiHttpState`.
+    #[serde(skip)]
+    pub effective_policy:
+        Option<std::sync::Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>>,
 }
 
 /// Session persistence state for the current request.
@@ -3935,6 +3941,7 @@ impl EdgionHttpContext {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx,
+            effective_policy: None,
         });
     }
 

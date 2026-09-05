@@ -166,10 +166,10 @@ impl Default for EdgionGatewayConfigHandler {
 /// default (`default_webhook_max_response_bytes`).
 const DEFAULT_WEBHOOK_MAX_RESPONSE_BYTES: usize = 16384;
 
-/// Default LB panic threshold when no `EdgionGatewayConfig` sets `load_balancing`.
-/// Must mirror `GLOBAL_DEFAULT`'s initial value (`panic_threshold.rs`): 0 = panic
-/// mode disabled (opt-in).
-const DEFAULT_LB_PANIC_THRESHOLD: u8 = 0;
+/// Default LB degrade threshold when no `EdgionGatewayConfig` sets `load_balancing`.
+/// Must mirror `GLOBAL_DEFAULT`'s initial value (`degrade_threshold.rs`): 0 =
+/// degrade mode disabled (opt-in).
+const DEFAULT_LB_DEGRADE_THRESHOLD: u8 = 0;
 
 /// Deterministically recompute the process-global LinkSys / load-balancing values
 /// from the **entire** config store and apply them.
@@ -181,7 +181,7 @@ const DEFAULT_LB_PANIC_THRESHOLD: u8 = 0;
 /// across all configs with an order-independent rule and fall back to the schema
 /// default when no config sets the field:
 ///   - webhook response cap: `min` — the strictest cap wins.
-///   - LB panic threshold:   `max` — panic mode engages as early as any config asks.
+///   - LB degrade threshold:   `max` — degrade mode engages as early as any config asks.
 fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
     let webhook_max = store
         .values()
@@ -192,18 +192,18 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
     configure_webhook_global_max(webhook_max);
 
     // Drop out-of-range thresholds before aggregating so one invalid config
-    // (`> 100`) cannot poison the `max` and silently disable panic mode for every
+    // (`> 100`) cannot poison the `max` and silently disable degrade mode for every
     // service — mirrors how the per-service annotation parser ignores invalid
     // values and falls back. If all configs are invalid the aggregate is empty and
     // we reset to the default.
-    let panic_threshold = store
+    let degrade_threshold = store
         .values()
         .filter_map(|config| config.spec.load_balancing.as_ref())
-        .map(|lb| lb.panic_threshold)
+        .map(|lb| lb.degrade_threshold)
         .filter(|&threshold| threshold <= 100)
         .max()
-        .unwrap_or(DEFAULT_LB_PANIC_THRESHOLD);
-    crate::backends::panic_threshold::configure_lb_panic_default(panic_threshold);
+        .unwrap_or(DEFAULT_LB_DEGRADE_THRESHOLD);
+    crate::backends::degrade_threshold::configure_lb_degrade_default(degrade_threshold);
 
     // Aggregate the cluster-wide outbound TLS default. Safest-wins on verify;
     // CA material and the client mTLS identity are independent policy axes and
@@ -358,7 +358,7 @@ mod tests {
     use std::collections::HashMap;
 
     // Serialize against every test module that mutates gateway-wide stores.
-    use crate::backends::panic_threshold::GLOBAL_STORE_TEST_LOCK as TEST_MUTEX;
+    use crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK as TEST_MUTEX;
 
     fn make_config(name: &str) -> EdgionGatewayConfig {
         EdgionGatewayConfig::new(
@@ -744,8 +744,8 @@ mod tests {
     }
 
     #[test]
-    fn test_load_balancing_panic_threshold_applied() {
-        use crate::backends::panic_threshold::get_lb_panic_default;
+    fn test_load_balancing_degrade_threshold_applied() {
+        use crate::backends::degrade_threshold::get_lb_degrade_default;
         use edgion_resources::resources::edgion_gateway_config::LoadBalancingConfig;
 
         let _g = TEST_MUTEX.lock();
@@ -753,14 +753,14 @@ mod tests {
 
         let handler = EdgionGatewayConfigHandler::new();
         let mut cfg = make_config("gw-pt");
-        cfg.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 50 });
+        cfg.spec.load_balancing = Some(LoadBalancingConfig { degrade_threshold: 50 });
 
         let mut data = HashMap::new();
         data.insert("gw-pt".to_string(), Arc::new(cfg));
         handler.full_set(&data);
 
-        assert_eq!(get_lb_panic_default(), 50);
-        crate::backends::panic_threshold::configure_lb_panic_default(0);
+        assert_eq!(get_lb_degrade_default(), 50);
+        crate::backends::degrade_threshold::configure_lb_degrade_default(0);
     }
 
     #[test]
@@ -806,71 +806,71 @@ mod tests {
     }
 
     #[test]
-    fn load_balancing_panic_threshold_aggregates_max_and_resets() {
-        use crate::backends::panic_threshold::{configure_lb_panic_default, get_lb_panic_default};
+    fn load_balancing_degrade_threshold_aggregates_max_and_resets() {
+        use crate::backends::degrade_threshold::{configure_lb_degrade_default, get_lb_degrade_default};
         use edgion_resources::resources::edgion_gateway_config::LoadBalancingConfig;
         let _g = TEST_MUTEX.lock();
         clear_store();
-        configure_lb_panic_default(0);
+        configure_lb_degrade_default(0);
         let handler = EdgionGatewayConfigHandler;
 
         let mut lo = make_config("lo");
-        lo.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 30 });
+        lo.spec.load_balancing = Some(LoadBalancingConfig { degrade_threshold: 30 });
         let mut hi = make_config("hi");
-        hi.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 70 });
+        hi.spec.load_balancing = Some(LoadBalancingConfig { degrade_threshold: 70 });
 
         let mut data = HashMap::new();
         data.insert("lo".to_string(), Arc::new(lo));
         data.insert("hi".to_string(), Arc::new(hi));
         handler.full_set(&data);
-        assert_eq!(get_lb_panic_default(), 70, "max threshold must win over hash order");
+        assert_eq!(get_lb_degrade_default(), 70, "max threshold must win over hash order");
 
         // Drop back to a single config; threshold follows the survivor.
         let mut only_lo = make_config("lo");
-        only_lo.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 30 });
+        only_lo.spec.load_balancing = Some(LoadBalancingConfig { degrade_threshold: 30 });
         let mut data2 = HashMap::new();
         data2.insert("lo".to_string(), Arc::new(only_lo));
         handler.full_set(&data2);
-        assert_eq!(get_lb_panic_default(), 30);
+        assert_eq!(get_lb_degrade_default(), 30);
 
         // Empty store resets to the disabled default.
         handler.full_set(&HashMap::new());
         assert_eq!(
-            get_lb_panic_default(),
+            get_lb_degrade_default(),
             0,
             "no load_balancing config must reset to disabled"
         );
 
-        configure_lb_panic_default(0);
+        configure_lb_degrade_default(0);
     }
 
     #[test]
     fn load_balancing_out_of_range_threshold_does_not_poison_max() {
-        use crate::backends::panic_threshold::{configure_lb_panic_default, get_lb_panic_default};
+        use crate::backends::degrade_threshold::{configure_lb_degrade_default, get_lb_degrade_default};
         use edgion_resources::resources::edgion_gateway_config::LoadBalancingConfig;
         let _g = TEST_MUTEX.lock();
         clear_store();
-        configure_lb_panic_default(0);
+        configure_lb_degrade_default(0);
         let handler = EdgionGatewayConfigHandler;
 
         // One config is out of range (>100); it must be ignored rather than win the
         // max and clamp the whole gateway to 0 (disabled).
         let mut good = make_config("good");
-        good.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 70 });
+        good.spec.load_balancing = Some(LoadBalancingConfig { degrade_threshold: 70 });
         let mut bad = make_config("bad");
-        bad.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 150 });
+        bad.spec.load_balancing = Some(LoadBalancingConfig { degrade_threshold: 150 });
 
         let mut data = HashMap::new();
         data.insert("good".to_string(), Arc::new(good));
         data.insert("bad".to_string(), Arc::new(bad));
         handler.full_set(&data);
         assert_eq!(
-            get_lb_panic_default(),
+            get_lb_degrade_default(),
             70,
             "out-of-range threshold must not poison the max"
         );
 
-        configure_lb_panic_default(0);
+        configure_lb_degrade_default(0);
     }
 
     #[test]

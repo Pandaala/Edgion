@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-08-31 |
-| Status | pending |
+| Status | implemented |
 | Type | refactor |
 | Priority | P1 |
 | Issue | N/A |
@@ -31,7 +31,7 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 
 - `BackendTrafficPolicyStore` publication and lookup model.
 - Core Service request consumers and typed effective-policy capture.
-- Health, outlier, panic-threshold, and authority reconciliation ordering needed for the new source of truth.
+- Health, outlier, degrade-threshold, and authority reconciliation ordering needed for the new source of truth.
 - Full and partial conf-sync publication tests.
 
 ### Out of scope
@@ -39,6 +39,15 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 - `EdgionBackendTrafficPolicy` schema changes or Service fan-out limits.
 - Route destination selection or weight semantics.
 - BackendTLSPolicy lookup semantics.
+
+## Document index
+
+| Document | Status | Notes |
+|----------|--------|-------|
+| [00-context.md](backend-traffic-policy-atomic-service-snapshot/00-context.md) | done | Skills and code index |
+| [01-design.md](backend-traffic-policy-atomic-service-snapshot/01-design.md) | draft | Spec: snapshot, publish, capture |
+| [02-implementation.md](backend-traffic-policy-atomic-service-snapshot/02-implementation.md) | draft | Task-by-task plan |
+| 03-subtasks.md | — | Covered by 02-implementation.md |
 
 ## Acceptance criteria
 
@@ -64,3 +73,5 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 | Date | Decision | Reason |
 |------|----------|--------|
 | 2026-08-31 | Defer implementation from the file audit. | Removing one compatibility map or adding a standalone index would leave mixed-generation readers; correctness requires migrating all request consumers and publication state together. |
+| 2026-09-04 | Lock snapshot+capture design before coding. | Spec and plan live in `backend-traffic-policy-atomic-service-snapshot/01-design.md` and `02-implementation.md`. Service captures at first `begin_upstream_attempt`; publish snapshot then reconcile probes; live connection counts stay on existing objects. Independent review required merging type+publish, capture+readers, incremental reverse-index patch, outbound `client.rs`, and documenting the L4 panic residual. |
+| 2026-09-05 | Second-round spec/plan review absorbed. | Four independent reviews (publication, capture call-graph, plan completeness, side-effects). Locked: Task 1 snapshot shims so DashMap delete still compiles; AI outlier handle materialized at effective-build; `target_keys` dedup + `retain(!ptr_eq)` patch; `reverse_index_equivalent` like TLS; no-bump skips side effects; Service/gRPC capture has no `selected_backend` gate; split `panic_engaged`; delete Service `resolve_connect_deadline`; AC 1/3 tests move to Task 2. |

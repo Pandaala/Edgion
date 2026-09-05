@@ -78,7 +78,7 @@ spec:
 
   # ─── Load balancing ───
   loadBalancing:
-    panicThreshold: 0                       # uint8 0-100; default 0 (disabled). When the healthy-backend fraction
+    degradeThreshold: 0                       # uint8 0-100; default 0 (disabled). When the healthy-backend fraction
                                             # drops below this percent, ignore health filtering and route across all
                                             # backends. 0 = disabled. Per-Service annotation overrides this value.
 
@@ -191,7 +191,7 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `panicThreshold` | `u8` | `0` | Global panic threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + outlier-detection filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables panic mode. A per-Service `EdgionBackendTrafficPolicy`'s `spec.loadBalancer.panicThreshold` overrides this global default for its target Service(s). Prometheus gauge `edgion_lb_panic_mode{service}` = 1 while panic mode is engaged. |
+| `degradeThreshold` | `u8` | `0` | Global degrade threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + outlier-detection filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables degrade mode. A per-Service `EdgionBackendTrafficPolicy`'s `spec.loadBalancer.degradeThreshold` overrides this global default for its target Service(s). Prometheus gauge `edgion_lb_degrade_mode{service}` = 1 while degrade mode is engaged. |
 
 > Default `0` matches Istio's Kubernetes default. Enable (e.g. `50`) only for services with larger backend pools (≈ ≥ 5 endpoints); see [03-resources/20-edgion-backend-traffic-policy.md](../03-resources/20-edgion-backend-traffic-policy.md) for the full rationale and the per-Service override.
 

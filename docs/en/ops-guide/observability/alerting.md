@@ -51,7 +51,7 @@ does not restate the per-reason reasoning.
 | EdgionIpDenyEntriesSkipped | deny-CIDR entries skipped — blacklist hole (fail-open) | 5m |
 | EdgionLinkSysUnhealthy | a LinkSys provider is unhealthy | 10m |
 | EdgionWasmGuestFailing | wasm guest trapping or failing closed | 5m |
-| EdgionLbPanicMode | load-balancer panic mode engaged | 5m |
+| EdgionLbDegradeMode | load-balancer degrade mode engaged | 5m |
 | EdgionUnexpectedApplyDuringInit | apply during init — watcher-stream anomaly (should stay 0) | 5m |
 | EdgionConnRateLimitRedisFailure | L4 rate-limit Redis failure (fail-open visibility) | 5m |
 | EdgionStatusConditionsHigh | a single resource's `.status.conditions` array is bloated past the threshold — a status-write loop (single-controller death-loop) or cross-controller condition pollution | 10m |
@@ -91,5 +91,5 @@ arrays are each individually small.)
 
 The inventory tags each metric `self` or `business`, but that split is documentation
 only (there is no runtime `category` label). A few `business` metrics
-(`ip_deny_entries_skipped`, `connection_rate_limit_redis_failure`, `lb_panic_mode`) are
+(`ip_deny_entries_skipped`, `connection_rate_limit_redis_failure`, `lb_degrade_mode`) are
 alerted here as operational health — the category tag is not an alerting boundary.

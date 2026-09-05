@@ -5,7 +5,7 @@ pub use backend_tls::{
     create_backend_tls_policy_handler, get_global_backend_tls_policy_store, BackendTLSPolicyStore,
     BackendTLSPolicyStoreStats,
 };
-pub use backend_traffic::{create_backend_traffic_policy_handler, get_backend_traffic_policy_store, resolve_lb_policy};
+pub use backend_traffic::{create_backend_traffic_policy_handler, get_backend_traffic_policy_store};
 
 use crate::backends::port_resolver::resolve_port_name;
 use crate::backends::LogicalBackendHandle;

@@ -105,9 +105,9 @@ layer has no plugin chain to attach a declaration to.
 | `edgion.io/dns-resolver-ref` | `namespace/name` | Service httpdns LinkSys override for both planes |
 
 Active health checks, outlier detection (passive ejection / circuit breaking), and
-the per-Service panic-threshold override are **not** annotations — they are
+the per-Service degrade-threshold override are **not** annotations — they are
 configured via the `EdgionBackendTrafficPolicy` CRD (`spec.healthCheck`,
-`spec.outlierDetection`, `spec.loadBalancer.panicThreshold`), attached to a
+`spec.outlierDetection`, `spec.loadBalancer.degradeThreshold`), attached to a
 Service via `targetRefs`. See
 [03-resources/20-edgion-backend-traffic-policy.md](../03-resources/20-edgion-backend-traffic-policy.md)
 for the full schema, defaults, and conflict semantics.

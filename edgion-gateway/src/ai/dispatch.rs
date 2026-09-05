@@ -909,10 +909,13 @@ mod tests {
         let policy = Arc::new(EffectiveBackendTrafficPolicy {
             resolved_target_class:
                 edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Ai,
+            winning_policy_key: "default/policy".to_string(),
             load_balancer: None,
+            degrade_threshold_override: None,
             upstream_authority: None,
             upstream_authority_config: None,
             retry_budget: Some(Arc::clone(&budget)),
+            retry_constraint: None,
             circuit_breaker_limit: None,
             connect_timeout: None,
             outlier_detection: None,

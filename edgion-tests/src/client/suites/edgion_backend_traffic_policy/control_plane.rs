@@ -358,14 +358,14 @@ impl EdgionBackendTrafficPolicyTestSuite {
         )
     }
 
-    // (1)(2)(4) Config round-trip: a full policy (LB + panicThreshold +
+    // (1)(2)(4) Config round-trip: a full policy (LB + degradeThreshold +
     // healthCheck + outlierDetection) reaches the gateway intact — asserted via
     // the synced-resource list. The data-plane effects of each section are
-    // covered by the HealthCheck / CircuitBreaker / PanicThreshold suites.
+    // covered by the HealthCheck / CircuitBreaker / DegradeThreshold suites.
     fn test_full_policy_roundtrips_via_configclient() -> TestCase {
         TestCase::new(
             "full_policy_roundtrips_via_configclient",
-            "A policy carrying LB+panic+healthCheck+outlierDetection round-trips to the gateway config store",
+            "A policy carrying LB+degrade+healthCheck+outlierDetection round-trips to the gateway config store",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -378,7 +378,7 @@ impl EdgionBackendTrafficPolicyTestSuite {
                         return TestResult::failed(start.elapsed(), e);
                     }
 
-                    let body = "  loadBalancer:\n    type: LeastConn\n    panicThreshold: 40\n  healthCheck:\n    active:\n      type: http\n      path: /health\n      interval: 1s\n      expectedStatuses:\n        - 200\n  outlierDetection:\n    consecutiveErrors: 3\n    ejectionTime: 3s\n";
+                    let body = "  loadBalancer:\n    type: LeastConn\n    degradeThreshold: 40\n  healthCheck:\n    active:\n      type: http\n      path: /health\n      interval: 1s\n      expectedStatuses:\n        - 200\n  outlierDetection:\n    consecutiveErrors: 3\n    ejectionTime: 3s\n";
                     if let Err(e) = ctx.apply_yaml(&lb_policy_yaml(name, svc, body)).await {
                         cleanup_policies(&ctx, &[name]).await;
                         cleanup_services(&ctx, &[svc]).await;
@@ -417,19 +417,19 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     };
                     let has_hc = p.pointer("/spec/healthCheck/active").is_some();
                     let has_od = p.pointer("/spec/outlierDetection").is_some();
-                    let has_pt = p.pointer("/spec/loadBalancer/panicThreshold").is_some();
+                    let has_pt = p.pointer("/spec/loadBalancer/degradeThreshold").is_some();
                     let resolved_as_service =
                         p.pointer("/spec/resolvedTargetClass").and_then(Value::as_str) == Some("service");
                     if has_hc && has_od && has_pt && resolved_as_service {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "full policy round-tripped with service target marker: healthCheck+outlierDetection+panicThreshold all present".to_string(),
+                            "full policy round-tripped with service target marker: healthCheck+outlierDetection+degradeThreshold all present".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "synced policy mismatch: healthCheck={}, outlierDetection={}, panicThreshold={}, resolvedTargetClass=service:{}",
+                                "synced policy mismatch: healthCheck={}, outlierDetection={}, degradeThreshold={}, resolvedTargetClass=service:{}",
                                 has_hc, has_od, has_pt, resolved_as_service
                             ),
                         )

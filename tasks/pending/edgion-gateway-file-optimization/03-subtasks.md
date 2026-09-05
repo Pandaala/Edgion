@@ -51,7 +51,7 @@
 | `backends-discovery-shared` | 3 | 1 | 1 | 1 | complete |
 | `backends-health` | 6 | 2 | 3 | 1 | complete |
 | `backends-outlier` | 4 | 2 | 2 | 0 | complete |
-| `backends-panic-threshold` | 1 | 1 | 0 | 0 | complete |
+| `backends-degrade-threshold` | 1 | 1 | 0 | 0 | complete |
 | `backends-policy-root` | 1 | 0 | 1 | 0 | complete |
 | `backends-policy-tls` | 3 | 1 | 2 | 0 | complete |
 | `backends-policy-traffic` | 5 | 0 | 5 | 0 | complete |
@@ -205,7 +205,7 @@
 | `edgion-gateway/src/backends/outlier_detection/mod.rs` | `backends-outlier` | source | examined-no-change | `B0042`: coherent outlier module façade retained |
 | `edgion-gateway/src/backends/outlier_detection/state.rs` | `backends-outlier` | source | changed | `B0042`: deterministic test-only deadline expiry removes wall-clock recovery sleeps |
 | `edgion-gateway/src/backends/outlier_detection/store.rs` | `backends-outlier` | source | changed | `B0042`: deterministic recovery/backoff tests; detached gauge lifecycle deferred to D0006 |
-| `edgion-gateway/src/backends/panic_threshold.rs` | `backends-panic-threshold` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
+| `edgion-gateway/src/backends/degrade_threshold.rs` | `backends-degrade-threshold` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/peer_builder.rs` | `backends-core` | source | changed | `B0043`: preserved complete upstream mTLS client chains and removed peer-construction allocations |
 | `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | `backends-policy-tls` | source | changed | BACKENDS-POLICY-TLS-001 / `f4acade9`, `c34041f3`; fail-close validation and true incremental publication deferred to dedicated TODOs |
 | `edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs` | `backends-policy-tls` | source | examined-no-change | BACKENDS-POLICY-TLS-001: Arc-preserving count-only conf-sync adapter retained |

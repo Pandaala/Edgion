@@ -2,22 +2,23 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
-pub struct PanicThresholdTestSuite;
+pub struct DegradeThresholdTestSuite;
 
-impl PanicThresholdTestSuite {
-    /// With a 50% panic threshold and every backend marked unhealthy by a
+impl DegradeThresholdTestSuite {
+    /// With a 50% degrade threshold and every backend marked unhealthy by a
     /// misconfigured health-check path, the gateway must ignore health filtering
     /// and keep routing to the (actually serving) backend — returning 200 rather
-    /// than the 503 a non-panic gateway returns once the pool goes all-unhealthy.
+    /// than the 503 a gateway without degrade mode returns once the pool goes
+    /// all-unhealthy.
     ///
     /// The sibling HealthCheck suite (`unhealthy_backend_filtered`) proves the
-    /// same probe config returns 503 WITHOUT a panic threshold, so here we only
+    /// same probe config returns 503 WITHOUT a degrade threshold, so here we only
     /// need to confirm that, well after the unhealthy transition would have
     /// happened, requests still succeed (and never flip to 503).
-    fn test_panic_mode_serves_all_unhealthy() -> TestCase {
+    fn test_degrade_mode_serves_all_unhealthy() -> TestCase {
         TestCase::new(
-            "panic_mode_serves_all_unhealthy",
-            "Panic threshold routes to all backends when the whole pool is unhealthy",
+            "degrade_mode_serves_all_unhealthy",
+            "Degrade threshold routes to all backends when the whole pool is unhealthy",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -25,8 +26,8 @@ impl PanicThresholdTestSuite {
 
                     // unhealthyThreshold=1, interval=1s. By ~4s (iteration 8 at
                     // 500ms) the backend is certainly marked unhealthy, so any
-                    // 200 from that point on can only come from panic mode, and a
-                    // 503 means panic did NOT engage.
+                    // 200 from that point on can only come from degrade mode, and a
+                    // 503 means degrade mode did NOT engage.
                     const TRANSITION_DONE_ITER: usize = 8;
                     let mut observed_statuses = Vec::new();
 
@@ -47,7 +48,7 @@ impl PanicThresholdTestSuite {
                                             return TestResult::passed_with_message(
                                                 start.elapsed(),
                                                 format!(
-                                                    "Panic mode served 200 after unhealthy transition, statuses: {:?}",
+                                                    "Degrade mode served 200 after unhealthy transition, statuses: {:?}",
                                                     observed_statuses
                                                 ),
                                             );
@@ -56,7 +57,7 @@ impl PanicThresholdTestSuite {
                                             return TestResult::failed(
                                                 start.elapsed(),
                                                 format!(
-                                                    "Expected 200 via panic mode, got 503 (panic did not engage), statuses: {:?}",
+                                                    "Expected 200 via degrade mode, got 503 (degrade did not engage), statuses: {:?}",
                                                     observed_statuses
                                                 ),
                                             );
@@ -68,7 +69,7 @@ impl PanicThresholdTestSuite {
                             Err(e) => {
                                 return TestResult::failed(
                                     start.elapsed(),
-                                    format!("Request failed while waiting for panic mode: {}", e),
+                                    format!("Request failed while waiting for degrade mode: {}", e),
                                 );
                             }
                         }
@@ -90,16 +91,16 @@ impl PanicThresholdTestSuite {
 }
 
 #[async_trait]
-impl TestSuite for PanicThresholdTestSuite {
+impl TestSuite for DegradeThresholdTestSuite {
     fn name(&self) -> &str {
-        "PanicThreshold"
+        "DegradeThreshold"
     }
 
     fn port_key(&self) -> Option<&str> {
-        Some("HTTPRoute/Backend/PanicThreshold")
+        Some("HTTPRoute/Backend/DegradeThreshold")
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_panic_mode_serves_all_unhealthy()]
+        vec![Self::test_degrade_mode_serves_all_unhealthy()]
     }
 }

@@ -115,7 +115,7 @@
 | edgion_circuit_breaker_ejected_endpoints | Gauge | gateway | service | business | Currently ejected endpoint count per service | - |
 | edgion_circuit_breaker_rejections_total | Counter | gateway | service | business | Requests blocked by an already-ejected backend | - |
 | edgion_gateway_circuit_breaker_shed_total | Counter | gateway | service | business | Requests shed by the per-endpoint circuit-breaker concurrency cap (`CbPermit::try_acquire` at cap) — distinct from the outlier-detection ejection/rejection metrics above, which trip on backend health rather than in-flight count | - |
-| edgion_lb_panic_mode | Gauge | gateway | service | business | 1 when load-balancer panic mode is engaged for the named service (healthy fraction below the configured threshold), 0 when normal | - |
+| edgion_lb_degrade_mode | Gauge | gateway | service | business | 1 when load-balancer degrade mode is engaged for the named service (healthy fraction below the configured threshold), 0 when normal | - |
 | edgion_rr_selector_truncated_total | Counter | gateway | none | business | RoundRobin selector backend-count truncation (backend count exceeded `u16::MAX`) — an alarm for an extreme configuration anomaly | - |
 | edgion_region_route_overlay_events_total | Counter | gateway | result (overlay_missing/overlay_disabled/overlay_type_mismatch/overlay_invalid) | business | `RegionRoute` overlay resolution events (fail-to-base outcomes when an EdgionConfigData overlay is missing, disabled, mismatched, or invalid) | - |
 | edgion_acme_challenge_lookup_total | Counter | gateway | result (hit/expired/domain_mismatch/not_found/empty_host) | business | ACME HTTP-01 challenge token lookup outcomes | - |

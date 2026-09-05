@@ -74,7 +74,7 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tcp_timeout: Option<TcpTimeout>,
 
-    /// Load-balancing-wide settings (panic threshold, etc.).
+    /// Load-balancing-wide settings (degrade threshold, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancing: Option<LoadBalancingConfig>,
 
@@ -442,13 +442,13 @@ fn default_tcp_connect_timeout() -> String {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadBalancingConfig {
-    /// Panic threshold percent (0-100). When the fraction of healthy backends
+    /// Degrade threshold percent (0-100). When the fraction of healthy backends
     /// for a service drops below this percent, the gateway ignores health
     /// filtering and load-balances across all backends. 0 (default) disables
-    /// panic mode. An EdgionBackendTrafficPolicy's `loadBalancer.panicThreshold`
+    /// degrade mode. An EdgionBackendTrafficPolicy's `loadBalancer.degradeThreshold`
     /// overrides this for its target Services.
     #[serde(default)]
-    pub panic_threshold: u8,
+    pub degrade_threshold: u8,
 }
 
 /// Secure default idle timeout applied to every L4 relay when the operator

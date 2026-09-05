@@ -63,9 +63,9 @@ spec:
                         key:
                           type: string
                           description: "Header/cookie/query-param name to hash on. Omit for sourceIp (conditional validation runs at controller ingest)."
-                    panicThreshold:
+                    degradeThreshold:
                       type: integer
-                      description: "Percent 0-100. Overrides the global EdgionGatewayConfig.spec.loadBalancing.panicThreshold for the target"
+                      description: "Percent 0-100. Overrides the global EdgionGatewayConfig.spec.loadBalancing.degradeThreshold for the target"
                       minimum: 0
                       maximum: 100
                 healthCheck:

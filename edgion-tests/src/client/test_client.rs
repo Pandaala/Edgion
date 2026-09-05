@@ -1595,8 +1595,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 Http,
             ));
             runner.add_suite(framework::with_listener(
-                Box::new(suites::PanicThresholdTestSuite),
-                "HTTPRoute/Backend/PanicThreshold",
+                Box::new(suites::DegradeThresholdTestSuite),
+                "HTTPRoute/Backend/DegradeThreshold",
                 Http,
             ));
             runner.add_suite(framework::with_listener(
@@ -1689,12 +1689,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
         }
-        "HTTPRoute/Backend/PanicThreshold" => {
+        "HTTPRoute/Backend/DegradeThreshold" => {
             if !gateway {
-                eprintln!("Error: PanicThreshold tests require --gateway flag");
+                eprintln!("Error: DegradeThreshold tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
+            runner.add_suite(Box::new(suites::DegradeThresholdTestSuite));
         }
         "HTTPRoute/Backend/GrpcHealthCheck" => {
             if !gateway {
@@ -3188,8 +3188,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                     Http,
                 ));
                 runner.add_suite(framework::with_listener(
-                    Box::new(suites::PanicThresholdTestSuite),
-                    "HTTPRoute/Backend/PanicThreshold",
+                    Box::new(suites::DegradeThresholdTestSuite),
+                    "HTTPRoute/Backend/DegradeThreshold",
                     Http,
                 ));
                 runner.add_suite(framework::with_listener(

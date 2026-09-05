@@ -36,13 +36,13 @@ one onto the other.
   path, and no per-route carrier anymore.
 - The gateway's `BackendTrafficPolicyStore`
   (`backends/policy/backend_traffic/store.rs`) resolves the oldest-wins
-  winning policy per Service key and caches the result in its
-  `lb_policies: DashMap<service_key, ParsedLBPolicy>`. The backend selector
-  (`backends/selector.rs::policy_to_kind`) maps `ParsedLBPolicy` onto the
+  winning policy per typed Service key and publishes `load_balancer` on the
+  immutable effective snapshot. HTTP/gRPC selection reads the request-captured
+  `ParsedLBPolicy`, not a live store helper. The backend selector
+  (`backends/selector.rs::policy_to_kind`) maps that policy onto the
   request-path `PolicyKind` used by `ServiceSelectorCell`.
 - When not configured (no policy, or `loadBalancer.type: RoundRobin`),
-  RoundRobin is used by default — `resolve_lb_policy(service_key)` returns
-  `None`.
+  RoundRobin is used by default — the captured `load_balancer` is `None`.
 
 ## EWMA and LeastConn selection algorithm
 

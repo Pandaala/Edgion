@@ -115,7 +115,7 @@ client-authored bytes.
 | `edgion.io/expose-client-cert` | `EdgionTls` | Exposes mTLS client certificate info to the plugin/session layer |
 
 Service-level backend behavior (active health checks, outlier detection,
-panic threshold, load-balancing algorithm) is **not** an annotation — it is
+degrade threshold, load-balancing algorithm) is **not** an annotation — it is
 configured via the `EdgionBackendTrafficPolicy` CRD, attached to a Service via
 `spec.targetRefs`. See
 [`skills/02-features/03-resources/20-edgion-backend-traffic-policy.md`](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md)

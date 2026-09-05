@@ -9,7 +9,7 @@ spec:
       name: panic-svc
   loadBalancer:
     type: RoundRobin
-    panicThreshold: 50
+    degradeThreshold: 50
   healthCheck:
     active:
       type: http

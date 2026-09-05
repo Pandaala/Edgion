@@ -283,7 +283,7 @@ pub async fn upstream_peer(
     // its own shed. Bypass paths (DirectEndpoint / ExternalJump) carry no service
     // key and no `lb_edgion_backend`, so this is a no-op for them.
     if let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.clone()) {
-        if let Some(max) = get_backend_traffic_policy_store().get_circuit_breaker_limit(&service_key) {
+        if let Some(max) = selected_effective_policy(ctx).and_then(|policy| policy.circuit_breaker_limit) {
             if let Some(chosen_backend) = ctx.get_current_upstream().and_then(|u| u.lb_edgion_backend.clone()) {
                 // Release any permit this request acquired on a PRIOR attempt
                 // before re-acquiring. On retry, Pingora re-enters upstream_peer
@@ -434,15 +434,15 @@ fn apply_upstream_authority(
         ctx.upstream_authority = None;
         return Ok(());
     }
-    // Borrow instead of `.clone()`-ing the service key: the design budget is one
-    // DashMap get per request on the common (no-policy) path, and this borrow
-    // ends at the `get_authority` call below, so there is no borrowck conflict
-    // with the mutable `ctx.upstream_authority` write in either early return.
-    let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref()) else {
-        ctx.upstream_authority = None;
-        return Ok(());
-    };
-    let Some(compiled) = get_backend_traffic_policy_store().get_authority(service_key) else {
+    // Read the request-captured compiled authority. The mutable
+    // `ctx.upstream_authority` write is only on the early-return / render
+    // paths after this immutable borrow ends.
+    let Some(compiled) = ctx
+        .backend_context
+        .as_ref()
+        .and_then(|bc| bc.effective_policy.as_ref())
+        .and_then(|policy| policy.upstream_authority.clone())
+    else {
         ctx.upstream_authority = None;
         return Ok(());
     };
@@ -1056,6 +1056,7 @@ fn apply_upstream_read_timeout_override(
 /// failure. The BTP override can never be zero (struct validation rejects it),
 /// so this only guards a degenerate global config.
 #[inline]
+#[cfg(test)]
 fn resolve_connect_deadline(service_key: Option<&str>, global: std::time::Duration) -> Option<std::time::Duration> {
     let d = service_key
         .and_then(|k| get_backend_traffic_policy_store().get_connect_timeout(k))
@@ -1119,19 +1120,14 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     // establishment is infrastructure overhead, and conflating the two would let a
     // tight per-try request bound cause spurious connect-time 504s. A zero resolved
     // deadline (degenerate `defaultConnectTimeout: "0s"`) yields None => left unset,
-    // never an instant-fail connect (see resolve_connect_deadline).
-    let service_key = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref());
+    // never an instant-fail connect. Service/gRPC use only the captured
+    // `connect_timeout`; they do not re-read the store.
     let captured_timeout = selected_effective_policy(ctx).and_then(|policy| policy.connect_timeout);
     let selected_is_logical_backend = ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai);
-    let service_timeout = if selected_is_logical_backend {
-        None
-    } else {
-        resolve_connect_deadline(service_key, backend_timeout.connect_timeout)
-    };
     let connect_deadline = choose_typed_connect_deadline(
         selected_is_logical_backend,
         captured_timeout,
-        service_timeout,
+        captured_timeout,
         backend_timeout.connect_timeout,
     );
     if let Some(connect_deadline) = connect_deadline {
@@ -1212,6 +1208,7 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);
+    capture_service_effective_policy(ctx);
 
     if ctx.upstream_start_time.is_none() {
         ctx.upstream_start_time = Some(std::time::Instant::now());
@@ -1241,23 +1238,36 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 /// Case 1.5, `pg_upstream_response_filter`).
 #[inline]
 pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc<RetryBudget>> {
-    let captured_budget = selected_effective_policy(ctx)
+    selected_effective_policy(ctx)
         .and_then(|policy| policy.retry_budget.as_ref())
-        .map(std::sync::Arc::clone);
-    if captured_budget.is_some() || ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
-        return captured_budget;
+        .map(std::sync::Arc::clone)
+}
+
+fn capture_service_effective_policy(ctx: &mut EdgionHttpContext) {
+    if ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
+        return;
     }
-    let service_key = ctx.backend_context.as_ref()?.service_key.as_deref()?;
-    get_backend_traffic_policy_store().get_retry_budget(service_key)
+    let Some(backend_context) = ctx.backend_context.as_mut() else {
+        return;
+    };
+    if backend_context.effective_policy.is_some() {
+        return;
+    }
+    let Some(service_key) = backend_context.service_key.as_deref() else {
+        return;
+    };
+    let target =
+        crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(service_key);
+    backend_context.effective_policy = get_backend_traffic_policy_store().snapshot().get_effective(&target);
 }
 
 fn selected_effective_policy(
     ctx: &EdgionHttpContext,
 ) -> Option<&std::sync::Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy>> {
-    match ctx.selected_backend.as_ref()? {
-        SelectedHttpBackend::Ai(_) => ctx.ai_state().and_then(|state| state.effective_policy.as_ref()),
-        SelectedHttpBackend::Service(_) | SelectedHttpBackend::Invalid(_) => None,
+    if ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
+        return ctx.ai_state().and_then(|state| state.effective_policy.as_ref());
     }
+    ctx.backend_context.as_ref()?.effective_policy.as_ref()
 }
 
 #[inline]
@@ -1314,6 +1324,7 @@ async fn try_ai_backend_peer(
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: Some(target.selected.logical().slot()),
+        effective_policy: None,
     });
     ctx.ensure_ai_state().effective_policy = target.selected.effective_policy.clone();
 
@@ -1446,6 +1457,7 @@ async fn try_external_jump_peer(
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
     }
 
@@ -1714,6 +1726,7 @@ mod tests {
     use crate::backends::policy::backend_traffic::authority::AuthorityError;
     use crate::backends::policy::backend_traffic::RetryBudget;
     use crate::backends::ServiceBackendKind;
+    use crate::ctx::BackendSource;
     use crate::plugins::PluginRuntime;
     use crate::routes::http::match_unit::{CompiledBackend, CompiledBackendTarget};
     use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
@@ -2340,23 +2353,56 @@ mod tests {
     use super::{choose_typed_connect_deadline, resolve_connect_deadline};
     use crate::backends::policy::backend_traffic::store::{get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK};
 
-    #[test]
-    fn configure_peer_timeouts_uses_btp_connect_override() {
+    fn capture_service_ctx(service_key: &str) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: Some(service_key.to_string()),
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+            effective_policy: None,
+        });
+        super::begin_upstream_attempt(&mut ctx);
+        ctx
+    }
+
+    fn captured_policy(
+        ctx: &EdgionHttpContext,
+    ) -> Arc<crate::backends::policy::backend_traffic::EffectiveBackendTrafficPolicy> {
+        ctx.backend_context
+            .as_ref()
+            .and_then(|bc| bc.effective_policy.clone())
+            .expect("service policy captured")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn service_policy_fields(
+        ns: &str,
+        name: &str,
+        svc: &str,
+        lb: Option<edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType>,
+        degrade_threshold: Option<u8>,
+        health_check_host: Option<&str>,
+        retry_percent: Option<u8>,
+        connect_timeout: Option<&str>,
+        cb_limit: Option<u32>,
+    ) -> Arc<edgion_resources::resources::EdgionBackendTrafficPolicy> {
+        use edgion_resources::resources::circuit_breaker::CircuitBreakerConfig;
         use edgion_resources::resources::edgion_backend_traffic_policy::{
-            ConnectionOverride, EdgionBackendTrafficPolicySpec, PolicyTargetRef,
+            BudgetDetails, ConnectionOverride, EdgionBackendTrafficPolicySpec, LoadBalancerConfig, PolicyTargetRef,
+            RetryConstraintConfig,
         };
+        use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
         use edgion_resources::resources::EdgionBackendTrafficPolicy;
         use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
-        use std::sync::Arc;
 
-        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
-        let store = get_backend_traffic_policy_store();
-        let key = "default/svc";
-
-        let policy = Arc::new(EdgionBackendTrafficPolicy {
+        Arc::new(EdgionBackendTrafficPolicy {
             metadata: ObjectMeta {
-                name: Some("p1".to_string()),
-                namespace: Some("default".to_string()),
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
                 creation_timestamp: Some(Time("2026-01-01T00:00:00Z".parse().expect("rfc3339"))),
                 ..Default::default()
             },
@@ -2364,38 +2410,95 @@ mod tests {
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),
-                    name: "svc".to_string(),
+                    name: svc.to_string(),
                 }],
                 resolved_target_class: Some(
                     edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
                 ),
-                load_balancer: None,
+                load_balancer: lb.map(|r#type| LoadBalancerConfig {
+                    r#type,
+                    consistent_hash: None,
+                    degrade_threshold,
+                }),
                 health_check: None,
                 outlier_detection: None,
-                upstream_authority: None,
-                retry_constraint: None,
-                circuit_breaker: None,
-                connection: Some(ConnectionOverride {
-                    connect_timeout: Some("123ms".to_string()),
+                upstream_authority: health_check_host.map(|host| UpstreamAuthorityConfig {
+                    pattern: "*.sandbox.internal".to_string(),
+                    template: "${ctx:tenant}.sandbox.internal".to_string(),
+                    health_check_host: Some(host.to_string()),
+                }),
+                retry_constraint: retry_percent.map(|percent| RetryConstraintConfig {
+                    budget: BudgetDetails {
+                        percent,
+                        interval: "10s".to_string(),
+                    },
+                    min_retry_rate: None,
+                }),
+                circuit_breaker: cb_limit.map(|max_parallel_requests| CircuitBreakerConfig { max_parallel_requests }),
+                connection: connect_timeout.map(|connect_timeout| ConnectionOverride {
+                    connect_timeout: Some(connect_timeout.to_string()),
                 }),
             },
             status: None,
-        });
-        let mut add = std::collections::HashMap::new();
-        add.insert("default/p1".to_string(), policy);
-        store.partial_update_policies(add, std::collections::HashMap::new(), std::collections::HashSet::new());
+        })
+    }
 
+    #[test]
+    fn configure_peer_timeouts_service_does_not_call_get_connect_timeout() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "to-cap/p1".to_string(),
+            service_policy_fields(
+                "to-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                None,
+                None,
+                Some("123ms"),
+                None,
+            ),
+        )]));
+
+        let ctx = capture_service_ctx("to-cap/svc");
+        let captured = captured_policy(&ctx);
+        assert_eq!(captured.connect_timeout, Some(Duration::from_millis(123)));
+
+        store.full_set_policies(std::collections::HashMap::from([(
+            "to-cap/p1".to_string(),
+            service_policy_fields(
+                "to-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                None,
+                None,
+                Some("999ms"),
+                None,
+            ),
+        )]));
         assert_eq!(
-            resolve_connect_deadline(Some(key), Duration::from_secs(5)),
-            Some(Duration::from_millis(123))
+            resolve_connect_deadline(Some("to-cap/svc"), Duration::from_secs(5)),
+            Some(Duration::from_millis(999)),
+            "the live shim must see the reloaded timeout"
+        );
+        assert_eq!(
+            choose_typed_connect_deadline(
+                false,
+                captured.connect_timeout,
+                captured.connect_timeout,
+                Duration::from_secs(5)
+            ),
+            Some(Duration::from_millis(123)),
+            "configure_peer_timeouts Service branch uses only the captured timeout"
         );
 
-        // Cleanup shared global store.
-        store.partial_update_policies(
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            std::collections::HashSet::from(["default/p1".to_string()]),
-        );
+        store.full_set_policies(std::collections::HashMap::new());
     }
 
     #[test]
@@ -2465,6 +2568,550 @@ mod tests {
 
         assert_eq!(backend.cb_inflight(), 0);
         assert!(ctx.cb_permit.is_none());
+    }
+
+    #[test]
+    fn begin_upstream_attempt_does_not_recapture_on_retry() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::{
+            EdgionBackendTrafficPolicySpec, LoadBalancerConfig, LoadBalancerType, PolicyTargetRef,
+        };
+        use edgion_resources::resources::EdgionBackendTrafficPolicy;
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
+        use std::sync::Arc;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        let first = Arc::new(EdgionBackendTrafficPolicy {
+            metadata: ObjectMeta {
+                name: Some("p1".to_string()),
+                namespace: Some("cap".to_string()),
+                creation_timestamp: Some(Time("2026-01-01T00:00:00Z".parse().expect("rfc3339"))),
+                ..Default::default()
+            },
+            spec: EdgionBackendTrafficPolicySpec {
+                target_refs: vec![PolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "svc".to_string(),
+                }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
+                load_balancer: Some(LoadBalancerConfig {
+                    r#type: LoadBalancerType::LeastConn,
+                    consistent_hash: None,
+                    degrade_threshold: None,
+                }),
+                health_check: None,
+                outlier_detection: None,
+                upstream_authority: None,
+                retry_constraint: None,
+                circuit_breaker: None,
+                connection: None,
+            },
+            status: None,
+        });
+        store.full_set_policies(std::collections::HashMap::from([("cap/p1".to_string(), first)]));
+
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: Some("cap/svc".to_string()),
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+            effective_policy: None,
+        });
+        super::begin_upstream_attempt(&mut ctx);
+        let captured = ctx
+            .backend_context
+            .as_ref()
+            .and_then(|bc| bc.effective_policy.clone())
+            .expect("captured");
+        assert_eq!(
+            captured.load_balancer,
+            Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn)
+        );
+
+        let second = Arc::new(EdgionBackendTrafficPolicy {
+            metadata: ObjectMeta {
+                name: Some("p1".to_string()),
+                namespace: Some("cap".to_string()),
+                creation_timestamp: Some(Time("2026-01-01T00:00:00Z".parse().expect("rfc3339"))),
+                ..Default::default()
+            },
+            spec: EdgionBackendTrafficPolicySpec {
+                target_refs: vec![PolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "svc".to_string(),
+                }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
+                load_balancer: Some(LoadBalancerConfig {
+                    r#type: LoadBalancerType::Ewma,
+                    consistent_hash: None,
+                    degrade_threshold: None,
+                }),
+                health_check: None,
+                outlier_detection: None,
+                upstream_authority: None,
+                retry_constraint: None,
+                circuit_breaker: None,
+                connection: None,
+            },
+            status: None,
+        });
+        store.full_set_policies(std::collections::HashMap::from([("cap/p1".to_string(), second)]));
+        super::begin_upstream_attempt(&mut ctx);
+        let still = ctx
+            .backend_context
+            .as_ref()
+            .and_then(|bc| bc.effective_policy.as_ref())
+            .expect("still captured");
+        assert!(Arc::ptr_eq(&captured, still), "retry must not recapture");
+        assert_eq!(
+            still.load_balancer,
+            Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn)
+        );
+        assert!(super::retry_budget_for(&ctx).is_none());
+
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn grpc_begin_upstream_attempt_captures_without_selected_backend() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::{
+            BudgetDetails, EdgionBackendTrafficPolicySpec, PolicyTargetRef, RetryConstraintConfig,
+        };
+        use edgion_resources::resources::EdgionBackendTrafficPolicy;
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
+        use std::sync::Arc;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        let policy = Arc::new(EdgionBackendTrafficPolicy {
+            metadata: ObjectMeta {
+                name: Some("p1".to_string()),
+                namespace: Some("grpc-cap".to_string()),
+                creation_timestamp: Some(Time("2026-01-01T00:00:00Z".parse().expect("rfc3339"))),
+                ..Default::default()
+            },
+            spec: EdgionBackendTrafficPolicySpec {
+                target_refs: vec![PolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "svc".to_string(),
+                }],
+                resolved_target_class: Some(
+                    edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Service,
+                ),
+                retry_constraint: Some(RetryConstraintConfig {
+                    budget: BudgetDetails {
+                        percent: 20,
+                        interval: "10s".to_string(),
+                    },
+                    min_retry_rate: None,
+                }),
+                load_balancer: None,
+                health_check: None,
+                outlier_detection: None,
+                upstream_authority: None,
+                circuit_breaker: None,
+                connection: None,
+            },
+            status: None,
+        });
+        store.full_set_policies(std::collections::HashMap::from([("grpc-cap/p1".to_string(), policy)]));
+
+        let mut ctx = EdgionHttpContext::new();
+        ctx.selected_backend = None;
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: Some("grpc-cap/svc".to_string()),
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+            effective_policy: None,
+        });
+        super::begin_upstream_attempt(&mut ctx);
+        assert!(ctx
+            .backend_context
+            .as_ref()
+            .and_then(|bc| bc.effective_policy.as_ref())
+            .is_some());
+        assert!(super::retry_budget_for(&ctx).is_some());
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn concurrent_capture_never_mixes_service_fields() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+        use edgion_resources::resources::lb_policy::ParsedLBPolicy;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "mix-cap/p1".to_string(),
+            service_policy_fields(
+                "mix-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::LeastConn),
+                Some(20),
+                Some("probe-a.sandbox.internal"),
+                Some(20),
+                Some("100ms"),
+                Some(5),
+            ),
+        )]));
+
+        let ctx = capture_service_ctx("mix-cap/svc");
+        let captured = captured_policy(&ctx);
+        let sampled = Arc::clone(&captured);
+        let reader = std::thread::spawn(move || {
+            for _ in 0..8_000 {
+                assert_eq!(sampled.load_balancer, Some(ParsedLBPolicy::LeastConn));
+                assert_eq!(sampled.degrade_threshold_override, Some(20));
+                assert_eq!(sampled.connect_timeout, Some(Duration::from_millis(100)));
+                assert_eq!(sampled.circuit_breaker_limit, Some(5));
+                assert_eq!(sampled.retry_constraint.as_ref().map(|c| c.budget.percent), Some(20));
+                assert_eq!(
+                    sampled
+                        .upstream_authority_config
+                        .as_ref()
+                        .and_then(|c| c.health_check_host.as_deref()),
+                    Some("probe-a.sandbox.internal")
+                );
+            }
+        });
+
+        store.full_set_policies(std::collections::HashMap::from([(
+            "mix-cap/p1".to_string(),
+            service_policy_fields(
+                "mix-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::Ewma),
+                Some(80),
+                Some("probe-b.sandbox.internal"),
+                Some(50),
+                Some("2s"),
+                Some(11),
+            ),
+        )]));
+        reader.join().expect("captured Arc stayed internally consistent");
+
+        assert_eq!(captured.load_balancer, Some(ParsedLBPolicy::LeastConn));
+        assert_eq!(captured.degrade_threshold_override, Some(20));
+        assert_eq!(captured.connect_timeout, Some(Duration::from_millis(100)));
+        assert_eq!(captured.circuit_breaker_limit, Some(5));
+
+        let later = capture_service_ctx("mix-cap/svc");
+        let reloaded = captured_policy(&later);
+        assert_eq!(reloaded.load_balancer, Some(ParsedLBPolicy::Ewma));
+        assert_eq!(reloaded.degrade_threshold_override, Some(80));
+        assert_eq!(reloaded.connect_timeout, Some(Duration::from_secs(2)));
+        assert_eq!(reloaded.circuit_breaker_limit, Some(11));
+        assert_eq!(reloaded.retry_constraint.as_ref().map(|c| c.budget.percent), Some(50));
+        assert_eq!(
+            reloaded
+                .upstream_authority_config
+                .as_ref()
+                .and_then(|c| c.health_check_host.as_deref()),
+            Some("probe-b.sandbox.internal")
+        );
+
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn captured_arc_retains_old_lb_after_reload() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+        use edgion_resources::resources::lb_policy::ParsedLBPolicy;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "retain-lb/p1".to_string(),
+            service_policy_fields(
+                "retain-lb",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::LeastConn),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )]));
+        let ctx = capture_service_ctx("retain-lb/svc");
+        let captured = captured_policy(&ctx);
+        store.full_set_policies(std::collections::HashMap::from([(
+            "retain-lb/p1".to_string(),
+            service_policy_fields(
+                "retain-lb",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::Ewma),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )]));
+        assert_eq!(captured.load_balancer, Some(ParsedLBPolicy::LeastConn));
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn captured_arc_retains_old_authority_after_reload() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "retain-auth/p1".to_string(),
+            service_policy_fields(
+                "retain-auth",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                Some("probe-old.sandbox.internal"),
+                None,
+                None,
+                None,
+            ),
+        )]));
+        let ctx = capture_service_ctx("retain-auth/svc");
+        let captured = captured_policy(&ctx);
+        store.full_set_policies(std::collections::HashMap::from([(
+            "retain-auth/p1".to_string(),
+            service_policy_fields(
+                "retain-auth",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                Some("probe-new.sandbox.internal"),
+                None,
+                None,
+                None,
+            ),
+        )]));
+        assert_eq!(
+            captured
+                .upstream_authority_config
+                .as_ref()
+                .and_then(|c| c.health_check_host.as_deref()),
+            Some("probe-old.sandbox.internal")
+        );
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn service_retry_budget_for_uses_captured_arc_after_store_reload() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "retry-cap/p1".to_string(),
+            service_policy_fields(
+                "retry-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                None,
+                Some(20),
+                None,
+                None,
+            ),
+        )]));
+        let ctx = capture_service_ctx("retry-cap/svc");
+        let first = super::retry_budget_for(&ctx).expect("captured budget");
+        store.full_set_policies(std::collections::HashMap::from([(
+            "retry-cap/p1".to_string(),
+            service_policy_fields(
+                "retry-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                None,
+                Some(50),
+                None,
+                None,
+            ),
+        )]));
+        let after_reload = super::retry_budget_for(&ctx).expect("same captured budget");
+        assert!(Arc::ptr_eq(&first, &after_reload));
+        let live = store
+            .snapshot()
+            .get_effective(
+                &crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(
+                    "retry-cap/svc",
+                ),
+            )
+            .and_then(|p| p.retry_budget.clone())
+            .expect("reloaded budget");
+        assert!(!Arc::ptr_eq(&first, &live));
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn service_try_retry_uses_same_captured_budget_arc() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "try-retry/p1".to_string(),
+            service_policy_fields(
+                "try-retry",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                None,
+                Some(20),
+                None,
+                None,
+            ),
+        )]));
+        let mut ctx = capture_service_ctx("try-retry/svc");
+        let first = super::retry_budget_for(&ctx).expect("captured budget");
+        store.full_set_policies(std::collections::HashMap::from([(
+            "try-retry/p1".to_string(),
+            service_policy_fields(
+                "try-retry",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::RoundRobin),
+                None,
+                None,
+                Some(80),
+                None,
+                None,
+            ),
+        )]));
+        super::begin_upstream_attempt(&mut ctx);
+        let on_retry = super::retry_budget_for(&ctx).expect("retry still uses capture");
+        assert!(
+            Arc::ptr_eq(&first, &on_retry),
+            "fail-to-connect retry_budget_for must keep the first-attempt Arc"
+        );
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn invalid_backend_with_service_key_still_captures() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+        use edgion_resources::HTTPBackendRef;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "inv-cap/p1".to_string(),
+            service_policy_fields(
+                "inv-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::LeastConn),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )]));
+
+        let schema: HTTPBackendRef = serde_json::from_value(serde_json::json!({
+            "group": "example.io",
+            "kind": "Service",
+            "name": "wrong-group-service",
+            "namespace": "inv-cap",
+            "port": 8080
+        }))
+        .unwrap();
+        let backend = crate::routes::http::match_unit::CompiledBackend::compile(
+            schema,
+            "inv-cap",
+            0,
+            Arc::new(crate::plugins::PluginRuntime::new()),
+        );
+        let mut ctx = EdgionHttpContext::new();
+        ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Invalid(
+            crate::backends::LogicalBackendHandle::new(Arc::new(vec![backend]), 0).unwrap(),
+        ));
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: Some("inv-cap/svc".to_string()),
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+            effective_policy: None,
+        });
+        super::begin_upstream_attempt(&mut ctx);
+        assert!(ctx
+            .backend_context
+            .as_ref()
+            .and_then(|bc| bc.effective_policy.as_ref())
+            .is_some());
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
+    fn direct_endpoint_finish_static_peer_captures_when_service_key_set() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::from([(
+            "de-cap/p1".to_string(),
+            service_policy_fields(
+                "de-cap",
+                "p1",
+                "svc",
+                Some(LoadBalancerType::LeastConn),
+                None,
+                None,
+                Some(20),
+                Some("123ms"),
+                Some(4),
+            ),
+        )]));
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            source: Some(BackendSource::DirectEndpoint),
+            rsc: None,
+            service_key: Some("de-cap/svc".to_string()),
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+            effective_policy: None,
+        });
+        super::begin_upstream_attempt(&mut ctx);
+        let captured = captured_policy(&ctx);
+        assert_eq!(
+            captured.load_balancer,
+            Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn)
+        );
+        assert_eq!(captured.connect_timeout, Some(Duration::from_millis(123)));
+        assert!(super::retry_budget_for(&ctx).is_some());
+        store.full_set_policies(std::collections::HashMap::new());
     }
 
     // ─── route-06: retry backoff minimum-wait conformance (GEP-1731) ───
@@ -2588,6 +3235,7 @@ mod tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
         let bc = ctx.backend_context.as_mut().unwrap();
         bc.upstreams.push(UpstreamInfo {

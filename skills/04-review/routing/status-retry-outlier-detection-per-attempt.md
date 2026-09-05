@@ -66,9 +66,9 @@ Service can always be ejected even at the default `maxEjectionPercent: 50`
 (`0` skips the guard entirely). The gateway then has no endpoint to select, and
 `get_peer`'s `_ =>` arm renders `end_response_503` — a 503, not a 502; 502 comes
 only from `pg_fail_to_proxy` on an attempt that was actually made. The one
-escape hatch is LB panic mode: a non-zero `loadBalancer.panicThreshold` makes
+escape hatch is LB degrade mode: a non-zero `loadBalancer.degradeThreshold` makes
 `selector::pick` bypass the health+ejection predicate, so the ejected sole
-endpoint is still selected. Panic mode defaults to `0` (disabled); it is kept
+endpoint is still selected. Degrade mode defaults to `0` (disabled); it is kept
 off the circuit-breaker user page on purpose (a per-feature page should not have
 to teach a global LB knob) and is documented in
 `docs/en/ops-guide/configuration/edgion-gateway-config.md` plus

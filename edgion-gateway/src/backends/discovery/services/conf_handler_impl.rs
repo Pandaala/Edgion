@@ -18,7 +18,7 @@ impl ConfHandler<Service> for ServiceStore {
 
         // Snapshot the previous key set before the swap so we can drop per-backend
         // runtime state and selector cells for Services removed by this full set.
-        // Per-service policy config (health check / circuit breaker / panic
+        // Per-service policy config (health check / circuit breaker / degrade
         // threshold / LB policy) is owned exclusively by the EdgionBackendTrafficPolicy
         // conf-handler, so a Service resync must never touch those stores.
         let old_keys = self.keys();

@@ -1,6 +1,6 @@
 ---
 name: edgion-gateway-config-global-aggregation-deterministic
-description: Use when reviewing EdgionGatewayConfig handler findings that the per-resource apply of a process-global value (webhook cap / LB panic threshold) is non-deterministic across cluster-scoped instances or is never reset on delete.
+description: Use when reviewing EdgionGatewayConfig handler findings that the per-resource apply of a process-global value (webhook cap / LB degrade threshold) is non-deterministic across cluster-scoped instances or is never reset on delete.
 status: fixed
 finding_id: types-misc-03
 closed: 2026-06-14
@@ -16,7 +16,7 @@ resource during the store iteration. Both globals are now recomputed from the
 reset-to-default when no instance carries the field:
 
 - `linkSys.webhookMaxResponseBytes` → `min` (strictest cap wins), default `16384`.
-- `loadBalancing.panicThreshold` → `max` (panic engages as early as any asks), default `0`.
+- `loadBalancing.degradeThreshold` → `max` (panic engages as early as any asks), default `0`.
 
 Re-reports of the form "per-resource apply is order-dependent" / "delete never
 resets the global" / "two cluster-scoped configs flip the value across relist"
@@ -39,15 +39,15 @@ the store key and never recomputed, so a relaxed cap lingered until process rest
 `recompute_global_config(&store)` (in
 `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`) iterates all
 instances, aggregates deterministically, and calls `configure_webhook_global_max`
-/ `configure_lb_panic_default` once. It is invoked at the end of `full_set` and at
+/ `configure_lb_degrade_default` once. It is invoked at the end of `full_set` and at
 the end of `partial_update` (after add/update/remove are all applied), so the
 delete path restores the default automatically. The aggregate rule matches each
-field's safety direction: caps tighten (`min`), panic mode is conservative (`max`).
+field's safety direction: caps tighten (`min`), degrade mode is conservative (`max`).
 
 **3. Default constants are pinned to the atomics' initial values.**
 
 `DEFAULT_WEBHOOK_MAX_RESPONSE_BYTES = 16384` mirrors `WEBHOOK_GLOBAL_MAX`'s init
-and the schema `default_webhook_max_response_bytes`; `DEFAULT_LB_PANIC_THRESHOLD =
+and the schema `default_webhook_max_response_bytes`; `DEFAULT_LB_DEGRADE_THRESHOLD =
 0` mirrors `GLOBAL_DEFAULT` (panic disabled / opt-in). A comment on each constant
 records the cross-file invariant.
 

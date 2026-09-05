@@ -21,7 +21,7 @@ over cardinality fears, are **not accepted**.
 
 **1. Free-function `gauge!`/`counter!` is the established precedent for flip/event metrics.**
 
-`record_lb_panic_mode`, `record_cb_ejection`/`_recovery`/`_rejection`, and the existing
+`record_lb_degrade_mode`, `record_cb_ejection`/`_recovery`/`_rejection`, and the existing
 `record_link_sys_es_bulk_channel_full` all use the free-function form. These fire on state changes
 or rare events, not per-request, so the macro's internal handle lookup is not a hot-path cost. A
 gauge only ever `set` on a flip also stays absent from `/metrics` until the first emit — the same
@@ -31,14 +31,14 @@ struct fields would be inconsistent and buy nothing.
 **2. The `link` label is bounded by provider count.**
 
 One series per configured LinkSys provider — the same bounded shape as the existing `service`
-(circuit breaker / LB panic) and `kind` (config parse) labels in this file. `direction` is a fixed
+(circuit breaker / LB degrade) and `kind` (config parse) labels in this file. `direction` is a fixed
 2-value set (`recovered`/`degraded`). No open-ended/user-controlled label values. Not a cardinality
 risk.
 
 **3. Stale series on provider deletion is a known, accepted, pre-existing behavior.**
 
 A deleted provider leaves `edgion_link_sys_health{link="..."}` frozen at its last value (the
-`metrics` registry never expires series) — identical to `record_lb_panic_mode` / `record_cb_*`.
+`metrics` registry never expires series) — identical to `record_lb_degrade_mode` / `record_cb_*`.
 Bounded by providers-ever-seen; not a regression introduced by this change.
 
 ## Fix Suggestions Not Accepted
@@ -61,4 +61,4 @@ Re-open only if:
 ## Reference Cases
 
 - 2026-06-16 Kafka health-recovery fix (spec `docs/superpowers/specs/2026-06-15-kafka-health-recovery-design.md`).
-- Precedent: `edgion-gateway/src/observe/metrics/registry.rs` (`record_lb_panic_mode`, `record_cb_*`, `record_link_sys_es_bulk_channel_full`).
+- Precedent: `edgion-gateway/src/observe/metrics/registry.rs` (`record_lb_degrade_mode`, `record_cb_*`, `record_link_sys_es_bulk_channel_full`).

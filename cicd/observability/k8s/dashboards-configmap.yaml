@@ -209,12 +209,12 @@ data:
         {
           "id": 4,
           "type": "stat",
-          "title": "LB panic mode",
+          "title": "LB degrade mode",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
-              "expr": "edgion_lb_panic_mode" }
+              "expr": "edgion_lb_degrade_mode" }
           ]
         },
         {

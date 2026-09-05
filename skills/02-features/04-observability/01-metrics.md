@@ -31,7 +31,7 @@ metrics listeners with a Kubernetes NetworkPolicy, firewall, or private scrape n
 
 Metric inventories change more often than this guide. Search the sources above before
 adding alerts or claiming that a family exists. Important groups include request/byte
-counters, active contexts/connections, circuit breaking and panic mode, mirror results,
+counters, active contexts/connections, circuit breaking and degrade mode, mirror results,
 log drops, LinkSys health/backpressure, FIPS/system-error state, Wasm runtime metrics,
 and Controller sync/status/certificate-expiry signals.
 

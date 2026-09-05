@@ -157,43 +157,57 @@ Full external schema: [02-features/03-resources/20-edgion-backend-traffic-policy
 ```
 policy/
 ├── backend_traffic/
-│   ├── store.rs             # BackendTrafficPolicyStore — synced cache + arbitration
+│   ├── store.rs             # BackendTrafficPolicyStore — one ArcSwap generation
 │   ├── conf_handler_impl.rs # ConfHandler<EdgionBackendTrafficPolicy>
-│   └── mod.rs                # resolve_lb_policy() — request-path LB lookup
+│   └── mod.rs                # current_lb_policy_for_admin() — admin/snapshot helper
 └── mod.rs
 ```
 
 `BackendTrafficPolicyStore` (`get_backend_traffic_policy_store()`, global
 singleton) is the single owner of typed Service and EdgionBackend policy
-config. Its immutable `BackendTrafficPolicySnapshot` publishes the complete
-affected target set in one generation and retains equivalent effective-policy
-`Arc`s. AI planning captures one snapshot before candidate iteration; Service
-selection continues to resolve the current snapshot at its existing late
-lookup point. The store is also the
-**sole writer** of `HealthCheckConfigStore`, `CircuitBreakerStore`, the
-`PanicThresholdStore` per-service override, and its own `lb_policies: DashMap<service_key, ParsedLBPolicy>`
-(read on the request path via `resolve_lb_policy(service_key)` /
-`backends::policy::resolve_lb_policy`). This replaced the former route-fed,
-ref-counted `lb/lb_policy/PolicyStore` (deleted).
+config. One `ArcSwap` generation publishes `{generation, policies, reverse_index,
+effective}` together. Equivalent effective-policy `Arc`s (retry budget,
+logical CB, AI outlier handle) are retained across no-op resyncs. AI planning
+captures one effective Arc before candidate iteration. HTTP/gRPC Service
+requests capture the same Arc at first `begin_upstream_attempt` onto
+`BackendContext.effective_policy` and do **not** re-read the store on later
+attempts. A missing capture means “no policy”, not “read the live generation”.
+The store is also the **sole writer** of `HealthCheckConfigStore`, Service
+outlier configuration, and the `DegradeThresholdStore` per-service override used
+only by the L4/`request_mirror` residual. HTTP/gRPC `pick` takes the captured
+`load_balancer` and `degrade_threshold_override`; it does not call
+`resolve_lb_policy` or `resolve_degrade_threshold`. This replaced the former
+route-fed, ref-counted `lb/lb_policy/PolicyStore` (deleted) and the later
+request-visible DashMaps.
 
-- **Arbitration** (`reapply_target(PolicyTargetKey)`): among all cached policies
-  whose `targetRefs` include the typed target, skip specs that fail
-  `get_validation_errors()`, then pick the minimum `precedence_key` (oldest
-  `creationTimestamp`, then name) — same rule as `BackendTLSPolicy`. The
-  winner's `loadBalancer` / `healthCheck` / `outlierDetection` sections are
-  pushed atomically (whole-section, no per-field merge across policies) into
-  the four stores; no winner clears all four.
+- **Arbitration** (`reapply_target(PolicyTargetKey)`): among eligible cached
+  policies whose `targetRefs` include the typed target, pick the minimum
+  `precedence_key` (oldest `creationTimestamp`, then name) — same rule as
+  `BackendTLSPolicy`. The winner's request-visible sections are published in
+  one `EffectiveBackendTrafficPolicy`. Health/outlier **status** stays live
+  and is not frozen into the generation.
 - **`full_set_policies` / `partial_update_policies`**: `partial_update` is a
-  real incremental diff (ConfHandler iron rule) — it recomputes only the
-  typed targets touched by the changed policies' old ∪ new `targetRefs`, then
-  publishes all affected targets together.
-- **EPS rebuild on LB change**: when `reapply_service` flips the applied LB
-  policy for a key, it calls
+  real incremental diff (ConfHandler iron rule) — it patches only the reverse
+  index lists touched by the changed policies' old ∪ new `targetRefs`, then
+  publishes all affected targets together. Side effects run after
+  `ArcSwap::store` and read the passed `next` snapshot.
+- **EPS rebuild on LB change**: when a Service winner's LB algorithm changes,
+  publication triggers
   `config_client.trigger_endpoint_slice_update_event(service_key)` so
   `ServiceSelectorCell`s rebuild against the new algorithm.
 - Admin `/store/stats` exposes the resolved LB map as `lb_policies` (a
-  `service_key → algorithm` map) — this is the field that replaced the old
-  `policy_store` stat.
+  `service_key → algorithm` map) from the current snapshot — this is the field
+  that replaced the old `policy_store` stat.
+
+Accepted residuals (not mixed-generation Service HTTP/gRPC reads):
+
+- TCP/UDP/TLS passthrough and `request_mirror` call
+  `select_roundrobin_backend_key` with no `BackendContext`. They keep
+  RoundRobin and read `DegradeThresholdStore` live (`degrade_engaged_l4`).
+- `request_mirror` uses the backend address as Host and does **not** apply
+  `upstreamAuthority`.
+- The EdgionGatewayConfig panic default is a **cross-store** window versus the
+  captured EBTP override. Do not merge EGC into the EBTP generation.
 
 ## BackendTLSPolicy
 
@@ -259,7 +273,7 @@ edgion-gateway/src/backends/
 ├── health/                   # health checks
 │   └── check/                # check system
 ├── circuit_breaker/          # circuit breaker (passive ejection)
-├── panic_threshold.rs        # panic-threshold store + resolution
+├── degrade_threshold.rs        # degrade-threshold store + resolution
 ├── policy/                   # backend policies
 │   ├── backend_tls/          # BackendTLSPolicy (upstream mTLS)
 │   └── backend_traffic/      # EdgionBackendTrafficPolicy (HC/CB/panic/LB arbitration)

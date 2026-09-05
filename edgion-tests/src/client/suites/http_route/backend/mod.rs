@@ -3,6 +3,7 @@
 
 mod backend_tls_sni_host_override;
 mod circuit_breaker;
+mod degrade_threshold;
 mod dns_resolution;
 mod dns_resolution_failure;
 mod dns_resolution_flap;
@@ -16,7 +17,6 @@ mod lb_ewma_retry_on_status;
 mod lb_leastconn;
 mod lb_leastconn_retry_on_status;
 mod lb_roundrobin;
-mod panic_threshold;
 mod partially_invalid;
 mod per_try_timeout;
 mod retry_on_status;
@@ -28,6 +28,7 @@ mod weighted_backend;
 
 pub use backend_tls_sni_host_override::BackendTlsSniHostOverrideTestSuite;
 pub use circuit_breaker::CircuitBreakerTestSuite;
+pub use degrade_threshold::DegradeThresholdTestSuite;
 pub use dns_resolution::DnsResolutionTestSuite;
 pub use dns_resolution_failure::DnsResolutionFailureTestSuite;
 pub use dns_resolution_flap::{DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite};
@@ -41,7 +42,6 @@ pub use lb_ewma_retry_on_status::LBEwmaRetryOnStatusTestSuite;
 pub use lb_leastconn::LBLeastConnTestSuite;
 pub use lb_leastconn_retry_on_status::LBLeastConnRetryOnStatusTestSuite;
 pub use lb_roundrobin::LBRoundRobinTestSuite;
-pub use panic_threshold::PanicThresholdTestSuite;
 pub use partially_invalid::PartiallyInvalidTestSuite;
 pub use per_try_timeout::PerTryTimeoutTestSuite;
 pub use retry_on_status::RetryOnStatusTestSuite;

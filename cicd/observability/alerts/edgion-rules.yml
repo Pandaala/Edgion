@@ -63,11 +63,11 @@ groups:
         for: 5m
         labels: {severity: warning}
         annotations: {summary: "Wasm guest {{ $labels.module }} trapping or failing closed"}
-      - alert: EdgionLbPanicMode
-        expr: edgion_lb_panic_mode == 1
+      - alert: EdgionLbDegradeMode
+        expr: edgion_lb_degrade_mode == 1
         for: 5m
         labels: {severity: warning}
-        annotations: {summary: "Load-balancer panic mode engaged for service {{ $labels.service }}"}
+        annotations: {summary: "Load-balancer degrade mode engaged for service {{ $labels.service }}"}
       - alert: EdgionUnexpectedApplyDuringInit
         expr: increase(edgion_controller_unexpected_apply_during_init_total[15m]) > 0
         for: 5m

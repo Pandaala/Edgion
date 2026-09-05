@@ -149,10 +149,13 @@ pub async fn outbound_call_with_body(
     // unchanged — only Host/SNI move. This is never a fallback path: a
     // rejected authority aborts the call rather than silently dialing the
     // static/IP-based base URL.
-    let base = match client
-        .authority_service_key()
-        .and_then(|key| get_backend_traffic_policy_store().get_authority(key))
-    {
+    let base = match client.authority_service_key().and_then(|key| {
+        let target = crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(key);
+        get_backend_traffic_policy_store()
+            .snapshot()
+            .get_effective(&target)
+            .and_then(|policy| policy.upstream_authority.clone())
+    }) {
         Some(compiled) => match render_authority(&compiled, session) {
             Ok(authority) => replace_url_host(&base, &authority),
             Err(e) => {

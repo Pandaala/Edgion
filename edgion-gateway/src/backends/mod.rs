@@ -1,9 +1,9 @@
 pub mod circuit_breaker;
+pub mod degrade_threshold;
 pub mod discovery;
 pub mod gateway_backend_tls_store;
 pub mod health;
 pub mod outlier_detection;
-pub mod panic_threshold;
 pub(crate) mod peer_builder;
 pub mod policy;
 pub mod port_resolver;
@@ -13,6 +13,10 @@ pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
+pub use degrade_threshold::{
+    configure_lb_degrade_default, degrade_floor, get_degrade_threshold_store, get_lb_degrade_default,
+    resolve_degrade_threshold,
+};
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_dns_cache,
     get_global_service_store, get_roundrobin_store, DnsResolutionMode, EndpointSliceExt, EpSliceStore,
@@ -20,9 +24,6 @@ pub use discovery::{
 };
 use edgion_resources::resources::BackendTLSPolicy;
 pub use outlier_detection::{get_outlier_detection_store, FailureClass};
-pub use panic_threshold::{
-    configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor, resolve_panic_threshold,
-};
 
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
 pub use health::{get_health_check_manager, get_health_status_store};
@@ -105,10 +106,23 @@ fn selected_http_service_input(
     Ok(ServicePeerInput {
         port: compiled.port,
         backend_tls_policy: selected.backend_tls_policy().cloned(),
-        lb_policy: crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key),
+        lb_policy: captured_lb_policy(backend_context),
         service_key,
         service_type: service_kind,
     })
+}
+
+fn captured_lb_policy(backend_context: Option<&crate::BackendContext>) -> Option<ParsedLBPolicy> {
+    backend_context
+        .and_then(|context| context.effective_policy.as_ref())
+        .and_then(|policy| policy.load_balancer.clone())
+}
+
+fn captured_degrade_override(ctx: &crate::EdgionHttpContext) -> Option<u8> {
+    ctx.backend_context
+        .as_ref()
+        .and_then(|context| context.effective_policy.as_ref())
+        .and_then(|policy| policy.degrade_threshold_override)
 }
 
 /// Internal: try to get peer, returns Result with EdgionErrorCode on error
@@ -137,7 +151,7 @@ pub(crate) async fn try_get_peer(
                 _ => None,
             })
             .ok_or(EdgionErrorCode::UpstreamNotBackendRefs)?;
-        let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
+        let lb_policy = captured_lb_policy(ctx.backend_context.as_ref());
         ServicePeerInput {
             port: grpc_br.compiled().port,
             backend_tls_policy: grpc_br.backend_tls_policy().cloned(),
@@ -167,7 +181,7 @@ pub(crate) async fn try_get_peer(
                 _ => None,
             })
             .ok_or(EdgionErrorCode::UpstreamNotBackendRefs)?;
-        let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
+        let lb_policy = captured_lb_policy(ctx.backend_context.as_ref());
         ServicePeerInput {
             port: http_br.port,
             // Invalid targets cannot resolve a typed BackendTLSPolicy. The old
@@ -204,8 +218,16 @@ pub(crate) async fn try_get_peer(
                 String::new()
             };
             let query = ctx.query(session.req_header());
+            let degrade_threshold_override = captured_degrade_override(ctx);
             let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip, query)
+                select_from_endpoint_slice(
+                    &service_key,
+                    &lb_policy,
+                    degrade_threshold_override,
+                    session,
+                    &remote_ip,
+                    query,
+                )
             })?;
 
             build_peer_from_lb_selection(
@@ -320,8 +342,16 @@ pub(crate) async fn try_get_peer(
                         String::new()
                     };
                     let query = ctx.query(session.req_header());
+                    let degrade_threshold_override = captured_degrade_override(ctx);
                     let backend = take_sp_target_or_select(ctx, &service_key, || {
-                        select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip, query)
+                        select_from_endpoint_slice(
+                            &service_key,
+                            &lb_policy,
+                            degrade_threshold_override,
+                            session,
+                            &remote_ip,
+                            query,
+                        )
                     })?;
                     build_peer_from_lb_selection(
                         ctx,
@@ -401,8 +431,16 @@ pub(crate) async fn try_get_peer(
                 String::new()
             };
             let query = ctx.query(session.req_header());
+            let degrade_threshold_override = captured_degrade_override(ctx);
             let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_from_endpoint_slice(&service_key, &lb_policy, session, &remote_ip, query)
+                select_from_endpoint_slice(
+                    &service_key,
+                    &lb_policy,
+                    degrade_threshold_override,
+                    session,
+                    &remote_ip,
+                    query,
+                )
             })?;
             build_peer_from_lb_selection(
                 ctx,
@@ -722,6 +760,7 @@ mod selected_service_input_tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: Some(0),
+            effective_policy: None,
         }
     }
 

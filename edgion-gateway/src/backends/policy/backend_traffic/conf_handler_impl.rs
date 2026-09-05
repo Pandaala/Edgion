@@ -82,7 +82,7 @@ mod tests {
                 load_balancer: Some(LoadBalancerConfig {
                     r#type: lb_type,
                     consistent_hash: None,
-                    panic_threshold: None,
+                    degrade_threshold: None,
                 }),
                 health_check: Some(ServiceHealthCheck {
                     active: Some(ActiveHealthCheckConfig::default()),

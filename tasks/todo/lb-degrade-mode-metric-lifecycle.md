@@ -1,4 +1,4 @@
-# Keep the load-balancer panic-mode gauge current across lifecycle exits
+# Keep the load-balancer degrade-mode gauge current across lifecycle exits
 
 ## Meta
 
@@ -12,11 +12,11 @@
 
 ## AI guide summary
 
-Make `edgion_lb_panic_mode{service}` return to zero whenever a Service leaves panic mode, including lifecycle paths that no longer run the survivor calculation. `panic_engaged` currently writes the gauge only after it evaluates a non-zero threshold against a non-empty selector with health or outlier state. If the series was previously set to one, changing the threshold to zero, removing health/outlier state, emptying the selector, or deleting the Service takes an early return and can leave the exported gauge at one indefinitely.
+Make `edgion_lb_degrade_mode{service}` return to zero whenever a Service leaves degrade mode, including lifecycle paths that no longer run the survivor calculation. `degrade_engaged` currently writes the gauge only after it evaluates a non-zero threshold against a non-empty selector with health or outlier state. If the series was previously set to one, changing the threshold to zero, removing health/outlier state, emptying the selector, or deleting the Service takes an early return and can leave the exported gauge at one indefinitely.
 
 ## Requirements
 
-- Preserve the inventory contract: the gauge is one exactly while the named Service is currently in panic mode and zero otherwise.
+- Preserve the inventory contract: the gauge is one exactly while the named Service is currently in degrade mode and zero otherwise.
 - Reset an existing series when the effective threshold becomes zero, health/outlier capability is removed, the selector becomes empty, or the Service is deleted.
 - Do not register a new zero-valued series for every ordinary Service that has never been panic-capable.
 - Do not construct an owned service label or perform registry lookup/allocation on every request. Reuse the canonical Gateway metrics layer and a bounded lifecycle-owned handle or equivalent mechanism.
@@ -30,18 +30,18 @@ Make `edgion_lb_panic_mode{service}` return to zero whenever a Service leaves pa
 
 - Panic-mode metric handle ownership and reset paths.
 - Selector, policy, health/outlier, EndpointSlice, and Service lifecycle hooks needed to set zero.
-- Cross-module isolation for tests that mutate panic-threshold globals.
+- Cross-module isolation for tests that mutate degrade-threshold globals.
 
 ### Out of scope
 
-- Changing panic-threshold selection semantics or its configuration schema.
-- Adding an access-log field for panic mode.
+- Changing degrade-threshold selection semantics or its configuration schema.
+- Adding an access-log field for degrade mode.
 - Removing unrelated Prometheus series.
 
 ## Acceptance criteria
 
 - Tests prove transitions from one to zero for threshold disable, health removal, outlier removal, empty selector, and Service deletion.
-- A Service that never configures/evaluates panic mode does not create a labeled gauge series merely because it handles traffic.
+- A Service that never configures/evaluates degrade mode does not create a labeled gauge series merely because it handles traffic.
 - Repeated request selection uses a cached metric handle and performs no label allocation.
 - Concurrent configuration and selection cannot republish one after a lifecycle reset for an older generation.
 - All tests that mutate `GLOBAL_DEFAULT` or the process-global override store share one guard and restore state on unwind.

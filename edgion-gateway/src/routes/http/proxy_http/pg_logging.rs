@@ -616,6 +616,7 @@ mod tests {
                 upstreams: Vec::new(),
                 current_upstream_id: None,
                 backend_ref_idx: None,
+                effective_policy: None,
             });
         }
         let bc = ctx.backend_context.as_mut().unwrap();
@@ -659,6 +660,7 @@ mod tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
         ctx.push_upstream(None, None);
         // lb_committed stays None (default from push_upstream)
@@ -789,6 +791,7 @@ mod tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
         ctx.push_upstream(None, None);
         if let Some(up) = ctx.get_current_upstream_mut() {
@@ -883,6 +886,7 @@ mod genai_tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
     }
 
