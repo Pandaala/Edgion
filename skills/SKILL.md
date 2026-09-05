@@ -56,6 +56,7 @@ its 🔴 rows against your diff before every commit.
 | **Grouped-list design pattern** — `*_groups` schema, atomic flat-field replacement, first-wins, group-in-ok-log iron rule | [01-architecture/00-common/04-grouped-list-pattern.md](01-architecture/00-common/04-grouped-list-pattern.md) |
 | **Integration testing** — architecture, running, adding test cases | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **Global review orchestration** — coverage ledger, capacity-aware review waves, and finding output | [10-fully-review/SKILL.md](10-fully-review/SKILL.md); closed decisions live in [04-review/CLOSED-FINDINGS.md](04-review/CLOSED-FINDINGS.md) |
+| **Algorithm catalog** — per-algorithm math, complexity/concurrency contract, prior-art comparison, and replacement criteria (LB scoring, caches, matchers, rate limiting) | [12-algorithms/SKILL.md](12-algorithms/SKILL.md) |
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
 | **Pre-commit / local checks** (fmt + workspace check + workspace clippy + agent-doc validation + SSA-force guard) | [09-misc/SKILL.md](09-misc/SKILL.md) |
 | **GitHub Actions / Docker / Release** — tag pushes, Docker images, release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |

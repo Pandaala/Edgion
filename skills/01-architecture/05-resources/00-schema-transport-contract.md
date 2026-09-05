@@ -28,11 +28,12 @@ Every field must be classified deliberately.
 ## Automated guards
 
 `edgion-resources/tests/crd_coverage.rs` currently performs bidirectional property-presence checks
-for three fully structural specs:
+for four fully structural specs:
 
 - `EdgionGatewayConfigSpec`
 - `EdgionTlsSpec`
 - `EdgionBackendTrafficPolicySpec`
+- `EdgionBackendSpec`
 
 It also contains narrow regression pins for EdgionAcme status and the stream-plugin TLS-route
 field. The property walker does not validate field types/patterns/defaults.

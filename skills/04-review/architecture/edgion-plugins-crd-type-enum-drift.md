@@ -50,7 +50,7 @@ issue mis-counted `ResponseRewrite`/`BandwidthLimit` as "missing".
 
 **2. Why it slipped through and what now guards it**
 
-`crd_coverage.rs` field-guards only the two fully-structural CRDs; the plugin CRD's `config` is
+`crd_coverage.rs` field-guards only the four fully-structural CRDs; the plugin CRD's `config` is
 `x-kubernetes-preserve-unknown-fields`, so nothing compared the discriminator enums against the
 Rust variants. The new guard `plugin_crd_type_coverage.rs` reads the variant universe from
 `schema_for!(EdgionPlugin)` and applies three checks:

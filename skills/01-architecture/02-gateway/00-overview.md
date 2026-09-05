@@ -105,7 +105,7 @@ edgion-gateway/src/
 │   ├── ewma/             # EWMA metric collection
 │   ├── leastconn/        # Least-connection state and cleaner
 │   ├── compiled_selector.rs # per-Service compiled selector cells
-│   └── runtime_state/    # Runtime LB state (increment/decrement/update_ewma)
+│   └── runtime_state/    # Runtime LB state (connection counts, draining)
 ├── link_sys/      # Gateway LinkSys providers/runtime; common core + Etcd live in edgion-common
 │   ├── providers/ # Elasticsearch, Kafka, Redis, Webhook, LocalFile, OTLP
 │   └── runtime/   # ConfHandler, DataSender

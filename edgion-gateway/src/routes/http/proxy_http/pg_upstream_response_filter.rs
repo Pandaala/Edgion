@@ -124,14 +124,47 @@ pub fn upstream_response_filter(
     // discarded for retry does not consume the inject state or carry a pointless
     // Set-Cookie.
 
+    // One clock read serves both header-time accounting and the LB sample, so
+    // `ht` and the score are provably the same measurement.
+    let header_at = Instant::now();
+
     // Record header time (time from this upstream's start_time to receiving response header)
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let ht = Instant::now()
-            .saturating_duration_since(upstream.start_time)
-            .as_millis() as u64;
+        let ht = header_at.saturating_duration_since(upstream.start_time).as_millis() as u64;
         upstream.ht = Some(ht);
         upstream.status = Some(status_code);
     }
+
+    // Record the LB latency sample at response HEADERS, not at request end.
+    //
+    // Two defects this fixes, both documented in
+    // `skills/12-algorithms/lb-peak-ewma.md`: settling at request end folded
+    // response-body streaming time into the "latency" estimate (defect 2), so
+    // an SSE stream scored in the tens of seconds; and a retried attempt
+    // discarded its sample entirely (defect 4), leaving a backend that answers
+    // slowly and then fails with a pristine score while one that answers slowly
+    // and succeeds was penalized permanently.
+    //
+    // The sample is recorded before the retry decision is known, because
+    // time-to-response-headers is a self-contained measurement of what this
+    // backend did and nothing afterwards makes it untrue. A connect-level
+    // failure that never produces headers records nothing; outlier detection
+    // owns that.
+    //
+    // Whether it may *lower* the score is decided by
+    // `lb::sample::is_useful_work` — 5xx and any route-declared retryable
+    // status are recorded peak-only, so a backend failing fast cannot acquire
+    // the best score in the pool. That predicate is deliberately NOT
+    // `FailureClass::from_http_status`, which is Envoy-shaped for ejection
+    // policy and classifies 429 the opposite way.
+    //
+    // Safe above the `has_ai_attempt_plan()` branch below: an AI attempt is
+    // never LB-selected (`SelectedHttpBackend::Ai` is disjoint from `Service`,
+    // and `backends/mod.rs` is the sole writer of `lb_edgion_backend`), so both
+    // this block and the outlier block are inert on that path. If AI ever gains
+    // an LB-selected backend, revisit — a 429 would then be "useful work" for
+    // the score and a credential failure for the AI runtime at the same time.
+    record_lb_latency_sample(ctx, status_code, header_at);
 
     // Record every completed upstream response before retry-on-status can
     // return early. The corresponding HTTPStatus control-flow error is not a
@@ -468,6 +501,39 @@ pub fn upstream_response_filter(
     Ok(())
 }
 
+/// Fold this attempt's time-to-headers into the Peak-EWMA score.
+///
+/// Isolated so the call site is unit-testable without a Pingora session.
+/// Returns whether a value was stored. Non-Ewma policies, missing backends,
+/// and skipped peak-only samples all return `false`.
+fn record_lb_latency_sample(ctx: &EdgionHttpContext, status: u16, header_at: Instant) -> bool {
+    let Some(upstream) = ctx.get_current_upstream() else {
+        return false;
+    };
+    if !matches!(
+        upstream.lb_policy,
+        Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma)
+    ) {
+        return false;
+    }
+    let Some(backend) = upstream.lb_edgion_backend.as_ref() else {
+        return false;
+    };
+    let latency_us = header_at.saturating_duration_since(upstream.start_time).as_micros() as u64;
+    let retry_codes = ctx
+        .route_unit
+        .as_ref()
+        .and_then(|route| route.rule.parsed_retry.as_ref())
+        .and_then(|retry| retry.codes.as_deref());
+    crate::lb::sample::record_response_sample(
+        backend,
+        status,
+        retry_codes,
+        latency_us,
+        crate::lb::ewma::score::units_at(header_at),
+    )
+}
+
 fn provider_reset_hint(
     headers: &http::HeaderMap,
     provider: crate::ai::AiProviderLabel,
@@ -559,6 +625,205 @@ mod interim_status_tests {
         for code in [200u16, 204, 304, 403, 500, 502] {
             assert!(!is_interim_informational(StatusCode::from_u16(code).unwrap()), "{code}");
         }
+    }
+}
+
+#[cfg(test)]
+mod lb_sample_tests {
+    use super::record_lb_latency_sample;
+    use crate::lb::edgion_backend::EdgionBackend;
+    use crate::lb::ewma::score::{units_at, DEFAULT_RTT_US};
+    use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+    use crate::{BackendContext, EdgionHttpContext, MatchInfo, Rsc};
+    use edgion_resources::resources::http_route::ParsedRouteRetry;
+    use edgion_resources::resources::lb_policy::ParsedLBPolicy;
+    use edgion_resources::{HTTPRouteMatch, HTTPRouteRule};
+    use pingora_core::protocols::l4::socket::SocketAddr;
+    use pingora_load_balancing::Backend;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    fn make_backend() -> Arc<EdgionBackend> {
+        Arc::new(EdgionBackend::new(Backend {
+            addr: SocketAddr::Inet(std::net::SocketAddr::from(([127, 0, 0, 1], 18080))),
+            weight: 1,
+            ext: Default::default(),
+        }))
+    }
+
+    fn ctx_with_attempt(
+        backend: Arc<EdgionBackend>,
+        policy: Option<ParsedLBPolicy>,
+        start_time: Instant,
+        retry_codes: Option<Vec<u16>>,
+    ) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+        });
+        let bc = ctx.backend_context.as_mut().unwrap();
+        bc.upstreams.push(crate::UpstreamInfo {
+            ip: None,
+            port: None,
+            status: None,
+            ct: None,
+            ht: None,
+            bt: None,
+            et: None,
+            wpt: None,
+            response_body_size: None,
+            start_time,
+            err: Vec::new(),
+            lb_backend_addr: None,
+            lb_edgion_backend: Some(backend),
+            service_key: None,
+            lb_policy: policy,
+            tls: None,
+            lb_committed: None,
+        });
+        bc.current_upstream_id = Some(0);
+        if let Some(codes) = retry_codes {
+            ctx.route_unit = Some(Arc::new(route_unit_with_retry_codes(codes)));
+        }
+        ctx
+    }
+
+    fn route_unit_with_retry_codes(codes: Vec<u16>) -> HttpRouteRuleUnit {
+        HttpRouteRuleUnit {
+            resource_key: "test-ns/lb-sample".to_string(),
+            matched_info: MatchInfo {
+                rsc: Rsc::new("HTTPRoute", "test-ns", "lb-sample"),
+                rule_id: 0,
+                match_id: 0,
+                sv: 0,
+                m: HTTPRouteMatch {
+                    path: None,
+                    headers: None,
+                    query_params: None,
+                    method: None,
+                },
+                labels_meta: None,
+                annotations_meta: None,
+            },
+            rule: Arc::new(HTTPRouteRule {
+                name: None,
+                resolved_terminal_route_uid: None,
+                resolved_terminal_rule_identity: None,
+                matches: None,
+                filters: None,
+                backend_refs: None,
+                timeouts: None,
+                retry: None,
+                session_persistence: None,
+                parsed_timeouts: None,
+                parsed_retry: Some(ParsedRouteRetry {
+                    attempts: None,
+                    backoff: None,
+                    codes: Some(codes),
+                }),
+                parsed_forward_raw_path: None,
+                parsed_allow_non_idempotent_retry: None,
+                parsed_mirror_tuning: None,
+            }),
+            route: None,
+            path_regex: None,
+            parent_refs: None,
+            compiled_header_regexes: vec![],
+            compiled_query_regexes: vec![],
+            has_query_matchers: false,
+            specificity: MatchSpecificity {
+                has_method: false,
+                header_count: 0,
+                query_count: 0,
+                creation_ts_ms: 0,
+                route_key: "test-ns/lb-sample".to_string(),
+                rule_index: 0,
+                match_index: 0,
+            },
+            metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+            plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
+            backends: Arc::new(vec![]),
+            backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        }
+    }
+
+    #[test]
+    fn ewma_fast_success_is_recorded_at_header_time() {
+        let backend = make_backend();
+        // A future Instant makes `units_at(header_at)` far from process start.
+        // Passing `0` instead would decay this 50 ms peak back to default.
+        let header_at = Instant::now() + Duration::from_secs(20);
+        let start_time = header_at - Duration::from_millis(50);
+        let ctx = ctx_with_attempt(backend.clone(), Some(ParsedLBPolicy::Ewma), start_time, None);
+
+        assert!(record_lb_latency_sample(&ctx, 200, header_at));
+        assert_eq!(backend.latency_estimate(units_at(header_at)), 50_000);
+    }
+
+    #[test]
+    fn non_ewma_policy_does_not_score() {
+        let backend = make_backend();
+        let header_at = Instant::now();
+        let ctx = ctx_with_attempt(
+            backend.clone(),
+            Some(ParsedLBPolicy::LeastConn),
+            header_at - Duration::from_millis(50),
+            None,
+        );
+
+        assert!(!record_lb_latency_sample(&ctx, 200, header_at));
+        assert_eq!(backend.latency_estimate(units_at(header_at)), DEFAULT_RTT_US);
+    }
+
+    #[test]
+    fn fast_5xx_does_not_lower_the_score() {
+        let backend = make_backend();
+        let header_at = Instant::now();
+        let ctx = ctx_with_attempt(
+            backend.clone(),
+            Some(ParsedLBPolicy::Ewma),
+            header_at - Duration::from_micros(2_000),
+            None,
+        );
+
+        assert!(!record_lb_latency_sample(&ctx, 503, header_at));
+        assert_eq!(backend.latency_estimate(units_at(header_at)), DEFAULT_RTT_US);
+    }
+
+    #[test]
+    fn slow_5xx_still_raises_the_score() {
+        let backend = make_backend();
+        let header_at = Instant::now();
+        let ctx = ctx_with_attempt(
+            backend.clone(),
+            Some(ParsedLBPolicy::Ewma),
+            header_at - Duration::from_secs(8),
+            None,
+        );
+
+        assert!(record_lb_latency_sample(&ctx, 503, header_at));
+        assert_eq!(backend.latency_estimate(units_at(header_at)), 8_000_000);
+    }
+
+    #[test]
+    fn retryable_429_is_read_from_the_route_and_is_peak_only() {
+        let backend = make_backend();
+        let header_at = Instant::now();
+        let ctx = ctx_with_attempt(
+            backend.clone(),
+            Some(ParsedLBPolicy::Ewma),
+            header_at - Duration::from_micros(2_000),
+            Some(vec![429]),
+        );
+
+        assert!(!record_lb_latency_sample(&ctx, 429, header_at));
+        assert_eq!(backend.latency_estimate(units_at(header_at)), DEFAULT_RTT_US);
     }
 }
 

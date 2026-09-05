@@ -454,14 +454,20 @@ fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&Pingo
     );
 }
 
-/// Settle the final attempt's LB commit at request end.
-/// Earlier attempts' commits were discarded by `begin_upstream_attempt` on each retry,
-/// so only the last upstream entry can still hold a pending commit here.
-/// Idempotent: a second call sees `None` from `take()` inside `finalize_attempt`.
+/// Balance the final attempt's outstanding-connection count at request end.
+///
+/// Earlier attempts were finalized by `begin_upstream_attempt` /
+/// `begin_ai_peer_attempt` on each retry, so only the last upstream entry can
+/// still hold a live guard here. Idempotent: a second call sees `None` from
+/// `take()` inside `finalize_attempt`, and an unresolved guard balances itself
+/// on drop.
+///
+/// This no longer records the latency sample — that moved to
+/// `pg_upstream_response_filter`, at response headers.
 #[inline]
 fn lb_runtime_cleanup(ctx: &mut EdgionHttpContext) {
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        crate::lb::finalize_attempt(upstream, crate::lb::FinalizeMode::Settle);
+        crate::lb::finalize_attempt(upstream);
     }
 }
 
@@ -741,15 +747,17 @@ mod tests {
     }
 
     #[test]
-    fn ewma_no_pollution_when_final_attempt_failed_to_connect() {
+    fn cleanup_records_no_latency_sample() {
         use crate::routes::http::proxy_http::pg_upstream_peer::begin_upstream_attempt;
 
+        // The sample moved to `pg_upstream_response_filter` (response headers).
+        // Request-end cleanup must only balance the outstanding-connection
+        // count — it must never touch the score, in either mode.
         let a = make_backend([127, 0, 0, 5], 30001);
-        let initial = a.ewma();
+        let now = crate::lb::ewma::score::now_units();
+        let initial = a.latency_estimate(now);
 
         let mut ctx = EdgionHttpContext::new();
-
-        // Attempt 1: connected to A — EWMA commit recorded.
         setup_committed_attempt(
             &mut ctx,
             a.clone(),
@@ -757,31 +765,30 @@ mod tests {
             Instant::now(),
         );
 
-        // Retry: Discard-mode finalize drops the EWMA sample (no update_ewma).
+        // Retry finalizes attempt 1; its guard is consumed.
         begin_upstream_attempt(&mut ctx);
         assert!(
             ctx.backend_context.as_ref().unwrap().upstreams[0]
                 .lb_committed
                 .is_none(),
-            "retry must discard upstream 0's EWMA commit"
+            "retry must consume upstream 0's guard"
         );
 
-        // Attempt 2: connect failed — lb_committed on upstream 1 stays None.
         lb_runtime_cleanup(&mut ctx);
 
         assert_eq!(
-            a.ewma(),
+            a.latency_estimate(now),
             initial,
-            "neither Discard-mode finalize nor a None-commit must update A's EWMA"
+            "neither retry-finalize nor request-end cleanup may score"
         );
+        assert_eq!(a.conn(), 0, "but both must balance the connection count");
     }
 
     #[test]
-    fn ewma_uses_attempt_start_not_request_start() {
+    fn ewma_policy_balances_conn_like_leastconn() {
+        // Ewma now maintains conn_count too, because its score is
+        // `latency_estimate * (conn + 1)`.
         let a = make_backend([127, 0, 0, 6], 30001);
-
-        // Upstream entry whose start_time (= attempt start) is ~50ms in the past.
-        let attempt_start = Instant::now() - Duration::from_millis(50);
         let mut ctx = EdgionHttpContext::new();
         ctx.backend_context = Some(BackendContext {
             source: None,
@@ -797,18 +804,13 @@ mod tests {
         if let Some(up) = ctx.get_current_upstream_mut() {
             up.lb_edgion_backend = Some(a.clone());
             up.lb_policy = Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma);
-            up.start_time = attempt_start;
+            up.start_time = Instant::now() - Duration::from_millis(50);
             commit_attempt(up);
         }
+        assert_eq!(a.conn(), 1, "Ewma commit must increment");
 
         lb_runtime_cleanup(&mut ctx);
-
-        let after = a.ewma();
-        assert!(
-            after > 1_000,
-            "EWMA should have moved past the 1ms initial after a ~50ms sample (got {}us)",
-            after
-        );
+        assert_eq!(a.conn(), 0, "cleanup must decrement");
     }
 
     #[test]

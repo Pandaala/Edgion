@@ -1,6 +1,6 @@
 //! `EdgionBackend` — load balancer backend wrapper.
 //!
-//! Per-backend metrics (`conn_count`, `ewma_us`) live on the wrapper itself,
+//! Per-backend metrics (`conn_count`, `score`) live on the wrapper itself,
 //! sharing the EP/EPS lifecycle with the backend list. All metric sharing
 //! happens via `Arc<EdgionBackend>` — the type is intentionally `!Clone`
 //! (auto-clone would silently fork atomic metric state).
@@ -9,18 +9,16 @@
 //! can read `addr` / `weight` / `ext` directly.
 //
 
+use crate::lb::ewma::score::{now_units, PeakEwmaScore};
 use pingora_load_balancing::Backend;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-/// Initial EWMA value for new backends (1 ms in µs).
-pub const INITIAL_EWMA_US: u64 = 1_000;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
 pub struct EdgionBackend {
     pub(crate) inner: Backend,
     conn_count: AtomicUsize,
-    ewma_us: AtomicU64,
+    score: PeakEwmaScore,
     cb_inflight: AtomicUsize,
 }
 
@@ -30,7 +28,7 @@ impl EdgionBackend {
         Self {
             inner,
             conn_count: AtomicUsize::new(0),
-            ewma_us: AtomicU64::new(INITIAL_EWMA_US),
+            score: PeakEwmaScore::new(now_units()),
             cb_inflight: AtomicUsize::new(0),
         }
     }
@@ -45,8 +43,11 @@ impl EdgionBackend {
         self.inner
     }
 
-    /// Increment the in-flight connection counter. Called by LeastConn when
-    /// a request successfully connects (`connected_to_upstream`).
+    /// Increment the in-flight connection counter at `connected_to_upstream`.
+    ///
+    /// Maintained by **both** scoring policies: LeastConn compares the count
+    /// directly, and Peak-EWMA multiplies its latency estimate by `conn + 1`
+    /// so a slow-but-quiet backend is not treated as free.
     #[inline]
     pub fn inc_conn(&self) {
         self.conn_count.fetch_add(1, Ordering::Relaxed);
@@ -77,32 +78,44 @@ impl EdgionBackend {
         self.conn_count.load(Ordering::Relaxed) as u64
     }
 
-    /// Update EWMA using the percent-alpha formula. Reads alpha from the
-    /// global EWMA config.
-    pub fn update_ewma(&self, latency_us: u64) {
-        let alpha = crate::lb::ewma::get_alpha() as u64;
-        let mut current = self.ewma_us.load(Ordering::Relaxed);
-        loop {
-            // Widen the multiply to u128 so the intermediate products cannot
-            // overflow u64. alpha is clamped to [0, 100], so 100 * u64::MAX
-            // still fits in u128. The result is a weighted average bounded by
-            // max(latency_us, current) <= u64::MAX, so the cast back is lossless.
-            let new_ewma =
-                ((alpha as u128 * latency_us as u128 + (100 - alpha) as u128 * current as u128) / 100) as u64;
-            match self
-                .ewma_us
-                .compare_exchange_weak(current, new_ewma, Ordering::Relaxed, Ordering::Relaxed)
-            {
-                Ok(_) => break,
-                Err(actual) => current = actual,
-            }
-        }
+    /// Record a latency sample, in µs, observed at `now_units`.
+    ///
+    /// Peak-immediate: a sample worse than the current decayed estimate is
+    /// adopted whole; a better one blends with the elapsed-derived weight. See
+    /// `crate::lb::ewma::score` and `skills/12-algorithms/lb-peak-ewma.md`.
+    #[inline]
+    pub fn observe_latency(&self, latency_us: u64, now_units: u32) {
+        self.score.observe(latency_us.min(u32::MAX as u64) as u32, now_units);
     }
 
-    /// Read the current EWMA latency in microseconds.
+    /// Store a synthetic sample only if it would raise the estimate; a value
+    /// that would not be a peak is skipped entirely, leaving both the value and
+    /// the decay anchor untouched.
+    ///
+    /// **This method bounds nothing** beyond the u32 µs field — callers own the
+    /// policy ceiling. See [`PeakEwmaScore::observe_peak_only`] for the two
+    /// call sites and their differing input contracts.
     #[inline]
-    pub fn ewma(&self) -> u64 {
-        self.ewma_us.load(Ordering::Relaxed)
+    #[must_use = "the caller may need to know whether the peak was actually stored"]
+    pub fn observe_peak_only(&self, sample_us: u64, now_units: u32) -> bool {
+        self.score
+            .observe_peak_only(sample_us.min(u32::MAX as u64) as u32, now_units)
+    }
+
+    /// Decayed latency estimate in µs, without the outstanding-load term.
+    #[inline]
+    pub fn latency_estimate(&self, now_units: u32) -> u32 {
+        self.score.read(now_units)
+    }
+
+    /// Full P2C selection score: decayed latency times outstanding load.
+    ///
+    /// The `conn + 1` keeps an idle backend's cost tied to its latency so a
+    /// slow-but-quiet backend is not treated as free, matching Tower/Linkerd's
+    /// `rtt * (pending + 1)`.
+    #[inline]
+    pub fn score(&self, now_units: u32) -> u64 {
+        (self.latency_estimate(now_units) as u64).saturating_mul(self.conn() + 1)
     }
 
     /// Try to reserve one circuit-breaker permit for this endpoint. Atomic

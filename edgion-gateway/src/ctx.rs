@@ -1627,11 +1627,14 @@ pub struct UpstreamInfo {
     /// Backend TLS connection information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<BackendTlsInfo>,
-    /// Attempt-owned LB commit guard. `Some` only when this attempt reached
-    /// `connected_to_upstream` AND its policy needs per-attempt accounting
-    /// (LeastConn / EWMA). Consumed by `finalize_attempt`:
-    ///   - `pg_upstream_peer::begin_upstream_attempt` on retry → FinalizeMode::Discard
-    ///   - `pg_logging::lb_runtime_cleanup` at request end    → FinalizeMode::Settle
+    /// Attempt-owned LB outstanding-connection guard. `Some` only when this
+    /// attempt reached `connected_to_upstream` AND its policy scores
+    /// (LeastConn / Ewma). Consumed by `finalize_attempt` from
+    /// `pg_upstream_peer::begin_upstream_attempt` / `begin_ai_peer_attempt` on
+    /// retry, and from `pg_logging::lb_runtime_cleanup` at request end; an
+    /// unresolved guard balances itself on drop. The latency sample is NOT
+    /// recorded here — it lands at response headers in
+    /// `pg_upstream_response_filter`.
     /// The guard owns the live backend Arc required for cancellation-safe Drop;
     /// `lb_edgion_backend` remains the selected-endpoint metadata used by other
     /// attempt hooks.

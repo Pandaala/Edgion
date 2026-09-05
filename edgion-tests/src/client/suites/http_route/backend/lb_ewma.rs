@@ -4,10 +4,11 @@
 //
 // Validates that an EdgionBackendTrafficPolicy with loadBalancer.type: Ewma
 // routes requests across multiple endpoints and
-// correctly runs the commit_attempt / finalize_attempt(Settle) lifecycle for
+// correctly runs the commit_attempt / finalize_attempt connection-accounting lifecycle for
 // each request. This route has no retry policy, so retry outcomes cannot bias
 // the distribution assertion. Under concurrent load all endpoints start with
-// equal EWMA scores (INITIAL_EWMA_US = 1ms), so the selector distributes across them.
+// equal Peak-EWMA scores (all seeded at DEFAULT_RTT_US), so the selector distributes
+// across them.
 //
 // Gateway annotations enable test-mode metrics:
 //   edgion.io/metrics-test-key: "lb-ewma-test"
@@ -22,7 +23,7 @@ pub struct LBEwmaTestSuite;
 
 impl LBEwmaTestSuite {
     /// 12 concurrent /delay/1 requests should distribute across multiple endpoints.
-    /// All backends start with INITIAL_EWMA_US (1ms), so selection is unbiased
+    /// All backends start at DEFAULT_RTT_US, so selection is unbiased
     /// on first contact; distribution must not collapse to a single endpoint.
     fn test_ewma_distributes_concurrent() -> TestCase {
         TestCase::new(

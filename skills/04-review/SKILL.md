@@ -263,7 +263,7 @@ some legacy rows without a topic file keep their rationale in the index itself.
 
 - When reviewing `ConsistentHashRing::select` charging `max_iterations` per ring slot / duplicate vnodes of a high-weight unhealthy backend exhaust budget / `steps += 1` before the dup-backend check (lb-F004): **fixed (lb-F004)** — [lb/consistent-hash-duplicate-node-budget.md](lb/consistent-hash-duplicate-node-budget.md). The literal `self.backends.len()` early-exit suggestion is rejected (termination safety).
 
-- When reviewing `EdgionBackend::update_ewma` u64 EWMA-multiply overflow / promote-to-u128-or-cap-latency (lb-F001): **fixed (lb-F001)** — [lb/update-ewma-u128-intermediate.md](lb/update-ewma-u128-intermediate.md). The 60s latency-cap suggestion is specifically rejected.
+- When reviewing `EdgionBackend::update_ewma` u64 EWMA-multiply overflow / promote-to-u128-or-cap-latency (lb-F001): **fixed (lb-F001); function deleted 2026-09-04, entry superseded but the 60s-cap rejection still stands** — [lb/update-ewma-u128-intermediate.md](lb/update-ewma-u128-intermediate.md). The 60s latency-cap suggestion is specifically rejected.
 
 - When reviewing `PolicyStore::remove_by_route` unconditional per-entry `ServiceLbPolicy` clone in the `DashMap::retain` closure / O(N) wasted clones per route deletion (lb-F008): **fixed (lb-F008)** — [lb/policy-store-remove-by-route-no-clone.md](lb/policy-store-remove-by-route-no-clone.md).
 

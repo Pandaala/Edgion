@@ -4,7 +4,7 @@
 //!   1. Session-persistence affinity map (token → endpoint SocketAddr).
 //!   2. Backend lifecycle ledger: draining registry.
 //!
-//! Metric atomics (`ewma_us`, `conn_count`) live on `EdgionBackend` itself.
+//! Metric atomics (the packed Peak-EWMA `score`, `conn_count`) live on `EdgionBackend` itself.
 //! `DRAINING_BACKENDS` holds the live `Arc<EdgionBackend>` so `BackendCleaner`
 //! can poll `backend.conn()` without a side counter.
 

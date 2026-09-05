@@ -1,71 +1,50 @@
-//! Per-attempt LB commit state and finalize helpers.
+//! Per-attempt LB commit state.
+//!
+//! The guard owns **outstanding-load accounting only**. The latency sample is
+//! recorded separately, at response headers, by
+//! `crate::routes::http::proxy_http::pg_upstream_response_filter` — see
+//! `skills/12-algorithms/lb-peak-ewma.md` (defect 2 and defect 4) for why it
+//! moved and why a retried attempt now keeps its sample.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::edgion_backend::EdgionBackend;
 
-/// One LB attempt's committed accounting record.
-#[derive(Debug)]
-enum LbCommitState {
-    /// `inc_conn()` was called at connect; finalize must call `dec_conn()`.
-    LeastConn,
-    /// Attempt start recorded; `Settle` finalize updates EWMA,
-    /// `Discard` drops the sample (retry must not pollute prior backend).
-    Ewma { started: Instant },
-}
-
-/// Move-only owner for an LB attempt's committed runtime accounting.
+/// Move-only owner for an LB attempt's outstanding-connection accounting.
 ///
-/// An explicit settle/discard consumes the state. Dropping an unresolved guard
-/// always discards it, balancing LeastConn without recording an EWMA sample.
+/// `inc_conn()` ran at connect; exactly one `dec_conn()` must follow. Dropping
+/// an unresolved guard balances it, which makes the accounting
+/// cancellation-safe.
+///
+/// Both scoring policies need this: LeastConn compares the count directly, and
+/// Peak-EWMA multiplies its latency estimate by `conn + 1`.
 #[derive(Debug)]
 pub struct LbCommitGuard {
     backend: Arc<EdgionBackend>,
-    state: Option<LbCommitState>,
+    /// Cleared by the first finalize; a second is a no-op.
+    live: bool,
 }
 
 impl LbCommitGuard {
-    fn new(backend: Arc<EdgionBackend>, state: LbCommitState) -> Self {
-        Self {
-            backend,
-            state: Some(state),
-        }
+    fn new(backend: Arc<EdgionBackend>) -> Self {
+        Self { backend, live: true }
     }
 
-    fn finalize(&mut self, mode: FinalizeMode) {
-        let Some(state) = self.state.take() else {
-            return;
-        };
-        match state {
-            LbCommitState::LeastConn => self.backend.dec_conn(),
-            LbCommitState::Ewma { started } => {
-                if let FinalizeMode::Settle = mode {
-                    let latency_us = Instant::now().saturating_duration_since(started).as_micros() as u64;
-                    self.backend.update_ewma(latency_us);
-                }
-            }
+    fn finalize(&mut self) {
+        if std::mem::take(&mut self.live) {
+            self.backend.dec_conn();
         }
     }
 }
 
 impl Drop for LbCommitGuard {
     fn drop(&mut self) {
-        self.finalize(FinalizeMode::Discard);
+        self.finalize();
     }
 }
 
-/// How a per-attempt LB commit is finalized.
-#[derive(Debug, Clone, Copy)]
-pub enum FinalizeMode {
-    /// Attempt abandoned (e.g. retry). EWMA sample dropped; LeastConn still
-    /// decrements to balance the earlier `inc_conn()`.
-    Discard,
-    /// Attempt is the request's final outcome. EWMA sample folded in.
-    Settle,
-}
-
 /// Record LB commit state after a successful upstream connect.
+///
 /// Reads `upstream.lb_policy` and `upstream.lb_edgion_backend`, writes
 /// `upstream.lb_committed`. Idempotent: a second call is a no-op.
 #[inline]
@@ -76,29 +55,26 @@ pub fn commit_attempt(upstream: &mut crate::UpstreamInfo) {
     let Some(backend) = upstream.lb_edgion_backend.as_ref().cloned() else {
         return;
     };
-    upstream.lb_committed = match &upstream.lb_policy {
-        Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn) => {
-            backend.inc_conn();
-            Some(LbCommitGuard::new(backend, LbCommitState::LeastConn))
-        }
-        Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma) => Some(LbCommitGuard::new(
-            backend,
-            LbCommitState::Ewma {
-                started: upstream.start_time,
-            },
-        )),
-        _ => None,
-    };
+    // Both scoring policies maintain the count; the non-scoring ones do not
+    // need it and are skipped so their backends pay nothing.
+    let scoring = matches!(
+        &upstream.lb_policy,
+        Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn)
+            | Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma)
+    );
+    if scoring {
+        backend.inc_conn();
+        upstream.lb_committed = Some(LbCommitGuard::new(backend));
+    }
 }
 
 /// Finalize and consume the commit on this upstream entry.
-/// Idempotent: a second call sees `None` from `take()` and does nothing.
+/// Idempotent: a second call sees `None` and does nothing.
 #[inline]
-pub fn finalize_attempt(upstream: &mut crate::UpstreamInfo, mode: FinalizeMode) {
-    let Some(mut commit) = upstream.lb_committed.take() else {
-        return;
-    };
-    commit.finalize(mode);
+pub fn finalize_attempt(upstream: &mut crate::UpstreamInfo) {
+    if let Some(mut commit) = upstream.lb_committed.take() {
+        commit.finalize();
+    }
 }
 
 #[cfg(test)]
@@ -106,12 +82,13 @@ mod tests {
     use super::*;
     use crate::lb::edgion_backend::EdgionBackend;
     use crate::UpstreamInfo;
+    use edgion_resources::resources::lb_policy::ConsistentHashOn;
     use edgion_resources::resources::lb_policy::ParsedLBPolicy;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
     use std::net::SocketAddr as StdSocketAddr;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     fn make_backend(port: u16) -> Arc<EdgionBackend> {
         Arc::new(EdgionBackend::new(Backend {
@@ -121,7 +98,7 @@ mod tests {
         }))
     }
 
-    fn make_upstream(backend: Arc<EdgionBackend>, policy: ParsedLBPolicy) -> UpstreamInfo {
+    fn make_upstream(backend: Arc<EdgionBackend>, policy: Option<ParsedLBPolicy>) -> UpstreamInfo {
         UpstreamInfo {
             ip: None,
             port: None,
@@ -137,128 +114,88 @@ mod tests {
             lb_backend_addr: None,
             lb_edgion_backend: Some(backend),
             service_key: None,
-            lb_policy: Some(policy),
+            lb_policy: policy,
             tls: None,
             lb_committed: None,
         }
     }
 
     #[test]
-    fn commit_leastconn_increments_and_records() {
-        let b = make_backend(10001);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::LeastConn);
-        commit_attempt(&mut up);
-        assert_eq!(b.conn(), 1);
-        assert!(up.lb_committed.is_some());
+    fn both_scoring_policies_increment_conn() {
+        // Ewma now needs the count too: its score is `latency * (conn + 1)`.
+        for policy in [ParsedLBPolicy::LeastConn, ParsedLBPolicy::Ewma] {
+            let b = make_backend(10001);
+            let mut up = make_upstream(b.clone(), Some(policy.clone()));
+            commit_attempt(&mut up);
+            assert_eq!(b.conn(), 1, "{policy:?} must inc_conn at connect");
+            assert!(up.lb_committed.is_some());
+        }
     }
 
     #[test]
-    fn commit_ewma_records_start_without_inc_conn() {
-        let b = make_backend(10002);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::Ewma);
-        commit_attempt(&mut up);
-        assert_eq!(b.conn(), 0, "EWMA commit must not call inc_conn");
-        assert!(up.lb_committed.is_some());
+    fn non_scoring_policies_do_not_commit() {
+        for policy in [None, Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp))] {
+            let b = make_backend(10002);
+            let mut up = make_upstream(b.clone(), policy.clone());
+            commit_attempt(&mut up);
+            assert_eq!(b.conn(), 0, "{policy:?} needs no outstanding-load accounting");
+            assert!(up.lb_committed.is_none());
+        }
     }
 
     #[test]
-    fn commit_is_idempotent() {
+    fn finalize_balances_the_increment() {
         let b = make_backend(10003);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::LeastConn);
-        commit_attempt(&mut up);
-        commit_attempt(&mut up);
-        assert_eq!(b.conn(), 1, "second commit must be a no-op");
-    }
-
-    #[test]
-    fn commit_no_op_without_backend() {
-        let mut up = UpstreamInfo {
-            ip: None,
-            port: None,
-            status: None,
-            ct: None,
-            ht: None,
-            bt: None,
-            et: None,
-            wpt: None,
-            response_body_size: None,
-            start_time: Instant::now(),
-            err: Vec::new(),
-            lb_backend_addr: None,
-            lb_edgion_backend: None,
-            service_key: None,
-            lb_policy: Some(ParsedLBPolicy::LeastConn),
-            tls: None,
-            lb_committed: None,
-        };
-        commit_attempt(&mut up); // must not panic
-        assert!(up.lb_committed.is_none());
-    }
-
-    #[test]
-    fn finalize_settle_leastconn_decrements() {
-        let b = make_backend(10004);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::LeastConn);
+        let mut up = make_upstream(b.clone(), Some(ParsedLBPolicy::Ewma));
         commit_attempt(&mut up);
         assert_eq!(b.conn(), 1);
-        finalize_attempt(&mut up, FinalizeMode::Settle);
+        finalize_attempt(&mut up);
         assert_eq!(b.conn(), 0);
         assert!(up.lb_committed.is_none());
-    }
-
-    #[test]
-    fn finalize_discard_leastconn_still_decrements() {
-        let b = make_backend(10005);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::LeastConn);
-        commit_attempt(&mut up);
-        finalize_attempt(&mut up, FinalizeMode::Discard);
-        assert_eq!(b.conn(), 0, "Discard must still decrement to balance inc_conn");
-    }
-
-    #[test]
-    fn finalize_settle_ewma_updates_sample() {
-        let b = make_backend(10006);
-        let initial = b.ewma();
-        // Use a past start_time so elapsed() is measurable.
-        let mut up = UpstreamInfo {
-            start_time: Instant::now() - Duration::from_millis(50),
-            ..make_upstream(b.clone(), ParsedLBPolicy::Ewma)
-        };
-        commit_attempt(&mut up);
-        finalize_attempt(&mut up, FinalizeMode::Settle);
-        assert_ne!(b.ewma(), initial, "Settle must fold the EWMA sample");
-    }
-
-    #[test]
-    fn finalize_discard_ewma_drops_sample() {
-        let b = make_backend(10007);
-        let initial = b.ewma();
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::Ewma);
-        commit_attempt(&mut up);
-        finalize_attempt(&mut up, FinalizeMode::Discard);
-        assert_eq!(b.ewma(), initial, "Discard must not call update_ewma");
     }
 
     #[test]
     fn finalize_is_idempotent() {
-        let b = make_backend(10008);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::LeastConn);
+        let b = make_backend(10004);
+        let mut up = make_upstream(b.clone(), Some(ParsedLBPolicy::LeastConn));
         commit_attempt(&mut up);
-        finalize_attempt(&mut up, FinalizeMode::Settle);
-        assert_eq!(b.conn(), 0);
-        b.inc_conn(); // separate in-flight on same backend
-        finalize_attempt(&mut up, FinalizeMode::Settle); // lb_committed=None — must be no-op
-        assert_eq!(b.conn(), 1, "second finalize must not decrement again");
+        finalize_attempt(&mut up);
+        finalize_attempt(&mut up);
+        assert_eq!(b.conn(), 0, "a second finalize must not double-decrement");
     }
 
     #[test]
-    fn dropping_unfinalized_guard_discards_exactly_once() {
-        let b = make_backend(10009);
-        let mut up = make_upstream(b.clone(), ParsedLBPolicy::LeastConn);
+    fn commit_is_idempotent() {
+        let b = make_backend(10005);
+        let mut up = make_upstream(b.clone(), Some(ParsedLBPolicy::LeastConn));
         commit_attempt(&mut up);
-        assert_eq!(b.conn(), 1);
+        commit_attempt(&mut up);
+        assert_eq!(b.conn(), 1, "a second commit must not double-increment");
+    }
 
-        drop(up);
-        assert_eq!(b.conn(), 0, "Drop must balance the committed connection");
+    #[test]
+    fn dropping_an_unresolved_guard_balances() {
+        // The third discard path: neither `begin_upstream_attempt` nor
+        // `lb_runtime_cleanup` ran, e.g. a cancelled request.
+        let b = make_backend(10006);
+        {
+            let mut up = make_upstream(b.clone(), Some(ParsedLBPolicy::Ewma));
+            commit_attempt(&mut up);
+            assert_eq!(b.conn(), 1);
+        }
+        assert_eq!(b.conn(), 0, "Drop must balance a guard nobody finalized");
+    }
+
+    #[test]
+    fn commit_records_no_latency_sample() {
+        // The sample now lands in `pg_upstream_response_filter`, at response
+        // headers. The guard must not touch the score at all.
+        let b = make_backend(10007);
+        let now = crate::lb::ewma::score::now_units();
+        let before = b.latency_estimate(now);
+        let mut up = make_upstream(b.clone(), Some(ParsedLBPolicy::Ewma));
+        commit_attempt(&mut up);
+        finalize_attempt(&mut up);
+        assert_eq!(b.latency_estimate(now), before, "commit/finalize must not score");
     }
 }

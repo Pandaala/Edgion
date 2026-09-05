@@ -1,9 +1,20 @@
 ---
 name: update-ewma-u128-intermediate
-description: Use when reviewing EdgionBackend::update_ewma u64 overflow findings — the blend now uses u128 intermediates; the 60s latency-cap suggestion is rejected.
+description: Historical — use when reviewing EdgionBackend::update_ewma u64 overflow findings against pre-2026-09-04 code. The function was deleted with the fixed-alpha estimator; the 60s latency-cap suggestion remains rejected and its reasoning still applies to the replacement.
 ---
 
 # EdgionBackend::update_ewma u64 Overflow
+
+> **Superseded 2026-09-04.** `update_ewma` and the fixed-alpha blend it describes were deleted
+> when the time-decayed Peak-EWMA estimator landed
+> ([../../12-algorithms/lb-peak-ewma.md](../../12-algorithms/lb-peak-ewma.md)). The verdict is
+> retained for two reasons: re-reports against older revisions still resolve here, and the
+> **rejection of the 60 s latency cap still stands** — the replacement likewise leaves RTT
+> samples unbounded (it saturates at the u32 µs field instead) and for the same reason:
+> WebSocket / gRPC streaming / large uploads legitimately exceed 60 s. The overflow guidance
+> itself no longer applies; the replacement's arithmetic bounds are invariants 3 and 4 of the
+> skill entry. Do not follow the "verify the current `update_ewma`" instruction below — there
+> is no such function.
 
 **Status / verdict**: fixed (lb-F001, 2026-05-24)
 

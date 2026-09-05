@@ -112,10 +112,13 @@ spec:
 
 ### Ewma
 
-- Selects the endpoint with the lowest exponentially weighted moving average of latency.
-- Update formula: `new = alpha × latency + (1 - alpha) × old`, with a default alpha of 10%.
-- Latency is folded in when each request completes; retried attempts drop their sample so they do not pollute the previous endpoint's average.
-- New endpoints start at 1ms (briefly preferred) and converge to their real latency.
+- Samples two endpoints at random and takes the better of the two (power-of-two-choices), scoring each as `score = latency estimate × (in-flight + 1)`. The in-flight term means a slow-but-idle endpoint is not treated as free.
+- The latency estimate is a **time-decayed Peak-EWMA**: a slower measurement is adopted immediately, a faster one is blended in, and the estimate relaxes toward a neutral 30 ms baseline as time passes — with no traffic at all. There is no tunable smoothing factor; how quickly history is forgotten depends on elapsed time, not on request rate.
+- Latency is measured at **response headers**, not at request completion, so streaming responses (SSE, large downloads) are not scored as multi-second latency.
+- A retried attempt **keeps** its sample: an endpoint that answers slowly and then fails is scored for it.
+- A `5xx` is recorded only if it is *worse* than the current estimate. A fast error therefore cannot improve an endpoint's score and pull traffic toward a failing backend.
+- New endpoints start at the 30 ms baseline — deliberately neutral, neither preferred nor penalized — and converge to their real latency.
+- An endpoint that spiked once recovers on its own, whether or not it is still receiving traffic.
 - State is service-scoped.
 
 ## Configuration scenarios

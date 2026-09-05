@@ -264,7 +264,7 @@ Wrap-up phase after the request completes:
    - Global bandwidth counters: `add_request_bytes()` + `add_response_bytes()`.
 2. **LB runtime state update**:
    - LeastConn: `runtime_state::decrement()` decrements the active connection count.
-   - EWMA: `runtime_state::update_ewma()` updates the latency metric.
+   - EWMA: nothing — the latency sample is recorded earlier, at response headers.
 3. **Response status update**: obtain the final response status code via `session.response_written()`.
 4. **Prometheus metrics**: `record_backend_request()` records along the gateway/route/backend/protocol/status_group dimensions.
 5. **AccessLog generation**: `AccessLogEntry::from_context(ctx)` → `to_json()` → `access_logger.send()`.

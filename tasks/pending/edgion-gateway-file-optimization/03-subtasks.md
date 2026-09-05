@@ -257,7 +257,7 @@
 | `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` | `lb-backend-selector` | source | pending | — |
 | `edgion-gateway/src/lb/compiled_selector.rs` | `lb-core` | source | pending | — |
 | `edgion-gateway/src/lb/edgion_backend.rs` | `lb-core` | source | pending | — |
-| `edgion-gateway/src/lb/ewma/metrics.rs` | `lb-ewma` | source | pending | — |
+| `edgion-gateway/src/lb/ewma/score.rs` | `lb-ewma` | source | n/a | replaced `metrics.rs`, deleted 2026-09-04 with the global alpha |
 | `edgion-gateway/src/lb/ewma/mod.rs` | `lb-ewma` | source | pending | — |
 | `edgion-gateway/src/lb/leastconn/cleaner.rs` | `lb-leastconn` | source | pending | — |
 | `edgion-gateway/src/lb/leastconn/mod.rs` | `lb-leastconn` | source | pending | — |

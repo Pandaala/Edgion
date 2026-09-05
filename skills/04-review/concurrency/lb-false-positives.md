@@ -50,9 +50,15 @@ description: Use when reviewing load-balancer module concurrency findings; disti
 
 ---
 
-## EWMA Integer Arithmetic Precision Loss is Not a Real Issue
+## EWMA Integer Arithmetic Precision Loss
 
-**False-positive scenario**: `update_ewma` uses percent-based integer alpha (0-100) and `/ 100` truncating division to update `AtomicU64`, discarding remainders at every step. Initial value 1ms is detached from real RTT. Global alpha cannot be configured per-service.
+> **Superseded 2026-09-04.** `update_ewma`, the global alpha and the 1 ms seed were all deleted
+> with the fixed-alpha estimator; see
+> [../../12-algorithms/lb-peak-ewma.md](../../12-algorithms/lb-peak-ewma.md). The verdict below
+> is retained for re-reports against older revisions. Precision loss in the replacement is
+> bounded by invariants 3-6 of that entry, not by the reasoning here. is Not a Real Issue
+
+**False-positive scenario** (against pre-2026-09-04 code; `update_ewma`, the global alpha and the 1 ms seed were all deleted with the fixed-alpha estimator — see [../../12-algorithms/lb-peak-ewma.md](../../12-algorithms/lb-peak-ewma.md)): `update_ewma` uses percent-based integer alpha (0-100) and `/ 100` truncating division to update `AtomicU64`, discarding remainders at every step. Initial value 1ms is detached from real RTT. Global alpha cannot be configured per-service.
 
 **Reality**:
 

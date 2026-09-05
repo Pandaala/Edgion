@@ -7,8 +7,12 @@
 // This integration test verifies the observable retry contract: three retries
 // produce four EWMA upstream attempts, the abandoned attempts carry the
 // RetryOnStatus reason, and the exhausted request returns the final 503.
-// `FinalizeMode::Discard` state mutation is verified directly by the LB unit
-// tests; endpoint distribution is covered by the retry-free LBEwma suite.
+// A retried attempt now KEEPS its latency sample (recorded at response headers)
+// while its connection slot is released; a 5xx is recorded peak-only so failing
+// fast cannot lower a backend's score. Classification lives in `lb/sample.rs`;
+// the response-header call site is asserted by
+// `pg_upstream_response_filter::lb_sample_tests`. Endpoint distribution is
+// covered by the retry-free LBEwma suite.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

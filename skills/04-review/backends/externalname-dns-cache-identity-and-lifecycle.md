@@ -121,8 +121,9 @@ Re-open this decision only if:
 
 - ExternalName resolution gains an input that is neither the Service key, the hostname, nor the
   resolver identity (it would have to enter the key).
-- Miss coalescing lands (`tasks/todo/externalname-dns-miss-coalescing.md`) and its pending-query
-  registry needs an ownership rule that interacts with this key.
+- Miss coalescing is reopened (declined 2026-09-03, see
+  [externalname-dns-miss-coalescing-not-implemented.md](externalname-dns-miss-coalescing-not-implemented.md))
+  and its in-flight state needs an ownership rule that interacts with this key.
 - Measured DNS load shows LRU capacity eviction, not TTL, is driving re-resolution — the capacity
   would then need its own knob rather than the shared `lru_cache` default.
 - Lock contention on a single hot ExternalName key shows up in a profile. Sharding cannot help that
@@ -141,4 +142,5 @@ Re-open this decision only if:
   `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs`,
   `edgion-gateway/src/backends/mod.rs` (`resolve_external_ips`).
 - Cache selection rule: `skills/01-architecture/00-common/05-unification-points.md`.
-- Related but separate: `tasks/todo/externalname-dns-miss-coalescing.md` (singleflight, backoff).
+- Related but separate: miss coalescing / failure backoff, declined 2026-09-03 —
+  [externalname-dns-miss-coalescing-not-implemented.md](externalname-dns-miss-coalescing-not-implemented.md).

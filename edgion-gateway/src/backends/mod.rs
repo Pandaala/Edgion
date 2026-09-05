@@ -572,7 +572,7 @@ where
         // healthy/unhealthy outcomes are handled by the in-attempt fallback
         // state machine, while this flag is the cross-attempt refresh evidence.
         ctx.ensure_session_persistence().sticky_consumed = true;
-        // Look up the live Arc from the cell so inc_conn/dec_conn/update_ewma
+        // Look up the live Arc from the cell so inc_conn/dec_conn/observe_latency
         // operate on the same object that the selector tracks. Wrapping a fresh
         // EdgionBackend here would create an orphan: metric calls would be on a
         // throwaway object and the real cell backend would always show conn==0.
@@ -606,7 +606,7 @@ where
 /// validates the address, writes upstream metadata, and constructs the peer.
 /// Stores the `Arc<EdgionBackend>` on `upstream.lb_edgion_backend` so that
 /// `connected_to_upstream` can call `inc_conn()` and `lb_runtime_cleanup` can
-/// call `dec_conn()` / `update_ewma()` on the same live object.
+/// call `dec_conn()` / `observe_latency()` on the same live object.
 #[allow(clippy::too_many_arguments)]
 fn build_peer_from_lb_selection(
     ctx: &mut EdgionHttpContext,

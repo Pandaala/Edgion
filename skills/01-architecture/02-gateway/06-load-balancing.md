@@ -15,7 +15,7 @@ description: Load balancing strategies — RoundRobin, EWMA, LeastConn, Consiste
 | Strategy | CRD `loadBalancer.type` | Selector-side `PolicyKind` | Description |
 |----------|--------------------------|------------------------------|-------------|
 | RoundRobin | `RoundRobin` (default; section may be omitted entirely) | `PolicyKind::RoundRobin` | Weighted round-robin, implemented via `WeightedRoundRobin<T>` |
-| EWMA | `Ewma` | `PolicyKind::Ewma` | Exponentially weighted moving average of response time, prefers low-latency backends |
+| EWMA | `Ewma` | `PolicyKind::Ewma` | Time-decayed Peak-EWMA latency score times outstanding load; prefers low-latency backends |
 | LeastConn | `LeastConn` | `PolicyKind::LeastConn` | Least connections, prefers the backend with the fewest active connections |
 | ConsistentHash | `ConsistentHash` (+ `consistentHash.hashOn`/`key`) | `PolicyKind::ConsistentHash` | Consistent hashing on a header / cookie / query-param value |
 | WeightedSelector | — | — | A general-purpose weighted selector implemented by `BackendSelector<T>`, used for selection across multiple BackendRefs (weight-based, not an LB algorithm choice) |
@@ -47,9 +47,17 @@ one onto the other.
 ## EWMA and LeastConn selection algorithm
 
 EWMA and LeastConn use power-of-two choices (P2C): sample two eligible backends and select the
-lower-metric candidate. LeastConn compares atomic active-connection counts; EWMA compares the
-atomic latency score. Repeated bounded sampling applies health/activity filtering without scanning
-or heap-building across the entire backend set.
+lower-metric candidate. LeastConn compares atomic active-connection counts. EWMA compares the
+time-decayed Peak-EWMA latency estimate times outstanding load
+(`latency estimate × (in-flight + 1)`). The estimator, sample-point, and useful-work
+classification live in `edgion-gateway/src/lb/ewma/score.rs` and
+`edgion-gateway/src/lb/sample.rs`; the math and invariants are in
+[12-algorithms/lb-peak-ewma.md](../../12-algorithms/lb-peak-ewma.md).
+Repeated bounded sampling applies health/activity filtering without scanning or heap-building
+across the entire backend set.
+
+Ewma and LeastConn apply to HTTP / gRPC selection only. TCP / UDP / TLS routes always use
+RoundRobin (`select_roundrobin_backend_key`).
 
 ## BackendSelector
 
@@ -91,7 +99,7 @@ HTTPRoute rule
             │   ├── Default: RoundRobin (Pingora LoadBalancer)
             │   ├── ConsistentHash: hash by request feature
             │   ├── LeastConn: least connections
-            │   └── EWMA: lowest latency
+            │   └── EWMA: lowest Peak-EWMA score
             │
             ├── Health check filtering (Pingora Backend health)
             │
@@ -148,20 +156,20 @@ in the resource schema doc.
 ```
 edgion-gateway/src/lb/
 ├── mod.rs                    # module exports
+├── attempt.rs                # LbCommitGuard — outstanding-connection accounting
+├── sample.rs                 # response -> latency-sample classification
 ├── backend_selector/         # general-purpose backend selector
 │   ├── selector.rs           # BackendSelector<T> implementation
 │   └── weighted_selector.rs  # WeightedRoundRobin<T> implementation
 ├── selection/                # strategy implementations
 │   ├── round_robin.rs        # RoundRobin selection
 │   ├── consistent_hash.rs    # consistent hashing selection
-│   ├── ewma.rs               # EWMA selection
-│   └── least_conn.rs         # least-connection selection
-├── ewma/                     # EWMA metric tracking
-│   └── metrics.rs            # EWMA latency metrics
+│   └── p2c.rs                # power-of-two-choices sampler (LeastConn and Ewma)
+├── ewma/
+│   └── score.rs              # PeakEwmaScore — packed, time-decayed Peak-EWMA
 ├── leastconn/                # LeastConn state management
-│   ├── backend_state.rs      # backend connection state
 │   └── cleaner.rs            # stale-state cleaner
-├── compiled_selector.rs      # ServiceSelectorCell — per-service selector cell (multi-PolicyKind)
+├── compiled_selector.rs      # ServiceSelectorCell — per-service selector cell
 ├── edgion_backend.rs         # EdgionBackend — LB-visible backend handle
 └── runtime_state/            # runtime backend state
     └── mod.rs                # backend active-state tracking

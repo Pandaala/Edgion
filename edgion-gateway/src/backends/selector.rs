@@ -147,14 +147,19 @@ pub fn select_roundrobin_backend_key(service_key: &str) -> Option<Arc<EdgionBack
         return None;
     }
     let selector = cell.get_or_build(PolicyKind::RoundRobin);
+    // RoundRobin does not consult the decay clock, but the parameter is read
+    // before the policy is known to the callee, so supply a real reading.
+    let now = crate::lb::ewma::score::now_units();
     let health_store = get_health_status_store();
     let outlier_store = get_outlier_detection_store();
     if degrade_engaged_l4(service_key, &selector, &health_store, &outlier_store) {
-        return selector.select(None, |_| true);
+        return selector.select(None, |_| true, now);
     }
-    selector.select(None, |b| {
-        is_backend_healthy(service_key, b.inner(), &health_store, &outlier_store)
-    })
+    selector.select(
+        None,
+        |b| is_backend_healthy(service_key, b.inner(), &health_store, &outlier_store),
+        now,
+    )
 }
 
 /// Get the current backend list for `service_key`.
@@ -289,6 +294,14 @@ fn pick(
 
     let health_store = get_health_status_store();
     let outlier_store = get_outlier_detection_store();
+    // Read the decay clock here rather than plumbing an Instant through this
+    // call chain. `upstream.start_time` is refreshed per attempt and would be
+    // correct, but is not available at this layer; `ctx.start_time` /
+    // `ctx.upstream_start_time` must NOT be substituted — they are
+    // request-scoped and stale by multiple half-lives on a retried or
+    // long-lived streaming request. One vDSO read per selection is negligible
+    // beside connection setup.
+    let now = crate::lb::ewma::score::now_units();
     let result = if degrade_engaged_http(
         service_key,
         &selector,
@@ -296,11 +309,13 @@ fn pick(
         &outlier_store,
         degrade_threshold_override,
     ) {
-        selector.select(hash_key, |_| true)
+        selector.select(hash_key, |_| true, now)
     } else {
-        selector.select(hash_key, |b| {
-            is_backend_healthy(service_key, b.inner(), &health_store, &outlier_store)
-        })
+        selector.select(
+            hash_key,
+            |b| is_backend_healthy(service_key, b.inner(), &health_store, &outlier_store),
+            now,
+        )
     };
     result.ok_or(not_found.for_kind(kind, hash_key_used))
 }

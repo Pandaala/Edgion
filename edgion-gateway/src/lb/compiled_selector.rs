@@ -234,10 +234,18 @@ impl CompiledSelector {
     ///   `select_from_backends`.
     /// * `health_filter` — combined active-health-check + circuit-breaker
     ///   predicate, supplied by the caller.
+    /// * `now_units` — decay clock for the Ewma policy. Callers read it fresh
+    ///   (`crate::lb::ewma::score::now_units`). `upstream.start_time` is
+    ///   per-attempt and would also be correct, but is not plumbed here;
+    ///   `ctx.start_time` / `ctx.upstream_start_time` must never be used — they
+    ///   are request-scoped and stale by multiple half-lives on a retried or
+    ///   long-lived streaming request. Taking it as a parameter keeps the decay
+    ///   clock injectable in tests.
     pub fn select(
         &self,
         hash_key: Option<&[u8]>,
         health_filter: impl Fn(&EdgionBackend) -> bool,
+        now_units: u32,
     ) -> Option<Arc<EdgionBackend>> {
         match self {
             CompiledSelector::RoundRobin(core) => core.select(health_filter),
@@ -255,10 +263,13 @@ impl CompiledSelector {
             CompiledSelector::LeastConn(core) => {
                 select_p2c(&core.backends, |b| b.conn(), health_filter, SELECT_MAX_ITERATIONS)
             }
-            // P2C over per-backend ewma_us atomics.
-            CompiledSelector::Ewma(core) => {
-                select_p2c(&core.backends, |b| b.ewma(), health_filter, SELECT_MAX_ITERATIONS)
-            }
+            // P2C over the decayed Peak-EWMA score times outstanding load.
+            CompiledSelector::Ewma(core) => select_p2c(
+                &core.backends,
+                |b| b.score(now_units),
+                health_filter,
+                SELECT_MAX_ITERATIONS,
+            ),
         }
     }
 }
@@ -564,14 +575,14 @@ mod tests {
     fn empty_cell_select_returns_none() {
         let cell = ServiceSelectorCell::new(Vec::new());
         let sel = cell.get_or_build(PolicyKind::RoundRobin);
-        assert!(sel.select(None, |_| true).is_none());
+        assert!(sel.select(None, |_| true, 0).is_none());
     }
 
     #[test]
     fn rr_select_picks_a_backend() {
         let cell = ServiceSelectorCell::new(vec![arc_backend(1), arc_backend(2)]);
         let sel = cell.get_or_build(PolicyKind::RoundRobin);
-        let picked = sel.select(None, |_| true);
+        let picked = sel.select(None, |_| true, 0);
         assert!(picked.is_some());
     }
 
@@ -579,7 +590,7 @@ mod tests {
     fn ch_with_empty_key_falls_back_to_rr() {
         let cell = ServiceSelectorCell::new(vec![arc_backend(1), arc_backend(2)]);
         let sel = cell.get_or_build(PolicyKind::ConsistentHash);
-        let picked = sel.select(Some(b""), |_| true);
+        let picked = sel.select(Some(b""), |_| true, 0);
         assert!(picked.is_some());
     }
 
@@ -593,7 +604,7 @@ mod tests {
         let sel = cell.get_or_build(PolicyKind::LeastConn);
         // P2C with equal metric would also pick b due to lower conn count
         for _ in 0..20 {
-            let picked = sel.select(None, |_| true).expect("must pick");
+            let picked = sel.select(None, |_| true, 0).expect("must pick");
             // b should dominate (conn=0 wins over conn=2 in P2C)
             assert!(
                 Arc::ptr_eq(&picked, &a) || Arc::ptr_eq(&picked, &b),
@@ -607,7 +618,7 @@ mod tests {
         let b = arc_backend(1);
         let cell = ServiceSelectorCell::new(vec![b.clone()]);
         let sel = cell.get_or_build(PolicyKind::RoundRobin);
-        let picked = sel.select(None, |_| true).expect("must pick");
+        let picked = sel.select(None, |_| true, 0).expect("must pick");
         assert!(Arc::ptr_eq(&picked, &b), "must return the original Arc, not a rewrap");
     }
 
@@ -618,7 +629,7 @@ mod tests {
         // Simulate accumulated metric state on backend `a`.
         a.inc_conn();
         a.inc_conn();
-        a.update_ewma(5_000);
+        a.observe_latency(5_000_000, 0);
         let cell = ServiceSelectorCell::new(vec![a.clone(), b.clone()]);
 
         // Replace with a list that still contains backend 1 (same addr) plus a new one.
@@ -634,8 +645,8 @@ mod tests {
         let carried = carried.unwrap();
         assert_eq!(carried.conn(), 2, "conn_count must survive replace_backends");
         assert!(
-            carried.ewma() > crate::lb::edgion_backend::INITIAL_EWMA_US,
-            "ewma must survive replace_backends"
+            carried.latency_estimate(0) > crate::lb::ewma::score::DEFAULT_RTT_US,
+            "the latency estimate must survive replace_backends"
         );
 
         // Backend 3 is new — must be a fresh Arc (not equal to a or b).

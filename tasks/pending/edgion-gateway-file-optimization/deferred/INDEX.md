@@ -4,7 +4,7 @@ These entries are backlinks only. Each linked `tasks/todo` file remains the sing
 
 | Finding | Status | Canonical task |
 |---------|--------|----------------|
-| D0001 — Define complete ExternalName DNS cache identity and lifecycle | needs-discussion | [campaign finding](D0001-external-name-dns-cache-identity-lifecycle.md) |
+| D0001 — Define complete ExternalName DNS cache identity and lifecycle | fixed (2026-09-03) | [resolution](../../../../skills/04-review/backends/externalname-dns-cache-identity-and-lifecycle.md) |
 | D0002 — Make EndpointSlice ownership transitions generation-safe | needs-discussion | [campaign finding](D0002-endpoint-slice-ownership-transitions.md) |
 | D0003 — Replace Gateway backend TLS identities authoritatively | needs-discussion | [campaign finding](D0003-gateway-backend-tls-authoritative-replacement.md) |
 | D0004 — Make health task/status generations cancellation-safe | needs-discussion | [campaign finding](D0004-health-task-status-generation-ownership.md) |

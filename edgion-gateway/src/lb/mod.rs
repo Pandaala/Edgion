@@ -9,9 +9,10 @@ pub mod edgion_backend;
 pub mod ewma;
 pub mod leastconn;
 pub mod runtime_state;
+pub mod sample;
 pub mod selection;
 
-pub use attempt::{commit_attempt, finalize_attempt, FinalizeMode, LbCommitGuard};
+pub use attempt::{commit_attempt, finalize_attempt, LbCommitGuard};
 pub use backend_selector::{
     BackendSelector, WeightedRoundRobin, WrrError, ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS, ERR_WRR_BUILD_FAILED,
 };

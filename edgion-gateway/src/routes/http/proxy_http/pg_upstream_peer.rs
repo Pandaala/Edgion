@@ -1193,7 +1193,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
 /// ip/port are filled in later by [`backfill_upstream_addr`] once the peer is known.
 ///
 /// Must be called after `init_backend_context_if_needed` and before any peer construction.
-/// On retries this also finalizes (Discard) the previous attempt's LB commit:
+/// On retries this also finalizes the previous attempt's LB commit:
 /// `get_current_upstream_mut()` still points at the prior entry at this moment, so
 /// this cleanup MUST run before `push_upstream` advances `current_upstream_id`.
 #[inline]
@@ -1201,9 +1201,11 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     // The previous endpoint admission belongs to the previous attempt. Release
     // it before any live policy lookup or endpoint resolution for the next one.
     ctx.cb_permit = None;
-    // On retry, discard the previous attempt's LB commit (dec LeastConn, drop EWMA sample).
+    // On retry, release the previous attempt's outstanding-connection slot. The
+    // latency sample is NOT dropped any more — it was already recorded at
+    // response headers (see `pg_upstream_response_filter`).
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        crate::lb::finalize_attempt(upstream, crate::lb::FinalizeMode::Discard);
+        crate::lb::finalize_attempt(upstream);
     }
 
     ctx.try_cnt += 1;
@@ -1381,7 +1383,7 @@ async fn resolve_ai_endpoint(
 /// successful connect, immediately before request headers/body are written.
 fn begin_ai_peer_attempt(ctx: &mut EdgionHttpContext) {
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        crate::lb::finalize_attempt(upstream, crate::lb::FinalizeMode::Discard);
+        crate::lb::finalize_attempt(upstream);
     }
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);
