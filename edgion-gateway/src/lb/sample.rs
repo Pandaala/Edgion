@@ -5,7 +5,7 @@
 //!
 //! Design record: `skills/12-algorithms/lb-peak-ewma.md`.
 
-use crate::lb::edgion_backend::EdgionBackend;
+use crate::lb::backend::LbBackend;
 
 /// Upper bound on a synthetic error sample, in µs (300 s).
 ///
@@ -56,7 +56,7 @@ pub fn is_useful_work(status: u16, retry_codes: Option<&[u16]>) -> bool {
 /// (peak or blend); a non-useful one stores only when it is a strict peak.
 #[inline]
 pub fn record_response_sample(
-    backend: &EdgionBackend,
+    backend: &LbBackend,
     status: u16,
     retry_codes: Option<&[u16]>,
     latency_us: u64,
@@ -78,8 +78,8 @@ mod tests {
     use pingora_load_balancing::Backend;
     use std::net::SocketAddr as StdSocketAddr;
 
-    fn backend() -> EdgionBackend {
-        EdgionBackend::new(Backend {
+    fn backend() -> LbBackend {
+        LbBackend::new(Backend {
             addr: SocketAddr::Inet(StdSocketAddr::from(([127, 0, 0, 1], 8080))),
             weight: 1,
             ext: Default::default(),

@@ -160,7 +160,7 @@ pub fn upstream_response_filter(
     //
     // Safe above the `has_ai_attempt_plan()` branch below: an AI attempt is
     // never LB-selected (`SelectedHttpBackend::Ai` is disjoint from `Service`,
-    // and `backends/mod.rs` is the sole writer of `lb_edgion_backend`), so both
+    // and `backends/mod.rs` is the sole writer of `lb_backend`), so both
     // this block and the outlier block are inert on that path. If AI ever gains
     // an LB-selected backend, revisit — a 429 would then be "useful work" for
     // the score and a credential failure for the AI runtime at the same time.
@@ -170,10 +170,8 @@ pub fn upstream_response_filter(
     // return early. The corresponding HTTPStatus control-flow error is not a
     // local-origin failure and is filtered out by error_while_proxy.
     if let Some(upstream) = ctx.get_current_upstream() {
-        if let (Some(backend), Some(token)) = (
-            upstream.lb_edgion_backend.as_deref(),
-            upstream.lb_outlier_completion.as_ref(),
-        ) {
+        if let (Some(backend), Some(token)) = (upstream.lb_backend.as_deref(), upstream.lb_outlier_completion.as_ref())
+        {
             let cb_store = crate::backends::get_outlier_detection_store();
             match crate::backends::FailureClass::from_http_status(status_code) {
                 Some(class) => cb_store.record_failure_for_backend_with_token(backend, token, class),
@@ -519,7 +517,7 @@ fn record_lb_latency_sample(ctx: &EdgionHttpContext, status: u16, header_at: Ins
     ) {
         return false;
     }
-    let Some(backend) = upstream.lb_edgion_backend.as_ref() else {
+    let Some(backend) = upstream.lb_backend.as_ref() else {
         return false;
     };
     let latency_us = header_at.saturating_duration_since(upstream.start_time).as_micros() as u64;
@@ -634,7 +632,7 @@ mod interim_status_tests {
 #[cfg(test)]
 mod lb_sample_tests {
     use super::record_lb_latency_sample;
-    use crate::lb::edgion_backend::EdgionBackend;
+    use crate::lb::backend::LbBackend;
     use crate::lb::ewma::score::{units_at, DEFAULT_RTT_US};
     use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
     use crate::{BackendContext, EdgionHttpContext, MatchInfo, Rsc};
@@ -646,8 +644,8 @@ mod lb_sample_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    fn make_backend() -> Arc<EdgionBackend> {
-        Arc::new(EdgionBackend::new(Backend {
+    fn make_backend() -> Arc<LbBackend> {
+        Arc::new(LbBackend::new(Backend {
             addr: SocketAddr::Inet(std::net::SocketAddr::from(([127, 0, 0, 1], 18080))),
             weight: 1,
             ext: Default::default(),
@@ -655,7 +653,7 @@ mod lb_sample_tests {
     }
 
     fn ctx_with_attempt(
-        backend: Arc<EdgionBackend>,
+        backend: Arc<LbBackend>,
         policy: Option<ParsedLBPolicy>,
         start_time: Instant,
         retry_codes: Option<Vec<u16>>,
@@ -670,7 +668,6 @@ mod lb_sample_tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
-            effective_policy: None,
         });
         let bc = ctx.backend_context.as_mut().unwrap();
         bc.upstreams.push(crate::UpstreamInfo {
@@ -686,7 +683,7 @@ mod lb_sample_tests {
             start_time,
             err: Vec::new(),
             lb_backend_addr: None,
-            lb_edgion_backend: Some(backend),
+            lb_backend: Some(backend),
             lb_outlier_completion: None,
             service_key: None,
             lb_policy: policy,

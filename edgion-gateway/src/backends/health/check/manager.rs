@@ -4,7 +4,7 @@ use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
 use crate::backends::discovery::get_service_discovery_coordinator;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
-use crate::lb::EdgionBackend;
+use crate::lb::LbBackend;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
 use futures::stream::FuturesUnordered;
@@ -358,7 +358,7 @@ fn derive_startup_jitter(service_key: &str, max_jitter: Duration) -> Duration {
 /// Returns the set of backends for a service, sourced exclusively from the
 /// EndpointSlice discovery store. The store already deduplicates and orders
 /// its result, so no further dedup is needed here.
-fn get_service_backends(service_key: &str) -> Vec<Arc<EdgionBackend>> {
+fn get_service_backends(service_key: &str) -> Vec<Arc<LbBackend>> {
     get_roundrobin_store()
         .get_backends_for_service(service_key)
         .iter()

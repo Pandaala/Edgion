@@ -4,8 +4,8 @@
 //!   1. Session-persistence affinity map (token → endpoint SocketAddr).
 //!   2. Backend lifecycle ledger: draining registry.
 //!
-//! Metric atomics (the packed Peak-EWMA `score`, `conn_count`) live on `EdgionBackend` itself.
-//! `DRAINING_BACKENDS` holds the live `Arc<EdgionBackend>` so `BackendCleaner`
+//! Metric atomics (the packed Peak-EWMA `score`, `conn_count`) live on `LbBackend` itself.
+//! `DRAINING_BACKENDS` holds the live `Arc<LbBackend>` so `BackendCleaner`
 //! can poll `backend.conn()` without a side counter.
 
 use crate::backends::discovery::ServiceSectionKey;
@@ -13,7 +13,7 @@ use dashmap::DashMap;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use std::sync::{Arc, LazyLock};
 
-use super::edgion_backend::EdgionBackend;
+use super::backend::LbBackend;
 
 // ── SP affinity map ───────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ pub struct SpAffinitySnapshot {
 }
 
 fn build_sp_affinity_map(
-    backends: &[Arc<EdgionBackend>],
+    backends: &[Arc<LbBackend>],
     scope: Option<&str>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let mut map = std::collections::HashMap::with_capacity(backends.len().min(SP_AFFINITY_MAX_PER_SERVICE));
@@ -60,7 +60,7 @@ fn build_sp_affinity_map(
 pub(crate) fn sp_affinity_get_or_build_key(
     service_key: &str,
     section: &ServiceSectionKey,
-    _backends_fn: impl FnOnce() -> Arc<Vec<Arc<EdgionBackend>>>,
+    _backends_fn: impl FnOnce() -> Arc<Vec<Arc<LbBackend>>>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let coordinator = crate::backends::discovery::get_service_discovery_coordinator();
     sp_affinity_get_or_build_from(&coordinator, service_key, section)
@@ -124,7 +124,7 @@ fn try_publish_sp_snapshot(
         return None;
     }
     let resolved = available.resolve_section(section).ok()?;
-    let backends: Vec<Arc<EdgionBackend>> = resolved
+    let backends: Vec<Arc<LbBackend>> = resolved
         .all_slots
         .iter()
         .map(|slot| Arc::clone(&slot.backend))
@@ -154,7 +154,7 @@ pub(crate) fn sp_affinity_get_or_build_scoped(
     service_key: &str,
     section: &ServiceSectionKey,
     scope: Option<&str>,
-    backends_fn: impl FnOnce() -> Arc<Vec<Arc<EdgionBackend>>>,
+    backends_fn: impl FnOnce() -> Arc<Vec<Arc<LbBackend>>>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     // Typed scopes may include a direct backend UID. Keeping those generations in
     // this process-global Service cache would let an in-flight request recreate
@@ -170,11 +170,11 @@ pub(crate) fn sp_affinity_get_or_build_scoped(
 // ── Backend lifecycle ledger ──────────────────────────────────────────────────
 
 /// Draining backend registry: backends removed from EP/EPS that still have
-/// in-flight connections. Holds the live `Arc<EdgionBackend>` so
+/// in-flight connections. Holds the live `Arc<LbBackend>` so
 /// `BackendCleaner` can poll the exact wrapper's generation-owned connection
 /// count. Shared transport counters are never used as drain ownership.
 /// Key: `"service_key\0addr_string\0incarnation\0proof"` for typed backends.
-static DRAINING_BACKENDS: LazyLock<DashMap<String, Arc<EdgionBackend>>> = LazyLock::new(DashMap::new);
+static DRAINING_BACKENDS: LazyLock<DashMap<String, Arc<LbBackend>>> = LazyLock::new(DashMap::new);
 
 pub struct DrainingStats {
     pub backend_count: usize,
@@ -199,7 +199,7 @@ pub fn draining_stats(key_limit: usize) -> DrainingStats {
     }
 }
 
-fn backend_key(service_key: &str, addr: &SocketAddr, backend: &EdgionBackend) -> String {
+fn backend_key(service_key: &str, addr: &SocketAddr, backend: &LbBackend) -> String {
     match backend.runtime_identity() {
         Some(identity) => format!(
             "{}\0{}\0{}\0{}",
@@ -215,7 +215,7 @@ fn backend_key(service_key: &str, addr: &SocketAddr, backend: &EdgionBackend) ->
 /// Register a backend as draining. Call when a backend is removed from EP/EPS
 /// but still has in-flight connections. The cleaner polls `backend.conn()` and
 /// removes it once it reaches zero.
-pub fn begin_draining(service_key: &str, addr: &SocketAddr, backend: Arc<EdgionBackend>) {
+pub fn begin_draining(service_key: &str, addr: &SocketAddr, backend: Arc<LbBackend>) {
     let key = backend_key(service_key, addr, &backend);
     DRAINING_BACKENDS.insert(key, backend);
     tracing::info!(
@@ -226,7 +226,7 @@ pub fn begin_draining(service_key: &str, addr: &SocketAddr, backend: Arc<EdgionB
 }
 
 /// Remove lifecycle state for exactly one backend identity.
-pub fn remove_backend_exact(service_key: &str, addr: &SocketAddr, backend: &EdgionBackend) {
+pub fn remove_backend_exact(service_key: &str, addr: &SocketAddr, backend: &LbBackend) {
     DRAINING_BACKENDS.remove(&backend_key(service_key, addr, backend));
 }
 
@@ -234,9 +234,9 @@ pub fn finish_draining(key: &str) {
     DRAINING_BACKENDS.remove(key);
 }
 
-/// Return all backends currently in draining state, as `(key, Arc<EdgionBackend>)`.
+/// Return all backends currently in draining state, as `(key, Arc<LbBackend>)`.
 /// Used by `BackendCleaner` to poll conn counts.
-pub fn all_draining_backends() -> Vec<(String, Arc<EdgionBackend>)> {
+pub fn all_draining_backends() -> Vec<(String, Arc<LbBackend>)> {
     DRAINING_BACKENDS
         .iter()
         .map(|e| (e.key().clone(), e.value().clone()))
@@ -286,8 +286,8 @@ mod tests {
         ServiceSectionKey::Number(NonZeroU16::new(8080).unwrap())
     }
 
-    fn backend(addr: StdSocketAddr) -> Arc<EdgionBackend> {
-        Arc::new(EdgionBackend::new(Backend {
+    fn backend(addr: StdSocketAddr) -> Arc<LbBackend> {
+        Arc::new(LbBackend::new(Backend {
             addr: SocketAddr::Inet(addr),
             weight: 1,
             ext: Default::default(),

@@ -552,7 +552,7 @@ where
         ctx.ensure_session_persistence().sticky_consumed = true;
         // Look up the live Arc from the cell so inc_conn/dec_conn/observe_latency
         // operate on the same object that the selector tracks. Wrapping a fresh
-        // EdgionBackend here would create an orphan: metric calls would be on a
+        // LbBackend here would create an orphan: metric calls would be on a
         // throwaway object and the real cell backend would always show conn==0.
         match resolved_endpoint_for_addr(service_key, section, target_addr) {
             Some((endpoint, eligible)) => {
@@ -574,7 +574,7 @@ where
 ///
 /// Takes the already-selected `ResolvedServiceEndpoint`, validates the proven
 /// serving address, writes upstream metadata, and constructs the peer.
-/// Stores the `Arc<EdgionBackend>` on `upstream.lb_edgion_backend` so that
+/// Stores the `Arc<LbBackend>` on `upstream.lb_backend` so that
 /// `connected_to_upstream` can call `inc_conn()` and `lb_runtime_cleanup` can
 /// call `dec_conn()` / `observe_latency()` on the same live object.
 fn build_peer_from_lb_selection(
@@ -618,7 +618,7 @@ fn build_peer_from_lb_selection(
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.lb_outlier_completion = get_outlier_detection_store().capture_completion_token(&backend);
         upstream.lb_backend_addr = Some(lb_addr);
-        upstream.lb_edgion_backend = Some(backend);
+        upstream.lb_backend = Some(backend);
         upstream.service_key = Some(service_key.to_string());
         upstream.lb_policy = lb_policy_clone;
     }

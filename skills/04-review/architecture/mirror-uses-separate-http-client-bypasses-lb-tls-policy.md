@@ -1,6 +1,6 @@
 ---
 name: mirror-uses-separate-http-client-bypasses-lb-tls-policy
-description: Use when reviewing findings that RequestMirrorPlugin sends shadow traffic via a standalone reqwest::Client instead of the cluster machinery — bypasses the active LB policy (always round-robin, ignores EWMA/LeastConn/ConsistentHash), bypasses BackendTLSPolicy (port==443 heuristic, no mTLS client cert), unlike Envoy request_mirror_policy where the mirror is a first-class cluster reference; covers why routing the mirror through EdgionBackend/get_peer is a wide-impact feature, not a narrow review fix.
+description: Use when reviewing findings that RequestMirrorPlugin sends shadow traffic via a standalone reqwest::Client instead of the cluster machinery — bypasses the active LB policy (always round-robin, ignores EWMA/LeastConn/ConsistentHash), bypasses BackendTLSPolicy (port==443 heuristic, no mTLS client cert), unlike Envoy request_mirror_policy where the mirror is a first-class cluster reference; covers why routing the mirror through LbBackend/get_peer is a wide-impact feature, not a narrow review fix.
 status: accepted-tradeoff
 finding_id: route-04
 closed: 2026-06-14
@@ -12,7 +12,7 @@ closed: 2026-06-14
 
 `RequestMirrorPlugin` (`edgion-gateway/src/plugins/http/request_mirror/plugin.rs`) sends the
 shadow copy of a request via a standalone `reqwest::Client` rather than through the
-`EdgionBackend` / `get_peer` upstream machinery used by the primary request. As a result the
+`LbBackend` / `get_peer` upstream machinery used by the primary request. As a result the
 mirror path diverges from the primary path in three ways:
 
 1. **LB policy bypass** — `RequestMirrorPlugin::resolve_target` calls `select_roundrobin_backend_key`,
@@ -31,7 +31,7 @@ Health-check and circuit-breaker ejection ARE honored for the mirror path
 (`select_roundrobin_backend_key` → `is_backend_healthy`, `backends/selector.rs`), correcting the
 original finding's claim that they are ignored.
 
-Fix suggestions of the form "route the mirror through `EdgionBackend` / `get_peer`", "make the
+Fix suggestions of the form "route the mirror through `LbBackend` / `get_peer`", "make the
 mirror a first-class Pingora upstream request like Envoy's `request_mirror_policy`", "query
 `BackendTLSPolicy` and apply the mTLS client cert in the mirror path", or "thread the active LB
 policy into `resolve_target`" are **not accepted** as review-issue fixes — that is a large
@@ -70,7 +70,7 @@ re-filing it as a bug does not change the disposition.
 
 ## Fix Suggestions Not Accepted
 
-- "Route the mirror through `EdgionBackend` / `get_peer` (issue's Suggested direction)" — large
+- "Route the mirror through `LbBackend` / `get_peer` (issue's Suggested direction)" — large
   cross-layer feature; promote to `tasks/todo/` and design via brainstorming.
 - "Query `BackendTLSPolicy` in `resolve_target` and build a client-cert-bearing client" — needs the
   per-service client-cert/CA/SNI assembly (the "pool of clients keyed on the differentiator" shape

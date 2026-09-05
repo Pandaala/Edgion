@@ -18,7 +18,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::lb::compiled_selector::CompiledSelectors;
-use crate::lb::{BackendRuntimeCounters, EdgionBackend, EndpointRuntimeIdentity, EndpointRuntimeScope};
+use crate::lb::{BackendRuntimeCounters, EndpointRuntimeIdentity, EndpointRuntimeScope, LbBackend};
 
 const PROOF_DOMAIN: &[u8] = b"edgion/service-selector-proof/v1\0";
 const MEMBERSHIP_DOMAIN: &[u8] = b"edgion/service-membership/v1\0";
@@ -86,7 +86,7 @@ pub struct EndpointOrigin {
 }
 
 pub struct ResolvedBackendSlot {
-    pub backend: Arc<EdgionBackend>,
+    pub backend: Arc<LbBackend>,
     pub ready: bool,
     pub origin_set: Arc<[EndpointOrigin]>,
     pub proof: [u8; 32],
@@ -134,7 +134,7 @@ impl AvailableServiceProjection {
     /// Number/name aliases of one section share the same identity and are
     /// returned once. Different sections that share a socket stay separate.
     /// Invalid sections contribute nothing.
-    pub fn canonical_probe_backends(&self) -> Arc<Vec<Arc<EdgionBackend>>> {
+    pub fn canonical_probe_backends(&self) -> Arc<Vec<Arc<LbBackend>>> {
         let mut seen = HashSet::new();
         let mut backends = Vec::new();
         for section in unique_resolved_sections(&self.sections) {
@@ -238,7 +238,7 @@ impl ServiceRuntimeSnapshot {
 
 pub struct EndpointRuntimeState {
     pub identity: Arc<EndpointRuntimeIdentity>,
-    pub backend: Arc<EdgionBackend>,
+    pub backend: Arc<LbBackend>,
     completion_lock: Mutex<EndpointCompletionState>,
     attached: AtomicBool,
     health_eligible: AtomicBool,
@@ -270,7 +270,7 @@ pub(crate) struct HealthPolicyIdentity {
 impl EndpointRuntimeState {
     fn fresh(
         identity: Arc<EndpointRuntimeIdentity>,
-        backend: Arc<EdgionBackend>,
+        backend: Arc<LbBackend>,
         health_policy: Option<Arc<HealthPolicyIdentity>>,
         outlier_policy: Option<Arc<OutlierPolicyIdentity>>,
     ) -> Self {
@@ -1461,7 +1461,7 @@ fn build_section(
         let ready = origins.iter().any(|origin| origin.ready);
         let origin_set: Arc<[EndpointOrigin]> = origins.into_iter().collect::<Vec<_>>().into();
         let proof = slot_proof(service, identity, socket, ready, &origin_set);
-        let backend = Arc::new(EdgionBackend::new(Backend {
+        let backend = Arc::new(LbBackend::new(Backend {
             addr: PingoraSocketAddr::Inet(socket),
             weight: 1,
             ext: Default::default(),
@@ -1603,10 +1603,7 @@ fn projection_membership_identity(sections: &BTreeMap<ServiceSectionKey, Arc<Ser
 
 fn identified_backends_for_reuse(
     old: Option<&ServicePublishedState>,
-) -> (
-    HashMap<[u8; 32], Arc<EdgionBackend>>,
-    HashMap<SocketAddr, Arc<EdgionBackend>>,
-) {
+) -> (HashMap<[u8; 32], Arc<LbBackend>>, HashMap<SocketAddr, Arc<LbBackend>>) {
     let Some(ServicePublishedState::Available(old)) = old else {
         return (HashMap::new(), HashMap::new());
     };
@@ -1627,8 +1624,8 @@ fn materialize_section(
     service_key: &str,
     membership_identity: u64,
     section: &ResolvedServiceSection,
-    old_by_proof: &HashMap<[u8; 32], Arc<EdgionBackend>>,
-    old_by_socket: &HashMap<SocketAddr, Arc<EdgionBackend>>,
+    old_by_proof: &HashMap<[u8; 32], Arc<LbBackend>>,
+    old_by_socket: &HashMap<SocketAddr, Arc<LbBackend>>,
     epochs: &mut impl Iterator<Item = u64>,
 ) -> Option<ResolvedServiceSection> {
     let mut all = Vec::with_capacity(section.all_slots.len());
@@ -1647,7 +1644,7 @@ fn materialize_section(
             incarnation,
             proof_digest: slot.proof,
         });
-        let backend = Arc::new(EdgionBackend::with_runtime_identity(
+        let backend = Arc::new(LbBackend::with_runtime_identity(
             Backend {
                 addr: PingoraSocketAddr::Inet(socket),
                 weight: 1,

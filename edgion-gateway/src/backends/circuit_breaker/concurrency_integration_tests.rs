@@ -4,17 +4,17 @@
 //! status checker with no concurrent-request driver and no holding upstream, so
 //! "N concurrent requests, excess shed" cannot be asserted there. These
 //! multi-threaded tests are the real proof of the admit-time cap at the
-//! `CbPermit` / `EdgionBackend` layer.
+//! `CbPermit` / `LbBackend` layer.
 
 use super::CbPermit;
-use crate::lb::edgion_backend::EdgionBackend;
+use crate::lb::backend::LbBackend;
 use pingora_load_balancing::Backend;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-fn backend() -> Arc<EdgionBackend> {
-    Arc::new(EdgionBackend::new(Backend::new("127.0.0.1:1").unwrap()))
+fn backend() -> Arc<LbBackend> {
+    Arc::new(LbBackend::new(Backend::new("127.0.0.1:1").unwrap()))
 }
 
 /// Under heavy contention, at most `max` acquires may succeed — the atomic

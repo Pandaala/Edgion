@@ -1,4 +1,4 @@
-//! `EdgionBackend` — load balancer backend wrapper.
+//! `LbBackend` — load balancer backend wrapper.
 //!
 //! Per-backend metrics (`conn_count`, Peak-EWMA `score`) live on shared
 //! runtime counters so proof replacement can keep transport/EWMA state. All
@@ -48,7 +48,7 @@ impl Default for BackendRuntimeCounters {
 }
 
 #[derive(Debug)]
-pub struct EdgionBackend {
+pub struct LbBackend {
     pub(crate) inner: Backend,
     counters: Arc<BackendRuntimeCounters>,
     /// Connections selected through this exact immutable backend generation.
@@ -60,7 +60,7 @@ pub struct EdgionBackend {
     runtime_membership_identity: Option<u64>,
 }
 
-impl EdgionBackend {
+impl LbBackend {
     #[inline]
     pub fn new(inner: Backend) -> Self {
         Self {
@@ -239,7 +239,7 @@ fn decrement_saturating(counter: &AtomicUsize) {
     }
 }
 
-impl Deref for EdgionBackend {
+impl Deref for LbBackend {
     type Target = Backend;
 
     #[inline]
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn cb_permit_hard_caps_at_max() {
-        let b = EdgionBackend::new(Backend::new("127.0.0.1:1").unwrap());
+        let b = LbBackend::new(Backend::new("127.0.0.1:1").unwrap());
         assert!(b.try_acquire_cb_permit(2)); // 0 -> 1
         assert!(b.try_acquire_cb_permit(2)); // 1 -> 2
         assert!(!b.try_acquire_cb_permit(2)); // at cap, reject
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn cb_permit_release_saturates_at_zero() {
-        let b = EdgionBackend::new(Backend::new("127.0.0.1:1").unwrap());
+        let b = LbBackend::new(Backend::new("127.0.0.1:1").unwrap());
         b.release_cb_permit(); // stays 0, no wraparound
         assert_eq!(b.cb_inflight(), 0);
     }

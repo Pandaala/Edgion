@@ -1,7 +1,7 @@
 use crate::ai::terminal::{AiClientStreamDialect, FinalResponseEligibility, ResponseTerminalState};
 use crate::ai::{AiAttemptPlan, AiRequestContext, GenAiSummary};
 use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
-use crate::lb::edgion_backend::EdgionBackend;
+use crate::lb::backend::LbBackend;
 use crate::observe::logs::LogBuffer;
 use crate::observe::RequestDiagnostics;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
@@ -1614,13 +1614,13 @@ pub struct UpstreamInfo {
     /// so that selection reads and request-completion writes are consistent.
     #[serde(skip)]
     pub lb_backend_addr: Option<SocketAddr>,
-    /// Live `EdgionBackend` captured from the joint Service selector generation.
+    /// Live `LbBackend` captured from the joint Service selector generation.
     /// Set by `build_peer_from_lb_selection`; read by `connected_to_upstream`
     /// to call `inc_conn()` and by other attempt hooks for endpoint metadata.
     /// Sticky selection restores the same live Arc; bypass and non-LB paths
     /// leave this field as `None`.
     #[serde(skip)]
-    pub lb_edgion_backend: Option<Arc<EdgionBackend>>,
+    pub lb_backend: Option<Arc<LbBackend>>,
     /// Outlier policy identity captured with this upstream attempt. Completion
     /// must present the same token so a policy rotation cannot accept a late
     /// result from the previous policy generation.
@@ -1645,7 +1645,7 @@ pub struct UpstreamInfo {
     /// recorded here — it lands at response headers in
     /// `pg_upstream_response_filter`.
     /// The guard owns the live backend Arc required for cancellation-safe Drop;
-    /// `lb_edgion_backend` remains the selected-endpoint metadata used by other
+    /// `lb_backend` remains the selected-endpoint metadata used by other
     /// attempt hooks.
     #[serde(skip)]
     pub lb_committed: Option<crate::lb::LbCommitGuard>,
@@ -1679,7 +1679,7 @@ mod upstream_info_tests {
             start_time: Instant::now(),
             err: Vec::new(),
             lb_backend_addr: None,
-            lb_edgion_backend: None,
+            lb_backend: None,
             lb_outlier_completion: None,
             service_key: None,
             lb_policy: None,
@@ -3974,7 +3974,7 @@ impl EdgionHttpContext {
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
                 lb_backend_addr: None,
-                lb_edgion_backend: None,
+                lb_backend: None,
                 lb_outlier_completion: None,
                 service_key: None,
                 lb_policy: None,

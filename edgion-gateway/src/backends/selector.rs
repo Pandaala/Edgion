@@ -2,7 +2,7 @@ use crate::backends::discovery::{
     get_service_discovery_coordinator, AvailableServiceProjection, ResolvedServiceSection, ServiceRuntimeSnapshot,
     ServiceSectionKey,
 };
-use crate::lb::{compiled_selector, EdgionBackend, PolicyKind};
+use crate::lb::{compiled_selector, LbBackend, PolicyKind};
 use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use edgion_resources::uri_utils;
 use edgion_resources::EdgionErrorCode;
@@ -12,7 +12,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 
 pub struct ResolvedServiceEndpoint {
-    pub backend: Arc<EdgionBackend>,
+    pub backend: Arc<LbBackend>,
     pub section: Arc<ResolvedServiceSection>,
     pub serving_port: NonZeroU16,
     pub ready: bool,
@@ -35,7 +35,7 @@ fn load_active_projection(service_key: &str) -> Option<(Arc<AvailableServiceProj
 }
 
 #[inline]
-fn runtime_eligible(active: &ServiceRuntimeSnapshot, backend: &EdgionBackend, record_rejection: bool) -> bool {
+fn runtime_eligible(active: &ServiceRuntimeSnapshot, backend: &LbBackend, record_rejection: bool) -> bool {
     let Some(identity) = backend.runtime_identity() else {
         return false;
     };
@@ -194,7 +194,7 @@ fn endpoint_slice_not_found() -> NotFoundMap {
 
 fn slot_for_backend<'a>(
     section: &'a ResolvedServiceSection,
-    backend: &Arc<EdgionBackend>,
+    backend: &Arc<LbBackend>,
 ) -> Option<&'a crate::backends::discovery::ResolvedBackendSlot> {
     section
         .all_slots
@@ -255,7 +255,7 @@ pub fn select_service_endpoint(
 
 /// Current backends for one proven Service section. Used by health-adjacent
 /// session-affinity construction for that section only.
-pub fn backends_for_service_section(service_key: &str, section: &ServiceSectionKey) -> Arc<Vec<Arc<EdgionBackend>>> {
+pub fn backends_for_service_section(service_key: &str, section: &ServiceSectionKey) -> Arc<Vec<Arc<LbBackend>>> {
     let Some((available, _)) = load_active_projection(service_key) else {
         return Arc::new(Vec::new());
     };

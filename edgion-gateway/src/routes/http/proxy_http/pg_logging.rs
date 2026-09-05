@@ -524,8 +524,8 @@ mod tests {
     //! fields and calling per-backend atomic methods we reproduce the exact
     //! stage sequence that the proxy would emit.
     use super::*;
+    use crate::lb::backend::LbBackend;
     use crate::lb::commit_attempt;
-    use crate::lb::edgion_backend::EdgionBackend;
     use crate::BackendContext;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
@@ -598,8 +598,8 @@ mod tests {
         assert!(rendered.contains("reason=logging-fallback"));
     }
 
-    fn make_backend(ip: [u8; 4], port: u16) -> Arc<EdgionBackend> {
-        Arc::new(EdgionBackend::new(Backend {
+    fn make_backend(ip: [u8; 4], port: u16) -> Arc<LbBackend> {
+        Arc::new(LbBackend::new(Backend {
             addr: SocketAddr::Inet(std::net::SocketAddr::from((ip, port))),
             weight: 1,
             ext: Default::default(),
@@ -609,7 +609,7 @@ mod tests {
     /// Push and commit a new upstream entry through the production ownership path.
     fn setup_committed_attempt(
         ctx: &mut EdgionHttpContext,
-        backend: Arc<EdgionBackend>,
+        backend: Arc<LbBackend>,
         policy: edgion_resources::resources::lb_policy::ParsedLBPolicy,
         start_time: Instant,
     ) {
@@ -639,7 +639,7 @@ mod tests {
             start_time,
             err: Vec::new(),
             lb_backend_addr: None,
-            lb_edgion_backend: Some(backend),
+            lb_backend: Some(backend),
             lb_outlier_completion: None,
             service_key: None,
             lb_policy: Some(policy),
@@ -734,7 +734,7 @@ mod tests {
 
         // Attempt 2: connected to B.
         if let Some(up) = ctx.get_current_upstream_mut() {
-            up.lb_edgion_backend = Some(b.clone());
+            up.lb_backend = Some(b.clone());
             up.lb_policy = Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn);
             commit_attempt(up);
         }
@@ -803,7 +803,7 @@ mod tests {
         });
         ctx.push_upstream(None, None);
         if let Some(up) = ctx.get_current_upstream_mut() {
-            up.lb_edgion_backend = Some(a.clone());
+            up.lb_backend = Some(a.clone());
             up.lb_policy = Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma);
             up.start_time = Instant::now() - Duration::from_millis(50);
             commit_attempt(up);

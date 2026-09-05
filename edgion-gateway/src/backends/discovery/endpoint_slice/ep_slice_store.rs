@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock};
 
 use crate::backends::discovery::{get_service_discovery_coordinator, ServiceDiscoveryCoordinator};
-use crate::lb::EdgionBackend;
+use crate::lb::LbBackend;
 
 static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> =
     LazyLock::new(|| Arc::new(EpSliceStore::new(get_service_discovery_coordinator())));
@@ -82,7 +82,7 @@ where
         endpoints
     }
 
-    pub fn get_backends_for_service(&self, service_key: &str) -> Arc<Vec<Arc<EdgionBackend>>> {
+    pub fn get_backends_for_service(&self, service_key: &str) -> Arc<Vec<Arc<LbBackend>>> {
         self.coordinator
             .load_generation()
             .available(service_key)

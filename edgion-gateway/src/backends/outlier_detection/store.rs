@@ -3,7 +3,7 @@ use super::config::OutlierDetectionResolved;
 use super::state::ejection_duration;
 use super::state::{FailureClass, FailureTransition, PassiveEjectionState};
 use crate::backends::discovery::{get_service_discovery_coordinator, OutlierPolicyIdentity};
-use crate::lb::{EdgionBackend, EndpointRuntimeIdentity};
+use crate::lb::{EndpointRuntimeIdentity, LbBackend};
 use dashmap::DashMap;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
@@ -216,7 +216,7 @@ impl OutlierDetectionStore {
         };
     }
 
-    pub fn capture_completion_token(&self, backend: &EdgionBackend) -> Option<OutlierCompletionToken> {
+    pub fn capture_completion_token(&self, backend: &LbBackend) -> Option<OutlierCompletionToken> {
         let service_key = backend.runtime_identity()?.service_key.as_ref();
         let service = self.services.get(service_key)?;
         Some(OutlierCompletionToken {
@@ -226,7 +226,7 @@ impl OutlierDetectionStore {
 
     pub fn record_failure_for_backend_with_token(
         &self,
-        backend: &EdgionBackend,
+        backend: &LbBackend,
         token: &OutlierCompletionToken,
         class: FailureClass,
     ) {
@@ -236,7 +236,7 @@ impl OutlierDetectionStore {
     pub(crate) fn record_failure_for_backend_in(
         &self,
         coordinator: &crate::backends::discovery::ServiceDiscoveryCoordinator,
-        backend: &EdgionBackend,
+        backend: &LbBackend,
         token: &OutlierCompletionToken,
         class: FailureClass,
     ) {
@@ -300,14 +300,14 @@ impl OutlierDetectionStore {
         );
     }
 
-    pub fn record_success_for_backend_with_token(&self, backend: &EdgionBackend, token: &OutlierCompletionToken) {
+    pub fn record_success_for_backend_with_token(&self, backend: &LbBackend, token: &OutlierCompletionToken) {
         self.record_success_for_backend_in(get_service_discovery_coordinator().as_ref(), backend, token);
     }
 
     pub(crate) fn record_success_for_backend_in(
         &self,
         coordinator: &crate::backends::discovery::ServiceDiscoveryCoordinator,
-        backend: &EdgionBackend,
+        backend: &LbBackend,
         token: &OutlierCompletionToken,
     ) {
         let Some(identity) = backend.runtime_identity() else {

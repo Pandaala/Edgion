@@ -240,7 +240,7 @@ The magnitudes stay hardcoded pending benchmarks, per the precedent in
 
 | Property | Value |
 |---|---|
-| New per-endpoint state | **None.** Reuses the Peak-EWMA `AtomicU64` via `upstream.lb_edgion_backend`. |
+| New per-endpoint state | **None.** Reuses the Peak-EWMA `AtomicU64` via `upstream.lb_backend`. |
 | New per-attempt state | One resolved boolean on `UpstreamInfo`, alongside the existing `lb_policy`. Required because `selected_effective_policy()` returns `None` for `SelectedHttpBackend::Service`, so the generic path has no policy snapshot to consult at response time. Resolving it at peer selection keeps the response path free of map lookups and keeps the switch stable across a mid-request config swap. |
 | Read cost | Unchanged — the penalty is invisible to the read path. |
 | Write cost | On a qualifying response only: one bounded header parse plus one CAS. |

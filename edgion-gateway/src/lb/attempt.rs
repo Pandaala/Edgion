@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use super::edgion_backend::EdgionBackend;
+use super::backend::LbBackend;
 
 /// Move-only owner for an LB attempt's outstanding-connection accounting.
 ///
@@ -20,13 +20,13 @@ use super::edgion_backend::EdgionBackend;
 /// Peak-EWMA multiplies its latency estimate by `conn + 1`.
 #[derive(Debug)]
 pub struct LbCommitGuard {
-    backend: Arc<EdgionBackend>,
+    backend: Arc<LbBackend>,
     /// Cleared by the first finalize; a second is a no-op.
     live: bool,
 }
 
 impl LbCommitGuard {
-    fn new(backend: Arc<EdgionBackend>) -> Self {
+    fn new(backend: Arc<LbBackend>) -> Self {
         Self { backend, live: true }
     }
 
@@ -45,14 +45,14 @@ impl Drop for LbCommitGuard {
 
 /// Record LB commit state after a successful upstream connect.
 ///
-/// Reads `upstream.lb_policy` and `upstream.lb_edgion_backend`, writes
+/// Reads `upstream.lb_policy` and `upstream.lb_backend`, writes
 /// `upstream.lb_committed`. Idempotent: a second call is a no-op.
 #[inline]
 pub fn commit_attempt(upstream: &mut crate::UpstreamInfo) {
     if upstream.lb_committed.is_some() {
         return;
     }
-    let Some(backend) = upstream.lb_edgion_backend.as_ref().cloned() else {
+    let Some(backend) = upstream.lb_backend.as_ref().cloned() else {
         return;
     };
     // Both scoring policies maintain the count; the non-scoring ones do not
@@ -80,7 +80,7 @@ pub fn finalize_attempt(upstream: &mut crate::UpstreamInfo) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lb::edgion_backend::EdgionBackend;
+    use crate::lb::backend::LbBackend;
     use crate::UpstreamInfo;
     use edgion_resources::resources::lb_policy::ConsistentHashOn;
     use edgion_resources::resources::lb_policy::ParsedLBPolicy;
@@ -90,15 +90,15 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    fn make_backend(port: u16) -> Arc<EdgionBackend> {
-        Arc::new(EdgionBackend::new(Backend {
+    fn make_backend(port: u16) -> Arc<LbBackend> {
+        Arc::new(LbBackend::new(Backend {
             addr: SocketAddr::Inet(StdSocketAddr::from(([127, 0, 0, 1], port))),
             weight: 1,
             ext: Default::default(),
         }))
     }
 
-    fn make_upstream(backend: Arc<EdgionBackend>, policy: Option<ParsedLBPolicy>) -> UpstreamInfo {
+    fn make_upstream(backend: Arc<LbBackend>, policy: Option<ParsedLBPolicy>) -> UpstreamInfo {
         UpstreamInfo {
             ip: None,
             port: None,
@@ -112,7 +112,7 @@ mod tests {
             start_time: Instant::now(),
             err: Vec::new(),
             lb_backend_addr: None,
-            lb_edgion_backend: Some(backend),
+            lb_backend: Some(backend),
             lb_outlier_completion: None,
             service_key: None,
             lb_policy: policy,

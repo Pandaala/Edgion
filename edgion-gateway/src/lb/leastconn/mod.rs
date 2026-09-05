@@ -1,6 +1,6 @@
 //! LeastConnection load balancing algorithm
 //!
-//! Per-backend connection tracking lives on `EdgionBackend`. Selection is
+//! Per-backend connection tracking lives on `LbBackend`. Selection is
 //! performed by `lb::selection::p2c`. This module owns the background cleaner.
 
 mod cleaner;
@@ -10,7 +10,7 @@ pub use cleaner::BackendCleaner;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lb::edgion_backend::EdgionBackend;
+    use crate::lb::backend::LbBackend;
     use crate::lb::runtime_state;
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
     use pingora_load_balancing::Backend;
@@ -75,7 +75,7 @@ mod tests {
             ext: Default::default(),
         };
         let addr = backend.addr.clone();
-        let arc = Arc::new(EdgionBackend::new(backend));
+        let arc = Arc::new(LbBackend::new(backend));
 
         runtime_state::begin_draining(svc, &addr, arc.clone());
         let listed = runtime_state::all_draining_backends();
@@ -104,7 +104,7 @@ mod tests {
                 ext: Default::default(),
             };
             let addr = b.addr.clone();
-            runtime_state::begin_draining(svc, &addr, Arc::new(EdgionBackend::new(b)));
+            runtime_state::begin_draining(svc, &addr, Arc::new(LbBackend::new(b)));
         }
         let before = runtime_state::all_draining_backends();
         let count_before = before

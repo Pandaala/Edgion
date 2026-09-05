@@ -271,7 +271,7 @@ pub async fn upstream_peer(
     };
 
     // Circuit breaker: admit-time per-endpoint concurrency cap. The chosen
-    // endpoint (`lb_edgion_backend`) is now known but Pingora has NOT yet
+    // endpoint (`lb_backend`) is now known but Pingora has NOT yet
     // connected the returned peer — this is the pre-connect admission point, and
     // the counter increment IS the acquire. If the endpoint is at cap, shed with
     // a non-retrying 503 that mirrors the established `end_response_503` +
@@ -281,10 +281,10 @@ pub async fn upstream_peer(
     // returns before any connect, it reaches none of the outlier-detection
     // `record_failure` sites — a busy-but-healthy endpoint is never ejected by
     // its own shed. Bypass paths (DirectEndpoint / ExternalJump) carry no service
-    // key and no `lb_edgion_backend`, so this is a no-op for them.
+    // key and no `lb_backend`, so this is a no-op for them.
     if let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.clone()) {
         if let Some(max) = selected_effective_policy(ctx).and_then(|policy| policy.circuit_breaker_limit) {
-            if let Some(chosen_backend) = ctx.get_current_upstream().and_then(|u| u.lb_edgion_backend.clone()) {
+            if let Some(chosen_backend) = ctx.get_current_upstream().and_then(|u| u.lb_backend.clone()) {
                 // Release any permit this request acquired on a PRIOR attempt
                 // before re-acquiring. On retry, Pingora re-enters upstream_peer
                 // with the same ctx (and its permit) still alive; without this a
@@ -2578,7 +2578,7 @@ mod tests {
 
     #[test]
     fn begin_service_attempt_releases_previous_endpoint_permit_first() {
-        let backend = Arc::new(crate::lb::EdgionBackend::new(Backend::new("127.0.0.1:18080").unwrap()));
+        let backend = Arc::new(crate::lb::LbBackend::new(Backend::new("127.0.0.1:18080").unwrap()));
         let mut ctx = EdgionHttpContext::new();
         ctx.cb_permit = crate::backends::circuit_breaker::CbPermit::try_acquire(backend.clone(), 1);
         assert_eq!(backend.cb_inflight(), 1);
@@ -3270,7 +3270,7 @@ mod tests {
             start_time: std::time::Instant::now(),
             err: Vec::new(),
             lb_backend_addr: None,
-            lb_edgion_backend: None,
+            lb_backend: None,
             lb_outlier_completion: None,
             service_key: None,
             lb_policy: None,

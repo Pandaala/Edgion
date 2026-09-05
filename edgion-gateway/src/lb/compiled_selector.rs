@@ -1,8 +1,8 @@
 //! Eagerly compiled selectors owned by one Service selector generation.
 //!
-//! Backends are stored as `Arc<EdgionBackend>` so selectors return the live
+//! Backends are stored as `Arc<LbBackend>` so selectors return the live
 //! object (with its metric atomics). `RrCore` / `ChCore` resolve
-//! `pingora::Backend` → `Arc<EdgionBackend>` via an addr-keyed map built at
+//! `pingora::Backend` → `Arc<LbBackend>` via an addr-keyed map built at
 //! compile time, with no per-request allocation. `MetricCore` (LeastConn /
 //! EWMA) drives P2C over per-backend atomic counters.
 
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::lb::edgion_backend::EdgionBackend;
+use crate::lb::backend::LbBackend;
 use crate::lb::selection::p2c::select_p2c;
 use crate::lb::selection::{consistent_hash::ConsistentHashRing, round_robin::RoundRobinSelector};
 
@@ -28,9 +28,9 @@ pub enum PolicyKind {
 /// Maximum number of fallback iterations when a healthy backend is rejected.
 const SELECT_MAX_ITERATIONS: usize = 256;
 
-/// Build a map from `std::net::SocketAddr` → `Arc<EdgionBackend>` for fast
+/// Build a map from `std::net::SocketAddr` → `Arc<LbBackend>` for fast
 /// resolution after the inner pingora selector picks a `Backend` by address.
-fn build_addr_map(backends: &[Arc<EdgionBackend>]) -> HashMap<SocketAddr, Arc<EdgionBackend>> {
+fn build_addr_map(backends: &[Arc<LbBackend>]) -> HashMap<SocketAddr, Arc<LbBackend>> {
     backends
         .iter()
         .filter_map(|b| {
@@ -44,14 +44,11 @@ fn build_addr_map(backends: &[Arc<EdgionBackend>]) -> HashMap<SocketAddr, Arc<Ed
 }
 
 /// Resolve the `pingora::Backend` chosen by an inner selector back to the live
-/// `Arc<EdgionBackend>` via the addr-keyed map. Non-Inet addresses (which the
+/// `Arc<LbBackend>` via the addr-keyed map. Non-Inet addresses (which the
 /// addr_map never contains) resolve to `None`. Does not re-apply the health
 /// filter: the chosen backend already passed it during the selector walk, so
 /// re-checking here would only open a TOCTOU window that could drop a valid pick.
-fn resolve_backend<'a>(
-    b: &Backend,
-    addr_map: &'a HashMap<SocketAddr, Arc<EdgionBackend>>,
-) -> Option<&'a Arc<EdgionBackend>> {
+fn resolve_backend<'a>(b: &Backend, addr_map: &'a HashMap<SocketAddr, Arc<LbBackend>>) -> Option<&'a Arc<LbBackend>> {
     if let PSocketAddr::Inet(addr) = b.addr {
         addr_map.get(&addr)
     } else {
@@ -65,25 +62,25 @@ fn resolve_backend<'a>(
 /// selection paths cannot drift apart.
 fn backend_passes_health(
     b: &Backend,
-    addr_map: &HashMap<SocketAddr, Arc<EdgionBackend>>,
-    health_filter: &impl Fn(&EdgionBackend) -> bool,
+    addr_map: &HashMap<SocketAddr, Arc<LbBackend>>,
+    health_filter: &impl Fn(&LbBackend) -> bool,
 ) -> bool {
     resolve_backend(b, addr_map).is_some_and(|eb| health_filter(eb))
 }
 
-/// Round-robin core: holds the canonical `Arc<EdgionBackend>` list plus the
+/// Round-robin core: holds the canonical `Arc<LbBackend>` list plus the
 /// pingora-backed weighted selector. The selector is materialized once at
-/// compile time from the EdgionBackend slice. A per-addr map resolves the
-/// `Backend` returned by the inner selector back to the live `Arc<EdgionBackend>`
+/// compile time from the LbBackend slice. A per-addr map resolves the
+/// `Backend` returned by the inner selector back to the live `Arc<LbBackend>`
 /// so no rewrapping occurs on the hot path.
 pub struct RrCore {
-    backends: Arc<Vec<Arc<EdgionBackend>>>,
+    backends: Arc<Vec<Arc<LbBackend>>>,
     selector: RoundRobinSelector,
-    addr_map: HashMap<SocketAddr, Arc<EdgionBackend>>,
+    addr_map: HashMap<SocketAddr, Arc<LbBackend>>,
 }
 
 impl RrCore {
-    fn build(backends: Arc<Vec<Arc<EdgionBackend>>>) -> Self {
+    fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
         let pingora_view: Vec<Backend> = backends.iter().map(|b| b.inner().clone()).collect();
         let selector = RoundRobinSelector::build(&pingora_view);
         let addr_map = build_addr_map(&backends);
@@ -94,7 +91,7 @@ impl RrCore {
         }
     }
 
-    fn select(&self, health_filter: impl Fn(&EdgionBackend) -> bool) -> Option<Arc<EdgionBackend>> {
+    fn select(&self, health_filter: impl Fn(&LbBackend) -> bool) -> Option<Arc<LbBackend>> {
         if self.backends.is_empty() {
             return None;
         }
@@ -114,13 +111,13 @@ impl RrCore {
 /// allocate a fresh `Vec<Backend>` and reset RR fairness on every keyless
 /// request (real-world scenario: missing cookie / unauthenticated traffic).
 pub struct ChCore {
-    backends: Arc<Vec<Arc<EdgionBackend>>>,
+    backends: Arc<Vec<Arc<LbBackend>>>,
     ring: ConsistentHashRing,
     rr_fallback: RrCore,
 }
 
 impl ChCore {
-    fn build(backends: Arc<Vec<Arc<EdgionBackend>>>) -> Self {
+    fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
         let pingora_view: Vec<Backend> = backends.iter().map(|b| b.inner().clone()).collect();
         let ring = ConsistentHashRing::build(&pingora_view);
         let rr_fallback = RrCore::build(backends.clone());
@@ -131,7 +128,7 @@ impl ChCore {
         }
     }
 
-    fn select(&self, hash_key: &[u8], health_filter: impl Fn(&EdgionBackend) -> bool) -> Option<Arc<EdgionBackend>> {
+    fn select(&self, hash_key: &[u8], health_filter: impl Fn(&LbBackend) -> bool) -> Option<Arc<LbBackend>> {
         if self.backends.is_empty() {
             return None;
         }
@@ -147,14 +144,14 @@ impl ChCore {
 }
 
 /// Metric-driven core (LeastConn / EWMA). Holds the canonical
-/// `Arc<EdgionBackend>` list; selection is done via P2C over per-backend
+/// `Arc<LbBackend>` list; selection is done via P2C over per-backend
 /// atomic counters.
 pub struct MetricCore {
-    backends: Arc<Vec<Arc<EdgionBackend>>>,
+    backends: Arc<Vec<Arc<LbBackend>>>,
 }
 
 impl MetricCore {
-    fn build(backends: Arc<Vec<Arc<EdgionBackend>>>) -> Self {
+    fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
         Self { backends }
     }
 }
@@ -171,7 +168,7 @@ impl CompiledSelector {
     /// Borrow this selector's own backend list. Used by the degrade-threshold
     /// counting pass so the count and the selection walk operate on the exact
     /// same list (no `replace_backends` TOCTOU skew).
-    fn backends_slice(&self) -> &[Arc<EdgionBackend>] {
+    fn backends_slice(&self) -> &[Arc<LbBackend>] {
         match self {
             CompiledSelector::RoundRobin(c) => &c.backends,
             CompiledSelector::ConsistentHash(c) => &c.backends,
@@ -185,7 +182,7 @@ impl CompiledSelector {
     /// than `floor` survive. Early-exits as soon as `floor` survivors are seen,
     /// so the common healthy case scans at most `floor` backends. `floor == 0`
     /// disables degrade mode (returns `false`).
-    pub fn degrade_should_engage(&self, floor: usize, quiet: impl Fn(&EdgionBackend) -> bool) -> bool {
+    pub fn degrade_should_engage(&self, floor: usize, quiet: impl Fn(&LbBackend) -> bool) -> bool {
         if floor == 0 {
             return false;
         }
@@ -211,7 +208,7 @@ impl CompiledSelector {
         }
     }
 
-    /// Select a backend, returning a shared `Arc<EdgionBackend>` so callers
+    /// Select a backend, returning a shared `Arc<LbBackend>` so callers
     /// can call metric methods on the live object without taking ownership.
     ///
     /// * `hash_key` — `Some` only for ConsistentHash; an empty key falls back
@@ -229,9 +226,9 @@ impl CompiledSelector {
     pub fn select(
         &self,
         hash_key: Option<&[u8]>,
-        health_filter: impl Fn(&EdgionBackend) -> bool,
+        health_filter: impl Fn(&LbBackend) -> bool,
         now_units: u32,
-    ) -> Option<Arc<EdgionBackend>> {
+    ) -> Option<Arc<LbBackend>> {
         match self {
             CompiledSelector::RoundRobin(core) => core.select(health_filter),
             CompiledSelector::ConsistentHash(core) => {
@@ -259,7 +256,7 @@ impl CompiledSelector {
     }
 }
 
-pub(crate) fn compile(kind: PolicyKind, backends: Arc<Vec<Arc<EdgionBackend>>>) -> CompiledSelector {
+pub(crate) fn compile(kind: PolicyKind, backends: Arc<Vec<Arc<LbBackend>>>) -> CompiledSelector {
     match kind {
         PolicyKind::RoundRobin => CompiledSelector::RoundRobin(RrCore::build(backends)),
         PolicyKind::ConsistentHash => CompiledSelector::ConsistentHash(ChCore::build(backends)),
@@ -281,7 +278,7 @@ pub struct CompiledSelectors {
 }
 
 impl CompiledSelectors {
-    pub(crate) fn build(backends: Arc<Vec<Arc<EdgionBackend>>>) -> Self {
+    pub(crate) fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
         Self {
             round_robin: Arc::new(compile(PolicyKind::RoundRobin, backends.clone())),
             consistent_hash: Arc::new(compile(PolicyKind::ConsistentHash, backends.clone())),
@@ -308,10 +305,10 @@ mod degrade_should_engage_tests {
     use pingora_load_balancing::Backend;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    fn backends(n: u8) -> Vec<Arc<EdgionBackend>> {
+    fn backends(n: u8) -> Vec<Arc<LbBackend>> {
         (0..n)
             .map(|i| {
-                Arc::new(EdgionBackend::new(Backend {
+                Arc::new(LbBackend::new(Backend {
                     addr: PSocketAddr::Inet(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)), 80)),
                     weight: 1,
                     ext: Default::default(),
@@ -359,17 +356,17 @@ mod tests {
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    fn backend(i: u32) -> EdgionBackend {
+    fn backend(i: u32) -> LbBackend {
         let octets = i.to_be_bytes();
         let ip = IpAddr::V4(Ipv4Addr::new(10, octets[1], octets[2], octets[3]));
-        EdgionBackend::new(Backend {
+        LbBackend::new(Backend {
             addr: PSocketAddr::Inet(SocketAddr::new(ip, 80)),
             weight: 1,
             ext: Default::default(),
         })
     }
 
-    fn arc_backend(i: u32) -> Arc<EdgionBackend> {
+    fn arc_backend(i: u32) -> Arc<LbBackend> {
         Arc::new(backend(i))
     }
 

@@ -167,7 +167,7 @@ edgion-gateway/src/lb/
 ├── leastconn/                # LeastConn state management
 │   └── cleaner.rs            # stale-state cleaner
 ├── compiled_selector.rs      # immutable eager selector bundle (multi-PolicyKind)
-├── edgion_backend.rs         # EdgionBackend — LB-visible backend handle
+├── backend.rs                # LbBackend — LB-visible backend handle
 └── runtime_state/            # runtime backend state
     └── mod.rs                # backend active-state tracking
 ```

@@ -19,7 +19,7 @@ P2C-sampled candidates. This entry covers the estimate itself, not the sampler
 ## What we run today
 
 `edgion-gateway/src/lb/ewma/score.rs` — `PeakEwmaScore`, one packed `AtomicU64`
-per backend, held by `EdgionBackend::score`:
+per backend, held by `LbBackend::score`:
 
 ```text
 [63:32] ts_units : u32   monotonic, 16 ms granularity
@@ -49,7 +49,7 @@ process-wide setting.
 ## What we ran before 2026-09-04 (replaced)
 
 Per backend, one `AtomicU64` holding microseconds, initialized to
-`INITIAL_EWMA_US = 1_000` (1 ms), in `edgion-gateway/src/lb/edgion_backend.rs`.
+`INITIAL_EWMA_US = 1_000` (1 ms), in `edgion-gateway/src/lb/backend.rs`.
 
 ```text
 update(sample):  ewma' = (alpha * sample + (100 - alpha) * ewma) / 100
@@ -271,7 +271,7 @@ and a torn read across two atomics:
 [31:0]  rtt_us   : u32   saturating (~71 minutes)
 ```
 
-One `load(Relaxed)` to read, one `compare_exchange_weak` to write. `EdgionBackend` keeps the
+One `load(Relaxed)` to read, one `compare_exchange_weak` to write. `LbBackend` keeps the
 same field count — the field becomes `score: PeakEwmaScore`, same size. At a 10 s half-life the
 16 ms quantization error is ≈0.11%.
 
@@ -398,7 +398,7 @@ These are correctness requirements, not style notes. Each has a failure mode tha
 score = read(now).saturating_mul(conn + 1)
 ```
 
-We do not need Tower's refcount trick — `EdgionBackend` already has `conn_count`. Both scoring
+We do not need Tower's refcount trick — `LbBackend` already has `conn_count`. Both scoring
 policies now maintain it (`lb/attempt.rs`; test `both_scoring_policies_increment_conn`); the
 replaced estimator incremented only on the `LeastConn` branch.
 

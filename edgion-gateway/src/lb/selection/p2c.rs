@@ -1,4 +1,4 @@
-//! Power of Two Choices (P2C) selection over `Arc<EdgionBackend>`.
+//! Power of Two Choices (P2C) selection over `Arc<LbBackend>`.
 //!
 //! Used by LeastConn / EWMA to pick a backend without scanning the full list.
 //! Two random backends are sampled; the one with the smaller metric is
@@ -11,7 +11,7 @@
 // skewed services. P2C is the same approach used by Envoy / Linkerd2 / Pingora;
 // it should suffice for the common case.
 
-use crate::lb::edgion_backend::EdgionBackend;
+use crate::lb::backend::LbBackend;
 use rand::Rng;
 use std::sync::Arc;
 
@@ -25,14 +25,14 @@ use std::sync::Arc;
 /// * `max_retries` — caps the worst-case retry budget when both samples fail
 ///   the health filter, bounding latency on degraded services.
 pub fn select_p2c<F, M>(
-    backends: &[Arc<EdgionBackend>],
+    backends: &[Arc<LbBackend>],
     metric: M,
     health_filter: F,
     max_retries: usize,
-) -> Option<Arc<EdgionBackend>>
+) -> Option<Arc<LbBackend>>
 where
-    F: Fn(&EdgionBackend) -> bool,
-    M: Fn(&EdgionBackend) -> u64,
+    F: Fn(&LbBackend) -> bool,
+    M: Fn(&LbBackend) -> u64,
 {
     if backends.is_empty() {
         return None;
@@ -79,10 +79,10 @@ mod tests {
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    fn backend(i: u32) -> Arc<EdgionBackend> {
+    fn backend(i: u32) -> Arc<LbBackend> {
         let octets = i.to_be_bytes();
         let ip = IpAddr::V4(Ipv4Addr::new(10, octets[1], octets[2], octets[3]));
-        Arc::new(EdgionBackend::new(Backend {
+        Arc::new(LbBackend::new(Backend {
             addr: PSocketAddr::Inet(SocketAddr::new(ip, 80)),
             weight: 1,
             ext: Default::default(),
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn fallback_finds_lone_healthy_backend_among_unhealthy() {
-        let bs: Vec<Arc<EdgionBackend>> = (0..16).map(backend).collect();
+        let bs: Vec<Arc<LbBackend>> = (0..16).map(backend).collect();
         let healthy_addr = bs[7].inner().addr.clone();
         let picked = select_p2c(&bs, |_| 0u64, |b| b.inner().addr == healthy_addr, 4);
         assert!(picked.is_some());
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn p2c_distribution_within_tolerance_under_uniform_metric() {
         let n = 32usize;
-        let bs: Vec<Arc<EdgionBackend>> = (0..n as u32).map(backend).collect();
+        let bs: Vec<Arc<LbBackend>> = (0..n as u32).map(backend).collect();
         let trials = 10_000usize;
         let mut counts: HashMap<std::net::SocketAddr, usize> = HashMap::new();
         for _ in 0..trials {

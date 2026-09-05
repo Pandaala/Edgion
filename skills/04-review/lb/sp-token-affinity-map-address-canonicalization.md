@@ -13,7 +13,7 @@ closed: 2026-06-12
 The session-affinity token (`pg_upstream_response_filter.rs`) and the affinity-map key
 (`lb::runtime_state::build_sp_affinity_map`) must hash the **same canonical address string** —
 `std::net::SocketAddr::to_string()` of the **LB cell address** (`upstream.lb_backend_addr`,
-i.e. `EdgionBackend.addr` before `resolve_target_port_key`). Two historical bugs broke this:
+i.e. `LbBackend.addr` before `resolve_target_port_key`). Two historical bugs broke this:
 
 - **route-07 (IPv6 bracket mismatch):** the response side hashed `format!("{}:{}", ip, port)` where
   `ip` is `IpAddr::to_string()` → `::1:30001` (unbracketed), while the map hashed

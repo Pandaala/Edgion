@@ -7,20 +7,20 @@
 //! request-termination path (success, upstream error, client disconnect,
 //! cancellation, early return) releases the slot without an explicit call.
 
-use crate::lb::edgion_backend::EdgionBackend;
+use crate::lb::backend::LbBackend;
 use std::sync::Arc;
 
 /// RAII circuit-breaker permit. Acquired at admit time; releasing is automatic
 /// on drop, so every request-termination path (success, upstream error, client
 /// disconnect, cancellation, early return) returns the slot exactly once.
 pub struct CbPermit {
-    backend: Arc<EdgionBackend>,
+    backend: Arc<LbBackend>,
 }
 
 impl CbPermit {
     /// Try to admit one request to `backend` under cap `max`. Returns the held
     /// permit on success, or `None` if the endpoint is at cap (caller must shed).
-    pub fn try_acquire(backend: Arc<EdgionBackend>, max: u32) -> Option<CbPermit> {
+    pub fn try_acquire(backend: Arc<LbBackend>, max: u32) -> Option<CbPermit> {
         if backend.try_acquire_cb_permit(max) {
             Some(CbPermit { backend })
         } else {
@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn permit_releases_on_drop() {
-        let b = Arc::new(EdgionBackend::new(Backend::new("127.0.0.1:1").unwrap()));
+        let b = Arc::new(LbBackend::new(Backend::new("127.0.0.1:1").unwrap()));
         {
             let _p = CbPermit::try_acquire(b.clone(), 1).unwrap();
             assert_eq!(b.cb_inflight(), 1);
