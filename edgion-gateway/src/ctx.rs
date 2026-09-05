@@ -750,7 +750,11 @@ mod waf_context_tests {
 
     #[test]
     fn finalization_distinguishes_not_run_incomplete_and_allowed() {
-        let clean = request_headers_outcome("", b"/clean");
+        // The rule set must be non-empty to compile; `/clean` simply does not match it.
+        let clean = request_headers_outcome(
+            "SecRule REQUEST_URI \"@contains /detected\" \"id:1,phase:1,pass,log\"\n",
+            b"/clean",
+        );
         let detected = request_headers_outcome(
             "SecRule REQUEST_URI \"@contains /detected\" \"id:1,phase:1,pass,log\"\n",
             b"/detected",
@@ -5180,7 +5184,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1104);
+        assert_eq!(std::mem::size_of_val(&ctx), 1112);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

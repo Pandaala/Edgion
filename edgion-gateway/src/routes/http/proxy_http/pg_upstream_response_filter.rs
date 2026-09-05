@@ -666,6 +666,7 @@ mod lb_sample_tests {
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy: None,
         });
         let bc = ctx.backend_context.as_mut().unwrap();
         bc.upstreams.push(crate::UpstreamInfo {
