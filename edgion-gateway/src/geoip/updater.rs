@@ -1006,12 +1006,17 @@ mod tests {
         );
     }
 
+    /// First-start `ensure_free_space` requires `max_db_bytes` on the temp
+    /// volume. Keep this cap fixture-scale so a constrained host tmpfs (well
+    /// under 1 GiB) can still exercise download, rename, swap, and `.meta`.
+    /// Disk exhaustion is covered by
+    /// `insufficient_free_space_fails_with_disk_reason_not_fetch`.
     #[tokio::test]
     async fn successful_cycle_renames_swaps_and_persists_meta() {
         let dir = tempfile::tempdir().unwrap();
         let body = std::fs::read(fixture_city_db()).unwrap();
         let url = serve_once(200, &[("etag", "\"v1\"")], body).await;
-        let u = updater_for(dir.path(), url, 1 << 30);
+        let u = updater_for(dir.path(), url, 1 << 20);
         let mut state = UpdateState::default();
         assert!(matches!(u.run_cycle(&mut state).await, Ok(CycleOutcome::Swapped)));
         assert!(dir.path().join("db.mmdb").exists());
