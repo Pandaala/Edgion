@@ -85,10 +85,23 @@ pub struct JwksProviderConfig {
     pub discovery_max_response_bytes: usize,
     pub jwks_max_response_bytes: usize,
     pub request_timeout: Duration,
+    /// How long a failed discovery outcome is reused before the next fetch.
+    /// Production uses [`DISCOVERY_FAILURE_BACKOFF`]; tests shorten it.
+    pub discovery_failure_backoff: Duration,
     /// Stable, low-cardinality component label used as the `plugin` label of
     /// `edgion_gateway_outbound_tls_san_mismatch_total`. Avoid per-instance
     /// dynamic strings.
     pub component_label: &'static str,
+}
+
+/// Kong-style short rediscovery gate after a failed discovery fetch.
+/// Not an operator field; the next call after this deadline retries.
+pub(crate) const DISCOVERY_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
+
+#[derive(Clone)]
+struct DiscoveryFailure {
+    until: Instant,
+    error: JwksProviderError,
 }
 
 /// Minimal discovery doc test fixture — only the two universal fields.
@@ -138,6 +151,7 @@ pub struct JwksProvider<D: DiscoveryDoc> {
     validator: DiscoveryValidator<D>,
     discovery_doc: RwLock<Option<Arc<D>>>,
     discovery_refresh: Mutex<()>,
+    discovery_failure: RwLock<Option<DiscoveryFailure>>,
     jwks_state: RwLock<JwksState>,
     jwks_refresh: Mutex<()>,
 }
@@ -152,6 +166,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             validator,
             discovery_doc: RwLock::new(None),
             discovery_refresh: Mutex::new(()),
+            discovery_failure: RwLock::new(None),
             jwks_state: RwLock::new(JwksState::default()),
             jwks_refresh: Mutex::new(()),
         })
@@ -164,16 +179,54 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     }
 
     /// Get cached discovery, fetch if absent. Validator runs **before** caching;
-    /// a failed validator does NOT poison the cache (next call retries).
+    /// a failed validator does NOT poison the cache. Transport, HTTP, parse, and
+    /// validator failures share a short backoff so concurrent cold callers do
+    /// not turn one provider outage into one timeout per waiter.
     pub async fn get_or_fetch_discovery(&self) -> Result<Arc<D>, JwksProviderError> {
         if let Some(doc) = self.discovery_doc.read().await.as_ref() {
             return Ok(doc.clone());
+        }
+        if let Some(error) = self.discovery_backoff_error().await {
+            return Err(error);
         }
         let _guard = self.discovery_refresh.lock().await;
         if let Some(doc) = self.discovery_doc.read().await.as_ref() {
             return Ok(doc.clone());
         }
+        if let Some(error) = self.discovery_backoff_error().await {
+            return Err(error);
+        }
 
+        match self.fetch_and_validate_discovery().await {
+            Ok(doc) => {
+                *self.discovery_failure.write().await = None;
+                *self.discovery_doc.write().await = Some(doc.clone());
+                Ok(doc)
+            }
+            Err(error) => Err(self.record_discovery_failure(error).await),
+        }
+    }
+
+    async fn discovery_backoff_error(&self) -> Option<JwksProviderError> {
+        let failure = self.discovery_failure.read().await;
+        failure.as_ref().and_then(|failure| {
+            if Instant::now() < failure.until {
+                Some(failure.error.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    async fn record_discovery_failure(&self, error: JwksProviderError) -> JwksProviderError {
+        *self.discovery_failure.write().await = Some(DiscoveryFailure {
+            until: Instant::now() + self.config.discovery_failure_backoff,
+            error: error.clone(),
+        });
+        error
+    }
+
+    async fn fetch_and_validate_discovery(&self) -> Result<Arc<D>, JwksProviderError> {
         super::plugin::admit_oidc_outbound_url(&self.config.discovery_url)
             .map_err(|error| JwksProviderError::Other(error.to_string()))?;
 
@@ -212,10 +265,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         }
         // Caller-supplied config-aware validation runs before caching.
         (self.validator)(&doc).map_err(JwksProviderError::Other)?;
-
-        let doc = Arc::new(doc);
-        *self.discovery_doc.write().await = Some(doc.clone());
-        Ok(doc)
+        Ok(Arc::new(doc))
     }
 
     /// Get JWKS. Stale-while-revalidate: if the upstream fetch fails and we
@@ -344,6 +394,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     /// Used by OIDC plugin tests that exercise post-discovery code paths.
     #[cfg(test)]
     pub async fn seed_discovery(&self, doc: D) {
+        *self.discovery_failure.write().await = None;
         *self.discovery_doc.write().await = Some(Arc::new(doc));
     }
 }
@@ -468,6 +519,7 @@ mod tests {
             discovery_max_response_bytes: 65_536,
             jwks_max_response_bytes: 1_048_576,
             request_timeout: Duration::from_secs(2),
+            discovery_failure_backoff: Duration::from_millis(200),
             component_label: "test",
         }
     }
@@ -647,6 +699,7 @@ mod tests {
             discovery_max_response_bytes: 65_536,
             jwks_max_response_bytes: 1_048_576,
             request_timeout: Duration::from_millis(timeout_ms),
+            discovery_failure_backoff: Duration::from_millis(200),
             component_label: "test",
         }
     }
@@ -817,6 +870,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_discovery_failure_backoff_reuses_error_without_refetch() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let first = p.get_or_fetch_discovery().await.expect_err("discovery 5xx must error");
+        let second = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("backoff must reuse the failed outcome");
+        assert_eq!(first, second);
+        assert!(
+            p.cached_discovery().await.is_none(),
+            "failure backoff must not publish a discovery snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discovery_recovers_after_failure_backoff() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        mount_ok_discovery(&server).await;
+        let mut cfg = wm_config(&server.uri(), 60_000, 0, 2_000);
+        cfg.discovery_failure_backoff = Duration::from_millis(50);
+        let p = build_provider(cfg);
+        p.get_or_fetch_discovery()
+            .await
+            .expect_err("first discovery attempt must fail");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let recovered = p
+            .get_or_fetch_discovery()
+            .await
+            .expect("retry after backoff must succeed");
+        let cached = p.cached_discovery().await.expect("recovery publishes a snapshot");
+        assert!(Arc::ptr_eq(&recovered, &cached));
+    }
+
+    #[tokio::test]
+    async fn test_discovery_concurrent_failures_one_fetch_then_backoff() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(503).set_delay(Duration::from_millis(40)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut cfg = wm_config(&server.uri(), 60_000, 0, 2_000);
+        cfg.discovery_failure_backoff = Duration::from_secs(2);
+        let p = build_provider(cfg);
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let provider = p.clone();
+            handles.push(tokio::spawn(async move { provider.get_or_fetch_discovery().await }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("join")
+                .expect_err("concurrent cold callers must see the failed fetch");
+        }
+        for _ in 0..8 {
+            p.get_or_fetch_discovery()
+                .await
+                .expect_err("callers inside the backoff window must not contact the provider");
+        }
+    }
+
+    #[tokio::test]
     async fn test_discovery_malformed_json_returns_error() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -893,6 +1023,7 @@ mod tests {
             discovery_max_response_bytes: 65_536,
             jwks_max_response_bytes: 1_048_576,
             request_timeout: Duration::from_millis(500),
+            discovery_failure_backoff: Duration::from_millis(200),
             component_label: "test",
         };
         let p = build_provider(cfg);

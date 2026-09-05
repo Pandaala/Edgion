@@ -83,6 +83,8 @@
 | `introspectionCacheTtl` | Integer | `0` | Introspection 结果缓存 TTL（秒），`0` 禁用 |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token 端点认证方式。可选值：`client_secret_basic` | `client_secret_post` |
 
+discovery 拉取失败会记住 5 秒，并发或紧随其后的请求复用同一次失败，而不会再次访问身份提供方。该窗口结束后下一次调用会重试；成功的文档会替换失败状态，并在该插件 generation 的生命周期内保持缓存。该间隔不可配置。
+
 ### 内存缓存限制
 
 只有 positive introspection 结果使用 TinyUFO/S3-FIFO。Access Token 间接存储

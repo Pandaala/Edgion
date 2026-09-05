@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
-use super::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, JwksProviderError};
+use super::jwks_provider::{
+    DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, JwksProviderError, DISCOVERY_FAILURE_BACKOFF,
+};
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use super::refresh_flight_registry::RefreshFlightRegistry;
 use crate::cache::{LogicalWeight, ShardedLruCache, TinyUfoTtlCache};
@@ -466,6 +468,7 @@ impl OpenidConnect {
                 discovery_max_response_bytes: config.discovery_max_response_bytes,
                 jwks_max_response_bytes: config.jwks_max_response_bytes,
                 request_timeout: Duration::from_secs(config.timeout),
+                discovery_failure_backoff: DISCOVERY_FAILURE_BACKOFF,
                 component_label: "openid_connect",
             };
             JwksProvider::new(provider_config, client, build_discovery_validator(&config))

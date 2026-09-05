@@ -83,6 +83,8 @@
 | `introspectionCacheTtl` | Integer | `0` | Introspection result cache TTL (seconds), `0` disables |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
 
+A failed discovery fetch is remembered for 5 seconds so concurrent or immediately following requests reuse that failure instead of contacting the identity provider again. The next call after that window retries; a successful document replaces the failure and is cached for the life of the plugin generation. This interval is not configurable.
+
 ### Cache Selection and Limits
 
 Only positive introspection results use TinyUFO/S3-FIFO. Access-token
