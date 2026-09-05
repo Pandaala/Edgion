@@ -5,7 +5,7 @@
 - Severity: high
 - Discovered in: B0093, dependency verification
 - Category: security-supply-chain
-- Canonical task: [`tasks/todo/upgrade-wasmtime-security-patches.md`](../../../todo/upgrade-wasmtime-security-patches.md)
+- Canonical record: this deferred finding (the `tasks/todo/` tracking file was closed after lock verification)
 
 ## Evidence
 Both the unchanged `142e0de0` baseline lock and the initial B0093 lock resolved Wasmtime 46.0.2. Current RustSec data reports RUSTSEC-2026-0268, a guest-controlled host allocation in WASIp3 streams, and RUSTSEC-2026-0269, a high-severity filesystem sandbox escape involving trailing slashes or symlinks. `cargo deny check` and `cargo audit` failed on both advisories.

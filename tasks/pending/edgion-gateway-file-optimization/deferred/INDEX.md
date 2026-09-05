@@ -128,7 +128,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Coalesce and back off failed OpenID Connect discovery fetches | pending | [task](../../../todo/openid-connect-discovery-failure-coalescing.md) |
 | Decide OpenID Connect session-cookie upstream ownership | completed | [campaign finding](D0060-openid-connect-session-cookie-upstream-ownership.md) |
 | Remove the GeoIP updater test's host-temp-space assumption | completed | [campaign finding](D0061-geoip-updater-test-temp-space.md) |
-| Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | completed | [task](../../../todo/upgrade-wasmtime-security-patches.md) |
+| Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | completed | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
 | Define complete RegionRoute table validation | pending | [task](../../../todo/define-region-route-effective-table-validation.md) |
