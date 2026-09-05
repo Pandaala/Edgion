@@ -94,7 +94,7 @@ spec:
 | `processingMode.responseHeaderMode` | Enum | `SKIP` | `SEND` / `SKIP` for final response headers on the same attached transaction. |
 | `processingMode.requestBodyMode` | Enum | `NONE` | `NONE`, `SKIP`, `BUFFERED`, or `STREAMED`. In `BUFFERED` mode, request headers (`end_of_stream=false`) and the full request body (`end_of_stream=true`) are sent on one `Process` stream. In `STREAMED` mode each body chunk is exchanged with the processor as it flows, on the same stream as the header phase. `BUFFERED_PARTIAL` is rejected. |
 | `processingMode.responseBodyMode` | Enum | `NONE` | `NONE`, `SKIP`, or `STREAMED`. Each bounded transport window is exchanged in lockstep; `BUFFERED` and `BUFFERED_PARTIAL` are rejected. |
-| `processingMode.responseTrailerMode` | Enum | `SKIP` | `SKIP` is the currently deployable value. `SEND` is implemented and locally tested but requires the pending immutable Edgion Pingora pin; once available, it sends a phase only for real upstream trailers and never fabricates an empty message. |
+| `processingMode.responseTrailerMode` | Enum | `SKIP` | `SEND` sends a phase only for real upstream trailers and never fabricates an empty message; `SKIP` leaves trailers unprocessed. |
 | `disableImmediateResponse` | Boolean | `false` | When `true`, ignore an `ImmediateResponse` in any phase, apply none of its mutations, deactivate ExtProc for this request, and continue the HTTP exchange unchanged. |
 | `allowModeOverride` | Boolean | `false` | Permit a processor's request- or response-header verdict to select an exact entry from `allowedOverrideModes`. Overrides can only disable later work; they cannot add capability. |
 | `allowedOverrideModes` | List of processing modes | `[]` | Exact normalized allow-list for `mode_override`, with 1–8 entries when enabled. Every entry must be a reduction of `processingMode`; normalized duplicates are rejected. The list must be empty when `allowModeOverride` is false. |
@@ -244,9 +244,8 @@ overrides are not supported.
 
 ### Response trailers
 
-This section documents the completed, locally tested behavior. It becomes
-available to ordinary Edgion builds only after the required Edgion Pingora
-revision is committed, pushed, and pinned.
+This behavior is available in ordinary Edgion builds through the pinned Edgion
+Pingora revision.
 
 With `responseTrailerMode: SEND`, a real upstream trailer map is sent as the
 final `response_trailers` request on the same Process stream. If the upstream

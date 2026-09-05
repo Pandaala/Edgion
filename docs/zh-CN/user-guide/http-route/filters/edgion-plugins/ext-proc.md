@@ -90,7 +90,7 @@ spec:
 | `processingMode.responseHeaderMode` | Enum | `SKIP` | 同一请求条目在最终响应 header 阶段的 `SEND` / `SKIP`。 |
 | `processingMode.requestBodyMode` | Enum | `NONE` | `NONE`、`SKIP`、`BUFFERED` 或 `STREAMED`。`BUFFERED` 先缓冲完整请求 body 再送处理服务；`STREAMED` 逐块随流交换（与 header 相位共用一条请求级 `Process` 流，逐块改写、上游改用 chunked 传输、请求不可重试）。`BUFFERED_PARTIAL` 被校验拒绝。 |
 | `processingMode.responseBodyMode` | Enum | `NONE` | `NONE`、`SKIP` 或 `STREAMED`。`STREAMED` 对每个有界 transport window 严格 lockstep 交换；响应仍逐块释放，绝不聚合完整 upstream response。 |
-| `processingMode.responseTrailerMode` | Enum | `SKIP` | `SKIP` 是当前可部署值。`SEND` 已完成实现和本地测试，但依赖待固定的 Edgion Pingora immutable revision；依赖就绪后，它只为真实上游 trailer 发送相位，绝不伪造空消息。 |
+| `processingMode.responseTrailerMode` | Enum | `SKIP` | `SEND` 只为真实上游 trailer 发送相位，绝不伪造空消息；`SKIP` 不处理 trailer。 |
 | `disableImmediateResponse` | Boolean | `false` | 为 `true` 时忽略任意相位的 `ImmediateResponse`，不应用其中的 mutation，停用本次请求的 ExtProc，并让当前 HTTP 交换原样继续。 |
 | `allowModeOverride` | Boolean | `false` | 允许处理服务在请求/响应 header verdict 中，从 `allowedOverrideModes` 精确选择一种模式。override 只能关闭后续能力，不能增加能力。 |
 | `allowedOverrideModes` | Processing mode 列表 | `[]` | `mode_override` 的精确、归一化 allow-list；启用时必须有 1–8 项。每项必须是基础 `processingMode` 的缩减，归一化后重复的条目会被拒绝；`allowModeOverride` 为 false 时列表必须为空。 |
@@ -161,7 +161,7 @@ allowedOverrideModes:
 
 ### 响应 trailer
 
-本节记录已经完成并通过本地测试的行为。所需 Edgion Pingora revision 完成 commit、push 并由 Edgion 固定后，普通构建才会提供该能力。
+普通 Edgion 构建已通过固定的 Edgion Pingora revision 提供该能力。
 
 使用 `responseTrailerMode: SEND` 时，真实的上游 trailer map 会作为同一条 Process 流最后一条 `response_trailers` 请求发送。上游没有 trailer 时，Edgion 会干净地关闭流，不伪造空 trailer 相位。`SKIP` 会让真实 trailer 不经过 ExtProc。
 

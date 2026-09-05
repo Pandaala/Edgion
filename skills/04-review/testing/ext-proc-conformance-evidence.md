@@ -42,9 +42,17 @@ independently generated processor belong behind `--full-test`.
 
 ## Re-evaluation triggers
 
-- Edgion wires request or response trailer phases.
-- A named, version-pinned external processor becomes an owned CI fixture.
+- Edgion wires request trailer phases.
+- The version-pinned external processor fixture changes generator version or
+  ownership model.
 - The response-body invariant changes through an approved design.
+
+The former response-trailer and external-fixture triggers were re-evaluated on
+2026-08-30. Response trailers now have a wired Gateway lifecycle, and the
+owned full-test fixture uses official Go v1.37 generated types. The
+compatibility matrix and the focused 32-case full suite provide the behavioral
+evidence; neither fact broadens support to request trailers or unsupported body
+modes.
 
 ## Reference cases
 
