@@ -76,7 +76,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0072 — Bound outbound HTTP/2 response header lists | needs-investigation | [campaign finding](D0072-outbound-http2-response-header-list-bound.md) |
 | D0073 — Isolate Wasm host panics at VM boundaries | needs-implementation | [campaign finding](D0073-wasm-host-panic-isolation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
-| Fail closed on invalid Gateway BackendTLSPolicy candidates | pending | [task](../../../todo/backend-tls-policy-defensive-validation-fail-closed.md) |
+| Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
 | Promote BackendTLSPolicy handling atomically to v1 only | pending | [task](../../../todo/backend-tls-policy-v1-only-atomic-promotion.md) |
 | Publish Service backend traffic policy through one immutable snapshot | pending | [task](../../../todo/backend-traffic-policy-atomic-service-snapshot.md) |

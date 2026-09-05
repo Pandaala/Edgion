@@ -33,7 +33,7 @@
 - Reviewer: `b0034_defer_review`
 - Verdict: LGTM; no Must Fix or Should Fix findings.
 - Must Fix resolution: none required.
-- Deferred observations: invalid applicable BackendTLSPolicy/plaintext downgrade is already covered by `tasks/todo/backend-tls-policy-defensive-validation-fail-closed.md`; full-snapshot partial publication is covered by `tasks/todo/backend-tls-policy-true-incremental-publication.md`; request-path port resolution and unsafe fallback are covered by `tasks/todo/backend-port-resolution-precompiled-fail-closed.md`.
+- Deferred observations: invalid applicable BackendTLSPolicy/plaintext downgrade later landed as the Gateway `BackendTlsPolicyLookup` contract (`skills/01-architecture/02-gateway/07-backends.md`); full-snapshot partial publication is covered by `tasks/todo/backend-tls-policy-true-incremental-publication.md`; request-path port resolution and unsafe fallback are covered by `tasks/todo/backend-port-resolution-precompiled-fail-closed.md`.
 - Adjudication: no new campaign finding; the broader observations are duplicates of existing, wider tasks and B0043 remains target-local.
 
 ## Verification

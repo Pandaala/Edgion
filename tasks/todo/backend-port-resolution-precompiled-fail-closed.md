@@ -22,7 +22,7 @@ Move Service-port to selected-endpoint-port resolution out of the Gateway reques
 - Fail the request or stream connection closed when `backendRef.port` is present but its Service port or selected endpoint port cannot be resolved. Never retain a first-port or stale-port value as an implicit fallback.
 - Preserve per-slice named-targetPort semantics during heterogeneous rollouts. An unknown origin may use a fallback only when all applicable slices prove the same port; otherwise fail closed.
 - Validate all K8s `i32` port values with checked conversion and the valid non-zero `u16` range; do not use truncating `as u16` casts.
-- Coordinate Service port-name capture for BackendTLSPolicy with `tasks/todo/backend-tls-policy-defensive-validation-fail-closed.md` so an unresolved section mapping cannot become an absent TLS policy.
+- Coordinate Service port-name capture for BackendTLSPolicy with the landed Gateway tri-state (`BackendTlsPolicyLookup` in `skills/01-architecture/02-gateway/07-backends.md`) so an unresolved section mapping cannot become an absent TLS policy.
 - Preserve IPv4/IPv6 numeric address equality and the existing post-resolution unsafe-address check.
 - Apply identical resolution and failure semantics to HTTP, TCP, TLS passthrough/termination, UDP, request-mirror, DirectEndpoint, and AllEndpointStatus consumers.
 - For AllEndpointStatus, replace the request-time `backendRef.port as u16` and default-port fallback with the same checked Service-port-to-EndpointSlice-serving-port proof before any probe is dialed.
@@ -63,7 +63,7 @@ Move Service-port to selected-endpoint-port resolution out of the Gateway reques
 - `skills/00-design-rules.md`
 - `skills/01-architecture/05-resources/16-service-endpoints.md`
 - `skills/04-review/backends/named-port-resolve-against-originating-slice.md`
-- `tasks/todo/backend-tls-policy-defensive-validation-fail-closed.md`
+- `skills/01-architecture/02-gateway/07-backends.md` (BackendTLSPolicy tri-state)
 
 ## Decision log
 

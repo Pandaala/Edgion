@@ -16,7 +16,7 @@ Make AllEndpointStatus on-demand endpoint probes honor the effective BackendTLSP
 
 ## Requirements
 
-- Consume the canonical absent, effective, and invalid BackendTLSPolicy publication outcome owned by `backend-tls-policy-defensive-validation-fail-closed`; do not define a plugin-local lookup or collapse invalid/unresolved into absent.
+- Consume the canonical absent, effective, and invalid BackendTLSPolicy publication outcome (`BackendTlsPolicyLookup`) already published by the Gateway store; do not define a plugin-local lookup or collapse invalid/unresolved into absent.
 - Consume the exact section and checked Service-to-serving-port outcome owned by the canonical backend-port task before choosing a policy or dialing an EndpointSlice endpoint.
 - Apply the effective CA trust, SNI, SAN constraints, and client certificate identity through the canonical backend-independent outbound TLS mechanism used by the default supported Gateway build.
 - Reuse the managed outbound client, canonical outbound TLS resolution, egress resolver and endpoint-IP pinning, proxy-env disablement, and redirect denial; do not add a second client/TLS mechanism.
@@ -56,7 +56,7 @@ Make AllEndpointStatus on-demand endpoint probes honor the effective BackendTLSP
 ## Related work
 
 - [`Precompile backend port resolution and fail closed on missing mappings`](../backend-port-resolution-precompiled-fail-closed.md)
-- [`Fail closed on invalid Gateway BackendTLSPolicy candidates`](../backend-tls-policy-defensive-validation-fail-closed.md)
+- Canonical BackendTLSPolicy tri-state: `skills/01-architecture/02-gateway/07-backends.md` (BackendTLSPolicy section)
 - Campaign finding D0005: active health-check TLS contract (adjacent lifecycle, not this task's owner)
 
 ## Decision log
