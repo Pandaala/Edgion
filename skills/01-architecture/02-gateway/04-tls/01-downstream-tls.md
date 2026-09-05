@@ -133,7 +133,7 @@ When EdgionTls has `spec.client_auth` configured, `configure_mtls` enables clien
 
 1. Get the CA certificate PEM from EdgionTls and build an `X509Store`.
 2. Set the verify depth (`verify_depth`, range 1–9).
-3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks. SAN matching is typed (`AllowedSan`: kind × Exact/Prefix/Suffix/Contains/RegularExpression). RegularExpression is compiled when the EdgionTls is ingested into `TlsStore`, never on the handshake path.
+3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks. SAN matching is typed (`AllowedSan`: kind × Exact/Prefix/Suffix/Contains/RegularExpression). RegularExpression is compiled when the EdgionTls is ingested into `TlsStore`, never on the handshake path. BoringSSL invokes that callback at every certificate-chain depth: `preverify_ok == 0` rejects immediately at any depth; client-identity extraction and SAN/CN allowlist evaluation run only at leaf depth 0 (`X509_STORE_CTX_get_error_depth`). Intermediate successful depths return 1 without extraction or a whitelist audit. A terminal mTLS failure emits at most one `ssl.log` record for that handshake.
 4. Otherwise use the standard BoringSSL verification chain.
 
 ### Client certificate info extraction

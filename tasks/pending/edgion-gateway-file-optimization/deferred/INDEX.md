@@ -86,7 +86,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Fail closed on denied L4 backend references | pending | [task](../../../todo/l4-backend-ref-denied-fail-closed.md) |
 | Keep the load-balancer degrade-mode gauge current across lifecycle exits | pending | [task](../../../todo/lb-degrade-mode-metric-lifecycle.md) |
 | Capture Service runtime health state once per load-balancer selection | pending | [task](../../../todo/lb-selection-service-runtime-state-capture.md) |
-| Run mTLS whitelist verification once for the leaf certificate | pending | [task](../../../todo/mtls-leaf-only-whitelist-verification.md) |
+| Run mTLS whitelist verification once for the leaf certificate | completed | [review rule](../../../../skills/04-review/edgion-tls/mtls-leaf-only-whitelist-verification.md) |
 | Define typed mTLS allowed SAN semantics | pending | [task](../../../todo/mtls-typed-allowed-san-semantics.md) |
 | Make retry-budget generations and window rotation coherent | pending | [task](../../../todo/retry-budget-generation-and-window-coherence.md) |
 | SSE window strict residency and continuity | pending | [task](../../../todo/sse-window-strict-residency-and-continuity.md) |

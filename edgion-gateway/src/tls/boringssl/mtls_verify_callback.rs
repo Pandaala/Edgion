@@ -11,16 +11,50 @@ use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
 use pingora_core::tls::ssl::SslRef;
 use std::os::raw::{c_int, c_void};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 /// Per-connection context passed to the verify callback via SSL ex_data.
 struct VerifyContext {
     edgion_tls: Arc<EdgionTls>,
+    /// One handshake owns at most one terminal mTLS `ssl.log` record.
+    audit_emitted: AtomicBool,
 }
 
 static VERIFY_EX_DATA_IDX: AtomicI32 = AtomicI32::new(-1);
 static INIT_ONCE: std::sync::Once = std::sync::Once::new();
+
+/// BoringSSL invokes the verify callback at every chain depth. Only the leaf
+/// may extract client identity or evaluate the SAN/CN allowlist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyStage {
+    RejectChain,
+    AcceptIntermediate,
+    RejectMissingContext,
+    RejectInvalidDepth,
+    EvaluateLeafAllowlist,
+}
+
+fn classify_verify_callback(preverify_ok: bool, depth: c_int, context_present: bool) -> VerifyStage {
+    if !preverify_ok {
+        VerifyStage::RejectChain
+    } else if depth == 0 {
+        if context_present {
+            VerifyStage::EvaluateLeafAllowlist
+        } else {
+            VerifyStage::RejectMissingContext
+        }
+    } else if depth > 0 {
+        VerifyStage::AcceptIntermediate
+    } else {
+        VerifyStage::RejectInvalidDepth
+    }
+}
+
+fn claim_terminal_audit(flag: &AtomicBool) -> bool {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
 
 /// Initialize the global ex_data index. Returns true if it's usable.
 unsafe fn init_ex_data_idx() -> bool {
@@ -80,66 +114,116 @@ unsafe extern "C" fn verify_callback(preverify_ok: c_int, x509_ctx: *mut boring_
             let ssl_ptr =
                 boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
                     as *mut boring_sys::SSL;
-            log_mtls_failure(ssl_ptr, "mTLS verify callback panic");
+            emit_mtls_failure(ssl_ptr, "mTLS verify callback panic");
         }
         0 // Reject on panic
     })
 }
 
-/// Verify callback impl. Safe to panic — wrapper above catches.
-unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X509_STORE_CTX) -> c_int {
-    // preverify_ok=0 means the cert chain itself is invalid (expired, revoked,
-    // untrusted, …). Reject regardless of whitelist.
-    if preverify_ok == 0 {
-        let error_code = boring_sys::X509_STORE_CTX_get_error(x509_ctx);
-        // SAFETY: X509_verify_cert_error_string takes c_long; c_int → i64 is lossless.
-        let error_ptr = boring_sys::X509_verify_cert_error_string(error_code as i64);
-        let error_str = if error_ptr.is_null() {
-            format!("Unknown error code: {}", error_code)
-        } else {
-            std::ffi::CStr::from_ptr(error_ptr).to_string_lossy().into_owned()
-        };
+unsafe fn ssl_from_store_ctx(x509_ctx: *mut boring_sys::X509_STORE_CTX) -> *mut boring_sys::SSL {
+    boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
+        as *mut boring_sys::SSL
+}
 
-        let ssl_ptr = boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
-            as *mut boring_sys::SSL;
-        log_mtls_failure(ssl_ptr, &format!("mTLS chain verify failed: {}", error_str));
-        return 0;
-    }
-
-    let ssl_ptr = boring_sys::X509_STORE_CTX_get_ex_data(x509_ctx, boring_sys::SSL_get_ex_data_X509_STORE_CTX_idx())
-        as *mut boring_sys::SSL;
+unsafe fn verify_context_from_ssl(ssl_ptr: *mut boring_sys::SSL) -> Option<*const VerifyContext> {
     if ssl_ptr.is_null() {
-        // Defensive: BoringSSL guarantees non-null here. Without an SSL we
-        // can't write ssl.log, so silently reject.
-        return 0;
+        return None;
     }
-
     let idx = VERIFY_EX_DATA_IDX.load(Ordering::Acquire);
     if idx < 0 {
-        log_mtls_failure(ssl_ptr, "mTLS verify context index missing");
-        return 0;
+        return None;
     }
     let ctx_ptr = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
     if ctx_ptr.is_null() {
-        log_mtls_failure(ssl_ptr, "mTLS verify context missing");
+        None
+    } else {
+        Some(ctx_ptr as *const VerifyContext)
+    }
+}
+
+/// Emit a terminal mTLS audit.
+///
+/// When `VerifyContext` is present, `audit_emitted` claims the single handshake
+/// record. When it is missing, this invocation is still the sole writer because
+/// every caller returns 0 and BoringSSL stops the verify-callback walk.
+unsafe fn emit_mtls_failure(ssl_ptr: *mut boring_sys::SSL, reason: &str) {
+    if let Some(ctx_ptr) = verify_context_from_ssl(ssl_ptr) {
+        let context = &*ctx_ptr;
+        if !claim_terminal_audit(&context.audit_emitted) {
+            return;
+        }
+    }
+    log_mtls_failure(ssl_ptr, reason);
+}
+
+/// Verify callback impl. Safe to panic — wrapper above catches.
+unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X509_STORE_CTX) -> c_int {
+    if x509_ctx.is_null() {
         return 0;
     }
 
-    let context = &*(ctx_ptr as *const VerifyContext);
-    let client_auth = match &context.edgion_tls.spec.client_auth {
-        Some(auth) => auth,
-        None => return 1,
-    };
-
-    // SAFETY: ssl_ptr valid during callback (BoringSSL guarantee). SslRef is an
-    // opaque wrapper over boring_sys::SSL — same as ForeignTypeRef::from_ptr().
-    let ssl_ref: &SslRef = &*(ssl_ptr as *const SslRef);
-
-    match perform_whitelist_validation(ssl_ref, client_auth) {
-        Ok(()) => 1,
-        Err(reason) => {
-            log_mtls_failure(ssl_ptr, &reason);
+    let ssl_ptr = ssl_from_store_ctx(x509_ctx);
+    let context_ptr = verify_context_from_ssl(ssl_ptr);
+    let depth = boring_sys::X509_STORE_CTX_get_error_depth(x509_ctx);
+    match classify_verify_callback(preverify_ok != 0, depth, context_ptr.is_some()) {
+        VerifyStage::RejectChain => {
+            // preverify_ok=0: the cert chain itself is invalid (expired, revoked,
+            // untrusted, …). Reject at every depth. Returning 0 stops further
+            // BoringSSL verify-callback invocations, so a missing VerifyContext
+            // still yields one terminal audit for this handshake.
+            let error_code = boring_sys::X509_STORE_CTX_get_error(x509_ctx);
+            // SAFETY: X509_verify_cert_error_string takes c_long; c_int → i64 is lossless.
+            let error_ptr = boring_sys::X509_verify_cert_error_string(error_code as i64);
+            let error_str = if error_ptr.is_null() {
+                format!("Unknown error code: {}", error_code)
+            } else {
+                std::ffi::CStr::from_ptr(error_ptr).to_string_lossy().into_owned()
+            };
+            emit_mtls_failure(ssl_ptr, &format!("mTLS chain verify failed: {}", error_str));
             0
+        }
+        VerifyStage::AcceptIntermediate => 1,
+        VerifyStage::RejectInvalidDepth => {
+            emit_mtls_failure(ssl_ptr, "mTLS verify depth invalid");
+            0
+        }
+        VerifyStage::RejectMissingContext => {
+            if ssl_ptr.is_null() {
+                // Defensive: BoringSSL guarantees non-null here. Without an SSL we
+                // can't write ssl.log, so silently reject.
+                return 0;
+            }
+            let idx = VERIFY_EX_DATA_IDX.load(Ordering::Acquire);
+            let reason = if idx < 0 {
+                "mTLS verify context index missing"
+            } else {
+                "mTLS verify context missing"
+            };
+            emit_mtls_failure(ssl_ptr, reason);
+            0
+        }
+        VerifyStage::EvaluateLeafAllowlist => {
+            let Some(context_ptr) = context_ptr else {
+                emit_mtls_failure(ssl_ptr, "mTLS verify context missing");
+                return 0;
+            };
+            let context = &*context_ptr;
+            let client_auth = match &context.edgion_tls.spec.client_auth {
+                Some(auth) => auth,
+                None => return 1,
+            };
+
+            // SAFETY: ssl_ptr valid during callback (BoringSSL guarantee). SslRef is an
+            // opaque wrapper over boring_sys::SSL — same as ForeignTypeRef::from_ptr().
+            let ssl_ref: &SslRef = &*(ssl_ptr as *const SslRef);
+
+            match perform_whitelist_validation(ssl_ref, client_auth) {
+                Ok(()) => 1,
+                Err(reason) => {
+                    emit_mtls_failure(ssl_ptr, &reason);
+                    0
+                }
+            }
         }
     }
 }
@@ -225,6 +309,7 @@ pub fn set_verify_callback_with_whitelist(
 
         let context = Box::new(VerifyContext {
             edgion_tls: edgion_tls.clone(),
+            audit_emitted: AtomicBool::new(false),
         });
         let ctx_ptr = Box::into_raw(context) as *mut c_void;
         let prev = boring_sys::SSL_get_ex_data(ssl_ptr, idx);
@@ -242,5 +327,197 @@ pub fn set_verify_callback_with_whitelist(
 
         boring_sys::SSL_set_verify(ssl_ptr, verify_mode.bits() as c_int, Some(verify_callback));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    enum ChainOrder {
+        LeafFirst,
+        RootFirst,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ChainWalk {
+        leaf_evaluations: usize,
+        terminal_logs: usize,
+        rejected: bool,
+    }
+
+    fn walk_verify_stages(
+        cert_count: usize,
+        order: ChainOrder,
+        mut preverify_ok_at: impl FnMut(c_int) -> bool,
+        context_present: bool,
+        leaf_allowlist_ok: bool,
+        stop_on_reject: bool,
+    ) -> ChainWalk {
+        assert!((1..=9).contains(&cert_count));
+        let mut depths: Vec<c_int> = (0..cert_count as c_int).collect();
+        if matches!(order, ChainOrder::RootFirst) {
+            depths.reverse();
+        }
+
+        let audit = AtomicBool::new(false);
+        let mut walk = ChainWalk {
+            leaf_evaluations: 0,
+            terminal_logs: 0,
+            rejected: false,
+        };
+
+        for depth in depths {
+            let stage = classify_verify_callback(preverify_ok_at(depth), depth, context_present);
+            match stage {
+                VerifyStage::RejectChain | VerifyStage::RejectMissingContext | VerifyStage::RejectInvalidDepth => {
+                    walk.rejected = true;
+                    if claim_terminal_audit(&audit) {
+                        walk.terminal_logs += 1;
+                    }
+                    if stop_on_reject {
+                        break;
+                    }
+                }
+                VerifyStage::AcceptIntermediate => {}
+                VerifyStage::EvaluateLeafAllowlist => {
+                    walk.leaf_evaluations += 1;
+                    if !leaf_allowlist_ok {
+                        walk.rejected = true;
+                        if claim_terminal_audit(&audit) {
+                            walk.terminal_logs += 1;
+                        }
+                        if stop_on_reject {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        walk
+    }
+
+    #[test]
+    fn classify_rejects_failed_preverify_at_every_depth() {
+        for depth in 0..=8 {
+            assert_eq!(classify_verify_callback(false, depth, true), VerifyStage::RejectChain);
+            assert_eq!(classify_verify_callback(false, depth, false), VerifyStage::RejectChain);
+        }
+    }
+
+    #[test]
+    fn classify_accepts_intermediate_without_context() {
+        for depth in 1..=8 {
+            assert_eq!(
+                classify_verify_callback(true, depth, false),
+                VerifyStage::AcceptIntermediate
+            );
+            assert_eq!(
+                classify_verify_callback(true, depth, true),
+                VerifyStage::AcceptIntermediate
+            );
+        }
+    }
+
+    #[test]
+    fn classify_leaf_requires_context_and_evaluates_allowlist() {
+        assert_eq!(
+            classify_verify_callback(true, 0, true),
+            VerifyStage::EvaluateLeafAllowlist
+        );
+        assert_eq!(
+            classify_verify_callback(true, 0, false),
+            VerifyStage::RejectMissingContext
+        );
+    }
+
+    #[test]
+    fn classify_negative_depth_is_fail_closed() {
+        assert_eq!(
+            classify_verify_callback(true, -1, true),
+            VerifyStage::RejectInvalidDepth
+        );
+    }
+
+    #[test]
+    fn successful_chains_evaluate_leaf_once_for_one_through_nine_certs() {
+        for cert_count in 1..=9 {
+            for order in [ChainOrder::LeafFirst, ChainOrder::RootFirst] {
+                let walk = walk_verify_stages(cert_count, order, |_| true, true, true, true);
+                assert_eq!(
+                    walk,
+                    ChainWalk {
+                        leaf_evaluations: 1,
+                        terminal_logs: 0,
+                        rejected: false,
+                    },
+                    "cert_count={cert_count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preverify_failure_rejects_immediately_without_leaf_work() {
+        for cert_count in 1..=9 {
+            for fail_depth in 0..cert_count as c_int {
+                let walk = walk_verify_stages(
+                    cert_count,
+                    ChainOrder::RootFirst,
+                    |depth| depth != fail_depth,
+                    true,
+                    true,
+                    true,
+                );
+                assert!(walk.rejected, "fail_depth={fail_depth}");
+                assert_eq!(walk.terminal_logs, 1, "fail_depth={fail_depth}");
+                assert_eq!(walk.leaf_evaluations, 0, "fail_depth={fail_depth}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_leaf_context_is_fail_closed() {
+        let walk = walk_verify_stages(3, ChainOrder::LeafFirst, |_| true, false, true, true);
+        assert_eq!(
+            walk,
+            ChainWalk {
+                leaf_evaluations: 0,
+                terminal_logs: 1,
+                rejected: true,
+            }
+        );
+    }
+
+    #[test]
+    fn intermediate_success_does_not_extract_or_log() {
+        let walk = walk_verify_stages(4, ChainOrder::RootFirst, |_| true, true, true, true);
+        assert_eq!(walk.leaf_evaluations, 1);
+        assert_eq!(walk.terminal_logs, 0);
+        assert!(!walk.rejected);
+    }
+
+    #[test]
+    fn allowlist_failure_emits_one_terminal_log() {
+        for order in [ChainOrder::LeafFirst, ChainOrder::RootFirst] {
+            let walk = walk_verify_stages(5, order, |_| true, true, false, false);
+            assert_eq!(
+                walk,
+                ChainWalk {
+                    leaf_evaluations: 1,
+                    terminal_logs: 1,
+                    rejected: true,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_audit_is_claimed_once_across_repeated_failures() {
+        let flag = AtomicBool::new(false);
+        assert!(claim_terminal_audit(&flag));
+        assert!(!claim_terminal_audit(&flag));
+        assert!(!claim_terminal_audit(&flag));
     }
 }
