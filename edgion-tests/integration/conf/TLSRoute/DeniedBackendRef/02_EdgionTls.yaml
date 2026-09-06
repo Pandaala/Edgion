@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-denied-ref-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-denied-ref-gw
+      namespace: edgion-test
+      sectionName: tls-terminate
+  hosts:
+    - "denied-terminate.sandbox.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

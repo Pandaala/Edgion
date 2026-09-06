@@ -1,5 +1,5 @@
 {
-  "current_max": 31953,
+  "current_max": 31957,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -362,6 +362,15 @@
     },
     "TLSRoute/GeoRestriction": {
       "tls": 31953
+    },
+    "TCPRoute/DeniedBackendRef": {
+      "tcp": 31954
+    },
+    "UDPRoute/DeniedBackendRef": {
+      "udp": 31955
+    },
+    "TLSRoute/DeniedBackendRef": {
+      "tls": 31956
     }
   }
 }

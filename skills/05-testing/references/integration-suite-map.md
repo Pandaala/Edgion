@@ -26,6 +26,7 @@ This file only answers three things:
 | `GRPCRoute/Match` | `edgion-tests/integration/conf/GRPCRoute/Match/` | `GrpcMatchTestSuite` | Yes | gRPC route matching (Exact + RegularExpression) |
 | `GRPCRoute/Backend/SessionPersistence` | `edgion-tests/integration/conf/GRPCRoute/Backend/SessionPersistence/` | `GrpcSessionPersistenceTestSuite` | Yes | Cookie/Header session persistence, stale-token fallback, on Service backed by per-port EndpointSlices |
 | `TCPRoute/Basic` | `edgion-tests/integration/conf/TCPRoute/Basic/` | `TcpTestSuite` | No | TCP echo |
+| `TCPRoute/DeniedBackendRef` | `edgion-tests/integration/conf/TCPRoute/DeniedBackendRef/` | `TcpDeniedBackendRefTestSuite` | Yes | Cross-ns TCP backendRef without ReferenceGrant fail-closes before echo |
 | `TCPRoute/StreamPlugins` | `edgion-tests/integration/conf/TCPRoute/StreamPlugins/` | `TcpStreamPluginsTestSuite` | Yes | Stream plugin wiring on TCP |
 | `TLSRoute/Basic` | `edgion-tests/integration/conf/TLSRoute/Basic/` | `TlsRouteTestSuite` | Yes | SNI/TLS route basics |
 | `TLSRoute/ProxyProtocol` | `edgion-tests/integration/conf/TLSRoute/ProxyProtocol/` | `TlsProxyProtocolTestSuite` | Yes | Depends on TCP PP2 test backend |
@@ -33,7 +34,9 @@ This file only answers three things:
 | `TLSRoute/MultiSNI` | `edgion-tests/integration/conf/TLSRoute/MultiSNI/` | `TlsMultiSniTestSuite` | Yes | Multi-hostname / multi-TLSRoute routing |
 | `TLSRoute/BothAbsentParentRef` | `edgion-tests/integration/conf/TLSRoute/BothAbsentParentRef/` | `TlsBothAbsentParentRefTestSuite` | Yes | parentRef missing/fallback validation |
 | `TLSRoute/Passthrough` | `edgion-tests/integration/conf/TLSRoute/Passthrough/` | `TlsPassthroughTestSuite` | Yes | TLS passthrough mode |
+| `TLSRoute/DeniedBackendRef` | `edgion-tests/integration/conf/TLSRoute/DeniedBackendRef/` | `TlsDeniedBackendRefTestSuite` | Yes | Cross-ns TLS terminate and passthrough backendRefs fail-close before dial |
 | `UDPRoute/Basic` | `edgion-tests/integration/conf/UDPRoute/Basic/` | `UdpTestSuite` | No | UDP echo |
+| `UDPRoute/DeniedBackendRef` | `edgion-tests/integration/conf/UDPRoute/DeniedBackendRef/` | `UdpDeniedBackendRefTestSuite` | Yes | Cross-ns UDP backendRef without ReferenceGrant drops the datagram |
 | `Gateway/Security` | `edgion-tests/integration/conf/Gateway/Security/` | `SecurityTestSuite` | Yes | Gateway security capability |
 | `Gateway/RealIP` | `edgion-tests/integration/conf/Gateway/RealIP/` | `RealIpTestSuite` | Yes | real-ip annotation and header parsing |
 | `Gateway/AllowedRoutes/*` | `edgion-tests/integration/conf/Gateway/AllowedRoutes/` | `AllowedRoutes*TestSuite` | Yes | namespace / kinds / selector |

@@ -1115,7 +1115,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
             "tcp" => "TCPRoute/Basic".to_string(),
             "tcp-keepalive-smoke" | "tcpkeepalivesmoke" => "TCPRoute/KeepaliveSmoke".to_string(),
+            "tcp-denied-backend-ref" | "tcpdeniedbackendref" => "TCPRoute/DeniedBackendRef".to_string(),
             "udp" => "UDPRoute/Basic".to_string(),
+            "udp-denied-backend-ref" | "udpdeniedbackendref" => "UDPRoute/DeniedBackendRef".to_string(),
             "mtls" => "EdgionTls/mTLS".to_string(),
             "security" => "Gateway/Security".to_string(),
             "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
@@ -1130,6 +1132,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "tls-multi-sni" | "tlsmultisni" | "multi-sni" => "TLSRoute/MultiSNI".to_string(),
             "tls-passthrough" | "tlspassthrough" => "TLSRoute/Passthrough".to_string(),
             "tls-unknown-kind-backend" | "tlsunknownkindbackend" => "TLSRoute/UnknownKindBackend".to_string(),
+            "tls-denied-backend-ref" | "tlsdeniedbackendref" => "TLSRoute/DeniedBackendRef".to_string(),
             "real-ip" | "realip" => "Gateway/RealIP".to_string(),
             "backend-tls" | "backendtls" => "Gateway/TLS/BackendTLS".to_string(),
             "backend-tls-san" | "backendtlssan" => "Gateway/TLS/BackendTLSSAN".to_string(),
@@ -1272,6 +1275,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TCPRoute/KeepaliveSmoke" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
         "TCPRoute/GlobalConnectionIpRestriction" => "TCPRoute/GlobalConnectionIpRestriction",
+        "TCPRoute/DeniedBackendRef" => "TCPRoute/DeniedBackendRef",
         // TLSRoute
         "TLSRoute/Basic" | "TLSRoute" => "TLSRoute/Basic",
         "TLSRoute/ProxyProtocol" => "TLSRoute/ProxyProtocol",
@@ -1280,9 +1284,11 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TLSRoute/BothAbsentParentRef" => "TLSRoute/BothAbsentParentRef",
         "TLSRoute/Passthrough" => "TLSRoute/Passthrough",
         "TLSRoute/UnknownKindBackend" => "TLSRoute/UnknownKindBackend",
+        "TLSRoute/DeniedBackendRef" => "TLSRoute/DeniedBackendRef",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
         "UDPRoute/StreamPlugins" => "UDPRoute/StreamPlugins",
+        "UDPRoute/DeniedBackendRef" => "UDPRoute/DeniedBackendRef",
         // Gateway
         "Gateway/Security" | "Gateway" => "Gateway/Security",
         "Gateway/RealIP" => "Gateway/RealIP",
@@ -2016,6 +2022,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::TcpGeoRestrictionTestSuite));
         }
+        "TCPRoute/DeniedBackendRef" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/DeniedBackendRef tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpDeniedBackendRefTestSuite));
+        }
         "TCPRoute/KeepaliveSmoke" => {
             if !gateway {
                 eprintln!("Error: TCPRoute/KeepaliveSmoke tests require --gateway flag");
@@ -2080,6 +2093,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::TlsUnknownKindBackendTestSuite));
         }
+        "TLSRoute/DeniedBackendRef" => {
+            if !gateway {
+                eprintln!("Error: TLSRoute/DeniedBackendRef tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TlsDeniedBackendRefTestSuite));
+        }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
         }
@@ -2089,6 +2109,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::UdpStreamPluginsTestSuite));
+        }
+        "UDPRoute/DeniedBackendRef" => {
+            if !gateway {
+                eprintln!("Error: UDPRoute/DeniedBackendRef tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::UdpDeniedBackendRefTestSuite));
         }
         // Gateway
         "Gateway" => {

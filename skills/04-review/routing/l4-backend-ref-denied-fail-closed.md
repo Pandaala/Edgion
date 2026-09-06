@@ -96,7 +96,8 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/todo/l4-backend-ref-denied-fail-closed.md` (enforcement fixed
-  2026-09-06; data-plane e2e / grant hot-reload coverage remains a follow-up).
+  2026-09-06; static L4 deny-dial e2e added 2026-09-06; HTTP/gRPC parity
+  and grant hot-reload coverage remain a follow-up).
 - Source: `edgion-gateway/src/routes/common.rs` (`classify_l4_selected_backend`,
   `l4_post_select`), the three L4 `route_unit.rs` selectors, TCP/UDP
   dial paths, and `apply_tls_l4_post_select` used by both TLS modes.
@@ -104,5 +105,8 @@ Re-open this decision only if:
   serialization, `mixed_denied_and_unsupported_keep_declared_weight`
   (TCP/UDP/TLS), `tcp_status_as_str_matches_log_field`,
   `udp_status_as_str_matches_log_field`.
+- Static e2e: `TCPRoute/DeniedBackendRef`, `UDPRoute/DeniedBackendRef`,
+  `TLSRoute/DeniedBackendRef` (terminate + passthrough), and
+  `TLSRoute/UnknownKindBackend` mixed-share sampling.
 - Sibling L7 work:
   [denied-named-jump-fails-closed.md](denied-named-jump-fails-closed.md).

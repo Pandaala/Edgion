@@ -45,16 +45,18 @@ pub use grpc_route::{
 };
 
 pub use tcp_route::{
-    GcirEnforcementTestSuite, TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite, TcpGeoRestrictionTestSuite,
-    TcpIdleTimeoutTestSuite, TcpKeepaliveSmokeTestSuite, TcpStreamPluginsTestSuite, TcpTestSuite,
+    GcirEnforcementTestSuite, TcpDeniedBackendRefTestSuite, TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite,
+    TcpGeoRestrictionTestSuite, TcpIdleTimeoutTestSuite, TcpKeepaliveSmokeTestSuite, TcpStreamPluginsTestSuite,
+    TcpTestSuite,
 };
 
 pub use tls_route::{
-    TlsBothAbsentParentRefTestSuite, TlsGeoRestrictionTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite,
-    TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite, TlsUnknownKindBackendTestSuite,
+    TlsBothAbsentParentRefTestSuite, TlsDeniedBackendRefTestSuite, TlsGeoRestrictionTestSuite, TlsMultiSniTestSuite,
+    TlsPassthroughTestSuite, TlsProxyProtocolTestSuite, TlsRouteTestSuite, TlsStreamPluginsTestSuite,
+    TlsUnknownKindBackendTestSuite,
 };
 
-pub use udp_route::{UdpStreamPluginsTestSuite, UdpTestSuite};
+pub use udp_route::{UdpDeniedBackendRefTestSuite, UdpStreamPluginsTestSuite, UdpTestSuite};
 
 // EdgionTls tests
 pub use edgion_tls::{

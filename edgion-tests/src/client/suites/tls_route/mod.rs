@@ -2,6 +2,7 @@
 
 pub(crate) mod basic;
 mod both_absent_parent_ref;
+mod denied_backend_ref;
 mod geo_restriction;
 mod multi_sni;
 mod passthrough;
@@ -11,6 +12,7 @@ mod unknown_kind_backend;
 
 pub use basic::TlsRouteTestSuite;
 pub use both_absent_parent_ref::TlsBothAbsentParentRefTestSuite;
+pub use denied_backend_ref::TlsDeniedBackendRefTestSuite;
 pub use geo_restriction::TlsGeoRestrictionTestSuite;
 pub use multi_sni::TlsMultiSniTestSuite;
 pub use passthrough::TlsPassthroughTestSuite;

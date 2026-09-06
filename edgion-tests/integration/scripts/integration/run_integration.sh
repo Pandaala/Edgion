@@ -1616,6 +1616,7 @@ run_all_tests() {
                     run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
                     run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
                     run_test "TCPRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GeoRestriction" || test_failed=true
+                    run_test "TCPRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i DeniedBackendRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TCPRoute_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
@@ -1630,6 +1631,7 @@ run_all_tests() {
                     run_test "TLSRoute_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
                     run_test "TLSRoute_Passthrough" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Passthrough" || test_failed=true
                     run_test "TLSRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i GeoRestriction" || test_failed=true
+                    run_test "TLSRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i DeniedBackendRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TLSRoute_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
@@ -1639,6 +1641,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "UDPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i Basic" || test_failed=true
                     run_test "UDPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i StreamPlugins" || test_failed=true
+                    run_test "UDPRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i DeniedBackendRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "UDPRoute_${item_safe}" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i ${G_ITEM}" || test_failed=true
@@ -1920,6 +1923,7 @@ run_all_tests() {
         run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
         run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
         run_test "TCPRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GeoRestriction" || test_failed=true
+        run_test "TCPRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i DeniedBackendRef" || test_failed=true
 
         # TLSRoute Tests
         run_test "TLSRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Basic" || test_failed=true
@@ -1929,11 +1933,13 @@ run_all_tests() {
         run_test "TLSRoute_BothAbsentParentRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
         run_test "TLSRoute_Passthrough" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i Passthrough" || test_failed=true
         run_test "TLSRoute_UnknownKindBackend" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i UnknownKindBackend" || test_failed=true
+        run_test "TLSRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i DeniedBackendRef" || test_failed=true
         run_test "TLSRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TLSRoute -i GeoRestriction" || test_failed=true
 
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i Basic" || test_failed=true
         run_test "UDPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i StreamPlugins" || test_failed=true
+        run_test "UDPRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r UDPRoute -i DeniedBackendRef" || test_failed=true
         
         # Gateway Tests
         run_test "Gateway_Security" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i Security" || test_failed=true

@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: tls-denied-ref
+  namespace: backend
+  labels:
+    kubernetes.io/service-name: tls-denied-ref
+addressType: IPv4
+ports:
+  - name: tcp-30010
+    port: 30010
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

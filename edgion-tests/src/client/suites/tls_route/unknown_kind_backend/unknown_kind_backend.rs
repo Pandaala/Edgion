@@ -77,47 +77,70 @@ impl TlsUnknownKindBackendTestSuite {
         )
     }
 
-    fn test_mixed_backend_uses_valid_service() -> TestCase {
+    fn test_mixed_backend_keeps_invalid_share() -> TestCase {
         TestCase::new(
-            "mixed_backend_uses_valid_service",
-            "TLSRoute with valid and unknown-kind backendRefs should route to valid Service only",
+            "mixed_backend_keeps_invalid_share",
+            "TLSRoute with equal-weight valid and unknown-kind backendRefs must fail the invalid share",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let addr = format!("{}:{}", ctx.target_host, PORT);
                     let connector = make_tls_connector();
-                    let sni = ServerName::try_from("mixed-backend.sandbox.example.com").unwrap();
-
-                    let tcp = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-                        Ok(Ok(s)) => s,
-                        Ok(Err(e)) => return TestResult::failed(start.elapsed(), format!("TCP connect failed: {e}")),
-                        Err(_) => return TestResult::failed(start.elapsed(), "TCP connect timed out".to_string()),
-                    };
-
-                    let mut tls = match connector.connect(sni, tcp).await {
-                        Ok(s) => s,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("TLS handshake failed: {e}")),
-                    };
-
                     let payload = b"mixed-backend-echo";
-                    if let Err(e) = tls.write_all(payload).await {
-                        return TestResult::failed(start.elapsed(), format!("TLS write failed: {e}"));
+                    const ATTEMPTS: usize = 20;
+                    let mut echoed = 0usize;
+                    let mut failed_closed = 0usize;
+
+                    for _ in 0..ATTEMPTS {
+                        let sni = ServerName::try_from("mixed-backend.sandbox.example.com").unwrap();
+                        let tcp = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                            Ok(Ok(s)) => s,
+                            Ok(Err(e)) => {
+                                return TestResult::failed(start.elapsed(), format!("TCP connect failed: {e}"))
+                            }
+                            Err(_) => return TestResult::failed(start.elapsed(), "TCP connect timed out".to_string()),
+                        };
+
+                        let mut tls = match connector.connect(sni, tcp).await {
+                            Ok(s) => s,
+                            Err(_) => {
+                                failed_closed += 1;
+                                continue;
+                            }
+                        };
+
+                        if tls.write_all(payload).await.is_err() {
+                            failed_closed += 1;
+                            continue;
+                        }
+
+                        let mut buf = vec![0u8; 1024];
+                        match tokio::time::timeout(Duration::from_secs(2), tls.read(&mut buf)).await {
+                            Ok(Ok(n)) if n > 0 => echoed += 1,
+                            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => failed_closed += 1,
+                        }
                     }
 
-                    let mut buf = vec![0u8; 1024];
-                    match tokio::time::timeout(Duration::from_secs(3), tls.read(&mut buf)).await {
-                        Ok(Ok(n)) if n > 0 && &buf[..n] == payload => TestResult::passed_with_message(
+                    if echoed == 0 {
+                        return TestResult::failed(
                             start.elapsed(),
-                            "Valid Service backend selected; unknown-kind backend filtered".to_string(),
-                        ),
-                        Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!("Connected through mixed route and received {n} bytes"),
-                        ),
-                        Ok(Ok(_)) => TestResult::failed(start.elapsed(), "No response from backend".to_string()),
-                        Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("TLS read failed: {e}")),
-                        Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
+                            format!(
+                                "All {ATTEMPTS} mixed-backend attempts failed closed; valid Service share is missing"
+                            ),
+                        );
                     }
+                    if failed_closed == 0 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("All {ATTEMPTS} mixed-backend attempts echoed; unknown-kind weight was dropped"),
+                        );
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!(
+                            "Mixed backends kept both shares: echoed={echoed} fail_closed={failed_closed} / {ATTEMPTS}"
+                        ),
+                    )
                 })
             },
         )
@@ -178,7 +201,7 @@ impl TestSuite for TlsUnknownKindBackendTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_unknown_kind_only_rejected(),
-            Self::test_mixed_backend_uses_valid_service(),
+            Self::test_mixed_backend_keeps_invalid_share(),
             Self::test_unknown_kind_status_invalid_kind(),
         ]
     }

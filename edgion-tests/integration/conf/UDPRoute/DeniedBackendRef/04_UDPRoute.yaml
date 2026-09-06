@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: udp-denied-ref
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: udp-denied-ref-gw
+      namespace: edgion-test
+      sectionName: udp
+  rules:
+    - backendRefs:
+        - name: udp-denied-ref
+          namespace: backend
+          port: 30011
+          weight: 100
