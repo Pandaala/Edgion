@@ -842,6 +842,20 @@ impl EdgionGatewayConfigSpec {
         self.request_body.validate()
     }
 
+    /// Validate `spec.realIp` at ingest. Returns error strings suitable for an
+    /// `Accepted=False/reason=Invalid` condition (empty = OK).
+    ///
+    /// Shares `RealIpConfig`'s validation body with the RealIp plugin admission
+    /// path, so a header name accepted for one consumer is accepted for both.
+    pub fn validate_real_ip(&self) -> Vec<String> {
+        use crate::resources::edgion_plugins::PluginValidation;
+        self.real_ip
+            .as_ref()
+            .and_then(|config| config.validation_error())
+            .map(|error| vec![format!("realIp: {error}")])
+            .unwrap_or_default()
+    }
+
     /// Validate `spec.forwardedHeaders` at ingest. Returns error strings
     /// suitable for an `Accepted=False/reason=Invalid` condition.
     pub fn validate_forwarded_headers(&self) -> Vec<String> {

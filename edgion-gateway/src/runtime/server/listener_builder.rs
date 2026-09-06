@@ -186,7 +186,22 @@ pub fn add_http_listener(
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts = crate::routes::http::proxy_http::ParsedTimeouts::from_config(&context.edgion_gateway_config);
 
-    let real_ip_extractor = if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
+    // Gateway-side backstop for `spec.realIp`, mirroring what the
+    // EdgionGatewayConfig store already does for `spec.forwardedHeaders`:
+    // Controller preparse warns and still publishes, so an invalid
+    // `realIpHeader` would otherwise reach the data plane and make extraction
+    // silently inert. Refusing to build the extractor keeps the outcome
+    // identical to a missing `realIp` and leaves one actionable error line.
+    let real_ip_errors = context.edgion_gateway_config.spec.validate_real_ip();
+    let real_ip_extractor = if !real_ip_errors.is_empty() {
+        tracing::error!(
+            gateway = %context.gateway_name,
+            listener = %listener_name,
+            errors = ?real_ip_errors,
+            "Ignoring invalid realIp configuration received by the gateway, real IP extraction disabled"
+        );
+        None
+    } else if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
         match crate::util::RealIpExtractor::new(
             &real_ip_config.trusted_ips,
             real_ip_config.real_ip_header.clone(),

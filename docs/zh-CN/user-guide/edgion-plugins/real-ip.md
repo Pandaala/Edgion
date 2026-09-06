@@ -79,6 +79,18 @@ spec:
 - `CF-Connecting-IP` - Cloudflare CDN
 - `True-Client-IP` - Akamai CDN
 
+该名称必须是合法的 HTTP header 字段名（RFC 9110 `token` 字符集：字母、数字以及
+`!#$%&'*+-.^_`|~`），且不超过 256 字节。`"X Forwarded For"` 这类拼写错误在运行时
+永远匹配不到任何已解析的 header，若不校验就会静默地让真实 IP 提取失效、把
+`RemoteIp` 固定为可信代理地址。因此非法名称在准入阶段即被报告：资源会被标记为
+`Accepted=False` 且 `reason=Invalid`。
+
+**插件路径为 fail-closed。** 对 `EdgionPlugins` 而言，非法的 RealIp 配置会把插件链
+封闭：命中该资源的每个请求都返回 `500 plugin configuration error`，而不是带着失效的
+提取逻辑放行。修正 header 名称后流量恢复。全局
+`EdgionGatewayConfig.spec.realIp` 路径不封闭：Gateway 记录一条 error 日志，并按
+`realIp` 未配置的方式运行（不做真实 IP 提取）。
+
 #### recursive
 
 启用递归查找模式。对应 Nginx 的 `real_ip_recursive` 指令。

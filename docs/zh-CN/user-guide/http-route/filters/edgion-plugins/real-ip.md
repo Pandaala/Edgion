@@ -48,7 +48,7 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `trustedIps` | Array\<Object\> | **必填** | 可信代理 IP 组。仅当连接对端属于这些组之一时才进行真实 IP 提取，必须非空，见子表格 |
-| `realIpHeader` | String | `X-Forwarded-For` | 提取真实 IP 的请求头。常用值：`X-Forwarded-For`、`X-Real-IP`、`CF-Connecting-IP`、`True-Client-IP` |
+| `realIpHeader` | String | `X-Forwarded-For` | 提取真实 IP 的请求头。必须是合法的 HTTP header 字段名（RFC 9110 `token` 字符集），且不超过 256 字节；非法名称在准入阶段被拒绝。常用值：`X-Forwarded-For`、`X-Real-IP`、`CF-Connecting-IP`、`True-Client-IP` |
 | `recursive` | Boolean | `true` | 启用 nginx 风格的从右到左 `X-Forwarded-For` 遍历，跳过可信 IP 直到找到第一个不可信 IP |
 | `maxTrustedHops` | Integer | 无 | 限制递归遍历时跳过的可信跳点数量（对应 Envoy 的 `xff_num_trusted_hops` 概念）。设为 `N` 时，跳过 `N` 个可信跳点后停止遍历。仅在 `recursive: true` 时生效。未设置时不限制（与 nginx 兼容） |
 

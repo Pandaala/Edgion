@@ -167,6 +167,10 @@ spec:
 
 提取逻辑：从右向左遍历 `realIpHeader`，跳过任一 `trustedIps` 分组中的地址，取第一个非信任 IP。
 
+`spec.realIp` 在准入阶段按与 RealIp 插件相同的规则校验：`trustedIps` 为空、CIDR 格式错误或重复、`IpGroup` 名称超出 label-value 字符集，或 `realIpHeader` 不是合法的 HTTP header 字段名时，资源会给出 `Accepted=False` 与 `reason=Invalid`。在 Kubernetes 路径上，CRD 已带有 header 名称的 `pattern` 与 `maxLength`，格式错误的 `realIpHeader` 会被 API Server 直接拒绝。
+
+Controller preparse 只告警、不阻止发布，因此 Gateway 侧做了同样的兜底校验：`spec.realIp` 非法时记录一条 error 日志，并按 `realIp` 未配置的方式运行（不做真实 IP 提取）。注意 `RealIpExtractor` 本身对单条 CIDR 是宽容的（跳过非法项并告警），所以此前会被静默降级的 CIDR 错误，现在会让整个 `realIp` 块失效。
+
 ### spec.securityProtect
 
 | 参数 | 类型 | 默认值 | 说明 |

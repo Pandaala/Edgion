@@ -166,13 +166,17 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `trustedIps` | `Array<IpGroup>` | `[]` | List of trusted proxy IP groups |
-| `realIpHeader` | `String` | `X-Forwarded-For` | Header from which to extract the real client IP |
+| `trustedIps` | `Array<IpGroup>` | — (required when `realIp` is set) | List of trusted proxy IP groups; must be non-empty |
+| `realIpHeader` | `String` | `X-Forwarded-For` | Header from which to extract the real client IP. Must be a valid HTTP header field name (RFC 9110 `token` charset) of at most 256 bytes |
 | `recursive` | `Boolean` | `true` | Traverse the header right-to-left, skip trusted proxies, and take the first non-trusted IP |
 
 Each `trustedIps` entry is an `IpGroup` object: `name` (required; ≤63 chars, charset `[a-zA-Z0-9._-]`, must start/end alphanumeric, unique within the list), `description` (optional), and `cidrs` (required; non-empty list of IP or CIDR strings).
 
 Extraction logic: walk `realIpHeader` from right to left, skip addresses in any `trustedIps` group, and return the first non-trusted IP.
+
+`spec.realIp` is validated at ingest with the same rules as the RealIp plugin. An empty `trustedIps`, a malformed or duplicated CIDR, an `IpGroup` name outside the label-value charset, or a `realIpHeader` that is not a valid HTTP header field name makes the resource report `Accepted=False` with `reason=Invalid`. On the Kubernetes path the API server rejects a malformed `realIpHeader` outright, since the CRD carries the header-name `pattern` and `maxLength`.
+
+Controller preparse warns rather than refusing to publish, so the Gateway applies the same check as a backstop: when `spec.realIp` is invalid it logs an error and runs with real-IP extraction disabled, exactly as if `realIp` were unset. Note that `RealIpExtractor` itself is forgiving about individual CIDRs (it skips invalid entries with a warning), so a CIDR mistake that previously degraded silently now invalidates the whole `realIp` block.
 
 ### spec.securityProtect
 

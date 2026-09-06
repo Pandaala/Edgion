@@ -59,6 +59,10 @@ pub struct RealIpConfig {
     ///
     /// Default: "X-Forwarded-For"
     #[serde(default = "default_real_ip_header")]
+    #[schemars(
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN),
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN)
+    )]
     pub real_ip_header: String,
 
     /// Enable recursive search (nginx-style right-to-left traversal)
@@ -117,6 +121,14 @@ impl RealIpConfig {
     /// Validate configuration. Does NOT build a matcher — `RealIpExtractor`
     /// builds its own from `trusted_ips` at runtime.
     pub fn validate_and_init(&mut self) -> Result<(), String> {
+        self.check()
+    }
+
+    /// Single validation body shared by [`Self::validate_and_init`] and the
+    /// [`PluginValidation`] admission path, so the global
+    /// `EdgionGatewayConfig.spec.realIp` consumer and the RealIp plugin
+    /// consumer can never drift apart.
+    fn check(&self) -> Result<(), String> {
         use crate::matcher::ip_cidr_helpers::validate_groups_structure;
 
         if self.trusted_ips.is_empty() {
@@ -124,6 +136,17 @@ impl RealIpConfig {
         }
         if self.real_ip_header.trim().is_empty() {
             return Err("'real_ip_header' must not be empty".to_string());
+        }
+        // A non-token or oversized name can never match a parsed header at
+        // runtime, so extraction would be silently inert and `RemoteIp` would
+        // stay pinned to the trusted proxy. Reject it before publication.
+        // The reserved-name list of `validate_remote_ip_header_name` does not
+        // apply here: this is the read direction, where `X-Forwarded-For` is
+        // the default and must stay valid.
+        if self.real_ip_header.len() > crate::gwapi_types::HEADER_NAME_MAX_LEN as usize
+            || !crate::gwapi_types::is_valid_header_token(&self.real_ip_header)
+        {
+            return Err("'real_ip_header' must be a valid HTTP header name".to_string());
         }
         validate_groups_structure(&self.trusted_ips).map_err(|e| format!("trusted_ips: {}", e))?;
         Ok(())
@@ -134,18 +157,7 @@ use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for RealIpConfig {
     fn validation_error(&self) -> Option<String> {
-        use crate::matcher::ip_cidr_helpers::validate_groups_structure;
-
-        if self.trusted_ips.is_empty() {
-            return Some("'trusted_ips' must not be empty".to_string());
-        }
-        if self.real_ip_header.trim().is_empty() {
-            return Some("'real_ip_header' must not be empty".to_string());
-        }
-        if let Err(e) = validate_groups_structure(&self.trusted_ips) {
-            return Some(format!("trusted_ips: {}", e));
-        }
-        None
+        self.check().err()
     }
 }
 
@@ -192,6 +204,51 @@ mod validation_tests {
         let msg = err.unwrap();
         assert!(msg.starts_with("trusted_ips:"), "unexpected message: {msg}");
         assert!(msg.contains("Invalid IP"), "unexpected message: {msg}");
+    }
+
+    fn config_with_header(name: &str) -> RealIpConfig {
+        RealIpConfig {
+            trusted_ips: vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            }],
+            real_ip_header: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_plugin_validation_rejects_non_token_header_names() {
+        for bad in ["X Forwarded For", "X-Forwarded-For:", " X-Real-IP ", "head(er)"] {
+            let err = config_with_header(bad).validation_error();
+            assert_eq!(
+                err.as_deref(),
+                Some("'real_ip_header' must be a valid HTTP header name"),
+                "should reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_plugin_validation_rejects_oversized_header_name() {
+        let oversized = "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize + 1);
+        assert_eq!(
+            config_with_header(&oversized).validation_error().as_deref(),
+            Some("'real_ip_header' must be a valid HTTP header name")
+        );
+        let at_bound = "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize);
+        assert!(config_with_header(&at_bound).validation_error().is_none());
+    }
+
+    #[test]
+    fn test_plugin_validation_accepts_default_and_custom_header_names() {
+        for ok in ["X-Forwarded-For", "CF-Connecting-IP", "True-Client-IP", "x_real.ip"] {
+            assert!(
+                config_with_header(ok).validation_error().is_none(),
+                "should accept {ok:?}"
+            );
+        }
     }
 
     #[test]

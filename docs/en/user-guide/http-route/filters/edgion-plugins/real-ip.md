@@ -48,7 +48,7 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `trustedIps` | Array\<Object\> | **Required** | Trusted proxy IP groups. Real-IP extraction only happens when the connecting peer is in one of these groups. Must be non-empty. See the sub-table |
-| `realIpHeader` | String | `X-Forwarded-For` | Header to extract the real IP from. Common values: `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `True-Client-IP` |
+| `realIpHeader` | String | `X-Forwarded-For` | Header to extract the real IP from. Must be a valid HTTP header field name (RFC 9110 `token` charset) of at most 256 bytes; an invalid name is rejected at admission. Common values: `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `True-Client-IP` |
 | `recursive` | Boolean | `true` | Enable nginx-style right-to-left traversal of `X-Forwarded-For`, skipping trusted IPs until the first non-trusted IP is found |
 | `maxTrustedHops` | Integer | none | Cap the number of trusted hops to skip during recursive traversal (Envoy's `xff_num_trusted_hops` concept). When set to `N`, traversal stops after skipping `N` trusted hops. Only takes effect when `recursive: true`. When unset, there is no cap (nginx-compatible) |
 

@@ -149,6 +149,8 @@ spec:
                       type: string
                       description: "Header to extract real IP from (default: 'X-Forwarded-For')"
                       default: "X-Forwarded-For"
+                      pattern: "^[A-Za-z0-9!#$%&'*+\\-.^_`|~]+$"
+                      maxLength: 256
                     recursive:
                       type: boolean
                       description: "Walk X-Forwarded-For right-to-left skipping trusted proxies (default true)"

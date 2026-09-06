@@ -79,6 +79,21 @@ Common values:
 - `CF-Connecting-IP` - Cloudflare CDN
 - `True-Client-IP` - Akamai CDN
 
+The name must be a valid HTTP header field name (RFC 9110 `token` charset:
+letters, digits and `!#$%&'*+-.^_`|~`) of at most 256 bytes. A typo such as
+`"X Forwarded For"` can never match a parsed header at runtime, so without this
+check real-IP extraction would be silently disabled and `RemoteIp` would stay
+pinned to the trusted proxy address. An invalid name is therefore reported at
+admission: the resource is stamped `Accepted=False` with `reason=Invalid`.
+
+**Fail-closed on the plugin path.** For `EdgionPlugins`, an invalid RealIp
+configuration seals the plugin chain closed — every request matching that
+resource is answered with `500 plugin configuration error` rather than passing
+through with extraction disabled. Fix the header name to restore traffic. The
+global `EdgionGatewayConfig.spec.realIp` path is not sealed: the Gateway logs
+an error and runs with real-IP extraction disabled, exactly as if `realIp` were
+unset.
+
 #### recursive
 
 Enables recursive lookup mode. Corresponds to Nginx's `real_ip_recursive` directive.

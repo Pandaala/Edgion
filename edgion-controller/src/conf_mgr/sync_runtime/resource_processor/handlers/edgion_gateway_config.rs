@@ -53,6 +53,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_dns_resolver());
         errors.extend(egc.spec.validate_request_body());
         errors.extend(egc.spec.validate_forwarded_headers());
+        errors.extend(egc.spec.validate_real_ip());
         errors.extend(egc.spec.validate_preflight_policy());
         errors
     }
@@ -347,6 +348,33 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.contains("remoteIpHeader")),
             "expected remoteIpHeader validation error; got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn egc_invalid_real_ip_header_is_rejected_at_ingest() {
+        use edgion_resources::resources::edgion_config_data::IpGroup;
+        use edgion_resources::resources::edgion_plugins::RealIpConfig;
+
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let mut spec = EdgionGatewayConfigSpec::default();
+        spec.real_ip = Some(RealIpConfig {
+            trusted_ips: vec![IpGroup {
+                name: "internal".to_string(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".to_string()],
+            }],
+            real_ip_header: "X Forwarded For".to_string(),
+            ..Default::default()
+        });
+        let mut egc = EdgionGatewayConfig::new("cluster-egc-real-ip", spec);
+
+        let errors = EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("realIp") && e.contains("valid HTTP header name")),
+            "expected realIp validation error; got: {errors:?}"
         );
     }
 
