@@ -34,7 +34,7 @@
 - Reviewer: `b0056_final_review`
 - Code verdict: Approved with no code findings
 - Record correction: clarified that raw gatewayRef already traverses conf-sync; the missing contract is validated/resolved serving ownership and enforcement.
-- Deferred adjudication: D0026 records the nonduplicate technical bug; D0027 records the genuinely required new integration scenario blocked on D0026; existing integration tests remain frozen.
+- Deferred adjudication: D0026 records the nonduplicate technical bug and the later multi-Gateway HTTP-01 isolation scenario. D0027 is closed as not a standalone defect; see `skills/04-review/testing/acme-gatewayref-isolation-coverage-not-standalone.md`. Existing integration tests remain frozen.
 
 ## Verification
 | Check group | Result | Important note only |
