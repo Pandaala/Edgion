@@ -143,7 +143,7 @@ spec:
 | `total_backends` | Integer | 探查的后端数量 |
 | `total_endpoints` | Integer | 所有后端探查的端点总数 |
 | `success_count` | Integer | 返回 2xx/3xx 状态码的端点数 |
-| `failure_count` | Integer | 返回非 2xx 状态码或失败的端点数 |
+| `failure_count` | Integer | 未记录 2xx/3xx 状态码的端点数：状态码在该范围之外，或因传输/时限失败没有状态码 |
 | `truncated` | Boolean | 端点数超过 `maxEndpoints` 并被截断时为 `true` |
 | `timeout_ms` | Integer | 实际生效的单端点超时 |
 | `wall_timeout_ms` | Integer | 实际生效的 wall-clock 超时 |

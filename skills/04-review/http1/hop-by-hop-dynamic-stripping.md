@@ -56,7 +56,9 @@ never affected by the gap.
   - `forward_auth/plugin.rs::forward_all_headers` (Mode 1 — forward all).
   - `request_mirror/plugin.rs::build_headers`.
   - `all_endpoint_status/plugin.rs::fan_out_requests` (derived once before
-    fan-out, cloned into each endpoint future).
+    fan-out, cloned into each endpoint future). Also skips `Host` and inbound
+    body headers (`Content-Length`, `Expect`) via `is_inbound_body_header`;
+    `Transfer-Encoding` is already hop-by-hop.
   - `link_sys/providers/webhook/resolver.rs::resolve_webhook_key`
     (operator-named `forward_headers` whitelist).
 
@@ -143,8 +145,8 @@ alone; they are withheld separately because they describe the inbound message
 rather than the outbound one being built.
 
 Scope: these two skips live in `collect_headers` and therefore cover ForwardAuth
-and the LinkSys webhook only. `request_mirror` strips `expect` with its own
-inline check. `all_endpoint_status` builds its outbound requests independently
-and still relays both — a known gap, tracked in
-`tasks/todo/all-endpoint-status-outbound-header-hygiene.md`, not a closed
-decision.
+and the LinkSys webhook. `request_mirror` strips `expect` with its own inline
+check. `all_endpoint_status` builds outbound requests independently and applies
+the same inbound-body skip via `is_inbound_body_header` (`Content-Length` and
+`Expect`; `Transfer-Encoding` is already hop-by-hop). Re-reports that
+AllEndpointStatus still relays those headers are **not accepted**.

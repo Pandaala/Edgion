@@ -55,8 +55,9 @@ the two ForwardAuth modes disagree: `forwardBody: true` sends no `Expect`
 (`edgion-gateway/src/plugins/http/request_mirror/plugin.rs`) has stripped
 `expect` inline, next to its hop-by-hop filter, since before this finding. The
 fix aligns the shared outbound builder with the precedent rather than inventing
-a rule. The two spellings are deliberate duplication for now — see "Known
-adjacent gap".
+a rule. AllEndpointStatus later adopted the same inbound-body skip on its
+independent builder; the three spellings remain deliberate duplication — see
+"Independent-builder consumer".
 
 **5. Same family as the framing decision, different mechanism**
 
@@ -68,25 +69,25 @@ connection — it is at worst a wasted expectation.
 
 ## Fix Suggestions Not Accepted
 
-- Add `expect` to `HOP_BY_HOP_HEADERS` — that constant is the literal RFC 9110 §7.6.1 set and `is_hop_by_hop` answers a factual question about it, so adding an end-to-end header makes it return a wrong answer. It would also silently change every other consumer of the set, including `all_endpoint_status` (see "Known adjacent gap"), rather than only the path where the decision is justified.
+- Add `expect` to `HOP_BY_HOP_HEADERS` — that constant is the literal RFC 9110 §7.6.1 set and `is_hop_by_hop` answers a factual question about it, so adding an end-to-end header makes it return a wrong answer. It would also silently change every other consumer of the set, including `all_endpoint_status`, rather than only the path where the decision is justified.
 - Fold the check into `is_body_framing_header` — `Expect` is not framing, and that predicate's name is load-bearing for the schema-side rejection rationale.
 - Reject `Expect` in `origin`/`custom` like the framing headers — an explicit listing is a deliberate operator act with no desync risk.
 - Have the outbound builder answer or honour the expectation itself — the outbound body is fully buffered before dispatch, so there is nothing to negotiate.
 
-## Known adjacent gap — not covered by this finding
+## Independent-builder consumer — AllEndpointStatus
 
 `AllEndpointStatus::fan_out_requests`
 (`edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs`) builds its own
-bodyless `reqwest` calls and filters only hop-by-hop plus `host`, so it still
-relays both `Expect` and `Content-Length` from the inbound request. That site is
-**not** fixed by this finding and is **not** covered by `FA-BODY-001` either —
-neither goes through `CompiledRequest::collect_headers`. A re-report against
-`all_endpoint_status` specifically is a valid new finding; tracked in
-`tasks/todo/all-endpoint-status-outbound-header-hygiene.md`.
+bodyless `reqwest` calls and does not go through `CompiledRequest::collect_headers`.
+It already applies hop-by-hop plus `Host` filtering, and separately skips inbound
+body headers (`Content-Length`, `Expect`) via `is_inbound_body_header`.
+`Transfer-Encoding` is hop-by-hop, so it is not relayed either. Re-reports that
+AllEndpointStatus still forwards inbound `Content-Length`, `Transfer-Encoding`,
+or `Expect` are **not accepted**.
 
-The same file also motivates the deliberate duplication with
-`request_mirror`'s inline `expect` check: a single shared predicate is only
-worth extracting once these three sites agree on one rule.
+The three sites still spell the Expect skip independently (`collect_headers`,
+`request_mirror`'s inline check, and `is_inbound_body_header`). Extracting one
+shared predicate is optional and is not required to keep this finding closed.
 
 ## Re-evaluation Triggers
 
@@ -100,4 +101,5 @@ Re-open this decision only if:
 - `FA-BODY-002`: split from `tasks/todo/forward-auth-content-length-leak.md`; the `Content-Length` half of that task is `FA-BODY-001`.
 - `edgion-gateway/src/plugins/http/common/outbound/request.rs` — `is_hop_owned_expectation_header`, unit tests `forward_all_strips_expect_continue` and `explicitly_listed_origin_expect_is_still_forwarded`.
 - `edgion-gateway/src/plugins/runtime/session_adapter.rs` — `capture_request_body` answers and strips the inbound expectation.
+- `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` — independent builder; `is_inbound_body_header` plus unit test `inbound_body_headers_are_content_length_and_expect`.
 - `docs/{en,zh-CN}/user-guide/edgion-plugins/forward-auth.md` — "Hop-by-Hop Header Filtering".

@@ -143,7 +143,7 @@ The plugin returns `200 OK` with `Content-Type: application/json`. The body is a
 | `total_backends` | Integer | Number of backends probed |
 | `total_endpoints` | Integer | Number of endpoints probed across all backends |
 | `success_count` | Integer | Endpoints that returned a 2xx/3xx status |
-| `failure_count` | Integer | Endpoints that returned a non-2xx status or failed |
+| `failure_count` | Integer | Endpoints that did not record a 2xx/3xx status — a status outside that range, or no status because of a transport or time-limit failure |
 | `truncated` | Boolean | `true` if the endpoint count exceeded `maxEndpoints` and was capped |
 | `timeout_ms` | Integer | Effective per-endpoint timeout used |
 | `wall_timeout_ms` | Integer | Effective wall-clock timeout used |
