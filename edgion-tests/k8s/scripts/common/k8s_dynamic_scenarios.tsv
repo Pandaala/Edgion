@@ -10,6 +10,7 @@ BtlspRefFlap	Status/BackendTLSPolicy/RefFlap/DynamicTest	initial	backendtlspolic
 CanaryHotSwap	EdgionPlugins/Canary/HotSwap/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	canary-hotswap-switch
 ConditionRefsDynamic	EdgionPlugins/ConditionRefsDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	condition-refs-dynamic
 CredentialInjectorDynamic	EdgionPlugins/CredentialInjector/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	credential-injector-dynamic
+CsrfSecretRotation	EdgionPlugins/Csrf/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	csrf-secret-rotation
 DnsResolutionFlap	HTTPRoute/Backend/DnsResolutionFlap/DynamicTest	initial	services	service	edgion-default	dns-flap
 DslDynamic	EdgionPlugins/DslDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	dsl-dynamic
 FormJsonTransformDynamic	EdgionPlugins/FormJsonTransform/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	form-json-transform-dynamic

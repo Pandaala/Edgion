@@ -43,7 +43,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0039 — Harden auth challenge realm quoted strings | needs-implementation | [campaign finding](D0039-auth-challenge-realm-quoted-string.md) |
 | D0040 — Unify CORS validation and header precomputation | needs-implementation | [campaign finding](D0040-cors-validation-header-precomputation.md) |
 | D0041 — Adjudicate CSRF duration-string migration | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/csrf-expires-integer-seconds-retained.md) |
-| D0042 — Add CSRF Secret-rotation integration coverage | needs-implementation | [campaign finding](D0042-csrf-secret-rotation-integration-coverage.md) |
+| D0042 — Add CSRF Secret-rotation integration coverage | fixed (2026-09-06) | [review rule](../../../../skills/04-review/csrf/csrf-secret-rotation-integration-coverage.md) |
 | D0043 — Enforce exactly one CtxSet transform operation | needs-implementation | [campaign finding](D0043-ctx-set-exact-transform-operation.md) |
 | D0044 — Design sensitive ctx provenance and unmasking | needs-discussion | [campaign finding](D0044-ctx-sensitive-provenance-unmasking.md) |
 | D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/ssl/dynamic-external-upstream-sni-host-validation.md) |
@@ -109,7 +109,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Harden auth challenge realm quoted strings | pending | [task](../../../todo/harden-auth-challenge-realm-quoted-strings.md) |
 | Unify CORS validation and header precomputation | pending | [task](../../../todo/unify-cors-validation-and-header-precomputation.md) |
 | Adjudicate CSRF duration-string migration | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/csrf-expires-integer-seconds-retained.md) |
-| Add CSRF Secret-rotation integration coverage | pending | [task](../../../todo/add-csrf-secret-rotation-integration-coverage.md) |
+| Add CSRF Secret-rotation integration coverage | fixed (2026-09-06) | [review rule](../../../../skills/04-review/csrf/csrf-secret-rotation-integration-coverage.md) |
 | Enforce exactly one CtxSet transform operation | pending | [task](../../../todo/enforce-one-ctx-set-transform-operation.md) |
 | Design sensitive ctx provenance and unmasking | pending | [task](../../../todo/design-ctx-sensitive-provenance-unmasking.md) |
 | Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/ssl/dynamic-external-upstream-sni-host-validation.md) |

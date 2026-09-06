@@ -30,6 +30,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "BodyDynamic",
     "ConditionRefsDynamic",
     "CredentialInjectorDynamic",
+    "CsrfSecretRotation",
     "JsonSchemaValidationDynamic",
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
@@ -1418,6 +1419,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "CanaryHotSwap"
         | "ConditionRefsDynamic"
         | "CredentialInjectorDynamic"
+        | "CsrfSecretRotation"
         | "DslDynamic"
         | "FormJsonTransformDynamic"
         | "JsonSchemaValidationDynamic"

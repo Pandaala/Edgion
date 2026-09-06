@@ -83,7 +83,10 @@ pub use credential_injector::{
     CredentialInjectorDynamicDeletedTestSuite, CredentialInjectorDynamicInitialTestSuite,
     CredentialInjectorDynamicUpdatedTestSuite, CredentialInjectorTestSuite,
 };
-pub use csrf::CsrfTestSuite;
+pub use csrf::{
+    capture_csrf_pre_rotation_token, CsrfPreRotationTokenGuard, CsrfSecretRotationDeletedTestSuite,
+    CsrfSecretRotationInitialTestSuite, CsrfSecretRotationUpdatedTestSuite, CsrfTestSuite,
+};
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
 pub use direct_endpoint::DirectEndpointTestSuite;

@@ -14,6 +14,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::body_dynamic::SCENARIO,
         crate::dynamic::scenarios::condition_refs_dynamic::SCENARIO,
         crate::dynamic::scenarios::credential_injector_dynamic::SCENARIO,
+        crate::dynamic::scenarios::csrf_secret_rotation::SCENARIO,
         crate::dynamic::scenarios::json_schema_validation::SCENARIO,
         crate::dynamic::scenarios::form_json_transform::SCENARIO,
         crate::dynamic::scenarios::basic_auth_dynamic::SCENARIO,
