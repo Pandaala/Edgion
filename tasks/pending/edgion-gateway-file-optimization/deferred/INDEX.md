@@ -83,7 +83,8 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/conf-sync-cert-watch-mtime-length-signature.md) |
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
 | Conf-Sync rotation transactional address selection | pending | [task](../../../todo/conf-sync-rotation-transactional-address-selection.md) |
-| Fail closed on denied L4 backend references | pending | [task](../../../todo/l4-backend-ref-denied-fail-closed.md) |
+| Fail closed on denied L4 backend references | completed | [review rule](../../../../skills/04-review/routing/l4-backend-ref-denied-fail-closed.md) |
+| Denied backendRef HTTP/gRPC parity and grant hot-reload | pending | [task](../../../todo/denied-backend-ref-parity-and-grant-hot-reload.md) |
 | Keep the load-balancer degrade-mode gauge current across lifecycle exits | pending | [task](../../../todo/lb-degrade-mode-metric-lifecycle.md) |
 | Capture Service runtime health state once per load-balancer selection | pending | [task](../../../todo/lb-selection-service-runtime-state-capture.md) |
 | Run mTLS whitelist verification once for the leaf certificate | completed | [review rule](../../../../skills/04-review/edgion-tls/mtls-leaf-only-whitelist-verification.md) |

@@ -62,6 +62,10 @@ group, kind, or endpoint list. TLS retries must `return` on both
   live sessions on every route generation is a separate hot-reload contract,
   not this dial-gate fix. TCP and TLS connections are per-accept and pick up
   the new generation on the next connect.
+- **HTTP/gRPC data-plane parity and grant hot-reload e2e are a follow-up,
+  not a reopen of this finding.** Static L4 deny-dial coverage is in place.
+  Remaining suites live in
+  `tasks/todo/denied-backend-ref-parity-and-grant-hot-reload.md`.
 
 ## Fix Suggestions Not Accepted
 
@@ -95,9 +99,9 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- `tasks/todo/l4-backend-ref-denied-fail-closed.md` (enforcement fixed
-  2026-09-06; static L4 deny-dial e2e added 2026-09-06; HTTP/gRPC parity
-  and grant hot-reload coverage remain a follow-up).
+- Original security todo closed 2026-09-06 after enforcement plus static
+  L4 deny-dial e2e. Remaining coverage lives in
+  `tasks/todo/denied-backend-ref-parity-and-grant-hot-reload.md`.
 - Source: `edgion-gateway/src/routes/common.rs` (`classify_l4_selected_backend`,
   `l4_post_select`), the three L4 `route_unit.rs` selectors, TCP/UDP
   dial paths, and `apply_tls_l4_post_select` used by both TLS modes.
