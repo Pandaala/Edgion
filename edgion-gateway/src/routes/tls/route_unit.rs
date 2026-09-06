@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
 use crate::lb::BackendSelector;
-use crate::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key, resolve_tcp_keepalive};
+use crate::routes::common::{resolve_stream_plugin_store_key, resolve_tcp_keepalive};
 use edgion_resources::resources::common::TcpKeepaliveConfig;
 use edgion_resources::resources::tls_route::TLSBackendRef;
 use edgion_resources::resources::TLSRoute;
@@ -94,16 +94,15 @@ impl TlsRouteUnit {
     }
 }
 
-/// Build a WRR selector over the first rule's core-service backend refs.
+/// Build a WRR selector over the first rule's backend refs.
+///
+/// Denied and non-Service refs keep their declared weight. Fail-close is
+/// the post-select dial gate, not selector construction.
 fn build_backend_selector(route: &TLSRoute) -> Arc<BackendSelector<TLSBackendRef>> {
     let selector = BackendSelector::new();
     if let Some(rule) = route.spec.rules.as_ref().and_then(|r| r.first()) {
         if let Some(backend_refs) = &rule.backend_refs {
-            let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
-                .iter()
-                .filter(|br| is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()))
-                .map(|br| (br.clone(), br.weight))
-                .unzip();
+            let (backends, weights): (Vec<_>, Vec<_>) = backend_refs.iter().map(|br| (br.clone(), br.weight)).unzip();
             if !backends.is_empty() {
                 selector.init(backends, weights);
             }
@@ -115,7 +114,7 @@ fn build_backend_selector(route: &TLSRoute) -> Arc<BackendSelector<TLSBackendRef
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::common::{ParentReference, RefDenied};
     use edgion_resources::resources::tls_route::{TLSBackendRef, TLSRouteRule, TLSRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<TLSRoute> {
@@ -223,5 +222,101 @@ mod tests {
     fn test_backend_finder_built_from_first_rule() {
         let unit = TlsRouteUnit::from_route(make_route(None));
         assert!(unit.backend_finder.select().is_ok());
+    }
+
+    #[test]
+    fn denied_core_service_ref_remains_selectable() {
+        let mut route = make_route(None);
+        {
+            let route = Arc::make_mut(&mut route);
+            let backend = route
+                .spec
+                .rules
+                .as_mut()
+                .and_then(|rules| rules.first_mut())
+                .and_then(|rule| rule.backend_refs.as_mut())
+                .and_then(|refs| refs.first_mut())
+                .expect("fixture has one backend ref");
+            backend.ref_denied = Some(RefDenied {
+                target_namespace: "other".to_string(),
+                target_name: "svc".to_string(),
+                reason: Some("NoMatchingReferenceGrant".to_string()),
+            });
+        }
+        let unit = TlsRouteUnit::from_route(route);
+        let selected = unit
+            .backend_finder
+            .select()
+            .expect("denied core Service stays selectable");
+        assert!(selected.ref_denied.is_some());
+    }
+
+    fn tls_backend(name: &str, group: Option<&str>, kind: Option<&str>, denied: bool) -> TLSBackendRef {
+        TLSBackendRef {
+            name: name.to_string(),
+            namespace: Some("default".to_string()),
+            port: Some(8080),
+            weight: Some(1),
+            group: group.map(str::to_string),
+            kind: kind.map(str::to_string),
+            ref_denied: denied.then(|| RefDenied {
+                target_namespace: "other".to_string(),
+                target_name: name.to_string(),
+                reason: Some("NoMatchingReferenceGrant".to_string()),
+            }),
+        }
+    }
+
+    fn mixed_weight_route() -> Arc<TLSRoute> {
+        let mut route = make_route(None);
+        {
+            let route = Arc::make_mut(&mut route);
+            let refs = route
+                .spec
+                .rules
+                .as_mut()
+                .and_then(|rules| rules.first_mut())
+                .and_then(|rule| rule.backend_refs.as_mut())
+                .expect("fixture has backend refs");
+            *refs = vec![
+                tls_backend("allowed", None, None, false),
+                tls_backend("denied", None, None, true),
+                tls_backend("invalid", Some("apps"), Some("Deployment"), false),
+            ];
+        }
+        route
+    }
+
+    #[test]
+    fn mixed_denied_and_unsupported_keep_declared_weight() {
+        use crate::routes::common::{classify_l4_selected_backend, L4SelectedBackend};
+        let unit = TlsRouteUnit::from_route(mixed_weight_route());
+        let mut allowed = 0;
+        let mut denied = 0;
+        let mut invalid = 0;
+        for _ in 0..3 {
+            let selected = unit.backend_finder.select().expect("three equal-weight slots");
+            let outcome = classify_l4_selected_backend(
+                selected.ref_denied.as_ref(),
+                selected.group.as_deref(),
+                selected.kind.as_deref(),
+            );
+            match selected.name.as_str() {
+                "allowed" => {
+                    allowed += 1;
+                    assert_eq!(outcome, L4SelectedBackend::Proceed);
+                }
+                "denied" => {
+                    denied += 1;
+                    assert_eq!(outcome, L4SelectedBackend::Denied);
+                }
+                "invalid" => {
+                    invalid += 1;
+                    assert_eq!(outcome, L4SelectedBackend::UnsupportedKind);
+                }
+                other => panic!("unexpected backend {other}"),
+            }
+        }
+        assert_eq!((allowed, denied, invalid), (1, 1, 1));
     }
 }

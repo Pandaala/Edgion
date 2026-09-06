@@ -12,7 +12,10 @@ use crate::backends::{select_service_endpoint, service_section_key_from_port, va
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::stream::get_global_stream_plugin_store;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
-use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
+use crate::routes::common::{
+    classify_l4_selected_backend, L4SelectedBackend, L4_BACKEND_REF_DENIED_LOG, L4_BACKEND_REF_DENIED_STATUS,
+    L4_BACKEND_UNSUPPORTED_KIND_LOG, L4_BACKEND_UNSUPPORTED_KIND_STATUS, UNSAFE_UPSTREAM_ADDRESS_LOG,
+};
 use crate::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::routes::tcp::TcpPortRouteManager;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -44,6 +47,12 @@ pub enum TcpStatus {
     NoRuleAvailable,
     PluginDenied,
     NoBackendSelected,
+    /// Selected backendRef is Controller-stamped `ref_denied` (no matching
+    /// ReferenceGrant). Fail closed before Service lookup or dial.
+    RefDenied,
+    /// Selected backendRef is not a core Service. Fail closed and keep the
+    /// declared WRR share instead of dropping the slot at selector build.
+    UnsupportedBackend,
     NoBackendResolved,
     UnsafeUpstreamAddress,
     UpstreamConnectionFailed,
@@ -68,6 +77,8 @@ impl TcpStatus {
             Self::NoRuleAvailable => "NoRuleAvailable",
             Self::PluginDenied => "PluginDenied",
             Self::NoBackendSelected => "NoBackendSelected",
+            Self::RefDenied => L4_BACKEND_REF_DENIED_STATUS,
+            Self::UnsupportedBackend => L4_BACKEND_UNSUPPORTED_KIND_STATUS,
             Self::NoBackendResolved => "NoBackendResolved",
             Self::UnsafeUpstreamAddress => "UnsafeUpstreamAddress",
             Self::UpstreamConnectionFailed => "UpstreamConnectionFailed",
@@ -168,6 +179,23 @@ impl EdgionTcpProxy {
                 return;
             }
         };
+        match classify_l4_selected_backend(
+            backend_ref.ref_denied.as_ref(),
+            backend_ref.group.as_deref(),
+            backend_ref.kind.as_deref(),
+        ) {
+            L4SelectedBackend::Denied => {
+                ctx.status = TcpStatus::RefDenied;
+                ctx.deny_reason = Some(L4_BACKEND_REF_DENIED_LOG);
+                return;
+            }
+            L4SelectedBackend::UnsupportedKind => {
+                ctx.status = TcpStatus::UnsupportedBackend;
+                ctx.deny_reason = Some(L4_BACKEND_UNSUPPORTED_KIND_LOG);
+                return;
+            }
+            L4SelectedBackend::Proceed => {}
+        }
 
         // 5. Resolve backend address via EndpointSlice
         let route_ns = tcp_route.metadata.namespace.as_deref().unwrap_or("default");

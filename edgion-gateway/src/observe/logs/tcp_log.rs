@@ -137,6 +137,8 @@ mod tests {
             (TcpStatus::NoRuleAvailable, "NoRuleAvailable"),
             (TcpStatus::PluginDenied, "PluginDenied"),
             (TcpStatus::NoBackendSelected, "NoBackendSelected"),
+            (TcpStatus::RefDenied, "RefDenied"),
+            (TcpStatus::UnsupportedBackend, "UnsupportedBackend"),
             (TcpStatus::NoBackendResolved, "NoBackendResolved"),
             (TcpStatus::UnsafeUpstreamAddress, "UnsafeUpstreamAddress"),
             (TcpStatus::UpstreamConnectionFailed, "UpstreamConnectionFailed"),

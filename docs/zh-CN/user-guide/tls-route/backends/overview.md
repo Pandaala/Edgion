@@ -93,9 +93,11 @@ spec:
 
 `weight: 0` 的后端不接收任何连接，但仍保留在声明中，适合在切流前暂存后端。
 
+被拒绝的跨命名空间 backendRef 以及非 Service 的 `kind` 仍保留其声明权重。这些选中份额会失败关闭（`RefDenied` / `UnsupportedBackend`），并且不会重试到另一个后端。
+
 ### 3. 跨命名空间后端（ReferenceGrant）
 
-若要转发到不同命名空间的 Service，在后端引用中设置 `namespace`，并在目标命名空间中创建一个 ReferenceGrant，允许从路由所在命名空间引用 TLSRoute。没有该授权，引用会被拒绝。
+若要转发到不同命名空间的 Service，在后端引用中设置 `namespace`，并在目标命名空间中创建一个 ReferenceGrant，允许从路由所在命名空间引用 TLSRoute。没有匹配的授权时，Controller 会将 backendRef 标记为拒绝，Gateway 在查找或拨号 Service 之前即关闭连接。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

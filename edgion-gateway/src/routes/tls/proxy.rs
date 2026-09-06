@@ -16,7 +16,7 @@ use crate::backends::{select_service_endpoint, service_section_key_from_port, va
 use crate::observe::log_tls;
 use crate::observe::logs::LogBuffer;
 use crate::observe::AccessLogger;
-use crate::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS_LOG};
+use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::bidirectional_relay;
 use crate::routes::tls::TlsRouteManager;
 use crate::util::proxy_protocol::ProxyProtocolV2Builder;
@@ -82,6 +82,11 @@ pub struct TlsContext {
     pub log: Option<LogBuffer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err_log: Option<String>,
+    /// Structured failure token (`RefDenied`, `UnsupportedBackend`, …).
+    /// Complements the free-form `err_log` so operator pipelines can match
+    /// TLS the same way they match TCP `status`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'static str>,
 }
 
 impl TlsContext {
@@ -111,6 +116,7 @@ impl TlsContext {
             upstream_info: Vec::new(),
             log: None,
             err_log: None,
+            status: None,
         }
     }
 
@@ -260,12 +266,15 @@ impl EdgionTlsTcpProxy {
                     return;
                 }
             };
-            if !is_core_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
-                last_err = format!(
-                    "unsupported backend kind: group={:?}, kind={:?}, name={}",
-                    backend_ref.group, backend_ref.kind, backend_ref.name
-                );
-                continue;
+            if super::apply_tls_l4_post_select(
+                ctx,
+                backend_ref.ref_denied.as_ref(),
+                backend_ref.group.as_deref(),
+                backend_ref.kind.as_deref(),
+            ) {
+                // Authorization or kind miss is terminal: do not retry onto
+                // another backend and do not look up or dial the Service.
+                return;
             }
 
             // 4b. Resolve backend address via EndpointSlice
@@ -497,6 +506,7 @@ impl EdgionTlsTcpProxy {
             "upstream_info": &ctx.upstream_info,
             "log": &ctx.log,
             "err_log": &ctx.err_log,
+            "status": ctx.status,
         });
         self.access_logger.send(log_entry.to_string()).await;
     }

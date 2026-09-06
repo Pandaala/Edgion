@@ -25,8 +25,29 @@ pub use conf_handler_impl::create_tls_route_handler;
 
 use crate::plugins::stream::get_global_stream_plugin_store;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult, TlsRouteContext};
+use crate::routes::common::{l4_post_select, L4PostSelect};
 use crate::routes::l4_duplex::{DuplexError, DuplexHooks};
+use edgion_resources::resources::common::RefDenied;
 use proxy::TlsContext;
+
+/// Shared TLS retry-loop gate. Both terminate and passthrough must
+/// `return` when this is true. The helper has no retry/continue outcome:
+/// authorization and kind misses are not connect failures.
+pub(super) fn apply_tls_l4_post_select(
+    ctx: &mut TlsContext,
+    ref_denied: Option<&RefDenied>,
+    group: Option<&str>,
+    kind: Option<&str>,
+) -> bool {
+    match l4_post_select(ref_denied, group, kind) {
+        L4PostSelect::FailClosed { status, log } => {
+            ctx.status = Some(status);
+            ctx.err_log = Some(log.to_string());
+            true
+        }
+        L4PostSelect::Proceed => false,
+    }
+}
 
 pub(super) const MAX_TLS_CONNECT_RETRIES: u32 = 5;
 pub(super) const DEFAULT_TLS_CONNECT_RETRIES: u32 = 2;
@@ -264,6 +285,62 @@ mod fail_close_tests {
             err.contains("direct peer IP"),
             "err_log should mention DirectPeerIp, got: {err}"
         );
+    }
+
+    #[test]
+    fn apply_tls_l4_post_select_denied_sets_status_and_is_terminal() {
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
+        let denied = RefDenied {
+            target_namespace: "other".to_string(),
+            target_name: "svc".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        };
+        assert!(apply_tls_l4_post_select(
+            &mut ctx,
+            Some(&denied),
+            Some("apps"),
+            Some("Deployment")
+        ));
+        assert_eq!(ctx.status, Some(crate::routes::common::L4_BACKEND_REF_DENIED_STATUS));
+        assert_eq!(
+            ctx.err_log.as_deref(),
+            Some(crate::routes::common::L4_BACKEND_REF_DENIED_LOG)
+        );
+        let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
+        assert_eq!(json["status"], "RefDenied");
+        assert_eq!(json["err_log"], "backend ref denied");
+    }
+
+    #[test]
+    fn apply_tls_l4_post_select_unsupported_kind_sets_status_and_is_terminal() {
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
+        assert!(apply_tls_l4_post_select(
+            &mut ctx,
+            None,
+            Some("apps"),
+            Some("Deployment")
+        ));
+        assert_eq!(
+            ctx.status,
+            Some(crate::routes::common::L4_BACKEND_UNSUPPORTED_KIND_STATUS)
+        );
+        assert_eq!(
+            ctx.err_log.as_deref(),
+            Some(crate::routes::common::L4_BACKEND_UNSUPPORTED_KIND_LOG)
+        );
+        let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
+        assert_eq!(json["status"], "UnsupportedBackend");
+        assert_eq!(json["err_log"], "unsupported backend kind");
+    }
+
+    #[test]
+    fn apply_tls_l4_post_select_core_service_is_not_terminal() {
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
+        assert!(!apply_tls_l4_post_select(&mut ctx, None, None, None));
+        assert!(ctx.status.is_none());
+        assert!(ctx.err_log.is_none());
+        let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
+        assert!(json.get("status").is_none());
     }
 
     #[test]

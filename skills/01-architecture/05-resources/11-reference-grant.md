@@ -43,7 +43,7 @@ When other resources' Handlers check cross-namespace references during the parse
 1. Detect that the namespace of the backendRef or secretRef differs from the resource's own namespace
 2. Call `is_cross_ns_ref_allowed()` → `ReferenceGrantStore.check_reference_allowed()`
 3. Check parameters: from_namespace, from_group, from_kind, to_namespace, to_group, to_kind, to_name
-4. If not allowed: set the `ref_denied` field on the backendRef (the Gateway side rejects requests accordingly), or set a RefNotPermitted error on the Gateway TLS reference
+4. If not allowed: set the `ref_denied` field on the backendRef (HTTP/gRPC return 500; TCP/UDP/TLS fail the connection closed before Service lookup), or set a RefNotPermitted error on the Gateway TLS reference
 
 ReferenceGrant validation can be disabled by configuration (`is_reference_grant_validation_enabled()`), in which case all cross-namespace references are allowed by default.
 

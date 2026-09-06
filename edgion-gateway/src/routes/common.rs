@@ -4,7 +4,7 @@ use edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use edgion_resources::constants::annotations::edgion::{
     TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
 };
-use edgion_resources::resources::common::{ParentReference, TcpKeepaliveConfig};
+use edgion_resources::resources::common::{ParentReference, RefDenied, TcpKeepaliveConfig};
 use edgion_resources::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
@@ -16,6 +16,81 @@ use std::time::Duration;
 /// HTTP) emit the same literal and operator log-scraping rules match across
 /// all protocols. Update here only; do not re-declare in protocol modules.
 pub(crate) const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
+
+/// TCP `status` / UDP failure-status token when a selected L4 backendRef
+/// carries Controller-stamped `ref_denied`. Fixed and non-identifying: do
+/// not interpolate grant, namespace, or target identity into this token.
+pub(crate) const L4_BACKEND_REF_DENIED_STATUS: &str = "RefDenied";
+
+/// TLS `err_log` / TCP `deny_reason` literal for the same authorization
+/// miss. Same sensitivity rule as `L4_BACKEND_REF_DENIED_STATUS`.
+pub(crate) const L4_BACKEND_REF_DENIED_LOG: &str = "backend ref denied";
+
+/// TCP `status` / UDP failure-status / TLS `status` token when a selected
+/// L4 backendRef is not a core Service. Fixed and non-identifying.
+pub(crate) const L4_BACKEND_UNSUPPORTED_KIND_STATUS: &str = "UnsupportedBackend";
+
+/// TLS `err_log` / TCP `deny_reason` literal for an unsupported L4
+/// backend kind. Do not interpolate group, kind, or name.
+pub(crate) const L4_BACKEND_UNSUPPORTED_KIND_LOG: &str = "unsupported backend kind";
+
+/// Outcome of the shared L4 post-select gate.
+///
+/// `Denied` and `UnsupportedKind` are terminal: the connection or new
+/// session must end without Service lookup, EndpointSlice resolution, or
+/// dialing, and TLS must not retry onto another backendRef.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum L4SelectedBackend {
+    Denied,
+    UnsupportedKind,
+    Proceed,
+}
+
+/// Final pre-dial authorization and kind gate for a selected L4 backendRef.
+///
+/// Controller-stamped `ref_denied` wins over kind. Preload filtering of
+/// denied or unsupported refs is a startup optimization only and is not
+/// this boundary. Denied and unsupported slots keep their declared WRR
+/// weight and fail after selection.
+#[inline]
+pub(crate) fn classify_l4_selected_backend(
+    ref_denied: Option<&RefDenied>,
+    group: Option<&str>,
+    kind: Option<&str>,
+) -> L4SelectedBackend {
+    if ref_denied.is_some() {
+        L4SelectedBackend::Denied
+    } else if !is_core_service_backend_ref(group, kind) {
+        L4SelectedBackend::UnsupportedKind
+    } else {
+        L4SelectedBackend::Proceed
+    }
+}
+
+/// Shared post-select action for every L4 dial path, including TLS retry
+/// loops. There is no retry variant: authorization and kind misses must
+/// `return`, never `continue`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum L4PostSelect {
+    FailClosed { status: &'static str, log: &'static str },
+    Proceed,
+}
+
+/// Map a selected L4 backendRef to the shared dial-path action.
+#[inline]
+pub(crate) fn l4_post_select(ref_denied: Option<&RefDenied>, group: Option<&str>, kind: Option<&str>) -> L4PostSelect {
+    match classify_l4_selected_backend(ref_denied, group, kind) {
+        L4SelectedBackend::Denied => L4PostSelect::FailClosed {
+            status: L4_BACKEND_REF_DENIED_STATUS,
+            log: L4_BACKEND_REF_DENIED_LOG,
+        },
+        L4SelectedBackend::UnsupportedKind => L4PostSelect::FailClosed {
+            status: L4_BACKEND_UNSUPPORTED_KIND_STATUS,
+            log: L4_BACKEND_UNSUPPORTED_KIND_LOG,
+        },
+        L4SelectedBackend::Proceed => L4PostSelect::Proceed,
+    }
+}
 
 /// Convert the shared, runtime-agnostic keepalive configuration at the
 /// data-plane boundary. `user_timeout = 0` keeps the Linux system default.
@@ -426,6 +501,100 @@ mod tests {
         // Unknown group or non-Service kind is not routable.
         assert!(!is_core_service_backend_ref(Some("example.com"), Some("Foo")));
         assert!(!is_core_service_backend_ref(Some(""), Some("Deployment")));
+    }
+
+    #[test]
+    fn l4_backend_ref_denied_literals_are_fixed_and_non_identifying() {
+        assert_eq!(L4_BACKEND_REF_DENIED_STATUS, "RefDenied");
+        assert_eq!(L4_BACKEND_REF_DENIED_LOG, "backend ref denied");
+        assert_eq!(L4_BACKEND_UNSUPPORTED_KIND_STATUS, "UnsupportedBackend");
+        assert_eq!(L4_BACKEND_UNSUPPORTED_KIND_LOG, "unsupported backend kind");
+        assert!(
+            !L4_BACKEND_REF_DENIED_LOG.contains("ReferenceGrant")
+                && !L4_BACKEND_REF_DENIED_STATUS.contains("ReferenceGrant")
+                && !L4_BACKEND_UNSUPPORTED_KIND_LOG.contains("Deployment")
+        );
+    }
+
+    fn sample_denied() -> RefDenied {
+        RefDenied {
+            target_namespace: "other".to_string(),
+            target_name: "svc".to_string(),
+            reason: Some("NoMatchingReferenceGrant".to_string()),
+        }
+    }
+
+    #[test]
+    fn classify_l4_selected_backend_denied_is_terminal_and_wins_over_kind() {
+        let denied = sample_denied();
+        assert_eq!(
+            classify_l4_selected_backend(Some(&denied), None, None),
+            L4SelectedBackend::Denied
+        );
+        assert_eq!(
+            classify_l4_selected_backend(Some(&denied), Some("apps"), Some("Deployment")),
+            L4SelectedBackend::Denied
+        );
+        assert_ne!(L4SelectedBackend::Denied, L4SelectedBackend::Proceed);
+        assert_ne!(L4SelectedBackend::UnsupportedKind, L4SelectedBackend::Proceed);
+    }
+
+    #[test]
+    fn classify_l4_selected_backend_rejects_non_core_service_kind() {
+        assert_eq!(
+            classify_l4_selected_backend(None, Some("apps"), Some("Deployment")),
+            L4SelectedBackend::UnsupportedKind
+        );
+        assert_eq!(
+            classify_l4_selected_backend(None, Some("example.com"), Some("Service")),
+            L4SelectedBackend::UnsupportedKind
+        );
+    }
+
+    #[test]
+    fn classify_l4_selected_backend_allows_core_service() {
+        assert_eq!(
+            classify_l4_selected_backend(None, None, None),
+            L4SelectedBackend::Proceed
+        );
+        assert_eq!(
+            classify_l4_selected_backend(None, Some(""), Some("Service")),
+            L4SelectedBackend::Proceed
+        );
+        assert_eq!(
+            classify_l4_selected_backend(None, Some("core"), Some("Service")),
+            L4SelectedBackend::Proceed
+        );
+    }
+
+    #[test]
+    fn l4_post_select_denied_and_unsupported_are_fail_closed_not_retryable() {
+        // Exhaustive: FailClosed | Proceed. A third Retry variant would
+        // re-open the TLS continue-after-deny / continue-after-kind bug.
+        let denied = sample_denied();
+        let denied_action = l4_post_select(Some(&denied), None, None);
+        assert_eq!(
+            denied_action,
+            L4PostSelect::FailClosed {
+                status: L4_BACKEND_REF_DENIED_STATUS,
+                log: L4_BACKEND_REF_DENIED_LOG,
+            }
+        );
+
+        let kind_action = l4_post_select(None, Some("apps"), Some("Deployment"));
+        assert_eq!(
+            kind_action,
+            L4PostSelect::FailClosed {
+                status: L4_BACKEND_UNSUPPORTED_KIND_STATUS,
+                log: L4_BACKEND_UNSUPPORTED_KIND_LOG,
+            }
+        );
+
+        assert_eq!(l4_post_select(None, None, None), L4PostSelect::Proceed);
+        assert!(!matches!(
+            l4_post_select(None, None, None),
+            L4PostSelect::FailClosed { .. }
+        ));
     }
 
     fn meta_with(namespace: Option<&str>, annotation_value: Option<&str>) -> ObjectMeta {

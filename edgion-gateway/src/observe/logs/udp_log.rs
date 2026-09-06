@@ -129,6 +129,26 @@ mod tests {
     }
 
     #[test]
+    fn udp_status_as_str_matches_log_field() {
+        use crate::routes::udp::edgion_udp::UdpStatus;
+        let cases: &[(UdpStatus, &str)] = &[
+            (UdpStatus::NoRouteMatched, "NoRouteMatched"),
+            (UdpStatus::NoRuleAvailable, "NoRuleAvailable"),
+            (UdpStatus::NoBackendSelected, "NoBackendSelected"),
+            (UdpStatus::RefDenied, "RefDenied"),
+            (UdpStatus::UnsupportedBackend, "UnsupportedBackend"),
+            (UdpStatus::NoBackendResolved, "NoBackendResolved"),
+            (UdpStatus::UnsafeUpstreamAddress, "unsafe upstream address"),
+            (UdpStatus::SessionLimitReached, "SessionLimitReached"),
+            (UdpStatus::UpstreamSendError, "UpstreamSendError"),
+            (UdpStatus::DownstreamSendError, "DownstreamSendError"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(variant.as_str(), *expected);
+        }
+    }
+
+    #[test]
     fn session_entry_carries_all_counters_and_omits_status() {
         let entry = UdpLogEntry::new(
             9000,

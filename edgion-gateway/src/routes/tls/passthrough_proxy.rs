@@ -24,7 +24,7 @@ use super::TlsRouteManager;
 use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
 use crate::observe::log_tls;
 use crate::observe::AccessLogger;
-use crate::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS_LOG};
+use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::bidirectional_relay;
 use crate::runtime::matching::route::hostname_matches_listener;
 use crate::runtime::store::get_listener_gateway_info_store;
@@ -246,12 +246,15 @@ impl EdgionTlsPassthroughProxy {
                     return;
                 }
             };
-            if !is_core_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
-                last_err = format!(
-                    "unsupported backend kind: group={:?}, kind={:?}, name={}",
-                    backend_ref.group, backend_ref.kind, backend_ref.name
-                );
-                continue;
+            if super::apply_tls_l4_post_select(
+                ctx,
+                backend_ref.ref_denied.as_ref(),
+                backend_ref.group.as_deref(),
+                backend_ref.kind.as_deref(),
+            ) {
+                // Authorization or kind miss is terminal: do not retry onto
+                // another backend and do not look up or dial the Service.
+                return;
             }
 
             let route_ns = tls_route.metadata.namespace.as_deref().unwrap_or("default");
@@ -486,6 +489,7 @@ impl EdgionTlsPassthroughProxy {
             "upstream_info": &ctx.upstream_info,
             "log": &ctx.log,
             "err_log": &ctx.err_log,
+            "status": ctx.status,
         });
         self.access_logger.send(log_entry.to_string()).await;
     }

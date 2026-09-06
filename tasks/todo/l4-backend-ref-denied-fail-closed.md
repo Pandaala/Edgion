@@ -5,14 +5,14 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-08-31 |
-| Status | pending |
+| Status | enforcement done; e2e follow-up remains |
 | Type | security bugfix |
 | Priority | P1 |
 | Issue | N/A |
 
 ## AI guide summary
 
-TCPRoute, UDPRoute, and both TLSRoute proxy modes compile core-Service backend references into weighted selectors without enforcing the Controller-resolved `ref_denied` marker after selection. Their dial paths validate the group and kind but do not reject a selected denied cross-namespace reference before building the Service key and resolving an endpoint. This differs from the HTTP and gRPC paths, which inspect `ref_denied` before using a selected backend. Preload filtering is only a startup optimization and is not an authorization boundary.
+TCPRoute, UDPRoute, and both TLSRoute proxy modes must honor the Controller-resolved `ref_denied` marker after selection, and they must keep denied plus non-Service backendRefs in the weighted selector so those slots fail their declared share. Preload filtering is only a startup optimization and is not an authorization boundary. Enforcement is in place; data-plane e2e / grant hot-reload coverage remains a follow-up.
 
 ## Requirements
 
@@ -60,3 +60,5 @@ TCPRoute, UDPRoute, and both TLSRoute proxy modes compile core-Service backend r
 | Date | Decision | Reason |
 |------|----------|--------|
 | 2026-08-31 | Defer implementation from the preload audit. | The defect spans three route-unit selectors, four connection paths, weighted invalid-backend semantics, and hot-reload authorization generations. A preload-only filter reduces wasted work but cannot enforce the final dial boundary. |
+| 2026-09-06 | Implement the post-select fail-close gate only. | Shared `l4_backend_ref_denied` plus the four dial paths. Selectors still retain denied weight. TLS retries return instead of continuing. Data-plane e2e / grant hot-reload / cross-protocol parity tests remain follow-up. An already-pinned UDP session is not torn down on grant revocation; that is existing session-pin behavior, not this gate. |
+| 2026-09-06 | Keep unsupported L4 kinds in the selector and fail after select. | Aligns L4 with Gateway API weighted-invalid-backend share. Shared `classify_l4_selected_backend` / `l4_post_select` covers Denied and UnsupportedKind. TLS `return`s on both. TCP/UDP/TLS logs use `UnsupportedBackend`. Mixed-weight unit tests lock the three-slot count. e2e remains follow-up. |

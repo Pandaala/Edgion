@@ -93,9 +93,11 @@ spec:
 
 A backend with `weight: 0` receives no connections while remaining declared, which is useful for staging a backend before shifting traffic to it.
 
+A denied cross-namespace backendRef and a non-Service `kind` keep their declared weight. Those selections fail closed (`RefDenied` / `UnsupportedBackend`) and do not retry onto another backend.
+
 ### 3. Cross-namespace backend (ReferenceGrant)
 
-To forward to a Service in a different namespace, set `namespace` on the backend reference and create a ReferenceGrant in the target namespace that permits TLSRoute references from the route's namespace. Without the grant the reference is rejected.
+To forward to a Service in a different namespace, set `namespace` on the backend reference and create a ReferenceGrant in the target namespace that permits TLSRoute references from the route's namespace. Without a matching grant, the Controller marks the backendRef denied and the Gateway fails the connection closed without looking up or dialing the Service.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

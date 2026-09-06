@@ -27,7 +27,7 @@ spec:
 | `name` | String | **Required** | Target Kubernetes Service name |
 | `port` | Integer | **Required** | Service port to send datagrams to |
 | `weight` | Integer | `1` | Relative share of sessions sent to this backend |
-| `namespace` | String | UDPRoute namespace | Service namespace; cross-namespace requires a `ReferenceGrant` |
+| `namespace` | String | UDPRoute namespace | Service namespace; cross-namespace requires a `ReferenceGrant`. Without a matching grant the Gateway fails the session closed without looking up or sending to the Service. |
 | `kind` | String | `Service` | Backend object kind |
 
 ## Sessions and timeouts
@@ -49,6 +49,8 @@ spec:
           port: 53
           weight: 1
 ```
+
+A denied cross-namespace backendRef and a non-Service `kind` keep their declared weight. Those selections fail closed (`RefDenied` / `UnsupportedBackend`) instead of redistributing sessions onto the remaining Services.
 
 ## Related documents
 

@@ -81,7 +81,7 @@ spec:
       kind: Service
 ```
 
-Unauthorized cross-namespace references set `ref_denied` on the backendRef; the Gateway side rejects requests accordingly (returning 500) — except when a `DynamicInternalUpstream`/`Canary` named jump addresses the denied ref, which takes that plugin's `onInvalid` policy first (403 by default).
+Unauthorized cross-namespace references set `ref_denied` on the backendRef; the Gateway side rejects them before using the target — HTTP/gRPC return 500, and TCP/UDP/TLS fail the connection closed without Service lookup — except when a `DynamicInternalUpstream`/`Canary` named jump addresses the denied ref, which takes that plugin's `onInvalid` policy first (403 by default). L4 denied and non-Service backendRefs keep their declared WRR weight and fail that share (`RefDenied` / `UnsupportedBackend`).
 
 ## hostname Intersection
 

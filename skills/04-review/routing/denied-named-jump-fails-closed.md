@@ -139,8 +139,9 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- `tasks/todo/fail-closed-on-denied-l7-named-jumps.md` (closed 2026-09-05); sibling L4 work is
-  tracked in `tasks/todo/l4-backend-ref-denied-fail-closed.md`, and the Canary half was B0066.
+- `tasks/todo/fail-closed-on-denied-l7-named-jumps.md` (closed 2026-09-05); sibling L4
+  dial-gate work is [l4-backend-ref-denied-fail-closed.md](l4-backend-ref-denied-fail-closed.md),
+  and the Canary half was B0066.
 - Source: `edgion-gateway/src/routes/http/routes_mgr.rs` (`find_backend_by_name`),
   `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` (`pick_backend_ref`),
   `edgion-gateway/src/plugins/http/dynamic_internal_upstream/plugin.rs`,

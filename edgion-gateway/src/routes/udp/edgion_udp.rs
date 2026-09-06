@@ -10,7 +10,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
 use crate::observe::{log_udp, UdpLogEntry};
-use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
+use crate::routes::common::{
+    classify_l4_selected_backend, L4SelectedBackend, L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_STATUS,
+    UNSAFE_UPSTREAM_ADDRESS_LOG,
+};
 use crate::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::routes::udp::UdpPortRouteManager;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -35,6 +38,41 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 /// Maximum number of concurrent client sessions per listener.
 /// Prevents resource exhaustion from UDP reflection/amplification attacks.
 const MAX_UDP_SESSIONS: usize = 10000;
+
+/// Stable UDP failure-status tokens. Plugin denials keep their own
+/// `&'static str` reason and do not go through this table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UdpStatus {
+    NoRouteMatched,
+    NoRuleAvailable,
+    NoBackendSelected,
+    RefDenied,
+    UnsupportedBackend,
+    NoBackendResolved,
+    UnsafeUpstreamAddress,
+    SessionLimitReached,
+    UpstreamSendError,
+    DownstreamSendError,
+}
+
+impl UdpStatus {
+    /// Stable string label for this status, used as the UDP access log
+    /// `status` field. Same contract as `TcpStatus::as_str`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoRouteMatched => "NoRouteMatched",
+            Self::NoRuleAvailable => "NoRuleAvailable",
+            Self::NoBackendSelected => "NoBackendSelected",
+            Self::RefDenied => L4_BACKEND_REF_DENIED_STATUS,
+            Self::UnsupportedBackend => L4_BACKEND_UNSUPPORTED_KIND_STATUS,
+            Self::NoBackendResolved => "NoBackendResolved",
+            Self::UnsafeUpstreamAddress => UNSAFE_UPSTREAM_ADDRESS_LOG,
+            Self::SessionLimitReached => "SessionLimitReached",
+            Self::UpstreamSendError => "UpstreamSendError",
+            Self::DownstreamSendError => "DownstreamSendError",
+        }
+    }
+}
 
 /// Pick the wildcard bind address whose family matches the upstream.
 ///
@@ -177,7 +215,7 @@ impl EdgionUdpProxy {
                     self.listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    "NoRouteMatched",
+                    UdpStatus::NoRouteMatched.as_str(),
                 ))
                 .await;
                 return;
@@ -193,7 +231,7 @@ impl EdgionUdpProxy {
                 self.listener_port,
                 direct_peer_ip,
                 direct_peer_port,
-                "NoRuleAvailable",
+                UdpStatus::NoRuleAvailable.as_str(),
             ))
             .await;
             return;
@@ -233,12 +271,39 @@ impl EdgionUdpProxy {
                     self.listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    "NoBackendSelected",
+                    UdpStatus::NoBackendSelected.as_str(),
                 ))
                 .await;
                 return;
             }
         };
+        match classify_l4_selected_backend(
+            backend_ref.ref_denied.as_ref(),
+            backend_ref.group.as_deref(),
+            backend_ref.kind.as_deref(),
+        ) {
+            L4SelectedBackend::Denied => {
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    direct_peer_ip,
+                    direct_peer_port,
+                    UdpStatus::RefDenied.as_str(),
+                ))
+                .await;
+                return;
+            }
+            L4SelectedBackend::UnsupportedKind => {
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    direct_peer_ip,
+                    direct_peer_port,
+                    UdpStatus::UnsupportedBackend.as_str(),
+                ))
+                .await;
+                return;
+            }
+            L4SelectedBackend::Proceed => {}
+        }
 
         let route_ns = udp_route.metadata.namespace.as_deref().unwrap_or("default");
         let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
@@ -251,7 +316,7 @@ impl EdgionUdpProxy {
                     self.listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    "NoBackendResolved",
+                    UdpStatus::NoBackendResolved.as_str(),
                 ))
                 .await;
                 return;
@@ -264,7 +329,7 @@ impl EdgionUdpProxy {
                     self.listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    "NoBackendResolved",
+                    UdpStatus::NoBackendResolved.as_str(),
                 ))
                 .await;
                 return;
@@ -283,7 +348,7 @@ impl EdgionUdpProxy {
                 self.listener_port,
                 direct_peer_ip,
                 direct_peer_port,
-                UNSAFE_UPSTREAM_ADDRESS_LOG,
+                UdpStatus::UnsafeUpstreamAddress.as_str(),
             ))
             .await;
             return;
@@ -296,7 +361,7 @@ impl EdgionUdpProxy {
                     self.listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    "SessionLimitReached",
+                    UdpStatus::SessionLimitReached.as_str(),
                 ))
                 .await;
                 return;
@@ -436,7 +501,7 @@ impl EdgionUdpProxy {
                     listener_port,
                     direct_peer_ip,
                     direct_peer_port,
-                    "UpstreamSendError",
+                    UdpStatus::UpstreamSendError.as_str(),
                 ))
                 .await;
             }
@@ -460,7 +525,7 @@ impl EdgionUdpProxy {
                     listener_port,
                     crate::ctx::canonicalize_ip(direct_peer_addr.ip()),
                     direct_peer_addr.port(),
-                    "DownstreamSendError",
+                    UdpStatus::DownstreamSendError.as_str(),
                 ))
                 .await;
             }
