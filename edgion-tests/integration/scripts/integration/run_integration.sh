@@ -1531,6 +1531,16 @@ run_credential_reservation_redis_test() {
     run_test "CredentialReservationRedis" "${test_bin} --ignored --nocapture"
 }
 
+run_token_bucket_partial_refill_redis_test() {
+    local test_bin="${EDGION_TOKEN_BUCKET_PARTIAL_REFILL_TEST_BIN:-}"
+    if [ -z "$test_bin" ] || [ ! -x "$test_bin" ]; then
+        log_error "Token-bucket partial-refill Redis test executable is unavailable: ${test_bin:-not configured}"
+        report_test "TokenBucketPartialRefillRedis" "FAIL" "0" "precompiled executable unavailable"
+        return 1
+    fi
+    run_test "TokenBucketPartialRefillRedis" "${test_bin} --ignored --nocapture"
+}
+
 run_all_tests() {
     local round_name="${1:-}"
     local test_failed=false
@@ -1698,6 +1708,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_ProxyRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimit" || test_failed=true
                     run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
+                    run_token_bucket_partial_refill_redis_test || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RealIp" || test_failed=true
                     run_test "EdgionPlugins_RequestMirror" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RequestMirror" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
@@ -1750,6 +1761,9 @@ run_all_tests() {
                         fi
                     else
                         log_info "Skipping complex test: ${test_name} (requires --full-test)"
+                    fi
+                    if [ "$G_ITEM" = "RateLimitRedis" ]; then
+                        run_token_bucket_partial_refill_redis_test || test_failed=true
                     fi
                 fi
                 ;;
@@ -1962,6 +1976,7 @@ run_all_tests() {
         run_test "EdgionPlugins_ProxyRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimit" || test_failed=true
         run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
+        run_token_bucket_partial_refill_redis_test || test_failed=true
         run_test "EdgionPlugins_RealIp" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RealIp" || test_failed=true
         run_test "EdgionPlugins_RequestMirror" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
@@ -2367,6 +2382,7 @@ main() {
     export EDGION_TEST_CLIENT_BIN="${gateway_bin_dir}/test_client"
     export EDGION_CACHE_RESIDUE_BIN="${gateway_bin_dir}/cache_residue"
     export EDGION_CREDENTIAL_RESERVATION_TEST_BIN="${gateway_bin_dir}/credential_reservation_redis"
+    export EDGION_TOKEN_BUCKET_PARTIAL_REFILL_TEST_BIN="${gateway_bin_dir}/token_bucket_partial_refill_redis"
     export EDGION_CAPABILITY_REGISTRY="${PROJECT_ROOT}/edgion-tests/integration/capabilities.tsv"
     if [ -n "$G_RESOURCE" ] && [ -n "$G_ITEM" ]; then
         export EDGION_INTEGRATION_EXPLICIT_TARGET=1
@@ -2506,6 +2522,14 @@ main() {
         && [ ! -x "$EDGION_CREDENTIAL_RESERVATION_TEST_BIN" ]; then
         log_error "Credential reservation Redis test executable is missing: ${EDGION_CREDENTIAL_RESERVATION_TEST_BIN}"
         report_test "Preflight_BinaryCapabilities" "FAIL" "0" "credential reservation test missing"
+        exit 1
+    fi
+    if { [ -z "$G_RESOURCE" ] \
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] \
+            && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "RateLimitRedis" ]; }; }; } \
+        && [ ! -x "$EDGION_TOKEN_BUCKET_PARTIAL_REFILL_TEST_BIN" ]; then
+        log_error "Token-bucket partial-refill Redis test executable is missing: ${EDGION_TOKEN_BUCKET_PARTIAL_REFILL_TEST_BIN}"
+        report_test "Preflight_BinaryCapabilities" "FAIL" "0" "token bucket partial refill test missing"
         exit 1
     fi
     report_test "Preflight_BinaryCapabilities" "PASS" "0"

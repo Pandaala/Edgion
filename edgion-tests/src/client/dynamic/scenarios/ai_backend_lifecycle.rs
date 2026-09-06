@@ -408,7 +408,9 @@ async fn wait_traffic(ctx: &ScenarioCtx, available: bool) -> Result<()> {
 }
 
 async fn apply(ctx: &ScenarioCtx, yaml: String) -> Result<()> {
-    let path = std::env::temp_dir().join(format!("edgion-ai-backend-lifecycle-{}.yaml", std::process::id()));
+    let path = crate::scratch::scratch_dir()
+        .await?
+        .join(format!("edgion-ai-backend-lifecycle-{}.yaml", std::process::id()));
     tokio::fs::write(&path, yaml)
         .await
         .context("failed to write lifecycle apply manifest")?;

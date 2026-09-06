@@ -121,9 +121,12 @@ group receives TERM, then KILL after `EDGION_DEADLINE_GRACE_SECONDS` (default 10
 jobs still reach the aggregate summary.
 
 `prepare.sh` is the canonical build phase. In addition to product and helper binaries, it builds
-`cache_residue` and precompiles the ignored `credential_reservation_redis` integration test, copying
-the hashed Cargo test executable to `target/debug/credential_reservation_redis` (or the coverage
-target equivalent). Non-coverage preparation normalizes `CARGO_TARGET_DIR` to the project-local
+`cache_residue` and precompiles the ignored real-Redis integration tests
+(`credential_reservation_redis`, `token_bucket_partial_refill_redis`), copying each hashed Cargo
+test executable to `target/debug/<test name>` (or the coverage target equivalent). Add a new
+ignored test to the `for ignored_test in ...` list in `prepare.sh` and to the artifact list in
+`integration/scripts/README.md`; a guard test in `test_client.rs` compares the two. Non-coverage
+preparation normalizes `CARGO_TARGET_DIR` to the project-local
 `target/` directory so every child resolves the same paths. Execution phases invoke those stable
 paths directly. `--no-prepare` is therefore
 strictly build-free: a missing artifact is an immediate infrastructure failure, never a late Cargo

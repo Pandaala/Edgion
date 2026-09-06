@@ -188,6 +188,7 @@ Built artifacts under `target/debug/`:
 - `config_load_validator`: configuration-load validator
 - `cache_residue`: final cache-residue validator
 - `credential_reservation_redis`: stable copy of the precompiled ignored Redis integration test
+- `token_bucket_partial_refill_redis`: stable copy of the precompiled ignored Redis token-bucket partial-refill test
 
 Output location:
 
@@ -202,7 +203,8 @@ target/debug/
 ├── resource_diff
 ├── config_load_validator
 ├── cache_residue
-└── credential_reservation_redis
+├── credential_reservation_redis
+└── token_bucket_partial_refill_redis
 ```
 
 ### `start_all.sh`

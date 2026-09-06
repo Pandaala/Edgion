@@ -33,6 +33,8 @@ pub mod metrics_helper;
 pub mod port_config;
 #[path = "client/reporter.rs"]
 pub mod reporter;
+#[path = "client/scratch.rs"]
+pub mod scratch;
 #[path = "client/suites/mod.rs"]
 pub mod suites;
 #[path = "client/transport.rs"]

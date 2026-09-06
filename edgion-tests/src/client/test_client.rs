@@ -330,6 +330,7 @@ mod capability_tests {
             "config_load_validator",
             "cache_residue",
             "credential_reservation_redis",
+            "token_bucket_partial_refill_redis",
         ]
         .into_iter()
         .collect();
@@ -353,8 +354,9 @@ mod capability_tests {
                     .map(|name| name.trim_end_matches(';'))
             })
             .collect();
-        if prepare.contains("stable_credential_test_bin=\"${target_root}/debug/credential_reservation_redis\"") {
-            prepared_artifacts.insert("credential_reservation_redis");
+        if let Some((_, rest)) = prepare.split_once("for ignored_test in ") {
+            let names = rest.split_once(';').map(|(names, _)| names).unwrap_or_default();
+            prepared_artifacts.extend(names.split_whitespace());
         }
         assert_eq!(documented_artifacts, prepared_artifacts);
     }
@@ -653,9 +655,13 @@ mod capability_tests {
         assert!(!main_runner.contains("cargo test"));
         assert!(main_runner.contains("EDGION_CACHE_RESIDUE_BIN"));
         assert!(main_runner.contains("EDGION_CREDENTIAL_RESERVATION_TEST_BIN"));
+        assert!(main_runner.contains("EDGION_TOKEN_BUCKET_PARTIAL_REFILL_TEST_BIN"));
         assert!(main_runner.contains("cache residue validator missing"));
         assert!(main_runner.contains("credential reservation test missing"));
+        assert!(main_runner.contains("token bucket partial refill test missing"));
         assert!(main_runner.contains(r#"run_test "CredentialReservationRedis" "${test_bin} --ignored --nocapture""#));
+        assert!(main_runner.contains(r#"run_test "TokenBucketPartialRefillRedis" "${test_bin} --ignored --nocapture""#));
+        assert!(main_runner.contains("run_token_bucket_partial_refill_redis_test || test_failed=true"));
         assert!(!main_runner.contains(r#"\"${test_bin}\" --ignored --nocapture"#));
         let build_phase = main_runner
             .find(r#"REPORT_PHASE="build""#)
@@ -677,9 +683,9 @@ mod capability_tests {
         assert!(runtime.contains(r#""$TEST_CLIENT_BIN" -r Services -i acme"#));
 
         assert!(prepare.contains("--bin cache_residue"));
-        assert!(prepare.contains("--test credential_reservation_redis"));
+        assert!(prepare.contains(r#"--test "$ignored_test""#));
         assert!(prepare.contains("--no-run"));
-        assert!(prepare.contains("stable_credential_test_bin"));
+        assert!(prepare.contains("stable_ignored_test_bin"));
         assert!(prepare.contains(r#"export CARGO_TARGET_DIR="${PROJECT_ROOT}/target""#));
     }
 

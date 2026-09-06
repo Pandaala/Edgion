@@ -1,11 +1,11 @@
 # D0029 — Add Redis Token-Bucket Partial-Refill Integration Coverage
 
 ## Meta
-- Status: needs-implementation
+- Status: done (2026-09-06)
 - Severity: medium
 - Discovered in: B0061, TokenBucket deny-balance correction
 - Category: testing
-- Canonical task: [`tasks/todo/add-redis-token-bucket-partial-refill-integration-coverage.md`](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md)
+- Closed by: `edgion-tests/tests/token_bucket_partial_refill_redis.rs`, registered in the integration runner; decision record [`skills/04-review/rate-limit/token-bucket-deny-branch-persists-balance.md`](../../../../skills/04-review/rate-limit/token-bucket-deny-branch-persists-balance.md). The canonical task file was deleted on close.
 
 ## Evidence
 Existing frozen Redis integration coverage does not exercise weighted TokenBucket partial refills across denied attempts. B0061 adds deterministic source-contract coverage, but a public real-Redis execution test is valuable for Lua state persistence and reply behavior.

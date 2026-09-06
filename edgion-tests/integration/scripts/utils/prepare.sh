@@ -117,16 +117,20 @@ main() {
     # Cargo test artifact to a stable execution-phase path. Runtime scripts
     # must never invoke Cargo after services or test scenarios have started.
     log_section "Build ignored integration test executables"
-    local credential_test_bin
-    if ! credential_test_bin=$(cargo test \
-        -p edgion-tests \
-        --test credential_reservation_redis \
-        --no-run \
-        --message-format=json-render-diagnostics \
-        | python3 -c '
+    local target_root="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}"
+    local ignored_test
+    for ignored_test in credential_reservation_redis token_bucket_partial_refill_redis; do
+        local ignored_test_bin
+        if ! ignored_test_bin=$(cargo test \
+            -p edgion-tests \
+            --test "$ignored_test" \
+            --no-run \
+            --message-format=json-render-diagnostics \
+            | python3 -c '
 import json
 import sys
 
+wanted = sys.argv[1]
 executables = []
 for line in sys.stdin:
     try:
@@ -135,24 +139,24 @@ for line in sys.stdin:
         continue
     target = event.get("target") or {}
     executable = event.get("executable")
-    if event.get("reason") == "compiler-artifact" and target.get("name") == "credential_reservation_redis" and executable:
+    if event.get("reason") == "compiler-artifact" and target.get("name") == wanted and executable:
         executables.append(executable)
 if not executables:
     raise SystemExit(1)
 print(executables[-1])
-'); then
-        log_error "Credential reservation Redis test compilation failed"
-        exit 1
-    fi
-    if [ ! -x "$credential_test_bin" ]; then
-        log_error "Credential reservation Redis test executable is missing: ${credential_test_bin}"
-        exit 1
-    fi
-    local target_root="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}"
-    local stable_credential_test_bin="${target_root}/debug/credential_reservation_redis"
-    cp -f "$credential_test_bin" "$stable_credential_test_bin"
-    chmod 755 "$stable_credential_test_bin"
-    log_success "Ignored integration test executable prepared: ${stable_credential_test_bin}"
+' "$ignored_test"); then
+            log_error "Ignored integration test compilation failed: ${ignored_test}"
+            exit 1
+        fi
+        if [ ! -x "$ignored_test_bin" ]; then
+            log_error "Ignored integration test executable is missing: ${ignored_test_bin}"
+            exit 1
+        fi
+        local stable_ignored_test_bin="${target_root}/debug/${ignored_test}"
+        cp -f "$ignored_test_bin" "$stable_ignored_test_bin"
+        chmod 755 "$stable_ignored_test_bin"
+        log_success "Ignored integration test executable prepared: ${stable_ignored_test_bin}"
+    done
 
     if $FULL_TEST; then
         log_section "Build external ExtProc fixture"

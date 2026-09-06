@@ -323,7 +323,7 @@ async fn ensure_pebble_ready() -> bool {
 
 /// Download Pebble's minica TLS root CA certificate from the running container.
 async fn download_pebble_tls_ca() -> anyhow::Result<std::path::PathBuf> {
-    let path = std::env::temp_dir().join("pebble-minica-ca.pem");
+    let path = crate::scratch::scratch_dir().await?.join("pebble-minica-ca.pem");
 
     if path.exists() {
         return Ok(path);
