@@ -170,6 +170,7 @@ impl RequestFilter for RequestRestriction {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::common::KeyGet;
     use edgion_resources::resources::edgion_plugins::conditions::{
         AllOfGroup, AnyOfClause, Condition, ConditionSet, IpAccessMatch, KeyExistCondition, KeyMatchCondition,
@@ -761,16 +762,14 @@ mod tests {
         drop(config);
 
         let mut session = MockPluginSession::new();
-        let auth_c = auth.clone();
-        let date_c = date.clone();
-        let digest_c = digest.clone();
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(auth_c.clone()),
-            "proxy-authorization" => None,
-            "date" => Some(date_c.clone()),
-            "digest" => Some(digest_c.clone()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("authorization", auth.as_str()),
+                ("date", date.as_str()),
+                ("digest", digest.as_str()),
+            ],
+        );
         session.expect_get_path().return_const("/v1/items".to_string());
         session.expect_get_query().returning(|| None);
         session.expect_get_method().return_const("POST".to_string());
@@ -820,7 +819,7 @@ mod tests {
         let plugin = RequestRestriction::create_with_body(&config, Some(BodyRequirement::fail_close()));
 
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|_| None);
+        setup_header_mocks(&mut session, &[]);
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});

@@ -24,7 +24,7 @@ use crate::plugins::runtime::body_gate::{
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::traits::session::BodyReadError;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
     BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential, HmacMatchConfig,
@@ -150,15 +150,15 @@ impl HmacVerifier {
         session: &dyn PluginSession,
     ) -> HmacVerifyOutcome {
         let Some(auth_header) = session
-            .header_value("authorization")
-            .or_else(|| session.header_value("proxy-authorization"))
+            .header_str("authorization")
+            .or_else(|| session.header_str("proxy-authorization"))
         else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::MissingAuth);
         };
         let Some(credentials) = credentials.filter(|credentials| !credentials.is_empty()) else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::NoCredentials);
         };
-        let Ok(params) = HmacAuth::parse_authorization(&auth_header) else {
+        let Ok(params) = HmacAuth::parse_authorization(auth_header) else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::BadFormat);
         };
         if !algorithms.contains(&params.algorithm) {
@@ -434,12 +434,12 @@ impl HmacAuth {
                 continue;
             }
 
-            let Some(value) = session.header_value(header_name) else {
+            let Some(value) = session.header_str(header_name) else {
                 return Err("Missing signed header");
             };
             signing.push_str(header_name);
             signing.push_str(": ");
-            signing.push_str(&value);
+            signing.push_str(value);
         }
 
         Ok(signing)
@@ -556,8 +556,8 @@ impl HmacAuth {
     }
 
     fn expected_body_digest(session: &dyn PluginSession) -> Result<String, &'static str> {
-        let digest_header = session.header_value("digest").ok_or("Missing Digest header")?;
-        Self::parse_body_digest_header(&digest_header).map(str::to_owned)
+        let digest_header = session.header_str("digest").ok_or("Missing Digest header")?;
+        Self::parse_body_digest_header(digest_header).map(str::to_owned)
     }
 
     fn parse_body_digest_header(digest_header: &str) -> Result<&str, &'static str> {
@@ -575,10 +575,10 @@ impl HmacAuth {
         max_skew: u64,
         signed_date_header: &str,
     ) -> Result<(), &'static str> {
-        let date_str = session.header_value(signed_date_header).ok_or("Missing Date header")?;
+        let date_str = session.header_str(signed_date_header).ok_or("Missing Date header")?;
 
-        let parsed = DateTime::parse_from_rfc2822(&date_str)
-            .or_else(|_| DateTime::parse_from_rfc3339(&date_str))
+        let parsed = DateTime::parse_from_rfc2822(date_str)
+            .or_else(|_| DateTime::parse_from_rfc3339(date_str))
             .map_err(|_| "Invalid Date header")?;
 
         let request_ts = parsed.timestamp();
@@ -709,6 +709,7 @@ impl RequestFilter for HmacAuth {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use bytes::Bytes;
     use mockall::Sequence;
 
@@ -800,11 +801,10 @@ mod tests {
             .times(2)
             .returning(|| Some("page=1&tag=a%20b".to_string()));
         session.expect_get_method().times(2).return_const("PoSt".to_string());
-        session.expect_header_value().times(2).returning(|name| match name {
-            "host" => Some("API.Example:8443".to_string()),
-            "x-custom" => Some("MiXeD/Value==;".to_string()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[("host", "API.Example:8443"), ("x-custom", "MiXeD/Value==;")],
+        );
         let headers = ["@request-target", "host", "x-custom", "(request-target)"]
             .map(str::to_string)
             .to_vec();
@@ -902,10 +902,7 @@ mod tests {
             (BodyReadError::Unimplemented, EdgionErrorCode::BodyReadUnimplemented),
         ] {
             let mut session = MockPluginSession::new();
-            session
-                .expect_header_value()
-                .withf(|name| name == "digest")
-                .return_const(Some("SHA-256=unused".to_string()));
+            setup_header_mocks(&mut session, &[("digest", "SHA-256=unused")]);
             session.expect_request_body_sha256().returning(move || Err(err.clone()));
             session
                 .expect_record_error()
@@ -925,10 +922,7 @@ mod tests {
     #[tokio::test]
     async fn verify_body_digest_does_not_double_count_refusal() {
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "digest")
-            .return_const(Some("SHA-256=unused".to_string()));
+        setup_header_mocks(&mut session, &[("digest", "SHA-256=unused")]);
         session
             .expect_request_body_sha256()
             .returning(|| Err(BodyReadError::NotBuffered));
@@ -998,12 +992,10 @@ mod tests {
         let mut session = MockPluginSession::new();
         let mut log = PluginLog::new("HmacAuth");
 
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(auth_header.clone()),
-            "proxy-authorization" => None,
-            "date" => Some(date.clone()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[("authorization", auth_header.as_str()), ("date", date.as_str())],
+        );
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
@@ -1022,11 +1014,7 @@ mod tests {
         };
         let plugin = HmacAuth::new(&config);
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "authorization")
-            .times(1)
-            .return_const(Some("hmac unused".to_string()));
+        setup_header_mocks(&mut session, &[("authorization", "hmac unused")]);
 
         let mut sequence = Sequence::new();
         session
@@ -1139,14 +1127,11 @@ mod tests {
         );
 
         let mut session = MockPluginSession::new();
-        let date_c = date.clone();
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(auth.clone()),
-            "proxy-authorization" => None,
-            "date" => Some(date_c.clone()),
-            "digest" => digest_val.clone(),
-            _ => None,
-        });
+        let mut header_pairs: Vec<(&str, &str)> = vec![("authorization", auth.as_str()), ("date", date.as_str())];
+        if let Some(digest_val) = digest_val.as_deref() {
+            header_pairs.push(("digest", digest_val));
+        }
+        setup_header_mocks(&mut session, &header_pairs);
         session.expect_get_path().return_const(path.to_string());
         session.expect_get_query().returning(|| None);
         session.expect_get_method().return_const("POST".to_string());

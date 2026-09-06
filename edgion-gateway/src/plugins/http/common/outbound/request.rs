@@ -25,7 +25,7 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{CompiledTempla
 
 use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::plugins::runtime::traits::session::RouteProto;
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::{PluginSession, PluginSessionHeaderExt};
 
 fn is_body_framing_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
@@ -385,16 +385,21 @@ impl CompiledRequest {
 
         // forward_all: add all session headers minus hop-by-hop (RFC 9110 §7.6.1).
         if self.headers.forward_all {
-            let conn_val = session.header_value("connection").unwrap_or_default();
-            let dynamic = connection_listed_hop_by_hop(&conn_val);
-            for (name, value) in session.request_headers() {
-                if !is_hop_by_hop_or_listed(&name, &dynamic)
-                    && !is_body_framing_header(&name)
-                    && !is_hop_owned_expectation_header(&name)
+            let conn_val = session.header_str("connection").unwrap_or_default();
+            let dynamic = connection_listed_hop_by_hop(conn_val);
+            for (name, value) in session.iter_headers() {
+                // Preserve the owned accessor's behavior: a header whose value is
+                // not valid UTF-8 is skipped entirely.
+                let Ok(value) = std::str::from_utf8(value) else {
+                    continue;
+                };
+                if !is_hop_by_hop_or_listed(name, &dynamic)
+                    && !is_body_framing_header(name)
+                    && !is_hop_owned_expectation_header(name)
                 {
                     if let (Ok(name), Ok(value)) = (
                         reqwest::header::HeaderName::from_bytes(name.as_bytes()),
-                        reqwest::header::HeaderValue::from_str(&value),
+                        reqwest::header::HeaderValue::from_str(value),
                     ) {
                         result.append(name, value);
                     }
@@ -631,6 +636,7 @@ fn get_session_field(session: &dyn PluginSession, kind: &FieldKind, name: &str) 
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::outbound_request::ListFields;
 
     /// TDD test (written before implementation): `forward_all=true` forwards
@@ -654,20 +660,19 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         // Connection header nominates "X-Custom-Hop" as an additional hop-by-hop name.
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(Some("X-Custom-Hop".to_string()));
-        // All request headers returned by the session, including hop-by-hop and normal ones.
-        session.expect_request_headers().return_const(vec![
-            ("content-type".to_string(), "application/json".to_string()),
-            ("content-length".to_string(), "9".to_string()),
-            ("transfer-encoding".to_string(), "chunked".to_string()),
-            ("connection".to_string(), "X-Custom-Hop".to_string()),
-            ("keep-alive".to_string(), "timeout=5".to_string()),
-            ("x-custom-hop".to_string(), "remove-this".to_string()),
-            ("authorization".to_string(), "Bearer token123".to_string()),
-        ]);
+        // All request headers the session exposes, including hop-by-hop and normal ones.
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("content-type", "application/json"),
+                ("content-length", "9"),
+                ("transfer-encoding", "chunked"),
+                ("connection", "X-Custom-Hop"),
+                ("keep-alive", "timeout=5"),
+                ("x-custom-hop", "remove-this"),
+                ("authorization", "Bearer token123"),
+            ],
+        );
 
         let result = compiled.collect_headers(&session, None).unwrap();
 
@@ -733,16 +738,15 @@ mod tests {
         let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(None::<String>);
-        session.expect_request_headers().return_const(vec![
-            ("x-forwarded-for".to_string(), "192.0.2.1".to_string()),
-            ("X-Forwarded-For".to_string(), "198.51.100.2".to_string()),
-            ("x-role".to_string(), "incoming-first".to_string()),
-            ("X-Role".to_string(), "incoming-second".to_string()),
-        ]);
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("x-forwarded-for", "192.0.2.1"),
+                ("x-forwarded-for", "198.51.100.2"),
+                ("x-role", "incoming-first"),
+                ("x-role", "incoming-second"),
+            ],
+        );
 
         let req = compiled
             .build_request(&session, None, "http://auth.test", None)
@@ -786,14 +790,10 @@ mod tests {
         let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(None::<String>);
-        session.expect_request_headers().return_const(vec![
-            ("authorization".to_string(), "Bearer valid-token".to_string()),
-            ("content-length".to_string(), "9".to_string()),
-        ]);
+        setup_header_mocks(
+            &mut session,
+            &[("authorization", "Bearer valid-token"), ("content-length", "9")],
+        );
 
         let req = compiled
             .build_request(&session, None, "http://auth.test", None)
@@ -860,19 +860,8 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         // No "connection" header — connection_listed_hop_by_hop returns empty set.
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(None::<String>);
-        // X-Required is NOT present in session headers.
-        session
-            .expect_header_value()
-            .withf(|name| name == "X-Required")
-            .return_const(None::<String>);
-        // request_headers does not include X-Required.
-        session
-            .expect_request_headers()
-            .return_const(vec![("content-type".to_string(), "text/plain".to_string())]);
+        // The session headers do not include X-Required.
+        setup_header_mocks(&mut session, &[("content-type", "text/plain")]);
 
         let result = compiled.collect_headers(&session, None);
         assert!(result.is_err(), "Expected Err for missing Required header, got Ok");
@@ -901,14 +890,10 @@ mod tests {
         let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(None::<String>);
-        session.expect_request_headers().return_const(vec![
-            ("expect".to_string(), "100-continue".to_string()),
-            ("authorization".to_string(), "Bearer token123".to_string()),
-        ]);
+        setup_header_mocks(
+            &mut session,
+            &[("expect", "100-continue"), ("authorization", "Bearer token123")],
+        );
 
         let result = compiled.collect_headers(&session, None).unwrap();
 
@@ -944,19 +929,20 @@ mod tests {
         let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(None::<String>);
-        // Distinct values per lookup path so the assertion identifies which branch
-        // produced the entry: the origin lookup, not the forward_all sweep.
-        session
-            .expect_header_value()
-            .withf(|name| name == "Expect")
-            .return_const(Some("100-continue-via-origin".to_string()));
-        session
-            .expect_request_headers()
-            .return_const(vec![("expect".to_string(), "100-continue".to_string())]);
+        // Deliberately NOT `setup_header_mocks`: this test needs the two lookup
+        // paths to disagree so the assertion can tell which branch produced the
+        // entry. The forward_all sweep reads the borrowed map; the explicitly
+        // listed origin field renders through `header_value`.
+        let mut map = http::HeaderMap::new();
+        map.append(
+            http::HeaderName::from_static("expect"),
+            http::HeaderValue::from_static("100-continue-from-sweep"),
+        );
+        session.expect_request_header_map().return_const(map);
+        session.expect_header_value().returning(|name| {
+            name.eq_ignore_ascii_case("expect")
+                .then(|| "100-continue-via-origin".to_string())
+        });
 
         let result = compiled.collect_headers(&session, None).unwrap();
 
@@ -1100,13 +1086,7 @@ mod tests {
         let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|n| n == "connection")
-            .return_const(None::<String>);
-        session
-            .expect_request_headers()
-            .return_const(vec![("content-type".to_string(), "text/plain".to_string())]);
+        setup_header_mocks(&mut session, &[("content-type", "text/plain")]);
 
         let req = compiled
             .build_request(&session, None, "http://upstream.test", None)

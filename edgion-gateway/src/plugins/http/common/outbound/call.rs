@@ -631,6 +631,7 @@ mod tests {
     use crate::plugins::http::common::outbound::request::CompiledRequest;
     use crate::plugins::http::common::outbound::target::ResolvedTarget;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
     use edgion_resources::resources::edgion_plugins::plugin_configs::CompiledTemplate;
 
@@ -1281,13 +1282,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("GET".to_string());
         session.expect_get_request_path().return_const("/verify".to_string());
-        session
-            .expect_header_value()
-            .withf(|name| name == "connection")
-            .return_const(None::<String>);
-        session
-            .expect_request_headers()
-            .return_const(vec![("authorization".to_string(), "Bearer test-token".to_string())]);
+        setup_header_mocks(&mut session, &[("authorization", "Bearer test-token")]);
 
         let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
         assert_eq!(resp.status, 200, "authorization header should have been forwarded");

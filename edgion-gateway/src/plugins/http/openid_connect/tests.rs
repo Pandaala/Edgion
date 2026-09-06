@@ -1,6 +1,7 @@
 use super::super::jwt_common::{select_jwk, JwkSelectError};
 use super::{DiscoveryDocument, IntrospectionCacheEntry, OidcSessionCookie, OpenidConnect};
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use crate::plugins::runtime::DyeOutcome;
 use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
@@ -50,13 +51,15 @@ fn install_request_cookies(session: &mut MockPluginSession, cookie_header: &str)
             (key == name).then(|| parts.next().unwrap_or("").to_string())
         })
     });
-    let for_headers = Arc::clone(&cookie);
-    session
-        .expect_request_headers()
-        .returning(move || match for_headers.lock().as_ref() {
-            Some(value) => vec![("Cookie".to_string(), value.clone())],
-            None => Vec::new(),
-        });
+    // The request-header tiers are static: `strip_cookies` reads the Cookie
+    // lines exactly once, so there is no need to model a live, rewritten map
+    // (which mockall's reference return could not express anyway). The `Arc`
+    // above still tracks what the rewrite produced.
+    if cookie_header.is_empty() {
+        setup_header_mocks(session, &[]);
+    } else {
+        setup_header_mocks(session, &[("cookie", cookie_header)]);
+    }
     let for_set = Arc::clone(&cookie);
     session.expect_set_request_header().returning(move |name, value| {
         if name.eq_ignore_ascii_case("Cookie") {
@@ -430,11 +433,10 @@ fn path_redirect_uris_ignore_x_forwarded_host() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
-    session.expect_header_value().returning(|name| match name {
-        "host" => Some("api.example.com".to_string()),
-        "x-forwarded-host" => Some("attacker.example".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(
+        &mut session,
+        &[("host", "api.example.com"), ("x-forwarded-host", "attacker.example")],
+    );
     session.expect_downstream_is_tls().returning(|| Some(true));
 
     assert_eq!(
@@ -457,11 +459,10 @@ fn path_redirect_uris_ignore_x_forwarded_proto() {
 
     // Hostile downgrade attempt on a TLS listener: the scheme must come from
     // the connection state, so the callback advertised to the IdP stays https.
-    session.expect_header_value().returning(|name| match name {
-        "host" => Some("api.example.com".to_string()),
-        "x-forwarded-proto" => Some("http".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(
+        &mut session,
+        &[("host", "api.example.com"), ("x-forwarded-proto", "http")],
+    );
     session.expect_downstream_is_tls().returning(|| Some(true));
 
     assert_eq!(
@@ -481,11 +482,10 @@ fn path_redirect_uris_fall_back_to_https_when_tls_state_unknown() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
-    session.expect_header_value().returning(|name| match name {
-        "host" => Some("api.example.com".to_string()),
-        "x-forwarded-proto" => Some("http".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(
+        &mut session,
+        &[("host", "api.example.com"), ("x-forwarded-proto", "http")],
+    );
     session.expect_downstream_is_tls().returning(|| None);
 
     assert_eq!(
@@ -503,11 +503,10 @@ fn path_redirect_uris_use_http_on_a_plaintext_listener() {
 
     // A forged `X-Forwarded-Proto: https` cannot upgrade the advertised scheme
     // either; deployments terminating TLS upstream must configure an absolute URL.
-    session.expect_header_value().returning(|name| match name {
-        "host" => Some("api.example.com".to_string()),
-        "x-forwarded-proto" => Some("https".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(
+        &mut session,
+        &[("host", "api.example.com"), ("x-forwarded-proto", "https")],
+    );
     session.expect_downstream_is_tls().returning(|| Some(false));
 
     assert_eq!(
@@ -534,7 +533,7 @@ async fn test_bearer_only_without_token_returns_401() {
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut session, &[]);
     session.expect_write_response_header().returning(|_, _| Ok(()));
     session.expect_write_response_body().returning(|_, _| Ok(()));
     session.expect_shutdown().returning(|| {});
@@ -558,7 +557,6 @@ async fn test_unauth_action_pass_without_token_allows_request() {
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     let cookies = install_request_cookies(&mut session, "");
-    session.expect_header_value().returning(|_| None);
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
@@ -594,12 +592,7 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     session.expect_get_path().return_const("/orders".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "authorization" => None,
-        "x-forwarded-host" => None,
-        "host" => Some("api.example.com".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(Some("x=1".to_string()));
     session.expect_write_response_header().returning(|resp, _| {
@@ -657,12 +650,7 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     session.expect_get_path().return_const("/orders".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "authorization" => None,
-        "x-forwarded-host" => None,
-        "host" => Some("api.example.com".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(Some("x=1".to_string()));
     session.expect_write_response_header().returning(|resp, _| {
@@ -711,12 +699,7 @@ async fn test_authorization_params_appends_non_reserved_params() {
     session.expect_get_path().return_const("/orders".to_string());
     session.expect_get_query_param().returning(|_| None);
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "authorization" => None,
-        "x-forwarded-host" => None,
-        "host" => Some("api.example.com".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_get_query().return_const(None);
     session.expect_write_response_header().returning(|resp, _| {
@@ -774,7 +757,7 @@ async fn test_logout_path_clears_cookies_and_redirects() {
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut session, &[]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -823,11 +806,7 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|name| match name {
-        "x-forwarded-host" => None,
-        "host" => Some("api.example.com".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -895,11 +874,7 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
             None
         }
     });
-    session.expect_header_value().returning(|name| match name {
-        "x-forwarded-host" => None,
-        "host" => Some("api.example.com".to_string()),
-        _ => None,
-    });
+    setup_header_mocks(&mut session, &[("host", "api.example.com")]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     let plugin_at_response = plugin.clone();
     session.expect_write_response_header().returning(move |resp, end| {
@@ -948,7 +923,7 @@ async fn test_logout_with_revoke_enabled_and_no_session_cookie_still_redirects()
 
     session.expect_get_path().return_const("/auth/logout".to_string());
     session.expect_get_cookie().returning(|_| None);
-    session.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut session, &[]);
     session.expect_downstream_is_tls().returning(|| Some(true));
     session.expect_write_response_header().returning(|resp, _| {
         assert_eq!(resp.status.as_u16(), 302);
@@ -1139,7 +1114,6 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
         &mut session,
         &format!("app=keep; edgion_oidc_session={encoded_cookie}; theme=dark"),
     );
-    session.expect_header_value().returning(|_| None);
     session.expect_append_response_header().times(0);
 
     let result = plugin.run_request(&mut session, &mut log).await;
@@ -1222,7 +1196,6 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded_cookie}"));
-    session.expect_header_value().returning(|_| None);
     session
         .expect_append_response_header()
         .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))
@@ -1273,7 +1246,6 @@ async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
         &mut session,
         &format!("edgion_oidc_session={encoded_cookie}; edgion_oidc_state=pending"),
     );
-    session.expect_header_value().returning(|_| None);
 
     let plugin_for_request = plugin.clone();
     let handle = tokio::spawn(async move {
@@ -1353,7 +1325,6 @@ async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_o
     session.expect_get_path().return_const("/".to_string());
     session.expect_get_query_param().returning(|_| None);
     let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={encoded_cookie}"));
-    session.expect_header_value().returning(|_| None);
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
@@ -1412,29 +1383,24 @@ fn strip_gateway_owned_cookies_uses_configured_session_name() {
 fn strip_gateway_owned_cookies_merges_multiple_cookie_lines() {
     let plugin = OpenidConnect::new(&base_config(), "default".to_string());
     let mut session = MockPluginSession::new();
-    let cookie = Arc::new(Mutex::new(Some("edgion_oidc_session=secret; app=keep".to_string())));
-    let second_line = Arc::new(Mutex::new(true));
-    let for_headers = Arc::clone(&cookie);
-    let for_second = Arc::clone(&second_line);
-    session.expect_request_headers().returning(move || {
-        let header = for_headers.lock().clone();
-        let mut rows = Vec::new();
-        if let Some(value) = header {
-            rows.push(("Cookie".to_string(), value));
-        }
-        if *for_second.lock() {
-            rows.push(("cookie".to_string(), "edgion_oidc_state=state; theme=dark".to_string()));
-        }
-        rows
-    });
+    // Two separate Cookie field lines; one pass must merge them and rewrite once.
+    let cookie: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    setup_header_mocks(
+        &mut session,
+        &[
+            ("cookie", "edgion_oidc_session=secret; app=keep"),
+            ("cookie", "edgion_oidc_state=state; theme=dark"),
+        ],
+    );
     let for_set = Arc::clone(&cookie);
-    let for_second_set = Arc::clone(&second_line);
-    session.expect_set_request_header().returning(move |name, value| {
-        assert!(name.eq_ignore_ascii_case("Cookie"));
-        *for_set.lock() = Some(value.to_string());
-        *for_second_set.lock() = false;
-        Ok(())
-    });
+    session
+        .expect_set_request_header()
+        .times(1)
+        .returning(move |name, value| {
+            assert!(name.eq_ignore_ascii_case("Cookie"));
+            *for_set.lock() = Some(value.to_string());
+            Ok(())
+        });
     session.expect_remove_request_header().returning(|_| {
         panic!("unrelated cookies must keep the Cookie header");
     });

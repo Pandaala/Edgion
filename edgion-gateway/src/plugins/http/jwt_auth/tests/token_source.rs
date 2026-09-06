@@ -24,7 +24,7 @@ async fn test_token_from_query_param() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     let token_clone = token.clone();
     mock.expect_get_query_param().returning(move |name| {
         if name == "token" {
@@ -58,7 +58,7 @@ async fn test_query_token_rejected_when_not_allowed_by_default() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     let token_clone = token.clone();
     mock.expect_get_query_param()
         .returning(move |name| if name == "jwt" { Some(token_clone.clone()) } else { None });
@@ -95,7 +95,7 @@ async fn test_token_from_cookie() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     let token_clone = token.clone();
     mock.expect_get_cookie().returning(move |name| {

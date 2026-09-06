@@ -11,7 +11,7 @@ use base64::Engine;
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
 };
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
@@ -107,7 +107,7 @@ impl JweDecrypt {
     }
 
     fn extract_token(&self, session: &dyn PluginSession) -> Option<String> {
-        let raw_value = session.header_value(&self.config.header)?;
+        let raw_value = session.header_str(&self.config.header)?;
         let trimmed = raw_value.trim();
 
         let token = if let Some(prefix) = &self.config.strip_prefix {
@@ -407,6 +407,7 @@ mod tests {
     use super::*;
     use crate::plugins::http::plugin_store::compile_plugins;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use bytes::Bytes;
     use edgion_resources::resources::edgion_plugins::{EdgionPlugin, RequestFilterEntry, ResolvedJweCredential};
     use edgion_resources::resources::EdgionPlugins;
@@ -519,7 +520,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         let mut log = PluginLog::new("JweDecrypt");
 
-        session.expect_header_value().returning(|_| None);
+        setup_header_mocks(&mut session, &[]);
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
@@ -536,7 +537,7 @@ mod tests {
         let mut log = PluginLog::new("JweDecrypt");
 
         let large = format!("Bearer {}", "a".repeat(9000));
-        session.expect_header_value().returning(move |_| Some(large.clone()));
+        setup_header_mocks(&mut session, &[("authorization", large.as_str())]);
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
@@ -554,9 +555,7 @@ mod tests {
         let mut log = PluginLog::new("JweDecrypt");
 
         let header_value = format!("Bearer {}", token);
-        session
-            .expect_header_value()
-            .returning(move |_| Some(header_value.clone()));
+        setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
@@ -663,11 +662,7 @@ mod tests {
                 encrypt_compact_jwe_with_protected(r#"{"sub":"alice"}"#, &test_key(), protected, index as u8 + 10);
             let header_value = format!("Bearer {token}");
             let mut session = MockPluginSession::new();
-            session
-                .expect_header_value()
-                .withf(|name| name == "authorization")
-                .times(1)
-                .returning(move |_| Some(header_value.clone()));
+            setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
             let mut sequence = Sequence::new();
             expect_auth_response(&mut session, &mut sequence, 400, b"400 Invalid JWE format");
 
@@ -690,11 +685,7 @@ mod tests {
         let token = encrypt_compact_jwe_with_protected(plaintext, &test_key(), protected, 20);
         let header_value = format!("Bearer {token}");
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "authorization")
-            .times(1)
-            .returning(move |_| Some(header_value.clone()));
+        setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
 
         let mut sequence = Sequence::new();
         session
@@ -742,11 +733,7 @@ mod tests {
             config.resolved_credential = resolved_credential;
             let plugin = JweDecrypt::new(&config, "default".to_string());
             let mut session = MockPluginSession::new();
-            session
-                .expect_header_value()
-                .withf(|name| name == "authorization")
-                .times(1)
-                .return_const(Some("Bearer malformed".to_string()));
+            setup_header_mocks(&mut session, &[("authorization", "Bearer malformed")]);
             let mut sequence = Sequence::new();
             expect_auth_response(&mut session, &mut sequence, 403, b"403 JWE decryption failed");
 
@@ -763,11 +750,7 @@ mod tests {
         let token = encrypt_compact_jwe(r#"{"sub":"alice"}"#, &test_key(), "A256GCM");
         let header_value = format!("Bearer {token}");
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "authorization")
-            .times(1)
-            .returning(move |_| Some(header_value.clone()));
+        setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
         let mut sequence = Sequence::new();
         expect_auth_response(&mut session, &mut sequence, 403, b"403 JWE decryption failed");
 
@@ -781,11 +764,7 @@ mod tests {
     async fn direct_constructor_preserves_parse_precedence_for_invalid_key_length() {
         let plugin = JweDecrypt::new(&config_with_key(b"too-short"), "default".to_string());
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "authorization")
-            .times(1)
-            .return_const(Some("Bearer malformed".to_string()));
+        setup_header_mocks(&mut session, &[("authorization", "Bearer malformed")]);
         let mut sequence = Sequence::new();
         expect_auth_response(&mut session, &mut sequence, 400, b"400 Invalid JWE format");
 

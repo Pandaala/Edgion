@@ -11,7 +11,7 @@ use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
 };
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::tls::validation::outbound_san_mismatch_reason;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
@@ -348,7 +348,7 @@ impl LdapAuth {
         })
     }
 
-    fn parse_authorization_value(&self, auth_str: String) -> Option<DecodedCredentials> {
+    fn parse_authorization_value(&self, auth_str: &str) -> Option<DecodedCredentials> {
         let trimmed = auth_str.trim();
         let mut parts = trimmed.splitn(2, ' ');
         let scheme = parts.next()?;
@@ -381,13 +381,13 @@ impl LdapAuth {
     /// Parse credentials from request headers.
     /// Priority: Proxy-Authorization > Authorization.
     fn parse_credentials(&self, session: &dyn PluginSession) -> ParseAuthResult {
-        if let Some(value) = session.header_value("proxy-authorization") {
+        if let Some(value) = session.header_str("proxy-authorization") {
             return self
                 .parse_authorization_value(value)
                 .map_or(ParseAuthResult::Invalid, ParseAuthResult::Valid);
         }
 
-        match session.header_value("authorization") {
+        match session.header_str("authorization") {
             Some(value) => self
                 .parse_authorization_value(value)
                 .map_or(ParseAuthResult::Invalid, ParseAuthResult::Valid),
@@ -570,6 +570,7 @@ impl RequestFilter for LdapAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::OutboundTlsLocal;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
@@ -597,9 +598,9 @@ mod tests {
     #[test]
     fn test_parse_authorization_value_invalid() {
         let auth = ldap_auth_default();
-        assert!(auth.parse_authorization_value("Basic abc".to_string()).is_none());
-        assert!(auth.parse_authorization_value("ldap !!!".to_string()).is_none());
-        assert!(auth.parse_authorization_value("ldap".to_string()).is_none());
+        assert!(auth.parse_authorization_value("Basic abc").is_none());
+        assert!(auth.parse_authorization_value("ldap !!!").is_none());
+        assert!(auth.parse_authorization_value("ldap").is_none());
     }
 
     #[test]
@@ -607,7 +608,7 @@ mod tests {
         let auth = ldap_auth_default();
         let payload = "  José :pä:ss ";
         let header = format!("LdAp {}", general_purpose::STANDARD.encode(payload));
-        let credentials = auth.parse_authorization_value(header).expect("credentials must parse");
+        let credentials = auth.parse_authorization_value(&header).expect("credentials must parse");
 
         assert_eq!(credentials.username(), "José");
         assert_eq!(credentials.password(), "pä:ss ");
@@ -619,17 +620,22 @@ mod tests {
     #[test]
     fn parse_credentials_short_circuits_authorization_when_proxy_is_present() {
         use crate::plugins::runtime::traits::session::MockPluginSession;
-        use mockall::predicate::eq;
 
         let auth = ldap_auth_default();
         let proxy = format!("ldap {}", general_purpose::STANDARD.encode("alice:password"));
+        // A *different* valid credential in `authorization`: the assertion below
+        // only holds if `proxy-authorization` short-circuits it. Asserting the
+        // winner positively is stronger than asserting `authorization` is never
+        // read, because it survives any change to how the header is fetched.
+        let fallback = format!("ldap {}", general_purpose::STANDARD.encode("mallory:other"));
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .with(eq("proxy-authorization"))
-            .times(1)
-            .return_once(move |_| Some(proxy));
-        session.expect_header_value().with(eq("authorization")).times(0);
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("proxy-authorization", proxy.as_str()),
+                ("authorization", fallback.as_str()),
+            ],
+        );
 
         match auth.parse_credentials(&session) {
             ParseAuthResult::Valid(credentials) => {
@@ -643,16 +649,20 @@ mod tests {
     #[test]
     fn invalid_proxy_does_not_fall_back_to_authorization() {
         use crate::plugins::runtime::traits::session::MockPluginSession;
-        use mockall::predicate::eq;
 
         let auth = ldap_auth_default();
+        // A malformed proxy header must be terminal. The valid `authorization`
+        // below would parse cleanly, so a `Valid` result here would prove a
+        // fallback happened.
+        let fallback = format!("ldap {}", general_purpose::STANDARD.encode("mallory:other"));
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .with(eq("proxy-authorization"))
-            .times(1)
-            .return_const(Some("ldap !!!".to_string()));
-        session.expect_header_value().with(eq("authorization")).times(0);
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("proxy-authorization", "ldap !!!"),
+                ("authorization", fallback.as_str()),
+            ],
+        );
 
         assert!(matches!(auth.parse_credentials(&session), ParseAuthResult::Invalid));
     }
@@ -842,7 +852,7 @@ mod tests {
         };
         let auth = LdapAuth::new(&config).expect("anonymous plugin must build");
         let mut missing = MockPluginSession::new();
-        missing.expect_header_value().times(2).return_const(None::<String>);
+        setup_header_mocks(&mut missing, &[]);
         missing
             .expect_set_request_header()
             .with(eq("X-Credential-Identifier"), eq("guest"))
@@ -861,12 +871,7 @@ mod tests {
         assert!(missing_log.contains("Allow anonymous"));
 
         let mut invalid = MockPluginSession::new();
-        invalid
-            .expect_header_value()
-            .with(eq("proxy-authorization"))
-            .times(1)
-            .return_const(Some("ldap invalid-base64".to_string()));
-        invalid.expect_header_value().with(eq("authorization")).times(0);
+        setup_header_mocks(&mut invalid, &[("proxy-authorization", "ldap invalid-base64")]);
         invalid.expect_write_response_header().times(1).returning(|_, _| Ok(()));
         invalid.expect_write_response_body().times(1).returning(|body, end| {
             assert_eq!(body.as_deref(), Some(Bytes::from_static(b"401 Unauthorized").as_ref()));

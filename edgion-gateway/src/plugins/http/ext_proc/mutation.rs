@@ -10,7 +10,7 @@
 
 use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMap, HeaderMutation, HeaderValue, HeaderValueOption};
 
-use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 use crate::PendingHeaderOp;
 
 /// Whether `name` is an HTTP/2 pseudo-header (leading `:`). These are sent to
@@ -117,10 +117,10 @@ pub fn apply_to_request(session: &mut dyn PluginSession, mutation: &HeaderMutati
             HeaderAppendAction::AppendIfExistsOrAdd => Some(session.append_request_header(&hv.key, &value)),
             HeaderAppendAction::OverwriteIfExistsOrAdd => Some(session.set_request_header(&hv.key, &value)),
             HeaderAppendAction::AddIfAbsent => {
-                (session.header_value(&hv.key).is_none()).then(|| session.set_request_header(&hv.key, &value))
+                (session.header_str(&hv.key).is_none()).then(|| session.set_request_header(&hv.key, &value))
             }
             HeaderAppendAction::OverwriteIfExists => {
-                (session.header_value(&hv.key).is_some()).then(|| session.set_request_header(&hv.key, &value))
+                (session.header_str(&hv.key).is_some()).then(|| session.set_request_header(&hv.key, &value))
             }
         };
         match outcome {
@@ -257,6 +257,7 @@ pub(super) fn reject_protected(name: &str, log: &mut PluginLog) -> bool {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 
     fn set_header_opt(key: &str, value: &str, action: HeaderAppendAction) -> HeaderValueOption {
         HeaderValueOption {
@@ -373,10 +374,7 @@ mod tests {
             remove_headers: vec![],
         };
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|n| n == "x-id")
-            .returning(|_| Some("existing".to_string()));
+        setup_header_mocks(&mut session, &[("x-id", "existing")]);
         // set_request_header must NOT be called when the header already exists.
         session.expect_set_request_header().never();
         let mut log = PluginLog::new("ExtProc");

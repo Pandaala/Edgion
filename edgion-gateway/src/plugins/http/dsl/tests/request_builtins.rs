@@ -208,10 +208,7 @@ fn test_req_content_type() {
 #[test]
 fn test_req_has_header_true() {
     let mut session = MockPluginSession::new();
-    session
-        .expect_header_value()
-        .withf(|h| h == "X-Auth")
-        .returning(|_| Some("token".to_string()));
+    setup_header_mocks(&mut session, &[("x-auth", "token")]);
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-R" && v == "yes")
@@ -227,10 +224,7 @@ fn test_req_has_header_true() {
 #[test]
 fn test_req_has_header_false() {
     let mut session = MockPluginSession::new();
-    session
-        .expect_header_value()
-        .withf(|h| h == "X-Auth")
-        .returning(|_| None);
+    setup_header_mocks(&mut session, &[]);
     let result = run(
         r#"if req.has_header("X-Auth") { req.set_header("X-R", "yes") }"#,
         session,
@@ -241,13 +235,7 @@ fn test_req_has_header_false() {
 #[test]
 fn test_req_header_names_for_in() {
     let mut session = MockPluginSession::new();
-    session.expect_request_headers().returning(|| {
-        vec![
-            ("X-A".to_string(), "v1".to_string()),
-            ("X-B".to_string(), "v2".to_string()),
-            ("X-C".to_string(), "v3".to_string()),
-        ]
-    });
+    setup_header_mocks(&mut session, &[("x-a", "v1"), ("x-b", "v2"), ("x-c", "v3")]);
     let result = run(r#"for name in req.header_names { log(name) }"#, session);
     assert_eq!(result, good_next());
 }

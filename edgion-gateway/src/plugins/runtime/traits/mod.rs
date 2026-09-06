@@ -1,5 +1,6 @@
 //! Filter traits for different plugin stages
 
+pub mod header_ext;
 pub mod request_body_stream;
 pub mod request_filter;
 pub mod session;
@@ -11,6 +12,7 @@ pub mod upstream_response_body_filter;
 pub mod upstream_response_filter;
 pub mod upstream_response_trailer;
 
+pub use header_ext::PluginSessionHeaderExt;
 pub use request_body_stream::{ChunkVerdict, RequestBodyStreamHandler};
 pub use request_filter::RequestFilter;
 pub use session::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};

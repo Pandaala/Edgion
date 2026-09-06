@@ -105,14 +105,10 @@ fn test_break_in_for_range() {
 #[test]
 fn test_break_in_for_in() {
     let mut session = MockPluginSession::new();
-    session.expect_request_headers().returning(|| {
-        vec![
-            ("X-A".to_string(), "v1".to_string()),
-            ("X-B".to_string(), "v2".to_string()),
-            ("X-C".to_string(), "v3".to_string()),
-            ("X-D".to_string(), "v4".to_string()),
-        ]
-    });
+    setup_header_mocks(
+        &mut session,
+        &[("x-a", "v1"), ("x-b", "v2"), ("x-c", "v3"), ("x-d", "v4")],
+    );
     // iterates header_names; breaks at idx==2 → set_header called 2 times
     session.expect_set_request_header().times(2).returning(|_, _| Ok(()));
     let result = run(

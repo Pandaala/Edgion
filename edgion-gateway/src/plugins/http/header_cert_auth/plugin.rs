@@ -14,7 +14,7 @@ use x509_parser::pem::Pem;
 
 use crate::ctx::ClientCertInfo;
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info_from_cert;
 use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
@@ -244,7 +244,7 @@ impl HeaderCertAuth {
 
     fn extract_from_header(&self, session: &dyn PluginSession) -> Result<ClientCertInfo, &'static str> {
         let header_value = session
-            .header_value(&self.config.certificate_header_name)
+            .header_str(&self.config.certificate_header_name)
             .ok_or("missing-cert-header")?;
         let cert_pem = self.decode_header_cert_to_pem(header_value.trim())?;
         self.verify_against_ca(&cert_pem)?;

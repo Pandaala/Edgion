@@ -15,7 +15,7 @@ use bytes::Bytes;
 use cookie::time::Duration;
 use cookie::{CookieBuilder, SameSite};
 
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::CsrfConfig;
 
@@ -93,7 +93,7 @@ impl RequestFilter for Csrf {
         }
 
         // 1. Get token from HEADER
-        let header_token = match session.header_value(&self.token_name) {
+        let header_token = match session.header_str(&self.token_name) {
             Some(token) if !token.is_empty() => token,
             _ => {
                 plugin_log.push("Deny missing token");
@@ -158,6 +158,7 @@ impl RequestFilter for Csrf {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 
     fn create_csrf_config() -> CsrfConfig {
         CsrfConfig {
@@ -269,10 +270,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Csrf");
 
         mock_session.expect_get_method().return_const("POST".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("X-CSRF-Token"))
-            .returning(|_| None);
+        setup_header_mocks(&mut mock_session, &[]);
 
         let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -294,10 +292,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Csrf");
 
         mock_session.expect_get_method().return_const("POST".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("X-CSRF-Token"))
-            .returning(|_| Some("some-token".to_string()));
+        setup_header_mocks(&mut mock_session, &[("X-CSRF-Token", "some-token")]);
         mock_session
             .expect_get_cookie()
             .with(mockall::predicate::eq("X-CSRF-Token"))
@@ -323,10 +318,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Csrf");
 
         mock_session.expect_get_method().return_const("POST".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("X-CSRF-Token"))
-            .returning(|_| Some("token1".to_string()));
+        setup_header_mocks(&mut mock_session, &[("X-CSRF-Token", "token1")]);
         mock_session
             .expect_get_cookie()
             .with(mockall::predicate::eq("X-CSRF-Token"))
@@ -349,10 +341,7 @@ mod tests {
         let csrf = Csrf::new(&create_csrf_config());
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_get_method().return_const("POST".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("X-CSRF-Token"))
-            .returning(|_| Some("not-a-valid-csrf-token".to_string()));
+        setup_header_mocks(&mut mock_session, &[("X-CSRF-Token", "not-a-valid-csrf-token")]);
         mock_session
             .expect_get_cookie()
             .with(mockall::predicate::eq("X-CSRF-Token"))
@@ -380,12 +369,7 @@ mod tests {
 
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_get_method().return_const("POST".to_string());
-        let header_token = token.clone();
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("X-CSRF-Token"))
-            .times(1)
-            .return_once(move |_| Some(header_token));
+        setup_header_mocks(&mut mock_session, &[("x-csrf-token", token.as_str())]);
         mock_session
             .expect_get_cookie()
             .with(mockall::predicate::eq("X-CSRF-Token"))

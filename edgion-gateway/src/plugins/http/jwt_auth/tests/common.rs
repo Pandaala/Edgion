@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) use super::super::JwtAuth;
 pub(super) use crate::plugins::runtime::traits::session::MockPluginSession;
+pub(super) use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 pub(super) use crate::plugins::runtime::{PluginLog, RequestFilter};
 pub(super) use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{ResolvedJwtCredential, ResolvedJwtIssuerGroup};
@@ -120,8 +121,7 @@ pub(super) async fn run_and_assert_reject(auth: JwtAuth, token: &str) -> PluginL
     let mut log = PluginLog::new("JwtAuth");
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.to_string();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));

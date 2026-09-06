@@ -9,6 +9,7 @@ pub(super) use super::lang::validator::{compile_dsl_source, ValidationLimits};
 pub(super) use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 pub(super) use super::runtime::DslRuntime;
 pub(super) use crate::plugins::runtime::traits::session::{MockPluginSession, PluginSession};
+pub(super) use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 pub(super) use crate::plugins::runtime::PluginLog;
 pub(super) use bytes::Bytes;
 pub(super) use edgion_resources::filters::PluginRunningResult;

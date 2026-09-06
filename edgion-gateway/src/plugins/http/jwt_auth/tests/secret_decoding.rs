@@ -28,8 +28,7 @@ async fn test_base64_secret_decoding() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));

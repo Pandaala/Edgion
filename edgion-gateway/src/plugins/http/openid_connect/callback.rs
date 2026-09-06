@@ -1,10 +1,10 @@
 use super::*;
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay as auth_delay;
+use crate::plugins::runtime::PluginSessionHeaderExt;
 
 impl OpenidConnect {
     pub(super) fn extract_bearer_token(&self, session: &dyn PluginSession) -> Option<String> {
-        let header = session.header_value("authorization")?;
-        let header = header.trim();
+        let header = session.header_str("authorization")?.trim();
         if header.len() < 8 {
             return None;
         }

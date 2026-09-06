@@ -42,6 +42,22 @@ pub enum ModelRouteDecisionError {
     InvalidWeight,
 }
 
+/// Does the request carry every header a route requires?
+///
+/// Takes the borrowed `HeaderMap` rather than an owned `Vec<(String, String)>`
+/// so the AI request path does not copy every header just to test a few of
+/// them; lookup is also a hash probe instead of a linear scan. Duplicate field
+/// lines are still considered, and a value that is not valid UTF-8 can never
+/// equal a configured (UTF-8) expectation, matching the previous behavior.
+fn route_headers_match(request_headers: &http::HeaderMap, required: &[(String, String)]) -> bool {
+    required.iter().all(|(name, expected)| {
+        request_headers
+            .get_all(name.as_str())
+            .iter()
+            .any(|actual| actual.as_bytes() == expected.as_bytes())
+    })
+}
+
 impl ModelRouteTable {
     pub fn compile(routes: &[AiModelRoute]) -> Option<Self> {
         let routes = routes
@@ -66,19 +82,14 @@ impl ModelRouteTable {
     pub fn decide(
         &self,
         requested_model: &str,
-        request_headers: &[(String, String)],
+        request_headers: &http::HeaderMap,
         backends: &[CompiledBackend],
     ) -> Result<ModelRouteDecision, ModelRouteDecisionError> {
         let winner = self
             .routes
             .iter()
             .filter(|route| {
-                route.pattern.matches(requested_model)
-                    && route.headers.iter().all(|(name, expected)| {
-                        request_headers.iter().any(|(actual_name, actual_value)| {
-                            actual_name.eq_ignore_ascii_case(name) && actual_value == expected
-                        })
-                    })
+                route.pattern.matches(requested_model) && route_headers_match(request_headers, &route.headers)
             })
             .max_by_key(|route| {
                 (
@@ -138,35 +149,21 @@ impl ModelRouteTable {
 
     pub fn header_applicable_patterns<'a>(
         &'a self,
-        request_headers: &'a [(String, String)],
+        request_headers: &'a http::HeaderMap,
     ) -> impl Iterator<Item = &'a str> + 'a {
         self.routes.iter().filter_map(move |route| {
-            route
-                .headers
-                .iter()
-                .all(|(name, expected)| {
-                    request_headers.iter().any(|(actual_name, actual_value)| {
-                        actual_name.eq_ignore_ascii_case(name) && actual_value == expected
-                    })
-                })
-                .then_some(route.source_pattern.as_str())
+            route_headers_match(request_headers, &route.headers).then_some(route.source_pattern.as_str())
         })
     }
 
     /// Conservative family-listing guard: a wildcard family is omitted when a
     /// different header-applicable route overlaps any part of its prefix
     /// language. Listing must not claim that the complete family is reachable.
-    pub fn wildcard_is_partially_shadowed(&self, wildcard: &str, request_headers: &[(String, String)]) -> bool {
+    pub fn wildcard_is_partially_shadowed(&self, wildcard: &str, request_headers: &http::HeaderMap) -> bool {
         let Some(prefix) = wildcard.strip_suffix('*') else {
             return false;
         };
-        let header_applicable = |route: &&CompiledModelRoute| {
-            route.headers.iter().all(|(name, expected)| {
-                request_headers.iter().any(|(actual_name, actual_value)| {
-                    actual_name.eq_ignore_ascii_case(name) && actual_value == expected
-                })
-            })
-        };
+        let header_applicable = |route: &&CompiledModelRoute| route_headers_match(request_headers, &route.headers);
         let has_identical_route = self
             .routes
             .iter()
@@ -201,6 +198,19 @@ mod tests {
     use edgion_resources::resources::edgion_plugins::{AiModelHeaderMatch, AiModelRouteCandidate, AiModelRouteMatch};
     use edgion_resources::resources::http_route::HTTPBackendRef;
     use std::sync::Arc;
+
+    /// Build a `HeaderMap` from `(name, value)` pairs for the routing tests.
+    /// Repeating a name appends a second field line.
+    fn headers(pairs: &[(&str, &str)]) -> http::HeaderMap {
+        let mut map = http::HeaderMap::new();
+        for (name, value) in pairs {
+            map.append(
+                http::HeaderName::from_bytes(name.as_bytes()).expect("test header name must be valid"),
+                http::HeaderValue::from_str(value).expect("test header value must be valid"),
+            );
+        }
+        map
+    }
 
     fn backend(name: &str, slot: usize, weight: i32) -> CompiledBackend {
         CompiledBackend::compile(
@@ -266,7 +276,7 @@ mod tests {
         let decision = table
             .decide(
                 "gpt-4",
-                &[("x-tier".to_string(), "paid".to_string())],
+                &headers(&[("x-tier", "paid")]),
                 &[backend("a", 0, 1), backend("b", 1, 3)],
             )
             .unwrap();
@@ -288,9 +298,9 @@ mod tests {
             },
         }])
         .unwrap();
-        assert!(table.wildcard_is_partially_shadowed("gpt*", &[]));
-        assert!(!table.wildcard_is_partially_shadowed("other*", &[]));
-        assert!(!table.wildcard_is_partially_shadowed("gpt-pro*", &[]));
+        assert!(table.wildcard_is_partially_shadowed("gpt*", &headers(&[])));
+        assert!(!table.wildcard_is_partially_shadowed("other*", &headers(&[])));
+        assert!(!table.wildcard_is_partially_shadowed("gpt-pro*", &headers(&[])));
 
         let with_broader = ModelRouteTable::compile(&[
             AiModelRoute {
@@ -315,8 +325,8 @@ mod tests {
             },
         ])
         .unwrap();
-        assert!(!with_broader.wildcard_is_partially_shadowed("gpt-pro*", &[]));
-        assert!(with_broader.wildcard_is_partially_shadowed("gpt*", &[]));
+        assert!(!with_broader.wildcard_is_partially_shadowed("gpt-pro*", &headers(&[])));
+        assert!(with_broader.wildcard_is_partially_shadowed("gpt*", &headers(&[])));
     }
 
     #[test]
@@ -343,24 +353,23 @@ mod tests {
         ])
         .unwrap();
         let backends = [backend("a", 0, 1)];
-        assert_eq!(table.decide("gpt-3", &[], &backends).unwrap().identity_model, "long");
+        assert_eq!(
+            table.decide("gpt-3", &headers(&[]), &backends).unwrap().identity_model,
+            "long"
+        );
         assert_eq!(
             table
-                .decide(
-                    "gpt-3",
-                    &[
-                        ("X-Tier".to_string(), "free".to_string()),
-                        ("x-tier".to_string(), "paid".to_string()),
-                    ],
-                    &backends,
-                )
+                .decide("gpt-3", &headers(&[("X-Tier", "free"), ("x-tier", "paid")]), &backends,)
                 .unwrap()
                 .identity_model,
             "headed"
         );
-        assert_eq!(table.decide("gpt-4", &[], &backends).unwrap().identity_model, "exact");
-        assert!(!table.decide("GPT-4", &[], &backends).unwrap().matched);
-        assert!(!table.decide("other", &[], &backends).unwrap().matched);
+        assert_eq!(
+            table.decide("gpt-4", &headers(&[]), &backends).unwrap().identity_model,
+            "exact"
+        );
+        assert!(!table.decide("GPT-4", &headers(&[]), &backends).unwrap().matched);
+        assert!(!table.decide("other", &headers(&[]), &backends).unwrap().matched);
     }
 
     #[test]
@@ -389,7 +398,7 @@ mod tests {
             },
         }])
         .unwrap();
-        let decision = table.decide("virtual", &[], &[first, second]).unwrap();
+        let decision = table.decide("virtual", &headers(&[]), &[first, second]).unwrap();
         assert_eq!(decision.weights, vec![7, 5]);
 
         let missing = ModelRouteTable::compile(&[AiModelRoute {
@@ -407,7 +416,7 @@ mod tests {
         }])
         .unwrap();
         assert_eq!(
-            missing.decide("virtual", &[], &[backend("same", 0, 1)]),
+            missing.decide("virtual", &headers(&[]), &[backend("same", 0, 1)]),
             Err(ModelRouteDecisionError::InvalidSelector)
         );
 
@@ -427,7 +436,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             all_zero
-                .decide("virtual", &[], &[backend("same", 0, 3), backend("other", 1, 5)])
+                .decide(
+                    "virtual",
+                    &headers(&[]),
+                    &[backend("same", 0, 3), backend("other", 1, 5)]
+                )
                 .unwrap()
                 .weights,
             vec![0, 0]

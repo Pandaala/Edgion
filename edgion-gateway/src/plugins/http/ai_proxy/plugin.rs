@@ -63,7 +63,7 @@ fn gate_candidate(
 fn visible_model_ids(
     model_routes: &ModelRouteTable,
     backends: &[crate::routes::http::match_unit::CompiledBackend],
-    headers: &[(String, String)],
+    headers: &http::HeaderMap,
     lookup: impl Fn(&str) -> Option<std::sync::Arc<crate::ai::RuntimeAiBackend>>,
 ) -> Vec<String> {
     let mut proposed = BTreeSet::new();
@@ -195,8 +195,9 @@ impl AiProxy {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let headers = session.request_headers();
-        let visible = visible_model_ids(&self.model_routes, backends, &headers, |key| snapshot.get_by_key(key));
+        let visible = visible_model_ids(&self.model_routes, backends, session.request_header_map(), |key| {
+            snapshot.get_by_key(key)
+        });
         let data = visible
             .into_iter()
             .map(|id| {
@@ -290,13 +291,14 @@ impl AiProxy {
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
 
-        let decision = match self
-            .model_routes
-            .decide(&canonical.requested_model, &session.request_headers(), &backends)
-        {
-            Ok(decision) => decision,
-            Err(_) => return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration),
-        };
+        let decision =
+            match self
+                .model_routes
+                .decide(&canonical.requested_model, session.request_header_map(), &backends)
+            {
+                Ok(decision) => decision,
+                Err(_) => return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration),
+            };
         if decision.identity_model != canonical.logical_model
             && canonical.replace_logical_model(&decision.identity_model).is_err()
         {
@@ -1011,7 +1013,7 @@ mod tests {
             },
         ])
         .unwrap();
-        let visible = visible_model_ids(&routes, &[compiled_ai_backend(None)], &[], |key| {
+        let visible = visible_model_ids(&routes, &[compiled_ai_backend(None)], &http::HeaderMap::new(), |key| {
             (key == "tenant-b/provider").then(|| runtime.clone())
         });
         assert_eq!(visible, vec!["owned*", "public"]);

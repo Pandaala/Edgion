@@ -6,7 +6,7 @@ use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, strip_cookie, strip_query_param,
 };
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
 /// Maximum size for a single JWT claim header value propagated upstream (8KB).
 const MAX_JWT_CLAIM_HEADER_VALUE_BYTES: usize = 8 * 1024;
@@ -24,7 +24,7 @@ pub(super) enum TokenSource {
 impl JwtAuth {
     /// Extract token from request (priority: Header > Query > Cookie).
     pub(super) fn extract_token(&self, session: &dyn PluginSession) -> Option<(String, TokenSource)> {
-        if let Some(v) = session.header_value(&self.config.header) {
+        if let Some(v) = session.header_str(&self.config.header) {
             let trimmed = v.trim();
             let token = if trimmed.len() >= 7 && trimmed.as_bytes()[..7].eq_ignore_ascii_case(b"bearer ") {
                 trimmed[7..].trim_start()

@@ -8,8 +8,7 @@ async fn run_and_assert_accept(auth: JwtAuth, token: &str) {
     let mut log = PluginLog::new("JwtAuth");
     mock.expect_get_method().return_const("GET".to_string());
     let token = token.to_string();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {token}")));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {token}"))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
@@ -38,8 +37,7 @@ async fn test_issuer_validation_pass() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
@@ -70,8 +68,7 @@ async fn test_issuer_validation_fail() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
@@ -107,8 +104,7 @@ async fn test_audience_validation_pass() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
@@ -139,8 +135,7 @@ async fn test_audience_validation_fail() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
@@ -261,8 +256,7 @@ async fn test_maximum_expiration_pass() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
@@ -292,8 +286,7 @@ async fn test_maximum_expiration_exceeded() {
 
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
-    mock.expect_header_value()
-        .returning(move |_| Some(format!("Bearer {}", token_clone)));
+    setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));

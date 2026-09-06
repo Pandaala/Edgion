@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BasicAuthConfig, ResolvedBasicAuthUser};
 
@@ -117,7 +117,7 @@ impl BasicAuth {
     }
 
     async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<(String, String), AuthFailure> {
-        let auth_header_value = match session.header_value("authorization") {
+        let auth_header_value = match session.header_str("authorization") {
             Some(v) => v,
             None => return Err(AuthFailure::MissingHeader),
         };
@@ -138,7 +138,7 @@ impl BasicAuth {
             .ok_or(AuthFailure::BadCredentials)
     }
 
-    fn extract_credentials(authorization: String) -> BasicAuthResult<(String, String)> {
+    fn extract_credentials(authorization: &str) -> BasicAuthResult<(String, String)> {
         let (scheme, encoded) = authorization
             .split_once(' ')
             .ok_or("Invalid authorization header format")?;
@@ -249,6 +249,7 @@ impl RequestFilter for BasicAuth {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use crate::plugins::runtime::PluginLog;
     use base64::engine::general_purpose;
     use serde_json::Value;
@@ -288,7 +289,7 @@ mod tests {
             "basic {}",
             general_purpose::STANDARD.encode("testuser:testpass".as_bytes())
         );
-        let (username, password) = BasicAuth::extract_credentials(header).expect("should parse");
+        let (username, password) = BasicAuth::extract_credentials(&header).expect("should parse");
         assert_eq!(username, "testuser");
         assert_eq!(password, "testpass");
     }
@@ -296,7 +297,7 @@ mod tests {
     #[test]
     fn test_extract_credentials_preserves_spaces_and_password_colons() {
         let header = basic_header(b" user : pass :tail");
-        let (username, password) = BasicAuth::extract_credentials(header).expect("should parse");
+        let (username, password) = BasicAuth::extract_credentials(&header).expect("should parse");
         assert_eq!(username, " user ");
         assert_eq!(password, " pass :tail");
     }
@@ -315,7 +316,7 @@ mod tests {
         ];
 
         for (header, expected) in cases {
-            let error = BasicAuth::extract_credentials(header).expect_err("input must be rejected");
+            let error = BasicAuth::extract_credentials(&header).expect_err("input must be rejected");
             assert_eq!(error.to_string(), expected);
         }
     }
@@ -452,20 +453,20 @@ mod tests {
         assert!(plugin.pin_known_user_generation("missing").is_none());
 
         let mut known = MockPluginSession::new();
-        known
-            .expect_header_value()
-            .withf(|name| name == "authorization")
-            .return_const(Some(basic_header(b"testuser:testpass")));
+        setup_header_mocks(
+            &mut known,
+            &[("authorization", basic_header(b"testuser:testpass").as_str())],
+        );
         assert_eq!(
             plugin.authenticate_request(&mut known).await.unwrap(),
             ("testuser".to_string(), "default".to_string())
         );
 
         let mut unknown = MockPluginSession::new();
-        unknown
-            .expect_header_value()
-            .withf(|name| name == "authorization")
-            .return_const(Some(basic_header(b"missing:testpass")));
+        setup_header_mocks(
+            &mut unknown,
+            &[("authorization", basic_header(b"missing:testpass").as_str())],
+        );
         assert!(matches!(
             plugin.authenticate_request(&mut unknown).await,
             Err(AuthFailure::BadCredentials)

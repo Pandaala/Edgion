@@ -846,6 +846,10 @@ pub(crate) fn resolve_cap(max_bytes: Option<u64>, ctx_cap: u64) -> u64 {
 
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
+    fn request_header_map(&self) -> &http::HeaderMap {
+        &self.inner.req_header().headers
+    }
+
     fn header_value(&self, name: &str) -> Option<String> {
         self.inner
             .req_header()

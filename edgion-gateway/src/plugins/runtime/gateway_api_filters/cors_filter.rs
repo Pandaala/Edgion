@@ -8,7 +8,7 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
 use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::traits::{PluginSession, RequestFilter, UpstreamResponseFilter};
+use crate::plugins::runtime::traits::{PluginSession, PluginSessionHeaderExt, RequestFilter, UpstreamResponseFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPCORSFilter;
 
@@ -85,8 +85,8 @@ impl GapiCorsFilter {
 
     fn is_preflight(&self, session: &mut dyn PluginSession) -> bool {
         session.get_method() == "OPTIONS"
-            && session.header_value("origin").is_some()
-            && session.header_value("access-control-request-method").is_some()
+            && session.header_str("origin").is_some()
+            && session.header_str("access-control-request-method").is_some()
     }
 
     /// Compute CORS response headers as key-value pairs.
@@ -115,7 +115,7 @@ impl GapiCorsFilter {
                 // When request carries credentials (Cookie/Authorization), browsers reject
                 // "Access-Control-Allow-Origin: *". Echo the origin instead.
                 let request_has_credentials =
-                    session.header_value("cookie").is_some() || session.header_value("authorization").is_some();
+                    session.header_str("cookie").is_some() || session.header_str("authorization").is_some();
                 if request_has_credentials {
                     origin.to_string()
                 } else {

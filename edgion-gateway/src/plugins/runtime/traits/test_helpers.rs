@@ -39,3 +39,63 @@ pub fn setup_default_path_mocks(mock: &mut MockPluginSession, path: &str) {
     mock.expect_get_request_uri().return_const(path_owned);
     mock.expect_get_query().return_const(Option::<String>::None);
 }
+
+/// Wire every request-header tier on a `MockPluginSession` from one source of truth.
+///
+/// `PluginSession` exposes request headers four ways - the borrowed
+/// `request_header_map()` (which every `PluginSessionHeaderExt` accessor is
+/// derived from), the owned `header_value()`, and the bulk `request_headers()` /
+/// `request_headers_bytes()`. A test that stubs only some of them panics as soon
+/// as the code under test reads another, and a test that stubs them by hand can
+/// let them disagree. This builds a single `http::HeaderMap` and serves all of
+/// them from it, so they cannot drift.
+///
+/// Because this stubs `request_headers()` too, a test using it must NOT also set
+/// `expect_request_headers()` - pass the full header list here instead.
+///
+/// Header names must be valid; values are taken as-is. Duplicate names are
+/// appended, so multi-value headers can be expressed by repeating a name.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut session = MockPluginSession::new();
+/// setup_header_mocks(&mut session, &[("origin", "https://example.com")]);
+/// ```
+#[cfg(test)]
+pub fn setup_header_mocks(mock: &mut MockPluginSession, headers: &[(&str, &str)]) {
+    use std::str::FromStr;
+
+    let mut map = http::HeaderMap::new();
+    for (name, value) in headers {
+        let name = http::HeaderName::from_str(name).expect("test header name must be valid");
+        let value = http::HeaderValue::from_str(value).expect("test header value must be valid");
+        map.append(name, value);
+    }
+
+    // Owned tier mirrors `PingoraSessionAdapter::header_value`: first value
+    // only, and a present-but-non-UTF-8 value reads as absent.
+    let owned = map.clone();
+    mock.expect_header_value()
+        .returning(move |name| owned.get(name).and_then(|v| v.to_str().ok()).map(str::to_string));
+
+    // Owned bulk tier mirrors `PingoraSessionAdapter::request_headers`: every
+    // field line in order, dropping any whose value is not valid UTF-8.
+    let all = map.clone();
+    mock.expect_request_headers().returning(move || {
+        all.iter()
+            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string())))
+            .collect()
+    });
+
+    // Raw bulk tier mirrors `PingoraSessionAdapter::request_headers_bytes`: no
+    // UTF-8 requirement, so non-UTF-8 values stay visible.
+    let raw = map.clone();
+    mock.expect_request_headers_bytes().returning(move || {
+        raw.iter()
+            .map(|(name, value)| (name.as_str().as_bytes().to_vec(), value.as_bytes().to_vec()))
+            .collect()
+    });
+
+    mock.expect_request_header_map().return_const(map);
+}

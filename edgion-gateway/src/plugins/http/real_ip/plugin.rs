@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::util::RealIpExtractor;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::RealIpConfig;
@@ -74,8 +74,8 @@ impl RequestFilter for RealIp {
 
         plugin_log.push(self.header_log);
 
-        let header_value = session.header_value(extractor.real_ip_header());
-        let resolution = extractor.resolve_real_ip(session.downstream_peer_ip(), header_value.as_deref());
+        let header_value = session.header_str(extractor.real_ip_header());
+        let resolution = extractor.resolve_real_ip(session.downstream_peer_ip(), header_value);
 
         if resolution.downstream_trusted {
             plugin_log.push("trusted proxy:match");
@@ -103,6 +103,7 @@ impl RequestFilter for RealIp {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use mockall::predicate::eq;
     use serde_json::json;
 
@@ -204,11 +205,7 @@ mod tests {
 
         let plugin = RealIp::create(&create_test_config());
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .with(eq("X-Forwarded-For"))
-            .times(1)
-            .return_const(Some("203.0.113.1, 192.168.1.1".to_string()));
+        setup_header_mocks(&mut session, &[("x-forwarded-for", "203.0.113.1, 192.168.1.1")]);
         session
             .expect_downstream_peer_ip()
             .times(1)
@@ -239,11 +236,7 @@ mod tests {
     async fn missing_header_keeps_remote_ip_without_calling_setter() {
         let plugin = RealIp::create(&create_test_config());
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .with(eq("X-Forwarded-For"))
-            .times(1)
-            .return_const(None);
+        setup_header_mocks(&mut session, &[]);
         session
             .expect_downstream_peer_ip()
             .times(1)
@@ -269,11 +262,7 @@ mod tests {
     async fn untrusted_peer_ignores_forwarded_header() {
         let plugin = RealIp::create(&create_test_config());
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .with(eq("X-Forwarded-For"))
-            .times(1)
-            .return_const(Some("203.0.113.1".to_string()));
+        setup_header_mocks(&mut session, &[("x-forwarded-for", "203.0.113.1")]);
         session
             .expect_downstream_peer_ip()
             .times(1)
@@ -297,11 +286,7 @@ mod tests {
         for peer in ["", "not-an-address"] {
             let plugin = RealIp::create(&create_test_config());
             let mut session = MockPluginSession::new();
-            session
-                .expect_header_value()
-                .with(eq("X-Forwarded-For"))
-                .times(1)
-                .return_const(None);
+            setup_header_mocks(&mut session, &[]);
             session
                 .expect_downstream_peer_ip()
                 .times(1)
@@ -326,10 +311,7 @@ mod tests {
     async fn setter_failure_is_non_terminal_and_statically_logged() {
         let plugin = RealIp::create(&create_test_config());
         let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .times(1)
-            .return_const(Some("203.0.113.1".to_string()));
+        setup_header_mocks(&mut session, &[("x-forwarded-for", "203.0.113.1")]);
         session
             .expect_downstream_peer_ip()
             .times(1)

@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use crate::observe::metrics::record_region_route_overlay_event;
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{
@@ -253,8 +253,8 @@ impl RegionRoute {
         let (host, port) = region.parse_endpoint();
 
         // SNI: strip port from the incoming Host header (IPv6-bracket-safe).
-        let raw_host = session.header_value("Host").unwrap_or_default();
-        let sni = crate::util::net::host_without_port(&raw_host).to_string();
+        let raw_host = session.header_str("Host").unwrap_or_default();
+        let sni = crate::util::net::host_without_port(raw_host).to_string();
 
         log.push_fmt(
             "→{} {}:{} sni={}",
@@ -512,6 +512,7 @@ mod tests {
     use crate::plugins::http::plugin_store::compile_plugins;
     use crate::plugins::runtime::log::PluginLog;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use bytes::Bytes;
     use edgion_resources::common::{KeyGet, KeySet};
     use edgion_resources::resources::edgion_plugins::{
@@ -896,7 +897,7 @@ mod tests {
         let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
 
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|_| None);
+        setup_header_mocks(&mut session, &[]);
         session
             .expect_set_upstream_jump()
             .withf(|target| match target {
@@ -966,7 +967,7 @@ mod tests {
         let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
 
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|_| None);
+        setup_header_mocks(&mut session, &[]);
         session
             .expect_set_upstream_jump()
             .return_const(SetJumpOutcome::Rejected);

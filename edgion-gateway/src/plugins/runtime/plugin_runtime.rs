@@ -2508,6 +2508,7 @@ mod tests {
         // eager gate. A malformed Authorization header must be rejected before
         // any request-body capture is attempted.
         use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
         use edgion_resources::resources::HmacAuthConfig;
 
         let cfg = HmacAuthConfig {
@@ -2531,10 +2532,7 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("POST".to_string());
-        session.expect_header_value().returning(|name| match name {
-            "authorization" => Some("malformed".to_string()),
-            _ => None,
-        });
+        setup_header_mocks(&mut session, &[("authorization", "malformed")]);
         session.expect_ensure_request_body().times(0);
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));

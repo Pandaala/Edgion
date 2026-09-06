@@ -1,5 +1,6 @@
 //! Shared authentication utilities for Edgion request auth plugins.
 
+use crate::plugins::runtime::PluginSessionHeaderExt;
 use bytes::Bytes;
 use edgion_resources::uri_utils::url_decode;
 use pingora_http::ResponseHeader;
@@ -63,32 +64,76 @@ pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
 /// (today it does — the adapter routes it through `insert_header`). Were it to
 /// become append semantics, every surviving cookie would be duplicated.
 pub fn strip_cookie(session: &mut dyn PluginSession, name: &str) {
-    let mut survivors: Vec<String> = Vec::new();
-    let mut saw_cookie = false;
-    for (header_name, value) in session.request_headers() {
-        if !header_name.eq_ignore_ascii_case("cookie") {
-            continue;
+    strip_cookies(session, std::slice::from_ref(&name));
+}
+
+/// Remove every cookie named in `names` in a **single** pass over the request's
+/// `Cookie` lines, followed by a single header rewrite.
+///
+/// Calling [`strip_cookie`] once per name would re-scan and re-write the header
+/// for each one; the end state is identical, so callers stripping more than one
+/// cookie should use this.
+pub fn strip_cookies(session: &mut dyn PluginSession, names: &[&str]) {
+    // Read borrowed, decide, then mutate: the immutable borrow ends with the
+    // plan, which owns its result.
+    let plan = plan_cookie_strip(
+        session
+            .header_all_bytes("cookie")
+            .filter_map(|value| std::str::from_utf8(value).ok()),
+        names,
+    );
+
+    match plan {
+        CookieStripPlan::Absent => {}
+        CookieStripPlan::RemoveHeader => {
+            let _ = session.remove_request_header("Cookie");
         }
+        CookieStripPlan::Replace(value) => {
+            let _ = session.set_request_header("Cookie", &value);
+        }
+    }
+}
+
+/// What [`strip_cookies`] should do to the `Cookie` header.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CookieStripPlan {
+    /// The request carried no `Cookie` line; nothing to do.
+    Absent,
+    /// Every pair was stripped; drop the header.
+    RemoveHeader,
+    /// Rewrite the header to this merged value.
+    Replace(String),
+}
+
+/// Pure cookie-strip decision over the request's `Cookie` header lines.
+///
+/// Split out from [`strip_cookies`] so the parsing and merging rules are covered
+/// by ordinary unit tests instead of through a session mock. Multiple `Cookie`
+/// lines are merged into one, matching the single rewrite the caller performs.
+pub(crate) fn plan_cookie_strip<'a>(cookie_lines: impl Iterator<Item = &'a str>, names: &[&str]) -> CookieStripPlan {
+    let mut survivors: Vec<&str> = Vec::new();
+    let mut saw_cookie = false;
+
+    for line in cookie_lines {
         saw_cookie = true;
-        for pair in value.split(';') {
+        for pair in line.split(';') {
             let trimmed = pair.trim();
             if trimmed.is_empty() {
                 continue;
             }
             let key = trimmed.split('=').next().unwrap_or("");
-            if key != name {
-                survivors.push(trimmed.to_string());
+            if !names.contains(&key) {
+                survivors.push(trimmed);
             }
         }
     }
 
     if !saw_cookie {
-        return;
-    }
-    if survivors.is_empty() {
-        let _ = session.remove_request_header("Cookie");
+        CookieStripPlan::Absent
+    } else if survivors.is_empty() {
+        CookieStripPlan::RemoveHeader
     } else {
-        let _ = session.set_request_header("Cookie", &survivors.join("; "));
+        CookieStripPlan::Replace(survivors.join("; "))
     }
 }
 
@@ -327,8 +372,12 @@ pub fn set_claims_headers(
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_quoted_string, resolve_claim_path, strip_cookie, strip_query_param, Claims};
+    use super::{
+        escape_quoted_string, plan_cookie_strip, resolve_claim_path, strip_cookie, strip_query_param, Claims,
+        CookieStripPlan,
+    };
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use serde_json::json;
 
     #[test]
@@ -425,9 +474,7 @@ mod tests {
     #[test]
     fn strip_cookie_removes_named_keeps_others() {
         let mut session = MockPluginSession::new();
-        session
-            .expect_request_headers()
-            .returning(|| vec![("Cookie".to_string(), "api_key=secret; other=1".to_string())]);
+        setup_header_mocks(&mut session, &[("Cookie", "api_key=secret; other=1")]);
         session
             .expect_set_request_header()
             .withf(|name, value| name == "Cookie" && value == "other=1")
@@ -440,9 +487,7 @@ mod tests {
     #[test]
     fn strip_cookie_only_cookie_removes_header() {
         let mut session = MockPluginSession::new();
-        session
-            .expect_request_headers()
-            .returning(|| vec![("Cookie".to_string(), "api_key=secret".to_string())]);
+        setup_header_mocks(&mut session, &[("Cookie", "api_key=secret")]);
         session
             .expect_remove_request_header()
             .withf(|name| name == "Cookie")
@@ -455,12 +500,7 @@ mod tests {
     #[test]
     fn strip_cookie_merges_multiple_cookie_lines() {
         let mut session = MockPluginSession::new();
-        session.expect_request_headers().returning(|| {
-            vec![
-                ("Cookie".to_string(), "api_key=secret; a=1".to_string()),
-                ("cookie".to_string(), "b=2".to_string()),
-            ]
-        });
+        setup_header_mocks(&mut session, &[("cookie", "api_key=secret; a=1"), ("cookie", "b=2")]);
         session
             .expect_set_request_header()
             .withf(|name, value| name == "Cookie" && value == "a=1; b=2")
@@ -468,5 +508,87 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         strip_cookie(&mut session, "api_key");
+    }
+
+    // ── plan_cookie_strip: pure logic, no session mock ───────────────────────
+    //
+    // These cover the parsing / merging / edge-case rules directly. The mock
+    // tests above only need to prove the session wiring (read -> decide ->
+    // rewrite), not re-derive the semantics.
+
+    fn plan(lines: &[&str], names: &[&str]) -> CookieStripPlan {
+        plan_cookie_strip(lines.iter().copied(), names)
+    }
+
+    #[test]
+    fn plan_cookie_strip_reports_absent_without_any_cookie_line() {
+        assert_eq!(plan(&[], &["api_key"]), CookieStripPlan::Absent);
+    }
+
+    #[test]
+    fn plan_cookie_strip_removes_header_when_nothing_survives() {
+        assert_eq!(plan(&["api_key=secret"], &["api_key"]), CookieStripPlan::RemoveHeader);
+        // An empty Cookie line is still a present header with no survivors.
+        assert_eq!(plan(&[""], &["api_key"]), CookieStripPlan::RemoveHeader);
+        assert_eq!(plan(&["  ;  ; "], &["api_key"]), CookieStripPlan::RemoveHeader);
+    }
+
+    #[test]
+    fn plan_cookie_strip_keeps_unnamed_pairs_and_trims_whitespace() {
+        assert_eq!(
+            plan(&["api_key=secret;  other=1 ; third=3"], &["api_key"]),
+            CookieStripPlan::Replace("other=1; third=3".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_cookie_strip_merges_multiple_cookie_lines_into_one() {
+        assert_eq!(
+            plan(&["a=1; api_key=secret", "b=2", "api_key=again; c=3"], &["api_key"]),
+            CookieStripPlan::Replace("a=1; b=2; c=3".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_cookie_strip_removes_every_named_cookie_in_one_pass() {
+        // Equivalent to stripping each name in sequence, but with a single scan.
+        assert_eq!(
+            plan(
+                &[
+                    "edgion_oidc_session=secret; app=keep",
+                    "edgion_oidc_state=state; theme=dark"
+                ],
+                &["edgion_oidc_session", "edgion_oidc_state"],
+            ),
+            CookieStripPlan::Replace("app=keep; theme=dark".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_cookie_strip_matches_the_raw_key_before_the_first_equals() {
+        // Mirrors `get_cookie`: the key is the raw text before the first '=',
+        // so a percent-encoded or differently-cased name is a different cookie.
+        assert_eq!(
+            plan(&["API_KEY=1; api%5Fkey=2; api_key=3"], &["api_key"]),
+            CookieStripPlan::Replace("API_KEY=1; api%5Fkey=2".to_string())
+        );
+        // A valueless pair keeps its whole text when it is not a match.
+        assert_eq!(
+            plan(&["flag; api_key=3"], &["api_key"]),
+            CookieStripPlan::Replace("flag".to_string())
+        );
+        // ...and is stripped when the bare name matches.
+        assert_eq!(
+            plan(&["api_key; x=1"], &["api_key"]),
+            CookieStripPlan::Replace("x=1".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_cookie_strip_with_no_names_keeps_everything() {
+        assert_eq!(
+            plan(&["a=1; b=2"], &[]),
+            CookieStripPlan::Replace("a=1; b=2".to_string())
+        );
     }
 }

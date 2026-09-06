@@ -7,7 +7,7 @@ use http::StatusCode;
 use pingora_http::ResponseHeader;
 
 use crate::plugins::runtime::log::{la, PluginLog};
-use crate::plugins::runtime::traits::{PluginSession, RequestFilter};
+use crate::plugins::runtime::traits::{PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::util::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPRequestRedirectFilter;
@@ -118,7 +118,7 @@ impl RequestFilter for RequestRedirectFilter {
         };
 
         // Get original request info for building Location
-        let original_host = session.header_value("host");
+        let original_host = session.header_str("host");
         let original_path = session.get_path().to_string();
         let original_query = session.get_query();
         let listener_port = session.ctx().request_info.listener_port;
@@ -140,7 +140,7 @@ impl RequestFilter for RequestRedirectFilter {
         // Build Location header
         let location = self.build_location(
             original_scheme,
-            original_host.as_deref(),
+            original_host,
             &original_path,
             original_query.as_deref(),
             matched_path_len,

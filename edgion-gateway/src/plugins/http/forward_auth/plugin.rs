@@ -66,7 +66,7 @@ use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::plugins::http::common::outbound::call::{outbound_call_with_body, OutboundResponse};
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::common::success::SuccessOutcome;
 use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
@@ -256,13 +256,13 @@ impl RequestFilter for ForwardAuth {
         // These are injected as extra_headers into the outbound request rather than
         // compiled into the request spec, because they are per-request dynamic values
         // (not static config-time constants).
-        let host = session.header_value("host").unwrap_or_default();
+        let host = session.header_str("host").unwrap_or_default();
         let path = session.get_path();
         let method = session.get_method();
         let query = session.get_query().unwrap_or_default();
 
         let extra_headers: &[(&str, &str)] = &[
-            ("X-Forwarded-Host", host.as_str()),
+            ("X-Forwarded-Host", host),
             ("X-Forwarded-Uri", path),
             ("X-Forwarded-Method", method),
             ("X-Forwarded-Query", query.as_str()),
@@ -320,6 +320,7 @@ mod tests {
     use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
     use crate::plugins::runtime::log::PluginLog;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::success::{BodyPredicate, PredicateOp, SuccessSpec};
     use edgion_resources::resources::edgion_plugins::ForwardAuthDecision;
     use mockall::Sequence;
@@ -350,9 +351,7 @@ mod tests {
 
     fn make_request_session() -> MockPluginSession {
         let mut s = MockPluginSession::new();
-        s.expect_header_value()
-            .withf(|name| name == "host")
-            .return_const(Some("example.com".to_string()));
+        setup_header_mocks(&mut s, &[("host", "example.com")]);
         s.expect_get_path().return_const("/api/data".to_string());
         s.expect_get_method().return_const("GET".to_string());
         s.expect_get_query().return_const(None::<String>);

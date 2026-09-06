@@ -51,7 +51,7 @@ async fn missing_token_returns_exact_bare_bearer_challenge() {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     expect_auth_response(&mut mock, "Bearer realm=\"my-api\"");
@@ -74,8 +74,7 @@ async fn invalid_token_returns_exact_invalid_token_challenge() {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value()
-        .returning(|_| Some("Bearer not-a-jwt".to_string()));
+    setup_header_mocks(&mut mock, &[("authorization", "Bearer not-a-jwt")]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     expect_auth_response(
@@ -100,7 +99,7 @@ async fn auth_failure_delay_is_exact_under_paused_time() {
     );
     let mut mock = MockPluginSession::new();
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     expect_auth_response(&mut mock, "Bearer realm=\"jwt\"");

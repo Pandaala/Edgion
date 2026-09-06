@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::runtime::store::get_redis_client;
 use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
-use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
 use super::bytecode::BuiltinId;
@@ -421,12 +421,19 @@ impl Vm {
                 checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqHeaderNames => {
-                let headers = session.request_headers();
                 const MAX_HEADER_NAMES: usize = 256;
                 let mut names: Vec<Arc<str>> = Vec::new();
-                for (k, _) in headers.into_iter().take(MAX_HEADER_NAMES) {
-                    check_string_len(&k, self.limits.max_string_len)?;
-                    names.push(Arc::from(k.as_str()));
+                for (k, v) in session.iter_headers() {
+                    if names.len() >= MAX_HEADER_NAMES {
+                        break;
+                    }
+                    // Preserve the owned accessor's behavior: a header whose value
+                    // is not valid UTF-8 is absent from the name list.
+                    if std::str::from_utf8(v).is_err() {
+                        continue;
+                    }
+                    check_string_len(k, self.limits.max_string_len)?;
+                    names.push(Arc::from(k));
                 }
                 Ok(Value::List(names))
             }
@@ -449,7 +456,7 @@ impl Vm {
             }
             BuiltinId::ReqHasHeader => {
                 let name = state.pop()?.runtime_string()?;
-                Ok(Value::Bool(session.header_value(&name).is_some()))
+                Ok(Value::Bool(session.header_str(&name).is_some()))
             }
 
             // ===== req.* mutation =====

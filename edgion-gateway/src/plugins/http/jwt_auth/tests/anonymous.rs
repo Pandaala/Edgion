@@ -9,7 +9,7 @@ async fn test_no_token_returns_401() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
@@ -28,7 +28,7 @@ async fn test_no_token_with_anonymous() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
@@ -45,7 +45,7 @@ async fn test_no_token_with_anonymous_allows_access() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value().returning(|_| None);
+    setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
@@ -62,8 +62,7 @@ async fn test_invalid_token_with_anonymous_must_reject() {
     let mut log = PluginLog::new("JwtAuth");
 
     mock.expect_get_method().return_const("GET".to_string());
-    mock.expect_header_value()
-        .returning(|_| Some("Bearer invalid.token.here".to_string()));
+    setup_header_mocks(&mut mock, &[("authorization", "Bearer invalid.token.here")]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));

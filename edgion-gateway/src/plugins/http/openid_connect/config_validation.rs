@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::runtime::PluginSessionHeaderExt;
 
 impl OpenidConnect {
     pub(super) fn trim_forwarded_header(value: &str) -> &str {
@@ -22,8 +23,8 @@ impl OpenidConnect {
     }
 
     pub(super) fn request_host(session: &dyn PluginSession) -> Option<String> {
-        if let Some(v) = session.header_value("host") {
-            let host = Self::trim_forwarded_header(&v);
+        if let Some(v) = session.header_str("host") {
+            let host = Self::trim_forwarded_header(v);
             if !host.is_empty() {
                 return Some(host.to_string());
             }

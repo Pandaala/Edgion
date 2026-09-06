@@ -15,7 +15,9 @@ use edgion_waf::seclang::{
 use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::traits::{PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseFilter};
+use crate::plugins::runtime::traits::{
+    PluginSession, PluginSessionHeaderExt, RequestFilter, UpstreamResponse, UpstreamResponseFilter,
+};
 
 const NAME: &str = "Waf";
 
@@ -238,10 +240,15 @@ impl RequestFilter for WafPlugin {
         if let Some(result) = self.claim_phase(session, WafPhase::Request, WafLogPhase::RequestHeaders) {
             return result;
         }
-        let raw_headers = session.request_headers_bytes();
-        let headers: Vec<_> = raw_headers
-            .iter()
-            .map(|(name, value)| RequestHeader::new(name, value))
+        // Borrow straight from the live header map: `RequestHeader` is a
+        // `(&[u8], &[u8])` view, so materializing owned bytes first only to
+        // point at them was 1 + 2N throwaway allocations per request. The
+        // borrow ends when `RequestHead` is consumed by the constructor below
+        // (`Transaction` stores an owned `RequestState`), before any `&mut
+        // session` use.
+        let headers: Vec<_> = session
+            .iter_headers()
+            .map(|(name, value)| RequestHeader::new(name.as_bytes(), value))
             .collect();
         let uri = session.get_uri();
         let raw_uri = session.get_request_uri();
@@ -507,7 +514,16 @@ mod tests {
             .returning(|_, _| WafPhaseClaim::Execute);
         session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
         session.expect_record_waf_terminal_error().returning(|_, _, _, _| ());
-        session.expect_request_headers_bytes().return_once(move || headers);
+        // Serve the borrowed map the plugin now reads, built from the same raw
+        // bytes so a non-UTF-8 header stays visible to the WAF.
+        let mut map = http::HeaderMap::new();
+        for (name, value) in &headers {
+            map.append(
+                http::HeaderName::from_bytes(name).expect("test header name must be valid"),
+                http::HeaderValue::from_bytes(value).expect("test header value must be valid"),
+            );
+        }
+        session.expect_request_header_map().return_const(map);
         session.expect_get_method().times(1).return_const("POST".to_string());
         session.expect_get_uri().return_const(uri.to_string());
         session.expect_get_request_uri().return_const(uri.to_string());

@@ -867,6 +867,7 @@ impl ProbabilityConditionExt for ProbabilityCondition {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     use edgion_resources::common::KeyGet;
@@ -909,7 +910,7 @@ mod tests {
             .hmac_credentials_ptr()
             .expect("header-only HMAC must prebuild one verifier");
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|_| None);
+        setup_header_mocks(&mut session, &[]);
 
         assert_eq!(compiled.evaluate_sync(&session), MatchState::False);
         assert_eq!(compiled.evaluate_sync(&session), MatchState::False);
@@ -1016,13 +1017,14 @@ mod tests {
         let set = ConditionSet::all_of(vec![unresolved_secret_condition(), body_hmac]);
         let compiled = CompiledConditionSet::new(&set, "conditions", Some(BodyRequirement::fail_close()));
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(authorization.clone()),
-            "proxy-authorization" => None,
-            "date" => Some(date.clone()),
-            "digest" => Some(digest.to_string()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("authorization", authorization.as_str()),
+                ("date", date.as_str()),
+                ("digest", digest),
+            ],
+        );
         session
             .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::Timeout));

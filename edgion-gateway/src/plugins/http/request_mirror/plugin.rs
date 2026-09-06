@@ -17,7 +17,7 @@ use crate::observe::metrics::record_mirror_metric;
 use crate::plugins::http::common::http_client::{
     connection_listed_hop_by_hop, get_mirror_http_client, is_hop_by_hop_or_listed,
 };
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::{MirrorConfig, MirrorState};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::http_route::{HTTPRequestMirrorFilter, MirrorTuning};
@@ -175,16 +175,21 @@ impl RequestMirrorPlugin {
 
     fn build_headers(&self, session: &dyn PluginSession, target: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        let connection_value = session.header_value("connection").unwrap_or_default();
-        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
-        for (name, value) in session.request_headers() {
-            if is_hop_by_hop_or_listed(&name, &dynamic_listed)
+        let connection_value = session.header_str("connection").unwrap_or_default();
+        let dynamic_listed = connection_listed_hop_by_hop(connection_value);
+        for (name, value) in session.iter_headers() {
+            if is_hop_by_hop_or_listed(name, &dynamic_listed)
                 || name.eq_ignore_ascii_case("expect")
                 || name.eq_ignore_ascii_case("host")
             {
                 continue;
             }
-            if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(&value)) {
+            // Preserve the owned accessor's behavior: a header whose value is not
+            // valid UTF-8 is skipped entirely, never forwarded as raw bytes.
+            let Ok(value) = std::str::from_utf8(value) else {
+                continue;
+            };
+            if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(value)) {
                 headers.append(hn, hv);
             }
         }
@@ -402,6 +407,7 @@ mod arming_tests {
     use super::*;
     use crate::backends::get_roundrobin_store;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use crate::EdgionHttpContext;
     use edgion_resources::constants::labels::k8s::SERVICE_NAME;
     use edgion_resources::resources::http_route::BackendObjectReference;
@@ -503,8 +509,7 @@ mod arming_tests {
         session.expect_get_path().return_const("/mirror".to_string());
         session.expect_get_query().return_const(None);
         session.expect_get_method().return_const("POST".to_string());
-        session.expect_header_value().return_const(None);
-        session.expect_request_headers().return_const(Vec::new());
+        setup_header_mocks(&mut session, &[]);
         session
     }
 

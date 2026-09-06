@@ -19,7 +19,7 @@ use regex::Regex;
 use crate::ctx::NormalizedHostname;
 use crate::plugins::runtime::conditions::{CompiledConditionSet, MatchState};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 
 /// Fallback deny body used when the operator configured no `message`.
 const DEFAULT_DENY_BODY: Bytes = Bytes::from_static(b"Access denied");
@@ -301,7 +301,7 @@ impl RuntimeProfile {
         let host = if self.url_index.candidates.is_empty() {
             NormalizedHostname::new("")
         } else {
-            NormalizedHostname::new(session.header_value("host").as_deref().unwrap_or_default())
+            NormalizedHostname::new(session.header_str("host").unwrap_or_default())
         };
         for group in &self.groups {
             let mut group_matched = false;
@@ -466,6 +466,7 @@ impl RequestFilter for RequestAccessPolicy {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     use edgion_resources::resources::edgion_plugins::conditions::{Condition, ConditionSet};
@@ -621,10 +622,7 @@ profiles:
         session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
         session.expect_remote_ip().return_const("203.0.113.8".to_string());
         session.expect_get_path().return_const("/callbacks/acme".to_string());
-        session.expect_header_value().returning(|name| {
-            name.eq_ignore_ascii_case("host")
-                .then(|| "Callbacks.Example.Com:443".to_string())
-        });
+        setup_header_mocks(&mut session, &[("host", "Callbacks.Example.Com:443")]);
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert_eq!(
             plugin.run_request(&mut session, &mut log).await,
@@ -687,9 +685,7 @@ profiles:
         session
             .expect_get_path()
             .return_const("/callbacks/acme/events".to_string());
-        session
-            .expect_header_value()
-            .return_const(Some("callbacks.example.com".to_string()));
+        setup_header_mocks(&mut session, &[("host", "callbacks.example.com")]);
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert_eq!(
             plugin.run_request(&mut session, &mut log).await,
@@ -754,11 +750,8 @@ profiles:
         session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
         session.expect_remote_ip().return_const("203.0.113.8".to_string());
         session.expect_get_path().return_const(path.to_string());
-        let host = host.to_string();
         let token = token.map(str::to_string);
-        session
-            .expect_header_value()
-            .returning(move |name| name.eq_ignore_ascii_case("host").then(|| host.clone()));
+        setup_header_mocks(&mut session, &[("host", host)]);
         session.expect_key_get().returning(move |key| match key {
             edgion_resources::common::KeyGet::Header { name } if name.eq_ignore_ascii_case("X-Vendor-Token") => {
                 token.clone()
@@ -929,10 +922,7 @@ profiles:
             session.expect_direct_peer_ip().return_const(direct.to_string());
             session.expect_remote_ip().return_const(remote.to_string());
             session.expect_get_path().return_const("/callback".to_string());
-            session.expect_header_value().returning(|name| {
-                name.eq_ignore_ascii_case("host")
-                    .then(|| "callbacks.example.com".to_string())
-            });
+            setup_header_mocks(&mut session, &[("host", "callbacks.example.com")]);
             let mut log = PluginLog::new("RequestAccessPolicy");
             plugin.run_request(&mut session, &mut log).await
         };
@@ -954,13 +944,16 @@ profiles:
         let mut session = MockPluginSession::new();
         session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
         session.expect_remote_ip().return_const("198.51.100.8".to_string());
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => {
-                Some(r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="AAAA""#.to_string())
-            }
-            "date" => Some(date.clone()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                (
+                    "authorization",
+                    r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="AAAA""#,
+                ),
+                ("date", date.as_str()),
+            ],
+        );
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert_eq!(
             plugin.run_request(&mut session, &mut log).await,
@@ -978,12 +971,14 @@ profiles:
         let mut session = MockPluginSession::new();
         session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
         session.expect_remote_ip().return_const("198.51.100.8".to_string());
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(authorization.clone()),
-            "date" => Some(date.clone()),
-            "digest" => Some(digest.clone()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("authorization", authorization.as_str()),
+                ("date", date.as_str()),
+                ("digest", digest.as_str()),
+            ],
+        );
         session
             .expect_ensure_request_body()
             .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
@@ -1012,12 +1007,14 @@ profiles:
         let mut session = MockPluginSession::new();
         session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
         session.expect_remote_ip().return_const("198.51.100.8".to_string());
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(authorization.clone()),
-            "date" => Some(date.clone()),
-            "digest" => Some(digest.clone()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("authorization", authorization.as_str()),
+                ("date", date.as_str()),
+                ("digest", digest.as_str()),
+            ],
+        );
         session.expect_ensure_request_body().returning(|_| Ok(5));
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert_eq!(
@@ -1036,12 +1033,14 @@ profiles:
         let mut session = MockPluginSession::new();
         session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
         session.expect_remote_ip().return_const("198.51.100.8".to_string());
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(authorization.clone()),
-            "date" => Some(date.clone()),
-            "digest" => Some(digest.clone()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("authorization", authorization.as_str()),
+                ("date", date.as_str()),
+                ("digest", digest.as_str()),
+            ],
+        );
         session.expect_ensure_request_body().returning(|_| Ok(1));
         session
             .expect_request_body_sha256()

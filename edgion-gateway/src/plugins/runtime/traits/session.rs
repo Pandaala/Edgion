@@ -112,7 +112,33 @@ pub enum RouteProto {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait PluginSession: Send + Sync {
-    /// Get a request header value by name
+    /// Borrowed access to the live request header map.
+    ///
+    /// This is the zero-copy read seam: every borrowed accessor in
+    /// [`PluginSessionHeaderExt`](super::header_ext::PluginSessionHeaderExt)
+    /// is derived from it, so the mock surface grows by this one method no
+    /// matter how rich that extension trait becomes.
+    ///
+    /// It must be a bare `&` return: `mockall` rejects any return type that
+    /// nests a non-`'static` lifetime (`Option<&[u8]>`, `Option<&HeaderValue>`,
+    /// a borrowed view struct) as well as `Fn`-object parameters, so neither an
+    /// `Option`-returning accessor nor a visitor callback can live on this
+    /// trait.
+    ///
+    /// Request-header writes go straight into the live header map
+    /// (`set_request_header` / `append_request_header` / `remove_request_header`),
+    /// so this observes exactly the same state as [`Self::header_value`].
+    /// Deferred credential headers are applied to the *upstream* request only
+    /// and are invisible to both.
+    fn request_header_map(&self) -> &http::HeaderMap;
+
+    /// Get a request header value by name, as an owned `String`.
+    ///
+    /// Prefer the borrowed accessors on
+    /// [`PluginSessionHeaderExt`](super::header_ext::PluginSessionHeaderExt)
+    /// unless the value must outlive an immutable borrow of the session -
+    /// i.e. it is moved across an `.await`, handed to `spawn_blocking`, or
+    /// held while the session is used mutably.
     fn header_value(&self, name: &str) -> Option<String>;
 
     /// Get all request headers as key-value pairs.

@@ -4,7 +4,7 @@ use pingora_http::ResponseHeader;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::CorsConfig;
 
@@ -56,7 +56,7 @@ impl Cors {
             return false;
         }
 
-        session.header_value("origin").is_some() && session.header_value("access-control-request-method").is_some()
+        session.header_str("origin").is_some() && session.header_str("access-control-request-method").is_some()
     }
 
     /// Select the value to emit in the Access-Control-Allow-Origin header for an
@@ -228,7 +228,7 @@ impl RequestFilter for Cors {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if session.header_value("origin").is_none() {
+        if session.header_str("origin").is_none() {
             // No Origin header means same-origin request, skip CORS
             return PluginRunningResult::GoodNext;
         }
@@ -284,6 +284,7 @@ impl RequestFilter for Cors {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 
     fn create_cors_config() -> CorsConfig {
         CorsConfig {
@@ -326,12 +327,14 @@ mod tests {
         config.timing_allow_origins = Some("https://example.com".to_string());
         let cors = Cors::new(&config);
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|name| match name {
-            "origin" => Some("https://example.com".to_string()),
-            "access-control-request-headers" => Some("X-Requested".to_string()),
-            "access-control-request-private-network" => Some("true".to_string()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("origin", "https://example.com"),
+                ("access-control-request-headers", "X-Requested"),
+                ("access-control-request-private-network", "true"),
+            ],
+        );
 
         let headers = cors.build_cors_header_pairs(&mut session, "https://example.com", true);
 
@@ -364,10 +367,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Cors");
 
         mock_session.expect_get_method().return_const("GET".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://evil.com".to_string()));
+        setup_header_mocks(&mut mock_session, &[("origin", "https://evil.com")]);
 
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -418,13 +418,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Cors");
 
         mock_session.expect_get_method().return_const("GET".to_string());
-        mock_session.expect_header_value().returning(move |name| {
-            if name == "origin" {
-                Some(origin.to_string())
-            } else {
-                None
-            }
-        });
+        setup_header_mocks(&mut mock_session, &[("origin", origin)]);
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
         mock_session.expect_append_response_header().returning(|_, _| Ok(()));
 
@@ -483,13 +477,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Cors");
 
         mock_session.expect_get_method().return_const("GET".to_string());
-        mock_session.expect_header_value().returning(|name| {
-            if name == "origin" {
-                Some("https://example.com".to_string())
-            } else {
-                None
-            }
-        });
+        setup_header_mocks(&mut mock_session, &[("origin", "https://example.com")]);
         let sink = queued.clone();
         mock_session.expect_set_response_header().returning(move |name, value| {
             sink.lock().push((name.to_ascii_lowercase(), value.to_string()));
@@ -566,11 +554,13 @@ mod tests {
         let mut plugin_log = PluginLog::new("Cors");
 
         mock_session.expect_get_method().return_const("OPTIONS".to_string());
-        mock_session.expect_header_value().returning(|name| match name {
-            "origin" => Some("https://example.com".to_string()),
-            "access-control-request-method" => Some("POST".to_string()),
-            _ => None,
-        });
+        setup_header_mocks(
+            &mut mock_session,
+            &[
+                ("origin", "https://example.com"),
+                ("access-control-request-method", "POST"),
+            ],
+        );
 
         let written: Arc<parking_lot::Mutex<Vec<(String, String)>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let sink = written.clone();
@@ -611,10 +601,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Cors");
 
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| None);
+        setup_header_mocks(&mut mock_session, &[]);
 
         let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
 
