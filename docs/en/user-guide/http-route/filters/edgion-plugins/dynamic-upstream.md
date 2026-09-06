@@ -200,8 +200,8 @@ spec:
 | `domain` | String | **Required** | Target domain (hostname; rejects spaces, `/`, `\`, `@`, `#`, `?`, `[`, `]`, and control characters) |
 | `port` | Integer | `443` if `tls: true`, else `80` | Target port |
 | `tls` | Boolean | `true` | Use TLS for the upstream connection |
-| `overrideHost` | String | original request Host | Override the Host header sent to the external domain |
-| `sni` | String | the `domain` value | Override the TLS SNI (only relevant when `tls: true`) |
+| `overrideHost` | String | original request Host | Optional. When omitted, the original request Host is kept. When set, must be nonempty, a valid HTTP header value, and a valid Host authority. |
+| `sni` | String | the `domain` value | Optional. When omitted, TLS uses `domain`. When set, must be nonempty and follow the same character rules as `domain`. Empty SNI is rejected. |
 
 ### Usage Scenarios
 

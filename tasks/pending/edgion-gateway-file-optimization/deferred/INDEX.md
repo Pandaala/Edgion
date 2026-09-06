@@ -46,7 +46,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0042 — Add CSRF Secret-rotation integration coverage | needs-implementation | [campaign finding](D0042-csrf-secret-rotation-integration-coverage.md) |
 | D0043 — Enforce exactly one CtxSet transform operation | needs-implementation | [campaign finding](D0043-ctx-set-exact-transform-operation.md) |
 | D0044 — Design sensitive ctx provenance and unmasking | needs-discussion | [campaign finding](D0044-ctx-sensitive-provenance-unmasking.md) |
-| D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | needs-implementation | [campaign finding](D0045-dynamic-external-upstream-sni-host-validation.md) |
+| D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/ssl/dynamic-external-upstream-sni-host-validation.md) |
 | D0046 — Use canonical final HTTP status validation for local replies | needs-implementation | [campaign finding](D0046-final-http-status-validation-local-replies.md) |
 | D0047 — Align HmacAuth documentation with the runtime wire format | needs-implementation | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
 | D0048 — Use one EdgionConfigData snapshot per authorization decision | needs-discussion | [campaign finding](D0048-request-scoped-config-data-snapshot.md) |
@@ -112,7 +112,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add CSRF Secret-rotation integration coverage | pending | [task](../../../todo/add-csrf-secret-rotation-integration-coverage.md) |
 | Enforce exactly one CtxSet transform operation | pending | [task](../../../todo/enforce-one-ctx-set-transform-operation.md) |
 | Design sensitive ctx provenance and unmasking | pending | [task](../../../todo/design-ctx-sensitive-provenance-unmasking.md) |
-| Reject unsafe DynamicExternalUpstream SNI and Host overrides | pending | [task](../../../todo/reject-unsafe-dynamic-external-upstream-sni-host-overrides.md) |
+| Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/ssl/dynamic-external-upstream-sni-host-validation.md) |
 | Use canonical final HTTP status validation for local replies | pending | [task](../../../todo/use-canonical-final-http-status-validation-for-local-replies.md) |
 | Align HmacAuth documentation with the runtime wire format | completed | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
 | Use one EdgionConfigData snapshot per authorization decision | pending | [task](../../../todo/request-scoped-edgion-config-data-snapshot.md) |

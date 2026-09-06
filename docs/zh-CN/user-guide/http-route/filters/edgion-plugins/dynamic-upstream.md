@@ -200,8 +200,8 @@ spec:
 | `domain` | String | **必填** | 目标域名（主机名；拒绝空格、`/`、`\`、`@`、`#`、`?`、`[`、`]` 及控制字符） |
 | `port` | Integer | `tls: true` 时为 `443`，否则为 `80` | 目标端口 |
 | `tls` | Boolean | `true` | 是否对上游连接使用 TLS |
-| `overrideHost` | String | 原始请求 Host | 覆盖发往外部域名的 Host 头 |
-| `sni` | String | `domain` 的值 | 覆盖 TLS SNI（仅在 `tls: true` 时有效） |
+| `overrideHost` | String | 原始请求 Host | 可选。省略时保留原始请求 Host；若设置，必须非空，且为合法 HTTP 头值与 Host authority。 |
+| `sni` | String | `domain` 的值 | 可选。省略时 TLS 使用 `domain`；若设置，必须非空，且与 `domain` 使用相同的字符规则。空 SNI 会被拒绝。 |
 
 ### 使用场景
 
