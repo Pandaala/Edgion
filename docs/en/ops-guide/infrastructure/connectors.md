@@ -813,6 +813,22 @@ Protects the external webhook service from being overwhelmed by the gateway.
 | `rateLimit.rate` | Integer | **Required** (when `rateLimit` is set) | Maximum calls allowed per window. |
 | `rateLimit.windowSec` | Integer | `1` | Window size in seconds. |
 
+The limit applies per Gateway client instance, shared by calls using that client,
+before outbound retries. It uses two-bucket sliding-window approximation:
+the current count plus the decaying previous count must be below `rate` before
+admitting a call. It is not an exact rolling request log or a cluster-wide quota.
+Windows use monotonic elapsed time at whole-second precision, with a minimum
+window of one second. System clock changes do not alter the window. After two
+or more window intervals without admissions, expired counts contribute zero.
+
+Concurrent calls update the window and consume a permit together. A delayed
+call whose sampled window has already been replaced is rate limited. Each
+bucket supports at most 1,099,511,627,775 admissions even if `rate` is larger;
+reaching this bound rejects further admissions in that bucket until the window
+advances. Exhausting the window identifier also rejects calls rather than
+resetting the counter. These semantics also apply to other plugins using the
+shared outbound client's `rateLimit` configuration.
+
 ### Health check
 
 Supports active probing, passive monitoring, or both (recommended).

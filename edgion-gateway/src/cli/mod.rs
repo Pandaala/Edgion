@@ -296,10 +296,10 @@ impl EdgionGatewayCli {
     }
 
     pub fn run(&self) -> Result<()> {
-        // Retry budgets must never use portable-atomic's lock-based fallback.
+        // Retry budgets and outbound rate limits must never use the lock-based fallback.
         if !portable_atomic::AtomicU128::is_lock_free() {
             bail!(
-                "Gateway requires lock-free 128-bit atomics for retry budgets; \
+                "Gateway requires lock-free 128-bit atomics for retry budgets and outbound rate limits; \
                  use a supported CPU and expose CMPXCHG16B to amd64 virtual machines"
             );
         }

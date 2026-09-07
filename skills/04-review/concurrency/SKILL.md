@@ -51,7 +51,7 @@ before applying a decision to current code.
 - [H2 END_STREAM Derived From Original Payload, Not Replay Source — FIXED (registered-buffer guard in `is_body_empty`)](regression-guards/pingora-body-buffer-h2-end-stream-replay-source.md)
 - [Body-Buffer Replay `next_chunk` Cancellation Safety — FIXED (two-phase peek/consume)](regression-guards/pingora-body-buffer-replay-cancel-safety.md)
 - [Provider cooldown survives a concurrent success](regression-guards/provider-cooldown-survives-concurrent-success.md)
-- [link-sys F-006 — `SlidingWindowCounter::try_acquire` decide+increment is now atomic via CAS retry](regression-guards/sliding-window-check-then-increment.md)
+- [Outbound rate-limit atomic window/admission, monotonic expiry and delayed calls](regression-guards/sliding-window-check-then-increment.md)
 - [Wasm tick-callout grant registry: evict/register race can drop a fresh grant — ACCEPTED-RISK](regression-guards/wasm-tick-callout-grant-evict-race.md)
 - [LinkSys Webhook dispatch credential gate (link-sys-F003)](regression-guards/webhook-dispatch-credential-gate.md)
 - [LinkSys webhook `webhook_call` full response-body read before size check (link-sys-F019)](regression-guards/webhook-full-body-read-before-size-check.md)

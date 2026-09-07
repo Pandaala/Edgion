@@ -56,9 +56,9 @@ a newer epoch. A floor increment superseded after budget admission is discarded
 without rollback. Saturated retained history denies; identifiers never wrap.
 
 N concurrent deciders retain up to N-1 soft over-admissions. The unrelated
-Webhook `SlidingWindowCounter` CAS guard does not prove that limiter's rotation
-correct; see [its bounded knowledge conclusion](../../concurrency/regression-guards/sliding-window-check-then-increment.md).
-Its remaining defect is tracked separately, not accepted as correct behavior.
+Webhook `SlidingWindowCounter` now uses a separate whole-window admission CAS;
+see [its protocol and verification](../../concurrency/regression-guards/sliding-window-check-then-increment.md).
+Its stricter admission contract does not inherit RetryBudget's soft cap.
 
 ## Verification and re-evaluation
 

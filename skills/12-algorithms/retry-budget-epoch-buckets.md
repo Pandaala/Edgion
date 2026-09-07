@@ -71,7 +71,7 @@ without a hot-path allocation, a writer-owned rotation flag, or a blocking lock.
 
 | Implementation / alternative | Decision |
 |---|---|
-| Repository `SlidingWindowCounter::try_acquire` in `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | Retain its two-window interpolation math; do not copy timestamp-first rotation or treat its single-count admission CAS as proof of epoch coherence. |
+| Repository `SlidingWindowCounter::try_acquire` in `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | Shares two-window interpolation, but commits epoch, both counts and admission in one word. Its stricter contract differs from RetryBudget's soft cap; see [outbound window coherence](../04-review/concurrency/regression-guards/sliding-window-check-then-increment.md). |
 | `portable-atomic` 1.14.0 native atomic128 implementations | Reuse the dependency's native atomic operations and runtime capability detection; do not implement platform assembly in Edgion. |
 | Mutex or a writer-owned seqlock | Reject: a paused writer can block every request for that backend. |
 | Per-operation ArcSwap snapshots | Reject: allocating replacement snapshots on every attempt violates this task's hot-path allocation constraint. |
