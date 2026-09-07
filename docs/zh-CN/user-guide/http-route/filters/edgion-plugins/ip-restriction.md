@@ -23,8 +23,11 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "192.168.1.0/24"  # 允许整个子网
-        - "10.0.0.100"       # 允许单个 IP
+        - name: internal-clients
+          description: 允许访问的内部客户端
+          cidrs:
+            - "192.168.1.0/24"  # 允许整个子网
+            - "10.0.0.100"       # 允许单个 IP
 ```
 
 **效果**：只有 `192.168.1.x` 和 `10.0.0.100` 可以访问，其他所有 IP 被拒绝。
@@ -36,8 +39,11 @@ filters:
   - type: IpRestriction
     config:
       deny:
-        - "203.0.113.50"     # 拒绝单个恶意 IP
-        - "198.51.100.0/24"  # 拒绝整个恶意子网
+        - name: blocked-sources
+          description: 已知恶意来源
+          cidrs:
+            - "203.0.113.50"     # 拒绝单个恶意 IP
+            - "198.51.100.0/24"  # 拒绝整个恶意子网
 ```
 
 **效果**：只有列表中的 IP 被拒绝，其他所有 IP 都可以访问。
@@ -48,8 +54,8 @@ filters:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `allow` | Array | 无 | 白名单。IP 地址或 CIDR 列表。示例：`["192.168.1.0/24", "10.0.0.1"]` |
-| `deny` | Array | 无 | 黑名单。IP 地址或 CIDR 列表。示例：`["203.0.113.50"]` |
+| `allow` | Array\<IpGroup\> | 无 | 允许分组。每项包含必填的 `name` 和非空 `cidrs`，可选 `description`。配置任意允许分组即进入白名单模式。 |
+| `deny` | Array\<IpGroup\> | 无 | 拒绝分组，结构同 `allow`；命中拒绝分组时优先拒绝，并在日志中记录组名。 |
 | `allowRefs` | Array | 无 | 引用中心化 `IpList` EdgionConfigData，其 CIDR 合并进白名单。每项 `{name, namespace?}`，`namespace` 缺省取资源所在 namespace；缺失/禁用时 fail-closed（全拒），以 `ResolvedRefs=False` 暴露。 |
 | `denyRefs` | Array | 无 | 同 `allowRefs`，合并进黑名单；缺失/禁用时少拦，以 `ResolvedRefs=False` 暴露。 |
 | `ipSource` | String | `"RemoteIp"` | IP 来源。`RemoteIp`：使用解析后的客户端身份；`DirectPeerIp`：使用物理传输对端地址 |
@@ -92,8 +98,6 @@ spec:
 
 未能解析的引用（IpList 不存在、`enable: false`、或结构非法）会通过该资源的 `ResolvedRefs=False` 状态条件暴露，`allowRef` 方向 fail-closed（全拒），`denyRef` 方向少拦。
 
-> **注意**：该中文页其余部分相对英文版偏旧（示例仍使用字符串数组形式的 `allow`/`deny`），本次仅补充 `allowRefs`/`denyRefs` 引用字段；完整对齐留待后续。
-
 ---
 
 ## 优先级规则
@@ -115,8 +119,13 @@ spec:
 ### 示例说明
 
 ```yaml
-allow: ["10.0.0.0/8"]
-deny: ["10.0.0.100"]
+allow:
+  - name: internal-network
+    description: 内部客户端网络
+    cidrs: ["10.0.0.0/8"]
+deny:
+  - name: blocked-hosts
+    cidrs: ["10.0.0.100"]
 defaultAction: "deny"
 ```
 
@@ -140,9 +149,12 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "10.0.0.0/8"        # 私网 A 类
-        - "172.16.0.0/12"     # 私网 B 类
-        - "192.168.0.0/16"    # 私网 C 类
+        - name: private-networks
+          description: 公司内部网络
+          cidrs:
+            - "10.0.0.0/8"        # 私网 A 类
+            - "172.16.0.0/12"     # 私网 B 类
+            - "192.168.0.0/16"    # 私网 C 类
       message: "Access denied: Internal network only"
       status: 403
 ```
@@ -156,9 +168,12 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "203.0.113.10"      # 办公室 IP 1
-        - "203.0.113.20"      # 办公室 IP 2
-        - "198.51.100.0/24"   # VPN 网段
+        - name: office
+          description: 办公室与 VPN 出口
+          cidrs:
+            - "203.0.113.10"      # 办公室 IP 1
+            - "203.0.113.20"      # 办公室 IP 2
+            - "198.51.100.0/24"   # VPN 网段
       message: "Access restricted to office network"
 ```
 
@@ -169,9 +184,12 @@ filters:
   - type: IpRestriction
     config:
       deny:
-        - "203.0.113.50"      # 恶意攻击者
-        - "198.51.100.100"    # 恶意爬虫
-        - "192.0.2.0/24"      # 恶意网段
+        - name: abuse
+          description: 已确认的恶意来源
+          cidrs:
+            - "203.0.113.50"      # 恶意攻击者
+            - "198.51.100.100"    # 恶意爬虫
+            - "192.0.2.0/24"      # 恶意网段
       message: "Your IP has been blocked"
       status: 403
       defaultAction: "allow"  # 其他 IP 允许访问
@@ -186,10 +204,14 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "10.0.0.0/16"       # 允许整个子网
+        - name: application-subnet
+          cidrs:
+            - "10.0.0.0/16"       # 允许整个子网
       deny:
-        - "10.0.0.100"        # 排除测试机器 1
-        - "10.0.0.200"        # 排除测试机器 2
+        - name: excluded-test-hosts
+          cidrs:
+            - "10.0.0.100"        # 排除测试机器 1
+            - "10.0.0.200"        # 排除测试机器 2
 ```
 
 **结果**：
@@ -206,9 +228,12 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "203.0.113.0/24"    # 合作伙伴 A
-        - "198.51.100.50"     # 合作伙伴 B
-        - "192.0.2.100"       # 合作伙伴 C
+        - name: partner-a
+          cidrs: ["203.0.113.0/24"]
+        - name: partner-b
+          cidrs: ["198.51.100.50"]
+        - name: partner-c
+          cidrs: ["192.0.2.100"]
       message: "Access restricted to authorized partners"
       status: 403
 ```
@@ -313,7 +338,8 @@ filters:
     config:
       ipSource: "RemoteIp"  # 默认值
       allow:
-        - "203.0.113.0/24"
+        - name: public-clients
+          cidrs: ["203.0.113.0/24"]
 ```
 
 ### `ipSource: DirectPeerIp`
@@ -339,7 +365,9 @@ filters:
     config:
       ipSource: "DirectPeerIp"
       allow:
-        - "10.0.0.0/8"  # 只允许内网负载均衡器
+        - name: load-balancers
+          cidrs:
+            - "10.0.0.0/8"  # 只允许内网负载均衡器
 ```
 
 ---
@@ -350,18 +378,22 @@ filters:
 
 ```yaml
 allow:
-  - "192.168.1.100"      # 单个 IP
-  - "203.0.113.50"
+  - name: hosts
+    cidrs:
+      - "192.168.1.100"      # 单个 IP
+      - "203.0.113.50"
 ```
 
 ### CIDR 子网
 
 ```yaml
 allow:
-  - "192.168.1.0/24"     # 192.168.1.0 - 192.168.1.255 (256个IP)
-  - "10.0.0.0/8"         # 10.0.0.0 - 10.255.255.255 (16M个IP)
-  - "172.16.0.0/12"      # 172.16.0.0 - 172.31.255.255
-  - "203.0.113.0/28"     # 203.0.113.0 - 203.0.113.15 (16个IP)
+  - name: subnets
+    cidrs:
+      - "192.168.1.0/24"     # 192.168.1.0 - 192.168.1.255 (256个IP)
+      - "10.0.0.0/8"         # 10.0.0.0 - 10.255.255.255 (16M个IP)
+      - "172.16.0.0/12"      # 172.16.0.0 - 172.31.255.255
+      - "203.0.113.0/28"     # 203.0.113.0 - 203.0.113.15 (16个IP)
 ```
 
 ### CIDR 速查表
@@ -377,9 +409,11 @@ allow:
 
 ```yaml
 allow:
-  - "2001:db8::1"                    # 单个 IPv6
-  - "2001:db8::/32"                  # IPv6 子网
-  - "fe80::/10"                      # 本地链路地址
+  - name: ipv6
+    cidrs:
+      - "2001:db8::1"                    # 单个 IPv6
+      - "2001:db8::/32"                  # IPv6 子网
+      - "fe80::/10"                      # 本地链路地址
 ```
 
 ---
@@ -404,7 +438,8 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "10.0.0.0/8"
+        - name: internal-network
+          cidrs: ["10.0.0.0/8"]
       status: 404  # 假装资源不存在（隐藏 API）
       message: "Not Found"
 ```
@@ -416,7 +451,8 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "192.168.1.0/24"
+        - name: office-network
+          cidrs: ["192.168.1.0/24"]
       status: 403
       message: "Access denied. Please contact administrator at admin@example.com"
 ```
@@ -431,8 +467,10 @@ filters:
    ```yaml
    # ✅ 好：只允许需要的 IP
    allow:
-     - "192.168.1.100"
-     - "192.168.1.101"
+     - name: required-hosts
+       cidrs:
+         - "192.168.1.100"
+         - "192.168.1.101"
    
    # ❌ 差：允许整个互联网
    # defaultAction: "allow"
@@ -442,11 +480,13 @@ filters:
    ```yaml
    # ✅ 好：精确范围
    allow:
-     - "10.0.1.0/24"
+     - name: application-subnet
+       cidrs: ["10.0.1.0/24"]
    
    # ❌ 差：过大范围
    allow:
-     - "10.0.0.0/8"
+     - name: all-private-a
+       cidrs: ["10.0.0.0/8"]
    ```
 
 3. **定期审查规则**
@@ -464,7 +504,10 @@ filters:
    filters:
      - type: IpRestriction
        config:
-         allow: ["10.0.0.0/8"]
+         allow:
+           - name: internal-network
+             description: 允许访问管理端点的内部网络
+             cidrs: ["10.0.0.0/8"]
      - type: BasicAuth
        config:
          secretRefs:
@@ -477,7 +520,9 @@ filters:
    ```yaml
    # ❌ 危险：允许所有私网
    allow:
-     - "0.0.0.0/0"  # 允许所有 IP
+     - name: all-ipv4
+       cidrs:
+         - "0.0.0.0/0"  # 允许所有 IPv4 地址
    ```
 
 2. **不要仅依赖 IP 限制做认证**
@@ -488,8 +533,10 @@ filters:
    ```yaml
    # 如果支持 IPv6，同时配置
    allow:
-     - "192.168.1.0/24"   # IPv4
-     - "2001:db8::/32"    # IPv6
+     - name: dual-stack
+       cidrs:
+         - "192.168.1.0/24"   # IPv4
+         - "2001:db8::/32"    # IPv6
    ```
 
 ---
@@ -523,7 +570,9 @@ ipSource: "DirectPeerIp"  # 如果直连
 # 临时：使用 DirectPeerIp 并允许负载均衡器 IP
 ipSource: "DirectPeerIp"
 allow:
-  - "10.0.0.50"  # 负载均衡器 IP
+  - name: load-balancer
+    cidrs:
+      - "10.0.0.50"  # 负载均衡器 IP
 
 # 长期：配置负载均衡器正确传递 X-Forwarded-For
 ```

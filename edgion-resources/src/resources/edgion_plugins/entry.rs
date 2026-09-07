@@ -89,7 +89,9 @@ pub(super) fn validate_alias_str(alias: &str) -> Option<String> {
 ///           before: "2024-12-31T23:59:59Z"
 ///     type: IpRestriction
 ///     config:
-///       allow: ["10.0.0.0/8"]
+///       allow:
+///         - name: internal-network
+///           cidrs: ["10.0.0.0/8"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

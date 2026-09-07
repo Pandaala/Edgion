@@ -18,20 +18,29 @@ use std::net::IpAddr;
 ///
 /// ### Whitelist mode (only allow specific IPs):
 /// ```yaml
-/// allow: ["192.168.1.0/24"]
+/// allow:
+///   - name: local-network
+///     description: Local network clients
+///     cidrs: ["192.168.1.0/24"]
 /// # Allows only 192.168.1.x, denies all others
 /// ```
 ///
 /// ### Blacklist mode (deny specific IPs):
 /// ```yaml
-/// deny: ["192.168.1.100"]
+/// deny:
+///   - name: blocked-hosts
+///     cidrs: ["192.168.1.100"]
 /// # Denies only 192.168.1.100, allows all others (default_action: allow)
 /// ```
 ///
 /// ### Combined mode (allow subnet but deny specific IP):
 /// ```yaml
-/// allow: ["10.0.0.0/8"]
-/// deny: ["10.0.0.100"]
+/// allow:
+///   - name: private-network
+///     cidrs: ["10.0.0.0/8"]
+/// deny:
+///   - name: blocked-hosts
+///     cidrs: ["10.0.0.100"]
 /// # Allows 10.x.x.x except 10.0.0.100 (deny wins)
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

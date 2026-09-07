@@ -487,7 +487,10 @@ filters:
   # 先限制 IP
   - type: IpRestriction
     config:
-      allow: ["10.0.0.0/8", "192.168.0.0/16"]
+      allow:
+        - name: internal-networks
+          description: 允许访问认证端点的内部网络
+          cidrs: ["10.0.0.0/8", "192.168.0.0/16"]
   
   # 再进行认证
   - type: BasicAuth

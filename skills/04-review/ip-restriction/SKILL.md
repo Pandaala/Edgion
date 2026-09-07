@@ -19,6 +19,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [IpRestriction documentation uses named `IpGroup` entries](regression-guards/named-ip-group-documentation.md)
 - [AccessDecision → StreamPluginResult Mapper Consolidated — FIXED](regression-guards/access-decision-to-stream-result-extracted.md)
 - [Deny→allow→default IP evaluation algorithm — CONSOLIDATED](regression-guards/deny-allow-default-algorithm-extracted-to-evaluate-ip-access.md)
 - [HTTP `IpRestriction::create` compiles matchers + fail-closed guard — FIXED](regression-guards/http-create-must-call-validate-and-init.md)

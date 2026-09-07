@@ -222,7 +222,10 @@ spec:
     - type: IpRestriction
       config:
         allow:
-          - 127.0.0.1/32
+          - name: localhost
+            description: Local development clients
+            cidrs:
+              - 127.0.0.1/32
         # allowRefs: reference a central IpList EdgionConfigData (merged into the allow pool)
         # allowRefs:
         #   - name: corp-allowlist   # namespace defaults to edgion-test

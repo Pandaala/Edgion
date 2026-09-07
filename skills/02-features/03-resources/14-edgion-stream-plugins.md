@@ -23,11 +23,16 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        allowlist:
-          - "10.0.0.0/8"
-          - "192.168.1.0/24"
-        denylist:
-          - "10.0.0.100"
+        allow:
+          - name: internal-networks
+            description: Private client networks
+            cidrs:
+              - "10.0.0.0/8"
+              - "192.168.1.0/24"
+        deny:
+          - name: blocked-hosts
+            cidrs:
+              - "10.0.0.100"
           # allowRefs/denyRefs (optional): reference central IpList EdgionConfigData objects;
           # merged into the same allow/deny pools as inline entries.
           # namespace defaults to this EdgionStreamPlugins resource's namespace if omitted.
@@ -39,8 +44,10 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        allowlist:
-          - "172.16.0.0/12"
+        allow:
+          - name: tls-clients
+            cidrs:
+              - "172.16.0.0/12"
         # allowRefs/denyRefs also available here (same semantics as Stage 1)
 ```
 
@@ -83,7 +90,7 @@ On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`
 
 | Type | Stage | Description |
 |------|-------|-------------|
-| `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline (`allowlist`/`denylist`) or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
+| `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline named `IpGroup` entries under `allow`/`deny` or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
 | `GlobalConnectionIpRestriction` | Stage 1 only | EdgionConfigData-referenced IP restriction. The plugin config holds `overrideRef`; referenced profiles carry the rule sets. No geo block — combine with `GeoIpLocation` (below) as a separate, ordered Stage-1 entry instead. |
 | `ConnectionRateLimit` | Stage 1 only | Limits new connections before TLS/application processing using the current connection-rate configuration. |
 | `GeoIpLocation` | Stage 1 only | Same config shape as the HTTP `GeoIpLocation` plugin (`defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`), sharing its matching core; `source: RemoteIp` is rejected at L4 (no `X-Forwarded-For` to resolve). Parse-only mode (`config: {}`) is a true no-op at L4 — there is no per-connection access log to populate. Denials are counted via `edgion_geoip_denied_total{layer,reason}`, never logged. See `docs/en/ops-guide/gateway/geoip.md`. |

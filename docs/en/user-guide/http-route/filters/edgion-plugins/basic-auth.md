@@ -487,7 +487,10 @@ filters:
   # Restrict IP first
   - type: IpRestriction
     config:
-      allow: ["10.0.0.0/8", "192.168.0.0/16"]
+      allow:
+        - name: internal-networks
+          description: Networks permitted to reach the authenticated endpoint
+          cidrs: ["10.0.0.0/8", "192.168.0.0/16"]
   
   # Then authenticate
   - type: BasicAuth

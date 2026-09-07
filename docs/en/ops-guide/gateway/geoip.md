@@ -208,7 +208,10 @@ spec:
   requestPlugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: office-network
+            description: Office clients exempt from the geo rule
+            cidrs: ["10.0.0.0/8"]
     - type: GeoIpLocation
       config:
         defaultAction: allow

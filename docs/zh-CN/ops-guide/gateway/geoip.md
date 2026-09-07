@@ -190,7 +190,10 @@ spec:
   requestPlugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: office-network
+            description: 不受地理规则限制的办公网络客户端
+            cidrs: ["10.0.0.0/8"]
     - type: GeoIpLocation
       config:
         defaultAction: allow

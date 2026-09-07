@@ -20,7 +20,9 @@ spec:
   requestPlugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: internal-network
+            cidrs: ["10.0.0.0/8"]
     - type: RealIp
       config:
         trustedAddresses: ["10.0.0.0/8"]
@@ -53,7 +55,9 @@ spec:
   requestPlugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: internal-network
+            cidrs: ["10.0.0.0/8"]
     - type: RealIp
       config:
         trustedAddresses: ["10.0.0.0/8"]

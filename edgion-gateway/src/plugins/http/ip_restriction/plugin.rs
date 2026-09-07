@@ -13,20 +13,29 @@
 //! ### Whitelist only specific network:
 //! ```yaml
 //! ipRestriction:
-//!   allow: ["192.168.1.0/24"]
+//!   allow:
+//!     - name: local-network
+//!       description: Local network clients
+//!       cidrs: ["192.168.1.0/24"]
 //! ```
 //!
 //! ### Blacklist specific IPs:
 //! ```yaml
 //! ipRestriction:
-//!   deny: ["192.168.1.100", "10.0.0.50"]
+//!   deny:
+//!     - name: blocked-hosts
+//!       cidrs: ["192.168.1.100", "10.0.0.50"]
 //! ```
 //!
 //! ### Combined: Allow subnet but deny specific IP:
 //! ```yaml
 //! ipRestriction:
-//!   allow: ["10.0.0.0/8"]
-//!   deny: ["10.0.0.100"]
+//!   allow:
+//!     - name: private-network
+//!       cidrs: ["10.0.0.0/8"]
+//!   deny:
+//!     - name: blocked-hosts
+//!       cidrs: ["10.0.0.100"]
 //! ```
 
 use async_trait::async_trait;
