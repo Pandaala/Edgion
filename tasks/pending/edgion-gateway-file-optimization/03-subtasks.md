@@ -92,7 +92,7 @@
 | `plugins-common` | 3 | 1 | 2 | 0 | complete |
 | `plugins-http-ai-guard` | 5 | 0 | 0 | 0 | pending |
 | `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
-| `plugins-http-all-endpoint-status` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-all-endpoint-status` | 3 | 1 | 1 | 0 | pending |
 | `plugins-http-bandwidth-limit` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-basic-auth` | 3 | 1 | 2 | 0 | complete |
 | `plugins-http-canary` | 2 | 0 | 0 | 0 | pending |
@@ -135,7 +135,7 @@
 | `plugins-http-trace-context` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-waf` | 1 | 0 | 0 | 0 | pending |
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
-| `plugins-http-webhook-key-get` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 0 | 0 | pending |
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
@@ -149,7 +149,7 @@
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
 | `tls-runtime` | 6 | 2 | 4 | 0 | complete |
 | `tls-store` | 4 | 2 | 2 | 0 | complete |
-| `tls-validation` | 5 | 3 | 2 | 0 | complete |
+| `tls-validation` | 6 | 3 | 2 | 0 | pending |
 | `util` | 6 | 4 | 2 | 0 | complete |
 
 ## File ledger
@@ -336,6 +336,7 @@
 | `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | changed | B0064 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
+| `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | pending | Added by external commit `d6d83bc5`; full audit pending |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/mod.rs` | `plugins-http-bandwidth-limit` | source | examined-no-change | B0065 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs` | `plugins-http-bandwidth-limit` | source | changed | B0065 |
 | `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | examined-no-change | B0067 |
@@ -513,7 +514,7 @@
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | changed | B0114 |
 | `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | changed | B0115 |
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
-| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | analysis-ready | B0117 |
+| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0117 |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | analysis-ready | B0118 |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | pending | — |
@@ -685,6 +686,7 @@
 | `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: canonical shared validation re-export retained |
 | `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: narrow module exports retained |
 | `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc`; typed SAN semantics deferred to dedicated TODO |
+| `edgion-gateway/src/tls/validation/outbound_client.rs` | `tls-validation` | source | pending | Added by external commit `7ceb0ea1`; full audit pending |
 | `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc` |
 | `edgion-gateway/src/util/client_ip.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/mod.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |

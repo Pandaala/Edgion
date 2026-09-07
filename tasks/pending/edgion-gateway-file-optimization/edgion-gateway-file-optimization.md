@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0116 independently reviewed and at the verification/commit gate |
-| Coverage | 535 current tracked files: 134 changed, 145 examined-no-change, 10 deferred, 246 non-terminal; 3 historical rows are removed |
-| Active batch | B0116 WebhookKeyGet facade; commit-ready after repository gates |
-| Analysis queue | B0117 WebhookKeyGet implementation and B0118 plugins root are analysis-ready; D0074–D0078 retain their separate scopes |
-| Integration freeze | Refreshed at external HEAD `884069ac`: 3,084 tracked `edgion-tests` files, including fifteen externally added AllEndpointStatus dynamic files and four changed fingerprints; no campaign integration-test edit occurred |
+| Campaign status | in-progress; B0117 independently reviewed and at the commit gate |
+| Coverage | 537 current tracked files: 135 changed, 145 examined-no-change, 10 deferred, 247 non-terminal; 3 historical rows are removed |
+| Active batch | B0117 WebhookKeyGet request-path allocation removal; commit-ready |
+| Analysis queue | B0118 plugins root is analysis-ready; two externally added Gateway files are reconciled as pending; D0074–D0078 retain their separate scopes |
+| Integration freeze | Refreshed at external HEAD `6ab45e17`: 3,084 tracked `edgion-tests` files, including six externally changed BasicAuth/integration-runner fingerprints from `f3b346fd` and `6ab45e17`; no campaign integration-test edit occurred |
 
 ## AI guide summary
 
