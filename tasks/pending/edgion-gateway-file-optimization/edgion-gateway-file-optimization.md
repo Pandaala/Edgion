@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0113 verified and at the exact local commit gate |
-| Coverage | 535 current tracked files: 132 changed, 144 examined-no-change, 10 deferred, 249 non-terminal; 3 historical rows are removed |
-| Active batch | B0113 Wasm response-chunk ownership; verified and awaiting the local commit |
-| Analysis queue | no queued batch behind B0113 yet; D0073 records Wasm host-panic isolation, D0074 disk-cache I/O offload, and D0075 manifest/archive CPU offload |
+| Campaign status | in-progress; B0114 reviewed, verified, and at the exact local commit gate |
+| Coverage | 535 current tracked files: 133 changed, 144 examined-no-change, 10 deferred, 248 non-terminal; 3 historical rows are removed |
+| Active batch | B0114 Wasm shared-data concurrency; commit-ready |
+| Analysis queue | B0115 Wasm VM manager candidate awaits post-B0114 current-HEAD refresh; D0073–D0076 retain their separate scopes |
 | Integration freeze | Refreshed at external HEAD `26461c83`: 3,069 tracked `edgion-tests` files, including eight externally added files and four externally changed fingerprints; no campaign integration-test edit occurred |
 
 ## AI guide summary

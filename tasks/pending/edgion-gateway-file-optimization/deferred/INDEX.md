@@ -144,3 +144,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Isolate Wasm host panics at VM boundaries | pending | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
 | Offload Wasm OCI disk cache I/O | pending | [task](../../../todo/offload-wasm-oci-disk-cache-io.md) |
 | Offload Wasm OCI manifest parsing and archive extraction | pending | [task](../../../todo/offload-wasm-oci-manifest-parsing-and-extraction.md) |
+| Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
