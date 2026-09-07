@@ -137,7 +137,7 @@
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 1 | 0 | complete |
-| `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
+| `plugins-runtime` | 34 | 2 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
@@ -516,11 +516,11 @@
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0117 |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
-| `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | changed | B0119 |
+| `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | analysis-ready | B0120 |
+| `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
+| `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
+| `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
 | `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | pending | — |
@@ -539,6 +539,7 @@
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | REQ-BODY-CORE-001: canonical empty-body digest consumer / `a408d7fd`; full audit pending |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | pending | — |
+| `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |
 | `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | pending | Added by external commit `b55375ca`; full audit pending |
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | pending | — |
