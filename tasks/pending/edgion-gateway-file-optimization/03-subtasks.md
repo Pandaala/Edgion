@@ -136,7 +136,7 @@
 | `plugins-http-waf` | 1 | 0 | 0 | 0 | pending |
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
-| `plugins-root` | 1 | 0 | 0 | 0 | pending |
+| `plugins-root` | 1 | 0 | 1 | 0 | complete |
 | `plugins-runtime` | 33 | 0 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
@@ -515,7 +515,7 @@
 | `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | changed | B0115 |
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0117 |
-| `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | analysis-ready | B0118 |
+| `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | pending | — |

@@ -75,6 +75,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0071 — Reduce WAF header materialization | needs-investigation | [campaign finding](D0071-waf-header-materialization.md) |
 | D0072 — Bound outbound HTTP/2 response header lists | needs-investigation | [campaign finding](D0072-outbound-http2-response-header-list-bound.md) |
 | D0073 — Isolate Wasm host panics at VM boundaries | resolved | [campaign finding](D0073-wasm-host-panic-isolation.md) |
+| D0079 — Correct PluginRuntime architecture documentation | needs-implementation | [campaign finding](D0079-plugin-runtime-architecture-documentation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -147,3 +148,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |
 | Emit bounded diagnostics for outbound warnIfMissing fields | pending | [task](../../../todo/outbound-warn-if-missing-diagnostics.md) |
+| Correct PluginRuntime architecture documentation | pending | [task](../../../todo/correct-plugin-runtime-architecture-documentation.md) |
