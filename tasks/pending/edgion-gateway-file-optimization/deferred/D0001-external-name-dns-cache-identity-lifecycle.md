@@ -6,7 +6,7 @@
 - Severity: high
 - Discovered in: B0035, `edgion-gateway/src/backends/discovery/dns_cache.rs`
 - Category: correctness
-- Resolution: [`skills/04-review/backends/externalname-dns-cache-identity-and-lifecycle.md`](../../../../skills/04-review/backends/externalname-dns-cache-identity-and-lifecycle.md)
+- Resolution: [`skills/04-review/backends/regression-guards/externalname-dns-cache-identity-and-lifecycle.md`](../../../../skills/04-review/backends/regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
 
 ## Evidence
 
@@ -28,4 +28,4 @@ A safe fix requires one explicit ownership design across the request-path cache 
 
 Fixed 2026-09-03. The cache key became the complete identity `(service_key, external_name, fingerprint)`, the store became a capacity-bounded `ShardedLruCache` (with a shard floor, since the global `lru_cache` default is a single shard), and the Service conf-handler invalidates removed Services after the store swap. A Service *update* needs no explicit invalidation: hostname and resolver are both in the key, so the previous generation's entry is unreachable by construction. See the linked resolution for the full decision record and the fix suggestions that were not accepted.
 
-Concurrent miss coalescing, pending-query admission, cancellation ownership, and failure backoff were tracked separately and were **declined on 2026-09-03** without implementation: the default deployment (`mode=controller` in K8s conf_center) never reaches the self-resolve path, because the controller's DNS resolver loop publishes real EndpointSlices. See [`skills/04-review/backends/externalname-dns-miss-coalescing-not-implemented.md`](../../../../skills/04-review/backends/externalname-dns-miss-coalescing-not-implemented.md) for the trigger-surface analysis, the rejected designs, and the re-evaluation triggers.
+Concurrent miss coalescing, pending-query admission, cancellation ownership, and failure backoff were tracked separately and were **declined on 2026-09-03** without implementation: the default deployment (`mode=controller` in K8s conf_center) never reaches the self-resolve path, because the controller's DNS resolver loop publishes real EndpointSlices. See [`skills/04-review/backends/intentional-design/externalname-dns-miss-coalescing-not-implemented.md`](../../../../skills/04-review/backends/intentional-design/externalname-dns-miss-coalescing-not-implemented.md) for the trigger-surface analysis, the rejected designs, and the re-evaluation triggers.

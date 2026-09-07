@@ -25,9 +25,9 @@ description: Use when running or preparing a global codebase review pass that pr
    that leave one concurrency slot for the main agent; never assume a fixed
    number of child-agent slots.
 3. For each unit, spawn a subagent with these pre-loads:
-     - skills/04-review/SKILL.md  (routing index + closed-findings pointer)
-     - skills/04-review/CLOSED-FINDINGS.md  (skip known false positives)
-     - skills/04-review/security/iron-rules.md  (timing / password / cache-key rules)
+     - skills/04-review/SKILL.md  (owning-function index)
+     - skills/04-review/knowledge-routing.md  (classification and decision scope)
+     - skills/04-review/security/mandatory-design/iron-rules.md  (timing / password / cache-key rules)
      - skills/03-coding/01-log-safety.md  (data-plane tracing prohibition)
      - Relevant topic dirs from 04-review/ matching the subtree content.
 4. Each subagent verifies findings by reading cited file:line + searching call sites;
@@ -38,9 +38,10 @@ description: Use when running or preparing a global codebase review pass that pr
 6. Collect finding files into `tasks/review-<batch-or-slug>/` and generate `INDEX.md`
    (columns: ID, Severity, Dimension, Title).
    `INDEX.md` is batch metadata, never a finding.
-7. Cross-check every finding against `skills/04-review/CLOSED-FINDINGS.md`
-   and the linked per-finding decision file. Matches are dropped or annotated
-   "already closed".
+7. Search the owning function pages by symbol, behavior, and ID. Compare current
+   evidence with the rule scope and re-evaluation triggers. Drop an already resolved
+   finding only after confirming the same behavior still holds; superseded guidance
+   cannot suppress a current defect.
 8. Before finishing, mark every ledger unit complete, skipped with a reason, or
    uncovered. A global review is not complete while any in-scope unit is merely
    absent from the ledger.
@@ -62,18 +63,18 @@ docs when they are part of the requested review scope.
 
 | Dimension | Where to load |
 |-----------|---------------|
-| Security | [04-review/security/iron-rules.md](../04-review/security/iron-rules.md), plus topic dirs: [auth-timing/](../04-review/auth-timing/), [hmac-auth/](../04-review/hmac-auth/), [oidc/](../04-review/oidc/), [ssrf/](../04-review/ssrf/), [ip-restriction/](../04-review/ip-restriction/) |
-| Correctness | [04-review/concurrency/](../04-review/concurrency/), [04-review/rwlock-unwrap/](../04-review/rwlock-unwrap/), [04-review/handler-requeue/](../04-review/handler-requeue/) |
+| Security | [04-review/security/mandatory-design/iron-rules.md](../04-review/security/mandatory-design/iron-rules.md), plus topic dirs: [auth-timing/](../04-review/auth-timing/), [hmac-auth/](../04-review/hmac-auth/), [oidc/](../04-review/oidc/), [ssrf/](../04-review/ssrf/), [ip-restriction/](../04-review/ip-restriction/) |
+| Correctness | [04-review/concurrency/](../04-review/concurrency/), [04-review/concurrency/](../04-review/concurrency/), [04-review/handler-requeue/](../04-review/handler-requeue/) |
 | Observability | [04-review/observability/](../04-review/observability/), [03-coding/01-log-safety.md](../03-coding/01-log-safety.md) |
-| Architecture | [04-review/architecture/](../04-review/architecture/) |
-| CPU / memory | [04-review/cpu-memory/](../04-review/cpu-memory/), [04-review/memory-leak/](../04-review/memory-leak/) |
+| Architecture | [04-review/review-method/](../04-review/review-method/) |
+| CPU / memory | [04-review/cpu-memory/](../04-review/cpu-memory/), [04-review/cpu-memory/](../04-review/cpu-memory/) |
 
 ---
 
-## Closed findings
+## Review knowledge
 
-`skills/04-review/CLOSED-FINDINGS.md` is the searchable coverage index. Its
-linked topic file is the canonical detailed rationale when one exists; legacy
-rows without a linked file retain their compact rationale in the index. A
-global review produces open findings under `tasks/`; it does not create closed
-decision records until a finding is actually resolved.
+Function indices under `skills/04-review/` route to semantic decision pages classified
+by knowledge type. Read `skills/04-review/knowledge-routing.md` for their authority and
+maintenance rules. A global review produces open findings under `tasks/`; it does not
+close them or declare new accepted tradeoffs. Resolution workflows rewrite the owning
+knowledge page after verification, preserving source IDs and evidence there.

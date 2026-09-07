@@ -154,6 +154,6 @@ Implication: if the plugin's config changes (e.g. `httpMaxTimeoutMs` is updated)
 - User-facing syntax / builtin reference / sandbox-limits user view: `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/` (`README.md`, `language-syntax.md`, `api-reference.md`, `sandbox-security.md`, `bytecode.md`, `examples.md`)
 - Maintainer view of the sandbox (where each cap is enforced, Point 02 Map/List caps, ReDoS posture, SSRF guard rationale): [`dsl-engine-security-model.md`](dsl-engine-security-model.md)
 - Per-builtin implementation guides: `skills/03-coding/dsl/` (`http-call.md`, `redis-builtin.md`, `builtins-path.md`)
-- `Value::Str` / `Value::List` design decision (why `Arc<str>`, not SSO): `skills/04-review/dsl-value-str/sso-migration-not-worth-it.md`
-- Engine selection rationale (why custom VM vs Rhai / mlua / rune / Boa, with reverse index of the `dsl-vm-rhai-research` series): `skills/04-review/dsl-design-decisions.md`
+- `Value::Str` / `Value::List` design decision (why `Arc<str>`, not SSO): `skills/04-review/dsl/intentional-design/sso-migration-not-worth-it.md`
+- Engine selection rationale (why custom VM vs Rhai / mlua / rune / Boa, with reverse index of the `dsl-vm-rhai-research` series): `skills/04-review/dsl/intentional-design/dsl-design-decisions.md`
 - Surrounding plugin framework (4-phase model, conditional execution, body-phase constraints): `skills/01-architecture/02-gateway/05-plugin-system.md`

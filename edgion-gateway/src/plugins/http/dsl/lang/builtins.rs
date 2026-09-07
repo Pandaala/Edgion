@@ -803,7 +803,7 @@ impl Vm {
             // the same byte, which is exploitable for allowlist bypass. The api-reference
             // doc carries the operator-facing warning; this comment is the in-source pointer
             // for future maintainers considering a rename / semantics change. See
-            // `skills/04-review/dsl-builtins/url-decode-form-semantics.md`.
+            // `skills/04-review/dsl/intentional-design/url-decode-form-semantics.md`.
             BuiltinId::UrlDecode => {
                 let s = state.pop()?.runtime_string()?;
                 let mut result = Vec::new();

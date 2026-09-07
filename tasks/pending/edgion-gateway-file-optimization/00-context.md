@@ -13,7 +13,7 @@
 - `skills/01-architecture/02-gateway/SKILL.md`
 - `skills/03-coding/SKILL.md`
 - `skills/04-review/SKILL.md`
-- `skills/04-review/CLOSED-FINDINGS.md`
+- `skills/04-review/SKILL.md`
 - `skills/05-testing/SKILL.md`
 - `skills/07-tasks/SKILL.md`
 

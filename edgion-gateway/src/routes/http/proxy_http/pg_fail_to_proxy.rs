@@ -78,7 +78,7 @@ pub async fn fail_to_proxy(
     // does not consult this field and tears the H1 downstream connection down.
     // This is safe because response_filter disables keepalive before writing;
     // preserving reuse is a separate Pingora lifecycle feature. See
-    // skills/04-review/architecture/response-local-reply-h1-close-is-feature.md.
+    // skills/04-review/http-body/intentional-design/response-local-reply-h1-close-is-feature.md.
     if ctx.local_reply_written() {
         return FailToProxy {
             error_code: ctx.final_downstream_status().unwrap_or(500),

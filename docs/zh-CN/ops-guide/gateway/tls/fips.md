@@ -271,7 +271,7 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 ## 已知限制
 
 FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（当前契约见
-`skills/04-review/edgion-tls/boring-v5-fips-build-verification.md`）：
+`skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md`）：
 
 - **BoringSSL 无法限制 TLS 1.3 密码套件。** `TLS_CHACHA20_POLY1305_SHA256` 在 TLS 1.3 上仍可协商。
   批准套件强制仅在 **TLS 1.2** 生效。若要彻底排除 TLS 1.3 ChaCha20，必须禁用 TLS 1.3（默认不禁用）。

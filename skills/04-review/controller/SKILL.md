@@ -1,0 +1,16 @@
+---
+name: review-controller
+description: Review knowledge for controller, grouped by decision type.
+---
+
+# controller review knowledge
+
+Read [routing and classification](../knowledge-routing.md) before adding or moving a rule.
+Search these pages by behavior, symbol, or finding ID; revalidate historical evidence
+before applying a decision to current code.
+
+## Regression guards
+
+- [Etcd resource keys are authoritative over content identity — FIXED](regression-guards/etcd-key-content-identity.md)
+- [Leader-Job Call Sites — FIXED (helpers), three hardening proposals REJECTED](regression-guards/leader-jobs-call-site-consolidation.md)
+- [Wedged Leader Never Restarts / Never Fails Over — FIXED (supervised loop + deadline + deadman + gauge)](regression-guards/liveness-probe-and-lifecycle-supervision.md)

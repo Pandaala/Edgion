@@ -187,7 +187,7 @@ not in-process checks.
   Found/NotFound/Unreachable tri-state (no response bytes reach any request,
   log-verbatim, or exfil channel; rate is capped by the cold-path poll
   cadence). Same family as the DSL `http.call` F-018 tradeoff. See
-  `skills/04-review/architecture/acme-propagation-check-interval-removed.md`.
+  `skills/04-review/acme/regression-guards/acme-propagation-check-interval-removed.md`.
 - **Not DNS at all**: K8s Service backends dial EndpointSlice pod IPs /
   ClusterIP directly; the upstream-authority outbound path uses
   `AnchorPinnedResolver`.
@@ -250,7 +250,7 @@ not in-process checks.
   MUST reuse `KeyGet` — never a plugin-local source enum. A new outbound
   fetch MUST be a plugin, not a `KeyGet` variant and not a per-plugin
   webhook field. See
-  [plugin-metadata/keyget-is-local-io-free.md](../../04-review/plugin-metadata/keyget-is-local-io-free.md).
+  [plugin-metadata/keyget-is-local-io-free.md](../../04-review/plugin-metadata/mandatory-design/keyget-is-local-io-free.md).
 
 ### 9. IP/CIDR matching — Unified
 
@@ -342,7 +342,7 @@ not in-process checks.
   error detail (upstream addresses, dependency error strings, stack traces).
   Detail goes to `PluginLog` / access-log diagnostics, not the response body.
   Rationale and worked cases:
-  [fail-closed-error-body-no-internal-detail.md](../../04-review/security/fail-closed-error-body-no-internal-detail.md).
+  [fail-closed-error-body-no-internal-detail.md](../../04-review/security/mandatory-design/fail-closed-error-body-no-internal-detail.md).
 
 ### 15. Condition predicate layer — Unified
 
@@ -366,7 +366,7 @@ not in-process checks.
 - **Rule**: new predicates MUST reuse `Condition`. Do not add a
   plugin-local predicate enum, `Include`/`Exclude`, `RestrictionSource`,
   or wildcard `values`. See
-  [plugin-metadata/unified-condition-layer.md](../../04-review/plugin-metadata/unified-condition-layer.md).
+  [plugin-metadata/unified-condition-layer.md](../../04-review/plugin-metadata/superseded/unified-condition-layer.md).
 
 ---
 
@@ -380,7 +380,7 @@ not in-process checks.
   restrained metrics; control plane: `tracing` + status conditions. See
   [skills/03-coding/observability/](../../03-coding/observability/01-metrics.md).
 - **Security review iron rules** —
-  [iron-rules.md](../../04-review/security/iron-rules.md) (review-layer
+  [iron-rules.md](../../04-review/security/mandatory-design/iron-rules.md) (review-layer
   companion to this registry).
 
 ---
@@ -407,4 +407,4 @@ not in-process checks.
   one-alg-per-group confusion defense); the only textual overlap is two
   `ErrorKind` matches with different output types and log vocabularies.
   Rationale and re-evaluation triggers:
-  `skills/04-review/jwt-auth/jwt-oidc-helper-split-deliberate.md`.
+  `skills/04-review/jwt-auth/intentional-design/jwt-oidc-helper-split-deliberate.md`.

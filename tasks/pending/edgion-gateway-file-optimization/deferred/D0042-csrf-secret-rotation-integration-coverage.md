@@ -6,7 +6,7 @@
 - Discovered in: B0070, CSRF audit
 - Category: integration-testing
 - Depends on: B0070; independent of D0041
-- Resolution: [`skills/04-review/csrf/csrf-secret-rotation-integration-coverage.md`](../../../../skills/04-review/csrf/csrf-secret-rotation-integration-coverage.md)
+- Resolution: [`skills/04-review/csrf/regression-guards/csrf-secret-rotation-integration-coverage.md`](../../../../skills/04-review/csrf/regression-guards/csrf-secret-rotation-integration-coverage.md)
 
 ## Evidence
 Existing frozen CSRF integration coverage verified normal double-submit behavior and a statically missing Secret, but did not exercise Secret event propagation through Controller resolution, conf-sync publication, PluginStore generation replacement, deletion, and recovery.

@@ -303,7 +303,7 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 ## Known limitations
 
 FIPS mode covers the common downstream posture, but has documented gaps (see the current contract in
-`skills/04-review/edgion-tls/boring-v5-fips-build-verification.md`):
+`skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md`):
 
 - **TLS 1.3 cipher suites cannot be restricted in BoringSSL.** `TLS_CHACHA20_POLY1305_SHA256`
   remains negotiable at TLS 1.3. Approved-suite enforcement bites at **TLS 1.2 only**. To eliminate

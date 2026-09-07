@@ -6,7 +6,7 @@
 - Discovered in: B0089, Mock audit
 - Category: performance-architecture
 - Canonical task: completed and removed from `tasks/todo/` on 2026-09-05
-- Decision record: [`skills/04-review/cpu-memory/cases/local-response-body-is-clone-cheap-bytes.md`](../../../../skills/04-review/cpu-memory/cases/local-response-body-is-clone-cheap-bytes.md)
+- Decision record: [`skills/04-review/cpu-memory/regression-guards/local-response-body-is-clone-cheap-bytes.md`](../../../../skills/04-review/cpu-memory/regression-guards/local-response-body-is-clone-cheap-bytes.md)
 
 ## Evidence
 `PluginRunningResult::ErrResponse` carries an owned `Option<String>` across the resources-to-Gateway plugin contract. A generation-owned configured body therefore requires a deep clone for every local response. Mock exposes the cost directly, but the enum has many producers and request- and response-stage consumers, so a plugin-local `Arc<str>` or `Bytes` field cannot remove the final copy.

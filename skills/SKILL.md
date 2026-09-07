@@ -55,7 +55,7 @@ its 🔴 rows against your diff before every commit.
 | **EdgionDSL** — architecture/security, builtin implementation, and user API | [01-architecture/02-gateway/dsl-engine.md](01-architecture/02-gateway/dsl-engine.md) (engine) + [03-coding/dsl/SKILL.md](03-coding/dsl/SKILL.md) (builtins) + `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md` (script API) |
 | **Grouped-list design pattern** — `*_groups` schema, atomic flat-field replacement, first-wins, group-in-ok-log iron rule | [01-architecture/00-common/04-grouped-list-pattern.md](01-architecture/00-common/04-grouped-list-pattern.md) |
 | **Integration testing** — architecture, running, adding test cases | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
-| **Global review orchestration** — coverage ledger, capacity-aware review waves, and finding output | [10-fully-review/SKILL.md](10-fully-review/SKILL.md); closed decisions live in [04-review/CLOSED-FINDINGS.md](04-review/CLOSED-FINDINGS.md) |
+| **Global review orchestration** — coverage ledger, capacity-aware review waves, and finding output | [10-fully-review/SKILL.md](10-fully-review/SKILL.md); closed decisions live in [review knowledge by function](04-review/SKILL.md) |
 | **Algorithm catalog** — per-algorithm math, complexity/concurrency contract, prior-art comparison, and replacement criteria (LB scoring, caches, matchers, rate limiting) | [12-algorithms/SKILL.md](12-algorithms/SKILL.md) |
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
 | **Pre-commit / local checks** (fmt + workspace check + workspace clippy + agent-doc validation + SSA-force guard) | [09-misc/SKILL.md](09-misc/SKILL.md) |

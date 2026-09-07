@@ -228,7 +228,7 @@ where
 /// must send the precondition from their own `GET`. `If-Match: *` also resolves
 /// to `None`; it means only "must exist", which the update/delete path already
 /// enforces via `ConfWriterError::NotFound`. Do not "fix" this into a `428` —
-/// see `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+/// see `skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md`.
 pub fn expected_resource_version(headers: &HeaderMap, body: &str) -> Result<Option<String>, StatusCode> {
     if let Some(value) = headers.get(IF_MATCH) {
         let value = value.to_str().map_err(|_| StatusCode::BAD_REQUEST)?.trim();

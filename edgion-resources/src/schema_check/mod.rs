@@ -7,7 +7,7 @@
 //! typo inside a plugin's `config` block is silently dropped instead of
 //! surfaced. Walking the schema instead of the deserializer sidesteps that
 //! blind spot entirely. See
-//! `skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
+//! `skills/04-review/resources/compatibility-constraints/serde-ignored-blind-spots-schema-walk-instead.md`
 //! for the measured comparison and the rules this module encodes.
 //!
 //! The resource-agnostic checker core is reused by the hand-written

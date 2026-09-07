@@ -1,0 +1,89 @@
+---
+name: link-sys-dispatch-extract-function
+description: Use when reviewing link_sys runtime/store.rs "dispatch_full_set / dispatch_partial_update have extractable functions / duplicate provider match arms / should unify the two dispatch functions" findings (F-013, F-008). The credential-readiness helper is already extracted; the deeper full_set/partial_update unification is a deliberately declined refactor.
+knowledge_type: intentional-design
+---
+
+# LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF
+
+**Audit date**: 2026-05-25 (re-confirmed 2026-06-09)
+**Linked issues**: link-sys F-013 (extract-function), link-sys F-008 (duplicate provider match arms) — both closed, not further refactored. A merged follow-up todo (`link-sys-dispatch-dedup-followup.md`) was re-evaluated with a skeptical design pass on 2026-06-09 and deleted: verdict unchanged (NO-GO-FOR-NOW).
+
+## Conclusion
+
+The one concrete, low-risk extraction these findings asked for — a shared
+credential-readiness prelude helper — is **already implemented** as
+`credential_readiness<M>(ls, auth_fn) -> (ready, tls_ok, auth)`
+(`edgion-gateway/src/link_sys/runtime/store.rs`), called from all six non-Webhook
+arms across both dispatch functions. Alongside it, `register_for_full_set`,
+`swap_and_shutdown_olds`, `spawn_and_swap_partial`, `carry_over_if_not_ready`,
+`preserve_if_not_ready`, and `spawn_shutdown_if_present` are already extracted.
+
+The remaining suggestions — per-provider `dispatch_full_set_<provider>`
+functions (F-013 #2) and collapsing both `match &ls.spec.config` blocks into a
+single generic `dispatch_one` + `LifecycleAction` enum (F-013 #3 / F-008) — are
+**not accepted**. Fix suggestions of the form "extract one function per provider
+to remove the eight `new_*_map` / `preserved_*_keys` locals" or "unify
+`dispatch_full_set` and `dispatch_partial_update` behind a `LifecycleAction`
+enum / `for_each_provider` closure" are not accepted.
+
+## Core Rationale
+
+**1. The two functions have genuinely different control flow, not just a swapped lifecycle helper**
+
+`dispatch_full_set`: snapshots all four runtime maps up front, carries over the
+*old snapshot's* Arc for not-ready resources, accumulates into four fresh maps,
+and after a **single** pass over `data` does an atomic swap-all-four +
+background shutdown of evicted old Arcs gated by `SHUTDOWN_ON_REPLACE`.
+
+`dispatch_partial_update`: preserves in place against the **live** runtime,
+swaps **per item**, and runs a separate uniform remove loop.
+
+Carry-over-from-snapshot vs preserve-in-place, swap-all-at-end vs swap-per-item,
+and the SHUTDOWN_ON_REPLACE-gated bulk eviction are real semantic differences.
+A `LifecycleAction` enum would have to re-encode both flows behind branches,
+re-introducing the divergence it claims to remove while adding indirection — and
+the swap/carry-over semantics are exactly the kind of thing a mechanical
+collapse silently regresses.
+
+**2. The eight locals are inherent to "single pass + atomic swap-all-at-end"**
+
+`new_*_map` / `preserved_*_keys` exist because one loop interleaves all four
+providers and the four swaps happen *after* the loop. Per-provider extraction
+can't remove them without either iterating `data` four times (changes pass count
+and operation ordering) or building a generic accumulator struct (more machinery
+than the locals it replaces). What's left is a form-only refactor.
+
+**3. Readability-only, off the data-plane hot path**
+
+Both functions run on LinkSys config sync / hot reload (ConfHandler), not on the
+per-request data path. There is no correctness risk — the repeated arms compile
+identically. The cost (restructuring two working, tested functions that touch
+config sync) and regression risk are out of proportion to a marginal
+readability gain. Same disposition class as
+[plugin-runtime-god-match.md](../../plugin-runtime/intentional-design/plugin-runtime-god-match.md) and
+[style-consolidation-thresholds.md](../../review-method/intentional-design/style-consolidation-thresholds.md).
+
+## Fix Suggestions Not Accepted
+
+- "Extract `dispatch_full_set_<provider>` per provider to drop the eight locals" — the locals are structural to single-pass-then-swap-all; extraction would force four passes over `data` or an accumulator struct, neither of which is a net improvement.
+- "Unify both dispatch functions behind a `LifecycleAction` enum / `dispatch_one` / `for_each_provider` closure (F-008)" — the two functions' carry-over/swap semantics genuinely differ; collapsing trades real regression risk for marginal readability.
+- "Adding a fifth provider requires editing both dispatch functions and the remove loop" — known trade-off, not a defect; the four provider arms are short and the `credential_readiness` prelude is already deduplicated.
+
+## Re-evaluation Triggers
+
+Re-open only if:
+
+- A fifth LinkSys provider is **actually implemented** and the duplication cost can be amortized across a broader rewrite. Note: the `SystemConfig` enum already has five variants — Redis, Etcd, Elasticsearch, Webhook, and `Kafka`. `Kafka` is a no-runtime stub (`KafkaClientConfig { brokers }`, documented "placeholder / future release", no roadmap date) caught today by the `_ => debug!` fallthrough, so the natural trigger is Kafka gaining a real runtime — at which point the change is one explicit arm in each dispatch function plus one line in the remove loop, and only then is a small per-arm macro worth reassessing. Adding the arm is also not a silent gap: the failure mode is benign (`_ => debug!("runtime not yet implemented")`), and `SystemConfig::system_type()` is an exhaustive `_`-free match that compile-errors on any new variant.
+- The `full_set` carry-over-from-snapshot and `partial_update` preserve-in-place semantics genuinely converge, so a single dispatch path no longer has to encode two flows.
+- A real bug is traced to a provider arm being added/changed in one function but not the other.
+
+## Reference Cases
+
+- link-sys F-013 (`tasks/link/link-sys-F013-store-rs-extract-function-dispatch.md`), link-sys F-008 (`tasks/link/link-sys-F008-dispatch-full-set-partial-update-code-duplication.md`), audited 2026-05-25.
+- `edgion-gateway/src/link_sys/runtime/store.rs` — `credential_readiness`, `dispatch_full_set`, `dispatch_partial_update`.
+- Sibling refactor-decline decisions: [plugin-runtime-god-match.md](../../plugin-runtime/intentional-design/plugin-runtime-god-match.md), [style-consolidation-thresholds.md](../../review-method/intentional-design/style-consolidation-thresholds.md), [size-and-similarity-heuristics.md](../../review-method/intentional-design/size-and-similarity-heuristics.md).
+
+## Resolution references
+
+- `link-sys-F013` — 2026-05-25 (⚠️ accepted tradeoff).

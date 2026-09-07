@@ -1,0 +1,51 @@
+---
+name: review-backends
+description: Review knowledge for backends, grouped by decision type.
+---
+
+# backends review knowledge
+
+Read [routing and classification](../knowledge-routing.md) before adding or moving a rule.
+Search these pages by behavior, symbol, or finding ID; revalidate historical evidence
+before applying a decision to current code.
+
+## Intentional design
+
+- [ExternalName DNS Miss Coalescing Is Not Implemented (task-externalname-dns-miss-coalescing) — DESIGN-TRADEOFF](intentional-design/externalname-dns-miss-coalescing-not-implemented.md)
+- [backends-F016 — Probe semaphore acquired per probe, not per cycle](intentional-design/probe-semaphore-per-cycle.md)
+
+## Compatibility constraints
+
+- [No upstream max-connection-duration; long-lived H2 connections are never rotated — DESIGN-TRADEOFF (PINGORA-API-BLOCKED)](compatibility-constraints/no-upstream-max-connection-duration-pingora-blocked.md)
+
+## Regression guards
+
+- [lb-06 — Active health-check probes run in parallel within a service — FIXED](regression-guards/active-hc-probes-parallel-within-service.md)
+- [BackendTLSPolicyStore::update Rebuild-Strategy Complexity Comment](regression-guards/backend-tls-policy-rebuild-strategy-comment.md)
+- [backends-F008 — build_client_cert_key duplicate PEM-parse block](regression-guards/build-client-cert-key-dedup.md)
+- [backends-F007 — build_peer_from_lb_selection inlines TLS-metadata write](regression-guards/build-peer-tls-helper-dedup.md)
+- [Circuit-Breaker Integration Ejection State Is Self-Cleaning — FIXED](regression-guards/circuit-breaker-integration-ejection-state-self-cleaning.md)
+- [Circuit Breaker — Local-Origin Failure Dimension Split — IMPLEMENTED](regression-guards/circuit-breaker-local-origin-split.md)
+- [Circuit Breaker record_failure total_endpoints == 0 Bypass — FIXED](regression-guards/circuit-breaker-record-failure-zero-total-endpoints.md)
+- [Circuit Breaker record_success Gauge Leak — FIXED](regression-guards/circuit-breaker-record-success-gauge-leak.md)
+- [backends-F017 — ClusterIP backend address handles IPv6 (no manual brackets)](regression-guards/clusterip-ipv6-no-brackets.md)
+- [backends-F014 — Consistent-hash query-arg match decodes percent/plus-encoded param names](regression-guards/consistent-hash-arg-percent-encoded-name.md)
+- [ctrl-02 — AI target limits preserve existing Service policy behavior — FIXED](regression-guards/ebtp-ai-target-limits-preserve-service-fanout.md)
+- [ebtp-atomic-service-snapshot — one captured Service policy generation — FIXED](regression-guards/ebtp-atomic-service-snapshot.md)
+- [backends-F013 — no-port EndpointSlices fail closed instead of defaulting to 8080](regression-guards/ep-slice-no-port-fail-closed.md)
+- [ExternalName DNS Cache Identity and Lifecycle (task-externalname-dns-cache-identity-and-lifecycle, origin D0001) — FIXED](regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
+- [runtime-F010 — backend error path reuses the listener's HSTS decision](regression-guards/hsts-on-plain-http-error-responses.md)
+- [backends-F001 — IPv6 health-probe URLs are bracketed; gRPC probe no longer panics](regression-guards/ipv6-probe-url-brackets.md)
+- [resolve_target_port_key honors the selected endpoint's originating slice — FIXED](regression-guards/named-port-resolve-against-originating-slice.md)
+- [backends-F011 — remove_task dead one-line wrapper](regression-guards/remove-task-dead-wrapper.md)
+- [net-F001 — resolve_domain hands unbracketed IPv6 literal to lookup_host](regression-guards/resolve-domain-ipv6-literal.md)
+- [backends-F010 — set_service_config duplicate ServiceCbState literal](regression-guards/service-cb-state-new-ctor.md)
+- [udp-F017 — UDP upstream socket bind ignores address family](regression-guards/session-bind-address-family.md)
+- [backends-F004 — `set_service_config` config update is now an atomic `entry()` swap](regression-guards/set-service-config-toctou-race.md)
+- [backends-F006 — BackendTLSPolicy sectionName match isolated per targetRef Service](regression-guards/tls-policy-wildcard-cross-service.md)
+- [backends-F002 — Concurrent `upsert_task` no longer leaks orphaned health-check tasks](regression-guards/upsert-task-concurrent-handle-leak.md)
+
+## Superseded decisions
+
+- [backends-F009 — preload collect_*_routes five identical bodies](superseded/preload-collect-routes-macro.md)
+- [backends-F005 — `warm_cell` startup hydration is now an atomic `hydrate_if_empty`](superseded/warm-cell-toctou-stale-overwrite.md)

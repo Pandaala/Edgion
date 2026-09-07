@@ -494,7 +494,7 @@ config field.
 This is a gateway-local field, not a cluster-synced one: a bad value can't be hot-pushed to
 crashloop a fleet, and it surfaces on first run. The `fips` cargo feature itself is an image/build
 concern, not something toggled at runtime. See
-`skills/04-review/edgion-tls/boring-v5-fips-build-verification.md` for the current build contract. The
+`skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md` for the current build contract. The
 approved cipher/curve set and known limitations (TLS 1.3 ChaCha20 not restrictable in BoringSSL;
 upstream/backend TLS ciphers are not FIPS-restricted).
 

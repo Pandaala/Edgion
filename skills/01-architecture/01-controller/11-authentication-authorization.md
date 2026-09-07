@@ -39,7 +39,7 @@ The local admin token is registered onto the `Authorizer` via `set_admin_token` 
 ### Federation mTLS — the Center identity
 
 Federation requests are served by a **separate admin router instance** (`fed_router`), built from `create_admin_router` wrapped with only `authz_layer` + `inject_center_identity` — it has **no token-authn layer and no 503 token gate**, so the Center path and the local-admin path are fully isolated router stacks. `inject_center_identity` snapshots the current Center policy as `Role::Restricted`. (The Controller↔Center link itself is an outbound gRPC channel from the Controller, not an inbound listener.) Details:
-[`../../04-review/architecture/fed-proxy-mtls-fail-close.md`](../../04-review/architecture/fed-proxy-mtls-fail-close.md).
+[`../../04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md`](../../04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md).
 
 ## Authorization (what may you do)
 
@@ -164,4 +164,4 @@ Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, k
 - [`02-admin-api.md`](02-admin-api.md) — Admin API endpoints + token authn request order.
 - [`../../02-features/02-config/00-controller-config.md`](../../02-features/02-config/00-controller-config.md) — `admin_token` / `[center]` / `[cli_tokens]` schemas.
 - [`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md) — token bootstrap + fail-close behavior matrix.
-- [`../../04-review/architecture/fed-proxy-mtls-fail-close.md`](../../04-review/architecture/fed-proxy-mtls-fail-close.md) — federation mTLS fail-close + Center identity injection.
+- [`../../04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md`](../../04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md) — federation mTLS fail-close + Center identity injection.

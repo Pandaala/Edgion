@@ -3,7 +3,7 @@
 //! When the gateway is a FIPS build, downstream listeners default to the
 //! FIPS-approved cipher/curve set unless the operator overrides via
 //! `EdgionTls.ciphers`. See
-//! skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
+//! skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md.
 //!
 //! Backend-agnostic surface: `fips_module_available` and `decide_cipher_action`
 //! are callable on both the boringssl and rustls builds (the startup path uses

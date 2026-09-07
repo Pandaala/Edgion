@@ -245,7 +245,7 @@ the default federation policy grants. Write safety throughout is a CAS property 
 ownership epoch.
 
 Full analysis and the decision to keep it that way:
-[`../../04-review/architecture/edgion-config-data-managed-by-is-inert.md`](../../04-review/architecture/edgion-config-data-managed-by-is-inert.md).
+[`../../04-review/resources/intentional-design/edgion-config-data-managed-by-is-inert.md`](../../04-review/resources/intentional-design/edgion-config-data-managed-by-is-inert.md).
 
 ## Cross-Resource Relationships
 

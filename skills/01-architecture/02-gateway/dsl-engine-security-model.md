@@ -211,7 +211,7 @@ response is returned directly to the script.
 
 - User-view sandbox doc: `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/sandbox-security.md` (and the zh-CN mirror)
 - Engine architecture (data flow, source layout, `DslRuntime` lifecycle, panic isolation): `dsl-engine.md`
-- `Value::Str` / `Value::List` design decision (why `Arc<str>`, not SSO): `skills/04-review/dsl-value-str/sso-migration-not-worth-it.md`
-- `Value::Map` boxing rationale (24 B `Value` invariant): `skills/04-review/dsl-value-str/map-variant-is-boxed.md`
+- `Value::Str` / `Value::List` design decision (why `Arc<str>`, not SSO): `skills/04-review/dsl/intentional-design/sso-migration-not-worth-it.md`
+- `Value::Map` boxing rationale (24 B `Value` invariant): `skills/04-review/dsl/intentional-design/map-variant-is-boxed.md`
 - Per-builtin implementation guides (where each cap is wired in): `skills/03-coding/dsl/` (`http-call.md`, `redis-builtin.md`, `builtins-path.md`)
 - Plugin lifecycle (how `DslPlugin` reaches `Vm::execute`): `skills/01-architecture/02-gateway/05-plugin-system.md`

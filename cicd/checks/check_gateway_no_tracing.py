@@ -23,7 +23,7 @@ Usage:
 
 Policy source:
   skills/03-coding/01-log-safety.md  -> Iron rule 3 + Data-plane entry list
-  skills/04-review/observability/observability-review-rule.md
+  skills/04-review/observability/mandatory-design/observability-review-rule.md
 """
 
 from __future__ import annotations

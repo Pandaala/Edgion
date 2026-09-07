@@ -28,7 +28,7 @@
 //! ```
 //!
 //! The figures recorded in
-//! `skills/04-review/cpu-memory/cases/lru-bounded-expiration-index.md` came from
+//! `skills/04-review/cpu-memory/regression-guards/lru-bounded-expiration-index.md` came from
 //! the third form. A default `cargo bench` builds optimized and reports
 //! materially lower absolute numbers; only the capacity-scaling ratios are
 //! comparable across profiles.

@@ -6,7 +6,7 @@
 - Discovered in: B0088, LDAP Auth audit
 - Category: egress-security
 - Closed: 2026-09-04
-- Canonical record: [`skills/04-review/ldap-auth/dial-time-egress-policy.md`](../../../../skills/04-review/ldap-auth/dial-time-egress-policy.md)
+- Canonical record: [`skills/04-review/ldap-auth/regression-guards/dial-time-egress-policy.md`](../../../../skills/04-review/ldap-auth/regression-guards/dial-time-egress-policy.md)
 
 ## Evidence
 Before the fix, `ldapHost` was passed to ldap3 as an `ldap://` or `ldaps://` URL. ldap3 performed system DNS and `TcpStream::connect(host:port)` without `EgressResolver` or `classify_ip`, so dial-time policy could not classify every candidate or block denied destinations.

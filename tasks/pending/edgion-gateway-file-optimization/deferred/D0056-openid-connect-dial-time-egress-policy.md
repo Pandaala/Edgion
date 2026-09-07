@@ -6,7 +6,7 @@
 - Discovered in: B0090, OpenID Connect audit
 - Category: egress-security
 - Closed: 2026-09-04
-- Canonical record: [`skills/04-review/oidc/dial-time-egress-policy.md`](../../../../skills/04-review/oidc/dial-time-egress-policy.md)
+- Canonical record: [`skills/04-review/oidc/regression-guards/dial-time-egress-policy.md`](../../../../skills/04-review/oidc/regression-guards/dial-time-egress-policy.md)
 
 ## Evidence
 Before the fix, the default OpenID Connect outbound client omitted `EgressResolver` and `disable_proxy`, and the SAN-pinning branch built a raw reqwest client without either control. Discovery and remotely discovered JWKS, token, introspection, userinfo, and revocation endpoints could therefore bypass dial-time classification through DNS or proxy routing.

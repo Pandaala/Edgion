@@ -298,7 +298,7 @@ rechecks both the published generation and membership before installing its snap
 - Used by `DirectEndpoint`, which selects a backend by endpoint address. Name-addressed jumps
   (`DynamicInternalUpstream`, `Canary`) do NOT use this function — they resolve through
   `RouteRules::find_backend_by_name`, the single name matcher; see
-  [`skills/04-review/routing/denied-named-jump-fails-closed.md`](../../04-review/routing/denied-named-jump-fails-closed.md).
+  [`skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md`](../../04-review/routing/regression-guards/denied-named-jump-fails-closed.md).
 
 ## Directory layout
 

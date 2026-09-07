@@ -396,7 +396,7 @@ pub fn upstream_response_filter(
                                 // intentionally LOST on a replaced response — matching
                                 // Envoy (no cookie carry-over onto a local/error
                                 // reply). Accepted as designed; see
-                                // skills/04-review/architecture/local-reply-drops-sticky-set-cookie.md
+                                // skills/04-review/routing/intentional-design/local-reply-drops-sticky-set-cookie.md
                                 let cookie_value =
                                     session_persistence::build_set_cookie_value(&sp, &token, is_tls, ttl_secs);
                                 let _ = upstream_response.append_header("Set-Cookie", &cookie_value);

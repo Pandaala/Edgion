@@ -603,7 +603,7 @@ pub async fn update_namespaced(
             // read-modify-write on the same EdgionConfigData, which would otherwise
             // interleave and silently lose an update. Held across the write below.
             // See `super::resource_locks` and
-            // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
+            // `skills/04-review/concurrency/regression-guards/failover-read-modify-write-per-key-lock.md`.
             let _resource_guard = super::resource_locks::lock_resource(kind.as_str(), &ns, &name).await;
             writer
                 .update_one_if_version(

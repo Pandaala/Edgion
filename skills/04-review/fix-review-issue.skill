@@ -138,6 +138,12 @@ Value verdict     : 🔴 Not worth fixing (harm tiny, cost/risk out of proportio
                     🟡 Optional fix (improvement but not urgent)
                     🟢 Worth fixing (clear benefit, controlled cost)
 
+### Knowledge applicability
+Knowledge pages : <paths and types, or no relevant match>
+Current evidence: <assumptions checked and decisive code/test evidence>
+Assessment      : applicable | partly applicable | stale/conflicting | unresolved | no match
+Re-evaluation   : <trigger reached and consequence for this verdict>
+
 ### Verdict
 ✅ Real issue — needs a code fix
 📝 Doc / comment only — no behavior change needed
@@ -152,14 +158,21 @@ not regress to a single one-liner** — even trivial issues benefit from the
 Context / Defect / Why-it-matters split because it forces you to state where the code
 lives and who pays the cost.
 
+Verify relevant knowledge claims against current code, tests, and applicable project
+requirements. Distinguish a code violation from a stale or incorrect rule. Historical
+verification is not fresh evidence. A matching ID/category cannot dismiss a finding;
+if a contradiction remains unresolved, retain that uncertainty and do not force a
+false-positive or accepted verdict. Correct confirmed knowledge errors within scope
+in Step 4b; track unrelated discrepancies separately.
+
 Relationship between Value verdict and Verdict:
-- Value verdict 🔴 → regardless of whether Verdict is ✅ or 📝, recommend downgrading to ⚠️ or ❌ and explain the reasoning to the user
+- Value verdict 🔴 → preserve factual validity. Recommend deferral with evidence and tracking, or seek explicit acceptance of the concrete risk. A low-value real defect is not a false positive or correct behavior. Accepted risk follows the accepted-decision path only after acceptance, retaining its scope, cost, and reconsideration triggers. Deferral retains the finding or follows Scope A's transfer/review/check gates before deletion.
 - Value verdict 🟡 → keep the Verdict but mark "low priority, may skip" in Step 2
 - Value verdict 🟢 → proceed with the normal flow
 
 Wait for the user to confirm or correct the verdict before proceeding.
-- Verdict ❌ → skip to Step 6 (close without any change).
-- Verdict ⚠️ → go to Step 4b only (add a `skills/04-review/` entry), then skip to Step 6.
+- Verdict ❌ → Step 4b (update semantic knowledge), Step 5 (independent review), then Step 6 (checks and close); no code change.
+- Verdict ⚠️ → Step 4b (update accepted decision), Step 5 (independent review), then Step 6 (checks and close); no code change.
 - Verdict 📝 → go to Step 4 (doc/comment work + side-effect checks), then Step 5 (review), then Step 6.
 - Verdict ✅ → continue to scope gate below.
 
@@ -188,9 +201,13 @@ C) Proceed anyway — only if you are confident the blast radius is bounded
 ```
 
 Wait for the user's choice:
-- **A (promote)**: create `tasks/todo/<id>-<slug>.md` with the issue summary and a link to
-  the original review file; delete `<ISSUE_DIR>/<filename>.md` (it is now tracked as a task);
-  stop here — do not proceed to Step 2.
+- **A (promote)**: create `tasks/todo/<id>-<slug>.md` preserving the stable ID,
+  original claim, decisive evidence, scope, unresolved questions, and proposed work.
+  Do not rely on a link to a file that will be deleted. Mark it deferred, not fixed
+  or accepted. Run Step 5 on the evidence transfer and Step 6's required checks before
+  deleting the original finding; verify the task is complete and discoverable instead
+  of requiring a resolution page. Then stop without implementation. A knowledge-page
+  pointer is optional when an existing rule needs to explain the unresolved boundary.
 - **B (narrow)**: record the narrowed scope explicitly, then continue to Step 2 with that
   scope as the hard boundary.
 - **C (proceed)**: continue to Step 2 with a note to be extra cautious.
@@ -316,26 +333,27 @@ Ask: does the fix change user-visible behavior, a configuration field, a default
   same change, following `skills/11-doc/SKILL.md`.
 - If **no**: note "docs not affected" and continue.
 
-### 4b. Skills knowledge base (`skills/`)
+### 4b. Review knowledge
 
-Ask: does the fix resolve a pattern that could be re-reported in a future review?
+Read `skills/04-review/knowledge-routing.md` and the owning function's `SKILL.md`.
+Search by behavior, symbol, and stable finding ID before choosing a destination.
+Rewrite the existing semantic rule when the mechanism already has a home; create
+`skills/04-review/<function>/<knowledge-type>/<semantic-slug>.md` only for a new rule.
+Use `_template.md` and classify by the reason for the decision, not just disposition.
 
-- If **yes**: **create ONE independent per-finding file** at
-  `skills/04-review/<topic>/<descriptive-slug>.md` recording why the old behavior was a
-  defect and how it was fixed (or, for ⚠️, why the tradeoff is accepted) and what re-reports
-  to reject. Use the `_template.md` shape and its frontmatter (`status`, `finding_id`,
-  `closed`). This is also the primary action for ⚠️ accepted-tradeoff verdicts.
-  - **One finding = one detailed file.** Add one concise row to
-    `skills/04-review/CLOSED-FINDINGS.md` after the detailed file is ready. Do
-    not copy the detailed rationale into the index. Serialize this small index
-    update when parallel fixes finish.
-  - Pick `<topic>` = the directory where sibling findings of the same family already live
-    (`find skills/04-review -mindepth 1 -maxdepth 1 -type d`); create the directory if the family is new. Discovery later is by
-    `rg -l '<keyword>' skills/04-review/` over the topic directories and the
-    central coverage index.
-- Ask: does the fix change a design decision, architectural constraint, or coding rule
-  documented in an EXISTING specific skill file (not an index)? If so, update that one file.
-- Check `skills/SKILL.md` "Key constraints" table — if the fix touches a listed constraint, update the table entry.
+- Required invariant: `mandatory-design`, with canonical authority.
+- Accepted choice: `intentional-design`, with cost and re-evaluation triggers.
+- External constraint: `compatibility-constraints`, with exact constraint and exit condition.
+- Corrected behavior: `regression-guards`, with root cause and verification.
+- Disproved premise or limited evidence: `review-evidence`, with precise scope.
+- Replaced decision: `superseded`, with an inactive notice and successor.
+
+Preserve stable IDs, decisive evidence, actual verification, and unresolved task links.
+Every closed finding must be discoverable in the resulting rule(s); several findings
+may update one rule. Do not create per-finding archives or a resolution ledger.
+Update only short links in the function index. Serialize edits sharing a semantic page.
+Update canonical architecture/coding documentation if the decision changes it.
+Follow project language rules for all persisted content.
 
 ### 4c. Integration tests (`edgion-tests/`)
 
@@ -371,10 +389,16 @@ Fix summary:
 <1–3 sentences describing what was changed>
 
 Please:
-1. Read the changed files in full.
+1. Read repository-root and applicable nested AGENTS.md files, the project knowledge
+   index, routing rules, relevant original knowledge pages, and changed files in full.
+   A parent summary cannot replace these sources.
 2. Check all callers / usages of the modified symbols.
 3. Verify the fix correctly addresses the original issue.
 4. Look for regressions, edge cases, or new bugs introduced by the fix.
+5. Verify knowledge applicability, classification, authority, evidence, validity limits,
+   historical/current separation, and reconsideration triggers. Report unresolved
+   contradictions. A low-value or deferred real defect is not a false positive or
+   accepted design; acceptance needs evidence and unresolved work must remain tracked.
 
 Report format:
 ## Review Result
@@ -385,6 +409,9 @@ Verdict: LGTM | Issues Found
 
 ### Edge Cases Checked
 - <what you checked and the conclusion>
+
+### Knowledge Review
+- <pages read, applicability, classification, conflicts, and evidence limits>
 ```
 
 If the subagent reports **Issues Found**:
@@ -396,6 +423,10 @@ If the subagent reports **Issues Found**:
 
 ## Step 6 — Close the issue
 
+Resolve the complete current quick-check set from `AGENTS.md`; the list below must
+not narrow newer repository requirements. Before deletion, verify the finding ID and
+resolution are discoverable in the selected function/type knowledge page(s).
+
 Run in sequence:
 
 1. `cargo fmt --all` — apply formatting first.
@@ -403,7 +434,9 @@ Run in sequence:
 3. `cargo clippy --workspace --all-targets` — must pass with no new warnings.
 4. `python3 cicd/checks/validate_agent_docs.py` — must pass.
 5. `python3 cicd/checks/check_ssa_force.py` — must pass.
-6. Run targeted tests proportionate to the finding; run `cargo test --all`
+6. `python3 cicd/checks/check_metrics_inventory.py` — must pass.
+7. `python3 cicd/checks/check_pingora_source_policy.py` — must pass.
+8. Run targeted tests proportionate to the finding; run `cargo test --all`
    only when the user explicitly requests it.
 
 If all required checks and targeted tests pass:
@@ -412,6 +445,7 @@ If all required checks and targeted tests pass:
 - Report to the user:
   ```
   Closed: <ISSUE_DIR>/<filename>
+  Knowledge: <function/type/path, rewritten or created; or deferred task path>
   Fix summary: <1–2 sentences>
   Files changed: <list>
   ```

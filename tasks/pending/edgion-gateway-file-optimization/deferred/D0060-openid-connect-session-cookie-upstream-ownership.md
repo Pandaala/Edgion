@@ -5,7 +5,7 @@
 - Severity: high
 - Discovered in: B0093, OpenID Connect request-flow analysis
 - Category: security-credential-ownership
-- Review knowledge: [`skills/04-review/oidc/session-cookie-upstream-ownership.md`](../../../../skills/04-review/oidc/session-cookie-upstream-ownership.md)
+- Review knowledge: [`skills/04-review/oidc/regression-guards/session-cookie-upstream-ownership.md`](../../../../skills/04-review/oidc/regression-guards/session-cookie-upstream-ownership.md)
 
 ## Evidence
 Successful session-mode authentication left the encrypted `edgion_oidc_session` cookie on the proxied request. The value is a replayable Gateway credential even though its plaintext is encrypted. `hideCredentials` previously removed only the bearer `Authorization` header, and the session branch returned before applying any cookie removal.

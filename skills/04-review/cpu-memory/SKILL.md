@@ -1,59 +1,76 @@
 ---
-name: cpu-memory-review
-description: Use when reviewing CPU or memory performance findings; index of per-scenario decision rules for accepted patterns (lazy cleanup, mandatory .to_string() API, single-shot allocations, etc.).
+name: review-cpu-memory
+description: Review knowledge for cpu-memory, grouped by decision type.
 ---
 
-# CPU / Memory Performance Review
+# cpu-memory review knowledge
 
-## Files in this directory
+Read [routing and classification](../knowledge-routing.md) before adding or moving a rule.
+Search these pages by behavior, symbol, or finding ID; revalidate historical evidence
+before applying a decision to current code.
 
-| File | Purpose |
-|------|---------|
-| [performance-review-methodology.md](performance-review-methodology.md) | General decision methodology — trace call chain, distinguish phases, verify mechanism |
-| [not-a-performance-issue.md](not-a-performance-issue.md) | Legacy stub — contents split into `cases/`; maintained for link compatibility |
-| [cases/](cases/) | Individual per-scenario closed-case files (one decision rule per file) |
+## Intentional design
 
-## Quick routing
+- [AccessLogEntry::from_context Per-Request request_uri String Alloc (include_raw_uri=true) is Not Worth Fixing](intentional-design/access-log-request-uri-include-raw-uri-alloc.md)
+- [`AdminState::cache_get_resource` Full-List + Linear-Scan is Not a Performance Issue](intentional-design/admin-state-cache-get-resource-full-list-scan.md)
+- [Async response-body hook no-work gate requires production profiling](intentional-design/async-response-body-hook-profile-before-gate.md)
+- [conf_sync `CompressEvent` Per-Key `Vec<ResourceChange>` — DESIGN-TRADEOFF (won't-fix)](intentional-design/conf-sync-compress-event-vec-per-key.md)
+- [Configuration Struct Field Ordering Causing Padding Waste](intentional-design/config-struct-field-ordering-padding-waste.md)
+- [Control-Plane Status-Write Counter Handle Pre-Caching is Not Worth It](intentional-design/control-plane-status-write-counter-pre-caching.md)
+- [DSL VM step budget counts opcode dispatches, not CPU time (intentional)](intentional-design/dsl-step-budget-not-cpu-bound.md)
+- [HTTP/1 Captured Request-Body Second Copy — ACCEPTED TRADEOFF](intentional-design/h1-request-body-capture-bounded-second-copy.md)
+- [`invalid_rule_indices` `Vec::contains` Linear Scan in HTTP/gRPC Route Compile Loops is Not an Issue](intentional-design/invalid-rule-indices-vec-contains-config-load.md)
+- [OnceLock Global Singleton is Deliberate Design](intentional-design/oncelock-global-singleton-deliberate-design.md)
+- [Wasm shared data: no eviction, no cluster KV backend, process-local lifetime — DESIGN-TRADEOFF](intentional-design/wasm-shared-data-no-eviction-no-cluster-kv.md)
 
-- **Is this a general "is it a performance issue?" question?** → [performance-review-methodology.md](performance-review-methodology.md)
-- **Looking for a specific named scenario?** → see the case table below or search `cases/`
-- **Checking a finding against a known accepted tradeoff?** → find the matching row and load that file
+## Compatibility constraints
 
-Closed findings are recorded one-file-per-finding under the relevant `skills/04-review/<topic>/` directory; use `grep`/`ls` to find them.
+- [metrics label `.to_string()` is an API Hard Requirement](compatibility-constraints/metrics-label-to-string-api.md)
 
-## Case Index
+## Regression guards
 
-| File | Description |
-|------|-------------|
-| [`cases/h1-request-body-capture-bounded-second-copy.md`](cases/h1-request-body-capture-bounded-second-copy.md) | Pingora H1 captured chunks incur a real second copy during in-memory accumulation, but Edgion uses its own spill-capable buffer and bounds the default copy to roughly 128 KiB; segmented storage is deferred pending profiling evidence |
-| [`cases/metrics-label-to-string-api.md`](cases/metrics-label-to-string-api.md) | `.to_string()` in metrics recording functions — mandatory for `Cow<'static, str>` API |
-| [`cases/control-plane-status-write-counter-pre-caching.md`](cases/control-plane-status-write-counter-pre-caching.md) | Pre-caching Counter handles for `record_status_write` on controller plane — not worth it |
-| [`cases/get-raw-any-lookup-not-json-scan.md`](cases/get-raw-any-lookup-not-json-scan.md) | `get_raw_any` / `lookup_gateway` is O(1) DashMap lookup, not JSON serialize + scan |
-| [`cases/http-grpc-route-regex-matching-no-fallback.md`](cases/http-grpc-route-regex-matching-no-fallback.md) | Hot-path `Regex::new()` fallback in `match_header` / `match_query_param` — removed; no re-add |
-| [`cases/watcher-vec-lazy-cleanup.md`](cases/watcher-vec-lazy-cleanup.md) | `RwLock<Vec<WatchClient>>` lazy cleanup — sufficient; bounded < 20KB |
-| [`cases/webhook-read-then-truncate-16kb-cap.md`](cases/webhook-read-then-truncate-16kb-cap.md) | `read_body_limited` 1GB buffering claim — actual hard cap is 16KB |
-| [`cases/oncelock-global-singleton-deliberate-design.md`](cases/oncelock-global-singleton-deliberate-design.md) | `GLOBAL_CONFIG_CLIENT OnceLock` not releasing on reconnect — deliberate design |
-| [`cases/small-object-clones-reconcile-config-sync.md`](cases/small-object-clones-reconcile-config-sync.md) | Small-object clones / `config.clone()` on reconcile / config-sync paths — not per-request |
-| [`cases/oidc-jwt-claims-json-serialization-opt-in.md`](cases/oidc-jwt-claims-json-serialization-opt-in.md) | OIDC/JWT claims `serde_json::to_string` per request — serialization is the opt-in feature itself |
-| [`cases/extract-status-json-double-serialization-cold-path.md`](cases/extract-status-json-double-serialization-cold-path.md) | `extract_status_json` called twice in `process_resource_inner` — cold path + API shape |
-| [`cases/config-struct-field-ordering-padding-waste.md`](cases/config-struct-field-ordering-padding-waste.md) | Config struct field reorder for padding — field order is part of user-visible JSON schema |
-| [`cases/hashmap-new-default-capacity-reconcile-paths.md`](cases/hashmap-new-default-capacity-reconcile-paths.md) | `HashMap::new()` without `with_capacity` on `full_set` / reconcile paths — cold event-level, tiny scale |
-| [`cases/access-log-json-serialization-per-request.md`](cases/access-log-json-serialization-per-request.md) | `AccessLogEntry::to_json()` per-request String alloc — channel boundary shape requires owned String |
-| [`cases/access-log-request-uri-include-raw-uri-alloc.md`](cases/access-log-request-uri-include-raw-uri-alloc.md) | `AccessLogEntry::from_context` per-request URI String alloc under `include_raw_uri=true` — dwarfed by accepted `to_json()` alloc; proposed `entry_raw_uri` cache saves nothing |
-| [`cases/record-cross-ns-refs-write-lock-per-item.md`](cases/record-cross-ns-refs-write-lock-per-item.md) | `record_cross_ns_refs` one write lock per `backend_ref` — cold reconcile path, < 2.5 µs total |
-| [`cases/bidirectional-ref-manager-no-gc-not-memory-leak.md`](cases/bidirectional-ref-manager-no-gc-not-memory-leak.md) | `BidirectionalRefManager` / `SecretRefManager` lacking GC — it is an index, not a cache |
-| [`cases/workqueue-delay-heap-no-size-cap.md`](cases/workqueue-delay-heap-no-size-cap.md) | Workqueue `BinaryHeap<DelayedItem>` no explicit size cap — dedup by key + per-Kind bounds |
-| [`cases/conf-sync-watcher-mpsc-chain-not-backlog.md`](cases/conf-sync-watcher-mpsc-chain-not-backlog.md) | conf_sync watcher `mpsc(100)` × 3 layers — items are batches, not single events; end-to-end backpressure |
-| [`cases/status-diff-conditions-equal-on2-bounded.md`](cases/status-diff-conditions-equal-on2-bounded.md) | `conditions_equal` O(n²) scan — n ≤ 10; HashMap overhead exceeds linear scan benefit |
-| [`cases/admin-state-cache-get-resource-full-list-scan.md`](cases/admin-state-cache-get-resource-full-list-scan.md) | `cache_get_resource` full-list + linear-scan — admin/diagnostic path, bounded by human ops |
-| [`cases/conf-sync-compress-event-vec-per-key.md`](cases/conf-sync-compress-event-vec-per-key.md) | `CompressEvent` per-key `Vec<ResourceChange>` "unbounded / OOM / O(N) scan" — confirmed-real but won't-fix; control-plane, 1-byte enum, trivially bounded |
-| [`cases/udp-established-session-route-pipeline-per-packet.md`](cases/udp-established-session-route-pipeline-per-packet.md) | UDP `handle_client_packet` ran full route pipeline per packet for established sessions — FIXED (F-016) with a `client_sessions` fast-path |
-| [`cases/dsl-step-budget-not-cpu-bound.md`](cases/dsl-step-budget-not-cpu-bound.md) | DSL VM `max_steps` counts opcode dispatches, not CPU time — per-opcode CPU is bounded by `max_string_len` + per-regex DFA limit + per-builtin output caps; the four-cap product is the runtime CPU bound |
-| [`cases/gcir-stream-plugin-store-key-precompute.md`](cases/gcir-stream-plugin-store-key-precompute.md) | `GlobalConnectionIpRestrictionPlugin` per-connection `format!("{}/{}", ns, name)` in PM-store lookup — FIXED (F-008) by precomputing the key in `new()` and calling the `_by_key` getter on the accept path |
-| [`cases/routes-http-listener-manager-per-request-lookup.md`](cases/routes-http-listener-manager-per-request-lookup.md) | `pg_request_filter` per-request `get_or_create_listener_manager(&listener_key)` — DashMap shard write-lock + `ListenerKey(String)` clone on hot path — FIXED (F-001) by caching `Arc<HttpPortRouteManager>` / `Arc<GrpcPortRouteManager>` on `EdgionHttpProxy` at construction |
-| [`cases/adaptive-telemetry-reconcile-is-incremental.md`](cases/adaptive-telemetry-reconcile-is-incremental.md) | Adaptive telemetry partial reconciliation uses per-route contributions plus plugin/AI-service reverse indexes; it never scans the full HTTPRoute cache or runs under the route rebuild lock |
-| [`cases/domain-route-rules-inner-arcswap-removed.md`](cases/domain-route-rules-inner-arcswap-removed.md) | `DomainRouteRules` inner `ArcSwap` / `ArcSwapOption` fields paid 3 redundant per-request atomic loads — FIXED (F-003) by switching to plain `Arc` / `Option<Arc<…>>` because the outer `ArcSwap<DomainRouteRules>` already provides swap granularity |
-| [`cases/invalid-rule-indices-vec-contains-config-load.md`](cases/invalid-rule-indices-vec-contains-config-load.md) | HTTP/gRPC route compile loops call `Vec::contains` on `invalid_rule_indices` per rule — config-load path only, `|invalid|` is 0–1 in practice; HashSet conversion is the wrong shape for this cardinality |
-| [`cases/tcp-log-entry-status-debug-format-replaced.md`](cases/tcp-log-entry-status-debug-format-replaced.md) | `TcpLogEntry::from_context` per-connection `format!("{:?}", TcpStatus)` for a 12-variant unit enum — FIXED (observe-F012) by `TcpStatus::as_str(&self) -> &'static str` + locking test; the structural win is decoupling the access-log schema from the `Debug` impl |
-| [`cases/cli-http-client-idle-pool-disabled.md`](cases/cli-http-client-idle-pool-disabled.md) | `edgion-cli` outbound client set `pool_max_idle_per_host(0)`, re-handshaking per request across `get --all` pagination and multi-document `apply` — FIXED (EDG-CLI-002) with a small explicit bound of 2; reqwest's unbounded default and a tuning flag both rejected |
-| [`cases/oidc-callback-path-precomputed.md`](cases/oidc-callback-path-precomputed.md) | OIDC callback path parsed and normalized on every request — FIXED (gw-plugin-oidc-01) by caching it when the plugin is constructed |
+- [Adaptive telemetry reconciliation is route-contribution incremental](regression-guards/adaptive-telemetry-reconcile-is-incremental.md)
+- [AI runtime stores must report cache residue](regression-guards/ai-runtime-stores-must-report-residue.md)
+- [`edgion-cli` Outbound Client Idle Pool Disabled — FIXED (EDG-CLI-002)](regression-guards/cli-http-client-idle-pool-disabled.md)
+- [Controller ConfCenter stats use the canonical resource inventory](regression-guards/controller-confcenter-stats-canonical-inventory.md)
+- [`DomainRouteRules` Inner `ArcSwap` Fields Removed (REAL FIX)](regression-guards/domain-route-rules-inner-arcswap-removed.md)
+- [`url_encode` builds incrementally and bails on overflow (fixed)](regression-guards/dsl-url-encode-streaming-bail.md)
+- [`GlobalConnectionIpRestrictionPlugin` Per-Connection Store-Key `format!` — FIXED (F-008)](regression-guards/gcir-stream-plugin-store-key-precompute.md)
+- [Header-only HMAC condition verifier is prebuilt — FIXED (cl-05)](regression-guards/header-hmac-condition-verifier-prebuilt.md)
+- [Local Response Bodies Are Clone-cheap Immutable `Bytes` — FIXED](regression-guards/local-response-body-is-clone-cheap-bytes.md)
+- [LRU Expiration Maintenance Is a Bounded Ordered Index — FIXED](regression-guards/lru-bounded-expiration-index.md)
+- [OIDC Access-Token Cache Stores Expiry Only as TTL — FIXED](regression-guards/oidc-access-token-cache-ttl-only.md)
+- [OIDC callback path is precomputed — FIXED (gw-plugin-oidc-01)](regression-guards/oidc-callback-path-precomputed.md)
+- [Outlier ejection arbitrates only threshold candidates](regression-guards/outlier-ejection-arbitrates-only-threshold-candidates.md)
+- [`RequestMirrorPlugin` `reqwest::Client` Per-Plugin Instance — FIXED (F-017)](regression-guards/request-mirror-reqwest-client-per-plugin-instance.md)
+- [`RouteRules` Inner `RwLock` Fields Removed (REAL FIX)](regression-guards/route-rules-inner-rwlock-fields-removed.md)
+- [`record_backend_request` / `record_request_duration` per-request allocations](regression-guards/route-unit-metric-handles.md)
+- [`EdgionHttpProxy` Caches Per-Listener Route Manager `Arc`s (REAL FIX)](regression-guards/routes-http-listener-manager-per-request-lookup.md)
+- [`TcpLogEntry::from_context` Per-Connection `format!("{:?}", TcpStatus)` — FIXED (observe-F012)](regression-guards/tcp-log-entry-status-debug-format-replaced.md)
+- [UDP `handle_client_packet` Per-Packet Route Pipeline for Established Sessions — FIXED (F-016)](regression-guards/udp-established-session-route-pipeline-per-packet.md)
+- [Wasm guest amplifying host memory via unbounded retained ABI state — FIXED](regression-guards/wasm-abi-retention-budget.md)
+- [Wasm artifact response bodies buffered before the size check — FIXED (streaming cap)](regression-guards/wasm-artifact-response-streaming-cap.md)
+- [Zero Wasm OCI purge interval busy loop — FIXED (clamped to a 1s floor)](regression-guards/wasm-oci-purge-interval-zero-clamp.md)
+
+## Review evidence
+
+- [Access Log JSON Serialization Allocating a New String per Request is Not an Issue](review-evidence/access-log-json-serialization-per-request.md)
+- [`BidirectionalRefManager` Lacking GC / Expiry Mechanism is Not a Memory Leak](review-evidence/bidirectional-ref-manager-no-gc-not-memory-leak.md)
+- [conf_sync Watcher Three-Layer mpsc(100) Chain is Not a Backlog Issue](review-evidence/conf-sync-watcher-mpsc-chain-not-backlog.md)
+- [`extract_status_json` Double Serialization is Cold Path + API Shape](review-evidence/extract-status-json-double-serialization-cold-path.md)
+- [`get_raw_any` / `lookup_gateway` is Not JSON Serialization](review-evidence/get-raw-any-lookup-not-json-scan.md)
+- [`HashMap::new()` Default Capacity on Reconcile / Full-Sync Paths](review-evidence/hashmap-new-default-capacity-reconcile-paths.md)
+- [HTTP/gRPC Route Regex Matching: Controller Validates + No Fallback on Hot Path](review-evidence/http-grpc-route-regex-matching-no-fallback.md)
+- [Non-Memory-Leak Scenarios](review-evidence/not-a-memory-leak.md)
+- [OIDC / JWT Claims JSON Serialization is the Opt-In Feature Itself](review-evidence/oidc-jwt-claims-json-serialization-opt-in.md)
+- [CPU/Memory Performance Audit Methodology](review-evidence/performance-review-methodology.md)
+- [Route Handlers `record_cross_ns_refs` Loop `add_ref` is Not a Lock Hotspot](review-evidence/record-cross-ns-refs-write-lock-per-item.md)
+- [Small-Object Clones on Resource Reconcile / Config Sync Paths Are Not Issues](review-evidence/small-object-clones-reconcile-config-sync.md)
+- [`status_diff::conditions_equal` O(n²) Linear Scan on Bounded Condition Arrays is Not an Issue](review-evidence/status-diff-conditions-equal-on2-bounded.md)
+- [Watcher Vec Lazy Cleanup is Sufficient](review-evidence/watcher-vec-lazy-cleanup.md)
+- [Webhook Read-Then-Truncate Has a 16KB Hard Cap](review-evidence/webhook-read-then-truncate-16kb-cap.md)
+- [Workqueue Delay Heap Without Explicit Size Cap is Not an Issue](review-evidence/workqueue-delay-heap-no-size-cap.md)
+
+## Superseded decisions
+
+- [`IncludeCondition` / `ExcludeCondition` HashSet/Wildcard Bucket Split (plugins-runtime-F005)](superseded/conditions-hashset-wildcard-bucket-split.md)

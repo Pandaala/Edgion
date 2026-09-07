@@ -99,7 +99,7 @@ alert on `edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_e
 limitations: TLS 1.3 cipher suites
 cannot be restricted in BoringSSL (`TLS_CHACHA20_POLY1305_SHA256` still negotiable under FIPS), and
 upstream (gateway→backend) TLS cipher suites are not FIPS-restricted (pingora connector
-limitation). See `skills/04-review/edgion-tls/boring-v5-fips-build-verification.md` for the current
+limitation). See `skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md` for the current
 build and verification contract.
 
 ## Knowledge System
@@ -113,6 +113,32 @@ When a task needs project context, start from `skills/SKILL.md` and **load progr
 3. **Three-layer lookup**: To understand architecture → `01-architecture/`; to look up a feature / configuration schema → `02-features/`; to write code → `01-architecture/` (development guides) + `03-coding/`.
 4. **Resource-related tasks**: First go to `01-architecture/05-resources/SKILL.md` for the architecture documents, then to `02-features/` for the feature schema. You typically need to consult both sides.
 5. **`docs/` is not a starting point**: `docs/` targets human users; `skills/` targets AI agents and developers.
+
+### Review knowledge in everyday work
+
+Before proposing or implementing a behavior change, design change, or refactor,
+search [04-review](skills/04-review/SKILL.md) by owning function, behavior, and
+symbols. Load only relevant pages, following the
+[knowledge routing rules](skills/04-review/knowledge-routing.md).
+
+Treat retrieved conclusions as evidence to verify, not proof that a finding is
+false. Check their scope, assumptions, cited implementation, and re-evaluation
+triggers against current code and relevant tests. Historical test results are not
+fresh verification; a category or recorded verdict does not establish correctness.
+Superseded guidance cannot suppress a current defect.
+
+Distinguish intended requirements from observed behavior: current code may violate
+a valid rule, and a knowledge page may be stale or wrong. Resolve conflicts using
+the applicable project authority and concrete evidence; do not silently change a
+required invariant or infer acceptance from existing code. If the conflict remains
+unresolved, report it explicitly rather than closing the finding as a false positive.
+Correct confirmed knowledge errors in the owning page within the task's scope;
+track unrelated or unresolved discrepancies as follow-up work. Preserve useful
+historical evidence without presenting it as current guidance.
+
+Independent reviewers must read applicable repository rules and original knowledge
+pages themselves, and verify both the implementation and the knowledge conclusion.
+A parent-agent summary is a starting point, not a substitute for those sources.
 
 ### Task lifecycle
 
@@ -255,7 +281,7 @@ Deliberate, accepted exception to Rule 5:
   correctness, and it is self-limited: writes are gated on `status_changed`, so a
   steady-state relist of unchanged resources does zero writes and the loop is
   pure CPU. See
-  `skills/04-review/handler-requeue/worker-path-status-io-inline-accepted.md`.
+  `skills/04-review/handler-requeue/intentional-design/worker-path-status-io-inline-accepted.md`.
 
 Because handlers must tolerate delete→create coalescing (the queue dedups by
 key, so `on_delete` may never run for a recreated key), the apply path must

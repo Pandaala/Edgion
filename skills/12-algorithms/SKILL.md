@@ -37,7 +37,7 @@ placeholders — write the entry when you next touch that code.
 
 | Algorithm | Source | Doc |
 |---|---|---|
-| Power of Two Choices (P2C), distinct-index sampling | `edgion-gateway/src/lb/selection/p2c.rs` | see `04-review/lb/p2c-choice-count-fixed-at-two.md` |
+| Power of Two Choices (P2C), distinct-index sampling | `edgion-gateway/src/lb/selection/p2c.rs` | see `04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md` |
 | Time-decayed Peak-EWMA latency scoring | `edgion-gateway/src/lb/ewma/score.rs`, `edgion-gateway/src/lb/backend.rs` | [lb-peak-ewma.md](lb-peak-ewma.md) |
 | Provider overload penalty (429, or 503 + `Retry-After`, as a synthetic latency sample) | peak-only store shipped (`score.rs::observe_peak_only`, used by the 5xx path); no 429 caller written | [lb-overload-penalty.md](lb-overload-penalty.md) |
 | Consistent hashing ring (session affinity) | `edgion-gateway/src/lb/selection/consistent_hash.rs` | not yet written |

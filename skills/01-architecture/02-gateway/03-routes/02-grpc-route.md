@@ -117,7 +117,7 @@ Edgion honors the client-supplied `grpc-timeout` header end-to-end:
 5. Retry-decision sites (`pg_fail_to_connect`, `pg_error_while_proxy`, `pg_upstream_response_filter` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, so a tight client deadline blocks LB picks and circuit-breaker counter increments the caller has already given up on.
 6. `pg_upstream_peer` retry backoff bounds the sleep by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep; required so that a `retry.backoff` coarser than the client `grpc-timeout` cannot extend gateway work past the caller's deadline.
 
-Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-web*`). Malformed headers fall back to the route-level `request_timeout` (no behavior change). See `skills/04-review/h2-grpc/timeout-honored.md` for the decision context.
+Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-web*`). Malformed headers fall back to the route-level `request_timeout` (no behavior change). See `skills/04-review/h2-grpc/regression-guards/timeout-honored.md` for the decision context.
 
 ## Key source files
 

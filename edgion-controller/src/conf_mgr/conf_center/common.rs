@@ -434,7 +434,7 @@ pub(crate) fn ensure_expected_resource_version(current: &str, expected: Option<&
 /// wrapper above, so between the two this is where every storage path that
 /// evaluates the precondition locally arrives — the Kubernetes *delete* is the
 /// one exception, handing it to the API Server as `DeleteParams.preconditions`.
-/// See `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+/// See `skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md`.
 pub(crate) fn ensure_expected_resource_version_value(
     current: &Value,
     expected: Option<&str>,

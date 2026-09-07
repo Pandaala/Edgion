@@ -14,7 +14,7 @@ status: shipped (constants benchmark-gated)
 
 The `Ewma` LB policy scores each backend by a latency estimate and picks the lower of two
 P2C-sampled candidates. This entry covers the estimate itself, not the sampler
-(see [../04-review/lb/p2c-choice-count-fixed-at-two.md](../04-review/lb/p2c-choice-count-fixed-at-two.md) for P2C).
+(see [../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md](../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md) for P2C).
 
 ## What we run today
 
@@ -59,7 +59,7 @@ read():          ewma
 - `alpha` was a process-global `AtomicU32` percent value, default 20 (= 0.20).
   **Deleted** when the replacement landed — it had no production call site.
 - The blend widened to `u128` intermediates so an extreme sample could not overflow
-  (see [../04-review/lb/update-ewma-u128-intermediate.md](../04-review/lb/update-ewma-u128-intermediate.md)).
+  (see [../04-review/lb/superseded/update-ewma-u128-intermediate.md](../04-review/lb/superseded/update-ewma-u128-intermediate.md)).
 - `update` ran only on `FinalizeMode::Settle`; a retried attempt used `Discard` and
   contributed no sample. Both the modes and the type are gone.
 - `Settle` fired from `lb_runtime_cleanup` at request end.
@@ -368,7 +368,7 @@ These are correctness requirements, not style notes. Each has a failure mode tha
    grows the magnitude and biases a below-default backend **away** from neutral, inflating a
    fast backend's advantage. Decay-from-below is a first-class case here precisely because we
    decay toward `default_rtt` rather than toward 0. Same class of bug as
-   [../04-review/lb/update-ewma-u128-intermediate.md](../04-review/lb/update-ewma-u128-intermediate.md).
+   [../04-review/lb/superseded/update-ewma-u128-intermediate.md](../04-review/lb/superseded/update-ewma-u128-intermediate.md).
 4. **Saturate at both boundaries.** The store-side conversion to u32 µs must saturate, never
    `as u32`; the outstanding-load multiply must be `saturating_mul`.
 5. **Truncating fixed-point can freeze values near parity.** When `|v − default| * (1 − d) < 1`
@@ -440,7 +440,7 @@ provably the same measurement.
 ## Deliberately not doing (yet)
 
 Exposing `halfLife` / `defaultRtt` as `EdgionBackendTrafficPolicy` fields. This follows the
-precedent in [../04-review/lb/p2c-choice-count-fixed-at-two.md](../04-review/lb/p2c-choice-count-fixed-at-two.md): do not copy an upstream knob
+precedent in [../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md](../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md): do not copy an upstream knob
 into the CRD before benchmarks show operators need to turn it. Add the fields later if
 evidence appears.
 
@@ -546,8 +546,8 @@ worded accordingly.
 - Dependent task: `tasks/todo/retry-after-backend-selection-penalty.md` — the provider
   `Retry-After` penalty is sequenced **behind** this one and folds into this scalar; its design
   record is [lb-overload-penalty.md](lb-overload-penalty.md)
-- Sampler decision: [../04-review/lb/p2c-choice-count-fixed-at-two.md](../04-review/lb/p2c-choice-count-fixed-at-two.md)
-- Overflow guard: [../04-review/lb/update-ewma-u128-intermediate.md](../04-review/lb/update-ewma-u128-intermediate.md)
+- Sampler decision: [../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md](../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md)
+- Overflow guard: [../04-review/lb/superseded/update-ewma-u128-intermediate.md](../04-review/lb/superseded/update-ewma-u128-intermediate.md)
 - Tower: <https://tower-rs.github.io/tower/src/tower/load/peak_ewma.rs.html>
 - linkerd2-proxy balance: <https://github.com/linkerd/linkerd2-proxy/blob/a66af811/linkerd/proxy/balance/src/lib.rs>
 - linkerd2-proxy ewma: <https://github.com/linkerd/linkerd2-proxy/blob/a66af811/linkerd/ewma/src/lib.rs>

@@ -246,7 +246,7 @@ Cross-namespace EdgionConfigData refs require controller-side handling for the
    `RouteRules::find_backend_by_name` against the route's *compiled* backend view. Never scan
    `route_unit.rule.backend_refs` yourself: the schema view carries no `ref_denied`, so a hand-
    rolled scan silently accepts a denied target. See
-   [`skills/04-review/routing/denied-named-jump-fails-closed.md`](../../04-review/routing/denied-named-jump-fails-closed.md).
+   [`skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md`](../../04-review/routing/regression-guards/denied-named-jump-fails-closed.md).
 
 **Cross-namespace `allowRefs`/`denyRefs` — key semantics for operators:**
 A denied `allowRef` is deny-all fail-closed (whitelist intent preserved); a denied `denyRef` is
@@ -416,7 +416,7 @@ The internal implementation of `session.set_upstream_uri()` (`session_adapter::s
 1. `session_adapter::set_upstream_uri` (the wrapper, the rewrite-plugin entry).
 2. The `pg_upstream_peer::upstream_peer_http` single-point decision block (spec §14, writes the normalized final state to upstream).
 
-Both must immediately be followed by `ctx.uri_finalized = true`. Any third site is a violation — flag it during review; see `skills/04-review/uri-normalization/SKILL.md` Rule 2.
+Both must immediately be followed by `ctx.uri_finalized = true`. Any third site is a violation — flag it during review; see `skills/04-review/uri-normalization/mandatory-design/normalization-contract.md` Rule 2.
 
 **(v4) View decision for forwarding path to upstream** (relevant if your plugin influences upstream path selection):
 

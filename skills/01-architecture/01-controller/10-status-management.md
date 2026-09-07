@@ -181,7 +181,7 @@ One documented reason outside that helper: `HTTPRoute::update_status` builds its
 the whole route (`Accepted=False/UnsupportedValue`) it clears a stale True to
 False/`UnsupportedValue` instead of False/`AllRulesValid` — the generic "all rules are
 valid" wording would contradict the `Accepted=False` beside it. See
-`skills/04-review/routing/ai-rule-accepted-escalates-only-when-nothing-serves.md`.
+`skills/04-review/ai-routing/regression-guards/ai-rule-accepted-escalates-only-when-nothing-serves.md`.
 
 Flat-status resources already using that helper: `EdgionPlugins` and `EdgionStreamPlugins`
 (bad inline IpRestriction / GlobalConnectionIpRestriction profile CIDR entries) and

@@ -769,7 +769,7 @@ center:
 
 > **Note on `kinds: ["*"]` with `reload`:** using `*` is safe here because `reload` is a write-only action with no read surface. The wildcard-read prohibition applies to `get`, `list`, and `watch` only.
 
-> **Cross-reference:** this change also fixes review finding `controller-01` -- the federation path now routes through the Admin API authorization layer instead of a bare unauthenticated router. See `skills/04-review/architecture/fed-proxy-mtls-fail-close.md` for the prior mTLS fix and the new RBAC fix status.
+> **Cross-reference:** this change also fixes review finding `controller-01` -- the federation path now routes through the Admin API authorization layer instead of a bare unauthenticated router. See `skills/04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md` for the prior mTLS fix and the new RBAC fix status.
 
 > **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md` for authorization examples, security notes, and the kill-switch reference.
 

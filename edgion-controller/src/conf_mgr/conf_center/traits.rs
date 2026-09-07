@@ -272,7 +272,7 @@ pub trait CenterApi: Send + Sync {
     /// `None` makes the write unconditional and last-writer-wins — the
     /// documented contract for callers that send no precondition, not a legacy
     /// carve-out. See
-    /// `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+    /// `skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md`.
     async fn update_one_if_version(
         &self,
         kind: &str,
@@ -315,7 +315,7 @@ pub trait CenterApi: Send + Sync {
     /// documented contract for callers that send no precondition, not a legacy
     /// carve-out. The admin `wipe` handler (`api/wipe_handlers.rs`) deletes
     /// through the unconditional `delete_one` wrapper by design. See
-    /// `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+    /// `skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md`.
     async fn delete_one_if_version(
         &self,
         kind: &str,

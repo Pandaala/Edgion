@@ -108,7 +108,7 @@ are resolved through Kubernetes optimistic concurrency control rather than Serve
 On graceful shutdown, a leader best-effort releases the lease (`release_lease`: clears `holder_identity`
 and `renew_time` under the same OCC, bounded by 3 s) so a successor acquires on its next tick (~2 s)
 instead of waiting out the ~17 s lease expiry; on any failure the release falls back to natural expiry.
-See `skills/04-review/concurrency/leader-lease-release-on-shutdown.md` for the decision record.
+See `skills/04-review/concurrency/regression-guards/leader-lease-release-on-shutdown.md` for the decision record.
 
 **Memory ordering note**: writes to `is_leader` use `Ordering::Release`, reads use `Ordering::Acquire`,
 guaranteeing cross-thread happens-before semantics so that the status-write guard remains correct on weakly-ordered architectures (e.g. ARM/M1).

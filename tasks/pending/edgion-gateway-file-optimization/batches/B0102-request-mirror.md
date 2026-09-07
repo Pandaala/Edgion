@@ -7,7 +7,7 @@
 - Owned files: `edgion-gateway/src/plugins/http/request_mirror/{mirror_log.rs,mirror_state.rs,mod.rs,plugin.rs}`
 - Revalidated blobs: `mirror_log.rs` = `614c6bd3799087df5f6a005861f5dff224aaa3b0`; `mirror_state.rs` = `ebcb4250b652f3c33bb35605bead997162502843`; `mod.rs` = `021731c4b8931601209562ca3a746fd4037f18fc`; `plugin.rs` = `22253839b30c5e342bf9cedd9cce725964b3fbd3`
 - Supporting blob: `edgion-gateway/src/plugins/http/common/http_client.rs` = `0f3d4285a87715bc9afff2e5bdac6690902d80ef`
-- Implementation allow-list: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs`, `edgion-gateway/src/plugins/http/common/http_client.rs`, `skills/04-review/architecture/mirror-uses-separate-http-client-bypasses-lb-tls-policy.md`, `skills/01-architecture/00-common/05-unification-points.md`, and `skills/04-review/cpu-memory/cases/request-mirror-reqwest-client-per-plugin-instance.md`
+- Implementation allow-list: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs`, `edgion-gateway/src/plugins/http/common/http_client.rs`, `skills/04-review/request-mirror/intentional-design/mirror-uses-separate-http-client-bypasses-lb-tls-policy.md`, `skills/01-architecture/00-common/05-unification-points.md`, and `skills/04-review/cpu-memory/regression-guards/request-mirror-reqwest-client-per-plugin-instance.md`
 - Forbidden files: the other three owned files, resources, Controller, runtime/session/BodyStorage, backends and routing, other review knowledge, documentation, Cargo, every existing `edgion-tests/**` path, and protected user paths
 
 ## Analysis boundary

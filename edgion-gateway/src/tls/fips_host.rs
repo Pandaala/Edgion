@@ -7,7 +7,7 @@
 //! guardrail (a non-FIPS binary on a FIPS node is a WARN) and the `auto`
 //! default of the approved cipher/curve policy.
 //!
-//! See skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
+//! See skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md.
 //!
 //! Known limitation: under VM- or sandbox-isolated runtimes (Kata, Firecracker,
 //! gVisor) this file reflects the guest kernel, not the physical node. The read

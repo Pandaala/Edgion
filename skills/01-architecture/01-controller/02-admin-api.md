@@ -203,7 +203,7 @@ something this repository asserts or tests). Requiring the
 precondition here would make this API stricter than the API it mirrors, and in
 K8s mode the guarantee would be unenforceable anyway because `kubectl apply`
 writes the same CRD without passing through this API at all. See
-[`../../04-review/architecture/admin-api-write-precondition-opt-in.md`](../../04-review/architecture/admin-api-write-precondition-opt-in.md)
+[`../../04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md`](../../04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md)
 for the full decision.
 
 In non-K8s mode every persisted write must carry a **freshly allocated**
@@ -272,7 +272,7 @@ and LinkSys provider configurations — resources whose
 `config` subtree is preserved by the CRD and therefore not pruned
 by the API server or caught by `deny_unknown_fields` (see
 `skills/00-design-rules.md` and
-`skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
+`skills/04-review/resources/compatibility-constraints/serde-ignored-blind-spots-schema-walk-instead.md`
 for the full rationale). Requires the standard Admin API bearer token; no extra scope.
 
 Backed by `observe::unknown_fields_registry`, a keyed registry read from the same typed

@@ -5,7 +5,7 @@
 - Severity: medium
 - Discovered in: B0061, TokenBucket deny-balance correction
 - Category: testing
-- Closed by: `edgion-tests/tests/token_bucket_partial_refill_redis.rs`, registered in the integration runner; decision record [`skills/04-review/rate-limit/token-bucket-deny-branch-persists-balance.md`](../../../../skills/04-review/rate-limit/token-bucket-deny-branch-persists-balance.md). The canonical task file was deleted on close.
+- Closed by: `edgion-tests/tests/token_bucket_partial_refill_redis.rs`, registered in the integration runner; decision record [`skills/04-review/rate-limit/regression-guards/token-bucket-deny-branch-persists-balance.md`](../../../../skills/04-review/rate-limit/regression-guards/token-bucket-deny-branch-persists-balance.md). The canonical task file was deleted on close.
 
 ## Evidence
 Existing frozen Redis integration coverage does not exercise weighted TokenBucket partial refills across denied attempts. B0061 adds deterministic source-contract coverage, but a public real-Redis execution test is valuable for Lua state persistence and reply behavior.

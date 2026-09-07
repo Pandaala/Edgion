@@ -127,7 +127,7 @@ pub struct EdgionPluginsSpec {
 /// Deserialize-only mirror of [`EdgionPluginsSpec`], carrying every field
 /// except `unknown_fields` (which is derived by the walk, never present in
 /// the wire document). See
-/// `skills/04-review/architecture/serde-ignored-blind-spots-schema-walk-instead.md`
+/// `skills/04-review/resources/compatibility-constraints/serde-ignored-blind-spots-schema-walk-instead.md`
 /// for why this shadow exists: it lets `EdgionPluginsSpec` keep a derived
 /// `Serialize`/`JsonSchema` while `Deserialize` is hand-written to run the
 /// schema walk before the input is consumed.

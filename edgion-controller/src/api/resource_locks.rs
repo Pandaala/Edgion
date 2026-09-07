@@ -11,7 +11,7 @@
 //! they do not do is *require* it — that check short-circuits to `Ok(())` when the
 //! caller supplies no version, so a precondition-free write remains an
 //! unconditional last-writer-wins replace. That contract is deliberate; see
-//! `skills/04-review/architecture/admin-api-write-precondition-opt-in.md`.
+//! `skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md`.
 //!
 //! `lock_resource` hands out a per-`kind/namespace/name` async mutex that such
 //! writers hold for the duration of their read-modify-write / replace, so writes
@@ -41,7 +41,7 @@
 //!   - `namespaced_handlers::update_namespaced` (generic EdgionConfigData PUT,
 //!     which the Center region-route sync also routes through)
 //!
-//! See `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
+//! See `skills/04-review/concurrency/regression-guards/failover-read-modify-write-per-key-lock.md`.
 //!
 //! The map is keyed by `kind/namespace/name` and is bounded by the number of
 //! distinct resources ever locked; each entry is an empty `Mutex<()>`, so no

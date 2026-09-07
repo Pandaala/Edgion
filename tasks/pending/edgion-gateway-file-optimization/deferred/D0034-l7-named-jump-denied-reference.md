@@ -6,7 +6,7 @@
 - Discovered in: B0066, Canary audit
 - Category: correctness-security
 - Canonical task: completed and removed from `tasks/todo/` on 2026-09-05
-- Decision record: [`skills/04-review/routing/denied-named-jump-fails-closed.md`](../../../../skills/04-review/routing/denied-named-jump-fails-closed.md)
+- Decision record: [`skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md`](../../../../skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md)
 
 ## Evidence
 DynamicInternalUpstream validates its configured target through a raw Service kind/name/namespace scan that ignores `ref_denied`, so it can publish a denied internal jump and record Success. The HTTP upstream selector then treats every named-finder error, including `RefDenied`, as an ordinary named miss and falls through to weighted selection. A legal sibling can be selected after the plugin has reported success, or a denied weighted target can fail only later.

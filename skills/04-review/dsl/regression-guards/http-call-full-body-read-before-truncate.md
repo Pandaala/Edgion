@@ -1,0 +1,19 @@
+---
+name: http-call-full-body-read-before-truncate
+description: Read when reviewing DSL `http.call` response-body memory findings — `call_builtin_http` reads the full body via `resp.bytes().await` before truncating, `max_response_body_bytes` enforced only after buffering, `dsl_http_client()` has no `content_length` limit, large-response memory exhaustion (plugins-http-dsl-F007).
+knowledge_type: regression-guards
+---
+
+# DSL `http.call` full response-body read before truncation (plugins-http-dsl-F007)
+
+**Status / verdict**: fixed (plugins-http-dsl-F007, 2026-05-26)
+
+When reviewing DSL `http.call` findings of the form "`call_builtin_http` reads the full response body via `resp.bytes().await` before truncating / `max_response_body_bytes` is enforced only after the whole body is buffered / `dsl_http_client()` has no `content_length` limit / large-response memory exhaustion (plugins-http-dsl-F007)": **fixed (plugins-http-dsl-F007, 2026-05-26)**. `call_builtin_http` (`edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`) now reads via `resp.bytes_stream()`, accumulating into a `Vec` that stops at `max_response_body_bytes` (peak memory ≤ cap + one chunk), then `String::from_utf8_lossy`. Observable behavior is byte-identical to the old read-all-then-`[..cap]` truncation — DSL `http.call` *silently truncates* (it does not error like webhook's `ResponseTooLarge`), so **no `Content-Length` early-reject was added** (the first `cap` bytes are still needed, a CL short-circuit cannot help); a chunk read error still returns `failure_map()`. Same defect class as link-sys-F019 (webhook `stream_body_capped`) / `http_util::fetch_json_limited` (OIDC). Unit regression `test_http_call_caps_large_response_body`. Re-reports of the "full body buffered before truncation / no streaming read / add `content_length` to `dsl_http_client`" form are not accepted; verify `call_builtin_http` uses `resp.bytes_stream()` before re-reporting.
+
+## Historical resolution evidence: plugins-http-dsl-F007
+
+`call_builtin_http` (`edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`) read the **entire** response body via `resp.bytes().await` and only then truncated to `runtime.max_response_body_bytes` (default 1 MB). The shared `dsl_http_client()` (`runtime.rs`) sets only a per-call wall-clock timeout, no `content_length` cap, so a slow/large upstream (or, with the default `block_private_ips:false`, an attacker-reachable endpoint) could allocate the full body before the timeout fired or the post-read truncation ran — additive across concurrent `http.call`s → gateway-worker OOM. Fixed: the body is now read via `resp.bytes_stream()` accumulated into a `Vec` that stops the moment it reaches `max_response_body_bytes` (peak memory ≤ cap + one chunk), then `String::from_utf8_lossy`. Observable behavior is unchanged — the returned `body` field is byte-identical to the old "read-all-then-`[..cap]`" truncation (DSL `http.call` *silently truncates*, it does not error like webhook's `ResponseTooLarge`), and a chunk read error still returns `failure_map()` (preserving the all-or-nothing `resp.bytes()` semantics). No `Content-Length` early-reject was added (DSL truncates-and-returns, so a CL short-circuit cannot help — the first `cap` bytes are still needed). Same defect class as link-sys-F019 (webhook `stream_body_capped`) / `http_util::fetch_json_limited` (OIDC) / `all_endpoint_status::read_body_limited`. Unit regression `test_http_call_caps_large_response_body` (`tests/http_call_tests.rs`): loopback server returns 100 bytes, cap 4, script asserts `body == "AAAA"`. Re-reports of the "full body buffered before truncation / no streaming read / no `content_length` limit on `dsl_http_client`" form are not accepted; verify `call_builtin_http` uses `resp.bytes_stream()` before re-reporting.
+
+## Resolution references
+
+- `plugins-http-dsl-F007` — 2026-05-26.

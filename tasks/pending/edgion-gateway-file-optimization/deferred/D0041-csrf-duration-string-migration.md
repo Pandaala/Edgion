@@ -7,7 +7,7 @@
 - Category: schema-architecture
 - Depends on: B0070
 - Closed: 2026-09-05
-- Canonical record: [`skills/04-review/architecture/csrf-expires-integer-seconds-retained.md`](../../../../skills/04-review/architecture/csrf-expires-integer-seconds-retained.md)
+- Canonical record: [`skills/04-review/csrf/intentional-design/csrf-expires-integer-seconds-retained.md`](../../../../skills/04-review/csrf/intentional-design/csrf-expires-integer-seconds-retained.md)
 
 ## Outcome
 Migration rejected. `CsrfConfig.expires` stays a positive integer-second lifetime.

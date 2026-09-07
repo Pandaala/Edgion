@@ -72,7 +72,7 @@ spec:
 > (default `auto`: enabled when the host kernel reports FIPS mode via
 > `/proc/sys/crypto/fips_enabled`, or explicit `on`) — this is cipher-suite policy alignment
 > only, not a compliance claim. See
-> `skills/04-review/edgion-tls/boring-v5-fips-build-verification.md` for the current contract.
+> `skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md` for the current contract.
 
 ### TlsVersion Enum
 

@@ -299,7 +299,7 @@ true; `auto_ca` does not silently cancel that explicit choice.
 > the three ways forward (`auto_ca`, cert paths, or `skip_tls`). `skip_tls: true` is the
 > ONLY way to run this channel in plaintext, and it stays loud. The retired
 > `plaintext_default` metric reason is gone; alert on `reason="skip_tls"`.
-> Decision record: [skills/04-review/architecture/conf-sync-plaintext-default-observable.md](../../04-review/architecture/conf-sync-plaintext-default-observable.md).
+> Decision record: [skills/04-review/conf-sync/regression-guards/conf-sync-plaintext-default-observable.md](../../04-review/conf-sync/regression-guards/conf-sync-plaintext-default-observable.md).
 
 ### Shared TLS layer
 

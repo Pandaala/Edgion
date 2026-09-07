@@ -33,7 +33,7 @@
 //!
 //! This is a deliberate design tradeoff (no state = no cross-request coordination cost). For
 //! audits and user documentation see the "Important Notes" section of the user guide and the
-//! `skills/04-review/rate-limit/bandwidth-limit-per-stream.md` decision record.
+//! `skills/04-review/rate-limit/intentional-design/bandwidth-limit-per-stream.md` decision record.
 
 use std::time::Duration;
 

@@ -4,7 +4,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 
 | Finding | Status | Canonical task |
 |---------|--------|----------------|
-| D0001 — Define complete ExternalName DNS cache identity and lifecycle | fixed (2026-09-03) | [resolution](../../../../skills/04-review/backends/externalname-dns-cache-identity-and-lifecycle.md) |
+| D0001 — Define complete ExternalName DNS cache identity and lifecycle | fixed (2026-09-03) | [resolution](../../../../skills/04-review/backends/regression-guards/externalname-dns-cache-identity-and-lifecycle.md) |
 | D0002 — Make EndpointSlice ownership transitions generation-safe | needs-discussion | [campaign finding](D0002-endpoint-slice-ownership-transitions.md) |
 | D0003 — Replace Gateway backend TLS identities authoritatively | needs-discussion | [campaign finding](D0003-gateway-backend-tls-authoritative-replacement.md) |
 | D0004 — Make health task/status generations cancellation-safe | needs-discussion | [campaign finding](D0004-health-task-status-generation-ownership.md) |
@@ -30,11 +30,11 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0024 — Unify Gateway request-template runtime policies | needs-discussion | [campaign finding](D0024-unify-gateway-request-template-runtime.md) |
 | D0025 — Make GeoIP lookup failures follow failure policy | fixed | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
 | D0026 — Enforce EdgionAcme HTTP-01 gatewayRef ownership | needs-discussion | [campaign finding](D0026-acme-http01-gatewayref-ownership.md) |
-| D0027 — Add ACME gatewayRef isolation integration coverage | closed (2026-09-06) | [review rule](../../../../skills/04-review/testing/acme-gatewayref-isolation-coverage-not-standalone.md) |
+| D0027 — Add ACME gatewayRef isolation integration coverage | closed (2026-09-06) | [review rule](../../../../skills/04-review/testing/intentional-design/acme-gatewayref-isolation-coverage-not-standalone.md) |
 | D0028 — Define the Redis rate-limiter numeric domain | needs-discussion | [campaign finding](D0028-redis-rate-limiter-numeric-domain.md) |
 | D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
 | D0030 — Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
-| D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/edgionplugins-lkg-identity-coverage-not-standalone.md) |
+| D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/intentional-design/edgionplugins-lkg-identity-coverage-not-standalone.md) |
 | D0032 — Add BackendTLSPolicy-aware AllEndpointStatus probes | needs-discussion | [campaign finding](D0032-all-endpoint-status-backend-tls-policy.md) |
 | D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | D0034 — Fail closed on denied L7 named jumps | resolved | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
@@ -42,11 +42,11 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0036 — Audit auth credential-copy lifetimes | needs-discussion | [campaign finding](D0036-auth-credential-copy-lifetime-audit.md) |
 | D0039 — Harden auth challenge realm quoted strings | needs-implementation | [campaign finding](D0039-auth-challenge-realm-quoted-string.md) |
 | D0040 — Unify CORS validation and header precomputation | needs-implementation | [campaign finding](D0040-cors-validation-header-precomputation.md) |
-| D0041 — Adjudicate CSRF duration-string migration | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/csrf-expires-integer-seconds-retained.md) |
-| D0042 — Add CSRF Secret-rotation integration coverage | fixed (2026-09-06) | [review rule](../../../../skills/04-review/csrf/csrf-secret-rotation-integration-coverage.md) |
+| D0041 — Adjudicate CSRF duration-string migration | accepted-tradeoff | [review rule](../../../../skills/04-review/csrf/intentional-design/csrf-expires-integer-seconds-retained.md) |
+| D0042 — Add CSRF Secret-rotation integration coverage | fixed (2026-09-06) | [review rule](../../../../skills/04-review/csrf/regression-guards/csrf-secret-rotation-integration-coverage.md) |
 | D0043 — Enforce exactly one CtxSet transform operation | needs-implementation | [campaign finding](D0043-ctx-set-exact-transform-operation.md) |
 | D0044 — Design sensitive ctx provenance and unmasking | needs-discussion | [campaign finding](D0044-ctx-sensitive-provenance-unmasking.md) |
-| D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/ssl/dynamic-external-upstream-sni-host-validation.md) |
+| D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/tls/regression-guards/dynamic-external-upstream-sni-host-validation.md) |
 | D0046 — Use canonical final HTTP status validation for local replies | needs-implementation | [campaign finding](D0046-final-http-status-validation-local-replies.md) |
 | D0047 — Align HmacAuth documentation with the runtime wire format | needs-implementation | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
 | D0048 — Use one EdgionConfigData snapshot per authorization decision | needs-discussion | [campaign finding](D0048-request-scoped-config-data-snapshot.md) |
@@ -80,14 +80,14 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
 | Promote BackendTLSPolicy handling atomically to v1 only | pending | [task](../../../todo/backend-tls-policy-v1-only-atomic-promotion.md) |
 | Publish Service backend traffic policy through one immutable snapshot | pending | [task](../../../todo/backend-traffic-policy-atomic-service-snapshot.md) |
-| Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/conf-sync-cert-watch-mtime-length-signature.md) |
+| Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/conf-sync/intentional-design/conf-sync-cert-watch-mtime-length-signature.md) |
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
 | Conf-Sync rotation transactional address selection | pending | [task](../../../todo/conf-sync-rotation-transactional-address-selection.md) |
-| Fail closed on denied L4 backend references | completed | [review rule](../../../../skills/04-review/routing/l4-backend-ref-denied-fail-closed.md) |
+| Fail closed on denied L4 backend references | completed | [review rule](../../../../skills/04-review/routing/regression-guards/l4-backend-ref-denied-fail-closed.md) |
 | Denied backendRef HTTP/gRPC parity and grant hot-reload | pending | [task](../../../todo/denied-backend-ref-parity-and-grant-hot-reload.md) |
 | Keep the load-balancer degrade-mode gauge current across lifecycle exits | pending | [task](../../../todo/lb-degrade-mode-metric-lifecycle.md) |
 | Capture Service runtime health state once per load-balancer selection | pending | [task](../../../todo/lb-selection-service-runtime-state-capture.md) |
-| Run mTLS whitelist verification once for the leaf certificate | completed | [review rule](../../../../skills/04-review/edgion-tls/mtls-leaf-only-whitelist-verification.md) |
+| Run mTLS whitelist verification once for the leaf certificate | completed | [review rule](../../../../skills/04-review/tls/regression-guards/mtls-leaf-only-whitelist-verification.md) |
 | Define typed mTLS allowed SAN semantics | pending | [task](../../../todo/mtls-typed-allowed-san-semantics.md) |
 | Make retry-budget generations and window rotation coherent | pending | [task](../../../todo/retry-budget-generation-and-window-coherence.md) |
 | SSE window strict residency and continuity | pending | [task](../../../todo/sse-window-strict-residency-and-continuity.md) |
@@ -97,23 +97,23 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Unify Gateway request-template runtime policies | pending | [task](../../../todo/unify-gateway-request-template-runtime/unify-gateway-request-template-runtime.md) |
 | Make GeoIP lookup failures follow failure policy | completed | [campaign finding](D0025-geoip-lookup-failure-policy.md) |
 | Enforce EdgionAcme HTTP-01 gatewayRef ownership | needs-discussion | [campaign finding](D0026-acme-http01-gatewayref-ownership.md) |
-| Add ACME gatewayRef isolation integration coverage | closed (2026-09-06) | [review rule](../../../../skills/04-review/testing/acme-gatewayref-isolation-coverage-not-standalone.md) |
+| Add ACME gatewayRef isolation integration coverage | closed (2026-09-06) | [review rule](../../../../skills/04-review/testing/intentional-design/acme-gatewayref-isolation-coverage-not-standalone.md) |
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
 | Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
 | Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
 | Add BackendTLSPolicy-aware AllEndpointStatus probes | pending | [task](../../../todo/add-all-endpoint-status-backend-tls-policy-support/add-all-endpoint-status-backend-tls-policy-support.md) |
 | Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
-| Fail closed on denied L7 named jumps | completed | [review rule](../../../../skills/04-review/routing/denied-named-jump-fails-closed.md) |
+| Fail closed on denied L7 named jumps | completed | [review rule](../../../../skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md) |
 | Add denied named-jump integration coverage | pending | [task](../../../todo/add-denied-named-jump-integration-coverage.md) |
 | Add borrowed Authorization header access | pending | [task](../../../todo/add-borrowed-authorization-header-access.md) |
 | Audit auth credential-copy lifetimes | pending | [task](../../../todo/audit-auth-credential-copy-lifetimes.md) |
 | Harden auth challenge realm quoted strings | pending | [task](../../../todo/harden-auth-challenge-realm-quoted-strings.md) |
 | Unify CORS validation and header precomputation | pending | [task](../../../todo/unify-cors-validation-and-header-precomputation.md) |
-| Adjudicate CSRF duration-string migration | accepted-tradeoff | [review rule](../../../../skills/04-review/architecture/csrf-expires-integer-seconds-retained.md) |
-| Add CSRF Secret-rotation integration coverage | fixed (2026-09-06) | [review rule](../../../../skills/04-review/csrf/csrf-secret-rotation-integration-coverage.md) |
+| Adjudicate CSRF duration-string migration | accepted-tradeoff | [review rule](../../../../skills/04-review/csrf/intentional-design/csrf-expires-integer-seconds-retained.md) |
+| Add CSRF Secret-rotation integration coverage | fixed (2026-09-06) | [review rule](../../../../skills/04-review/csrf/regression-guards/csrf-secret-rotation-integration-coverage.md) |
 | Enforce exactly one CtxSet transform operation | pending | [task](../../../todo/enforce-one-ctx-set-transform-operation.md) |
 | Design sensitive ctx provenance and unmasking | pending | [task](../../../todo/design-ctx-sensitive-provenance-unmasking.md) |
-| Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/ssl/dynamic-external-upstream-sni-host-validation.md) |
+| Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/tls/regression-guards/dynamic-external-upstream-sni-host-validation.md) |
 | Use canonical final HTTP status validation for local replies | pending | [task](../../../todo/use-canonical-final-http-status-validation-for-local-replies.md) |
 | Align HmacAuth documentation with the runtime wire format | completed | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
 | Use one EdgionConfigData snapshot per authorization decision | pending | [task](../../../todo/request-scoped-edgion-config-data-snapshot.md) |

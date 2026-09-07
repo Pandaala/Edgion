@@ -20,7 +20,7 @@ least able to serve it.
 
 This entry covers the signal and how it enters the score. The estimator it folds into is
 [lb-peak-ewma.md](lb-peak-ewma.md); the sampler is
-[../04-review/lb/p2c-choice-count-fixed-at-two.md](../04-review/lb/p2c-choice-count-fixed-at-two.md).
+[../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md](../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md).
 
 ## What we run today
 
@@ -234,7 +234,7 @@ The two benchmarks must be read together, and the penalty benchmark must state t
 
 Only the on/off switch is exposed as an `EdgionBackendTrafficPolicy` field, defaulting to off.
 The magnitudes stay hardcoded pending benchmarks, per the precedent in
-[../04-review/lb/p2c-choice-count-fixed-at-two.md](../04-review/lb/p2c-choice-count-fixed-at-two.md).
+[../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md](../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md).
 
 ## Contract
 
@@ -400,8 +400,8 @@ not the algorithm. Record which, and re-run against a per-replica limit before r
 - Task: `tasks/todo/retry-after-backend-selection-penalty.md`
 - **Prerequisite** task: `tasks/todo/time-decayed-peak-ewma-load-balancing.md`
 - Estimator: [lb-peak-ewma.md](lb-peak-ewma.md)
-- Sampler: [../04-review/lb/p2c-choice-count-fixed-at-two.md](../04-review/lb/p2c-choice-count-fixed-at-two.md)
-- Overflow precedent: [../04-review/lb/update-ewma-u128-intermediate.md](../04-review/lb/update-ewma-u128-intermediate.md)
+- Sampler: [../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md](../04-review/lb/intentional-design/p2c-choice-count-fixed-at-two.md)
+- Overflow precedent: [../04-review/lb/superseded/update-ewma-u128-intermediate.md](../04-review/lb/superseded/update-ewma-u128-intermediate.md)
 - Canonical parser: `edgion-common/src/time.rs::parse_retry_after` — accepts delay-seconds or
   HTTP-date, returns `Some(Duration::ZERO)` for a past date, and **clamps nothing**. Every
   bound above is the caller's responsibility.

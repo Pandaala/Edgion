@@ -328,7 +328,7 @@ fn test_url_decode() {
 // space. This is intentional and documented in api-reference.md §url_decode (Semantics +
 // Security warning) and in the BuiltinId::UrlDecode source comment. Mirrors the same
 // semantics used by edgion_resources::uri_utils::url_decode at the routing layer. See
-// skills/04-review/dsl-builtins/url-decode-form-semantics.md for the design lock.
+// skills/04-review/dsl/intentional-design/url-decode-form-semantics.md for the design lock.
 #[test]
 fn test_url_decode_plus_decodes_to_space_form_semantics() {
     assert_sets_request_header(r#"req.set_header("X-Out", url_decode("a+b"))"#, "X-Out", "a b");

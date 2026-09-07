@@ -98,6 +98,6 @@ For `DynamicTest` mode, new subdirectories (`initial_grouped/`, `updates_grouped
 | `HmacAuth` | `secret_groups` | [`../../04-review/hmac-auth/`](../../04-review/hmac-auth/) |
 | `JwtAuth` | `issuer_groups` | [`../../04-review/jwt-auth/`](../../04-review/jwt-auth/) |
 | `BasicAuth` | `secret_groups` | [`../../04-review/basic-auth/`](../../04-review/basic-auth/) |
-| `EdgionConfigData::KeyList` | `KeyGroup` | [`../../04-review/plugin-metadata/keylist-group-structure.md`](../../04-review/plugin-metadata/keylist-group-structure.md) |
+| `EdgionConfigData::KeyList` | `KeyGroup` | [`../../04-review/plugin-metadata/mandatory-design/keylist-group-structure.md`](../../04-review/plugin-metadata/mandatory-design/keylist-group-structure.md) |
 
 When adding a new grouped list, open a `skills/04-review/<plugin>/` directory and copy the `group-in-ok-log.md` + `dup-key-first-wins.md` templates from the closest existing instance.

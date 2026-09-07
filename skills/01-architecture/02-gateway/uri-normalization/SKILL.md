@@ -6,7 +6,7 @@ description: Authoritative document for URI normalization architecture — full-
 # URI normalization (Path Normalization)
 
 > Authoritative source: `docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-> Related review rules: [../../04-review/uri-normalization/SKILL.md](../../../04-review/uri-normalization/SKILL.md)
+> Related review rules: [../../04-review/uri-normalization/mandatory-design/normalization-contract.md](../../../04-review/uri-normalization/mandatory-design/normalization-contract.md)
 
 Edgion enforces path normalization at every request entry (cannot be disabled), eliminating gaps where path-class ACLs could be bypassed via percent-encoding / double slashes / dot-segments / path-parameters.
 

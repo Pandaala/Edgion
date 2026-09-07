@@ -87,7 +87,7 @@ When implementing a new builtin that can fail:
 1. **Does the script author have a way to validate input before calling?** If yes, lean toward `ApiError` (failure is genuinely exceptional). If no, lean toward silent fallback (failure is a normal data condition).
 2. **Is the failure deterministic from script-visible state?** Bad regex literal → compile error (handled). Bad runtime string → silent fallback. Host I/O failure → `ApiError`.
 3. **Will a chained `if x == nil` / `if x == false` idiom let the script handle it gracefully?** If yes, silent fallback. If no (e.g. `set_header` has no useful Value return), `ApiError`.
-4. **Will `Display::to_string()` ever be called on user data?** If yes, see [chrono-display-panic](../../04-review/dsl-builtins/chrono-display-panic.md) — use `write!` to surface fallible-formatter `Err` as `ApiError`, do not let it panic.
+4. **Will `Display::to_string()` ever be called on user data?** If yes, see [chrono-display-panic](../../04-review/dsl/regression-guards/chrono-display-panic.md) — use `write!` to surface fallible-formatter `Err` as `ApiError`, do not let it panic.
 5. **Does it access opaque request-body storage?** Keep normal data outcomes
    (`nil` / `false`) script-visible, but map storage, scan-budget, byte-range,
    and transactional mutation failures to `BodyAccess`.
@@ -96,7 +96,7 @@ After implementing, add a lock-in test to the appropriate file (mirroring the ex
 
 ## Cross-references
 
-- Panic-via-Display prevention rule → [chrono-display-panic](../../04-review/dsl-builtins/chrono-display-panic.md)
+- Panic-via-Display prevention rule → [chrono-display-panic](../../04-review/dsl/regression-guards/chrono-display-panic.md)
 - Engine architecture & error policy → `skills/01-architecture/02-gateway/dsl-engine.md`
 - User-facing function reference → `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
 - Test helpers → `edgion-gateway/src/plugins/http/dsl/tests/mod.rs`

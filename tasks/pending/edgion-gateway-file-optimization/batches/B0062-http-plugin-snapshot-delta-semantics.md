@@ -40,7 +40,7 @@
 - Code reviewer: `b0056_final_review`
 - Plan verdict: Approved after removing the ambiguous test-only API, narrowing two supporting files, and correcting the snapshot-coherence test design
 - Code verdict: Approved with no Must or Should findings; the reviewer confirmed the single-writer call chain, one-publication boundary, original/incoming Arc assertions, same-guard coherence, bounded stress, and exact supporting-file narrowness.
-- Deferred adjudication: D0030 records the nonduplicate cross-source EdgionPlugins identity design and the later source-to-reconnect scenario. D0031 is closed as not a standalone defect; see `skills/04-review/testing/edgionplugins-lkg-identity-coverage-not-standalone.md`. Existing integration tests remain frozen.
+- Deferred adjudication: D0030 records the nonduplicate cross-source EdgionPlugins identity design and the later source-to-reconnect scenario. D0031 is closed as not a standalone defect; see `skills/04-review/testing/intentional-design/edgionplugins-lkg-identity-coverage-not-standalone.md`. Existing integration tests remain frozen.
 
 ## Verification
 | Check group | Result | Important note only |

@@ -229,7 +229,7 @@ pub struct GatewayConfig {
     /// Accepts only `auto`/`on`/`off`. Also settable via `EDGION_FIPS_POLICY`
     /// (same three values), which takes precedence over this field. `None`
     /// means "not specified".
-    /// See skills/04-review/edgion-tls/boring-v5-fips-build-verification.md.
+    /// See skills/04-review/tls/regression-guards/boring-v5-fips-build-verification.md.
     #[arg(
         long = "fips-policy",
         value_name = "MODE",
