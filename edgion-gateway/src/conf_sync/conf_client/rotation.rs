@@ -1,68 +1,88 @@
-//! Rotates a gateway through its list of controller addresses to find the
-//! leader (spec §7.2/§7.5). The list is shuffled once per gateway at
-//! construction so a fleet does not hammer the same dead node first after a
-//! failover; backoff applies only after a full failed lap.
+//! Candidate traversal is separate from the installed channel. Only actual
+//! remote failures advance traversal; local preparation errors retain a candidate.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use rand::seq::SliceRandom;
 use rand::Rng;
 
-pub struct EndpointRotator {
+pub(crate) struct EndpointRotator {
     addrs: Vec<String>,
-    cursor: AtomicUsize,
-    lap_failures: AtomicUsize,
+    candidate: usize,
+    searching: bool,
+    failures: usize,
+    revision: u64,
+    paused_laps: usize,
 }
 
 impl EndpointRotator {
-    pub fn new(mut addrs: Vec<String>) -> Self {
+    pub(crate) fn new(mut addrs: Vec<String>) -> Self {
         addrs.shuffle(&mut rand::rng());
         Self {
             addrs,
-            cursor: AtomicUsize::new(0),
-            lap_failures: AtomicUsize::new(0),
+            candidate: 0,
+            searching: false,
+            failures: 0,
+            revision: 0,
+            paused_laps: 0,
         }
     }
 
-    /// True when there is at most one address — callers skip rotation entirely,
-    /// which is the K8s zero-impact guarantee (spec §10.5 S5/S6).
-    pub fn is_single(&self) -> bool {
+    pub(crate) fn is_single(&self) -> bool {
         self.addrs.len() <= 1
     }
 
-    pub fn current(&self) -> String {
-        self.addrs[self.cursor.load(Ordering::Acquire) % self.addrs.len()].clone()
+    pub(crate) fn address(&self, index: usize) -> &str {
+        &self.addrs[index]
     }
 
-    /// Move to the next address (a no-op address-wise for a one-element list),
-    /// recording one failure toward the current lap.
-    pub fn advance(&self) -> String {
-        if self.addrs.len() > 1 {
-            self.cursor.fetch_add(1, Ordering::AcqRel);
+    /// Count the failed installed attempt once, even when local preparation retries.
+    pub(crate) fn begin_search(&mut self, installed: usize) {
+        if !self.searching {
+            self.searching = true;
+            self.candidate = installed;
+            self.note_failure();
         }
-        self.lap_failures.fetch_add(1, Ordering::AcqRel);
-        self.current()
     }
 
-    /// Reset the lap-failure count ("stream established AND first event
-    /// received" — spec §7.5).
-    pub fn note_success(&self) {
-        self.lap_failures.store(0, Ordering::Release);
+    pub(crate) fn candidate(&self) -> (usize, u64) {
+        (self.candidate, self.revision)
     }
 
-    /// True once every address has failed since the last success.
-    pub fn completed_full_lap(&self) -> bool {
-        self.lap_failures.load(Ordering::Acquire) >= self.addrs.len()
+    pub(crate) fn matches(&self, index: usize, revision: u64) -> bool {
+        self.searching && self.candidate == index && self.revision == revision
     }
 
-    /// Jittered backoff, only meaningful after a full failed lap (spec §7.5):
-    /// grows with the number of completed failed laps, capped at 30s.
-    pub async fn backoff_after_lap(&self) {
-        let laps = (self.lap_failures.load(Ordering::Acquire) / self.addrs.len().max(1)).min(6) as u32;
-        let cap_ms = (500u64 << laps).min(30_000);
-        let ms = rand::rng().random_range(cap_ms / 2..=cap_ms);
-        tokio::time::sleep(Duration::from_millis(ms)).await;
+    pub(crate) fn note_failure(&mut self) {
+        self.failures = self.failures.saturating_add(1);
+        self.candidate = (self.candidate + 1) % self.addrs.len();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// A successful unary probe does not prove the metadata stream works.
+    pub(crate) fn installed(&mut self) {
+        self.searching = false;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub(crate) fn note_success(&mut self) {
+        self.failures = 0;
+        self.paused_laps = 0;
+        self.installed();
+    }
+
+    pub(crate) fn take_lap_delay(&mut self) -> Option<Duration> {
+        let laps = self.failures / self.addrs.len();
+        if laps <= self.paused_laps {
+            return None;
+        }
+        self.paused_laps = laps;
+        let cap = Self::lap_cap_ms(laps);
+        Some(Duration::from_millis(rand::rng().random_range(cap / 2..=cap)))
+    }
+
+    fn lap_cap_ms(laps: usize) -> u64 {
+        (500_u64 << laps.min(6)).min(30_000)
     }
 }
 
@@ -71,34 +91,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn single_address_never_rotates() {
-        let r = EndpointRotator::new(vec!["a:1".into()]);
-        assert!(r.is_single());
-        assert_eq!(r.current(), "a:1");
-        assert_eq!(r.advance(), "a:1"); // one element: advance is a no-op address-wise
+    fn local_failure_retains_candidate_and_count() {
+        let mut r = EndpointRotator::new(vec!["a".into(), "b".into()]);
+        r.begin_search(0);
+        let candidate = r.candidate();
+        r.begin_search(0);
+        assert_eq!(r.candidate(), candidate);
+        assert_eq!(r.failures, 1);
+        assert_eq!(candidate.0, 1);
+        assert!(r.take_lap_delay().is_none());
     }
 
     #[test]
-    fn multi_address_cycles_and_detects_full_lap() {
-        let r = EndpointRotator::new(vec!["a:1".into(), "b:1".into()]);
-        let first = r.current();
-        let second = r.advance();
-        assert_ne!(first, second);
-        let third = r.advance(); // wrapped
-        assert_eq!(third, first);
-        assert!(r.completed_full_lap(), "two advances over two addrs = a full lap");
+    fn two_failed_laps_back_off_once_each_and_cap() {
+        let mut r = EndpointRotator::new(vec!["a".into(), "b".into()]);
+        r.begin_search(0);
+        r.note_failure();
+        assert_eq!(r.candidate().0, 0);
+        let first = r.take_lap_delay().unwrap();
+        assert!((Duration::from_millis(500)..=Duration::from_millis(1000)).contains(&first));
+        assert!(r.take_lap_delay().is_none());
+        r.note_failure();
+        assert!(r.take_lap_delay().is_none());
+        r.note_failure();
+        let second = r.take_lap_delay().unwrap();
+        assert!((Duration::from_millis(1000)..=Duration::from_millis(2000)).contains(&second));
+        assert_eq!(EndpointRotator::lap_cap_ms(100), 30_000);
         r.note_success();
-        assert!(!r.completed_full_lap());
+        assert_eq!(r.failures, 0);
+        assert!(r.take_lap_delay().is_none());
     }
 
     #[test]
-    fn shuffle_preserves_the_address_set() {
+    fn successful_probe_does_not_reset_meta_failures() {
+        let mut r = EndpointRotator::new(vec!["a".into(), "b".into()]);
+        r.begin_search(0);
+        let ticket = r.candidate();
+        r.installed();
+        assert!(!r.matches(ticket.0, ticket.1));
+        r.begin_search(1);
+        assert!(r.take_lap_delay().is_some(), "failed metadata completed a lap");
+    }
+
+    #[test]
+    fn shuffle_preserves_addresses_and_single_stays_single() {
         let addrs: Vec<String> = (0..8).map(|i| format!("addr-{i}:1")).collect();
         let r = EndpointRotator::new(addrs.clone());
-        let mut seen: Vec<String> = (0..8).map(|_| r.advance()).collect();
+        let mut seen = r.addrs;
         seen.sort();
-        let mut expect = addrs;
-        expect.sort();
-        assert_eq!(seen, expect, "one full lap visits every address exactly once");
+        assert_eq!(seen, addrs);
+        let r = EndpointRotator::new(vec!["a".into()]);
+        assert!(r.is_single());
+        assert_eq!(r.address(0), "a");
     }
 }

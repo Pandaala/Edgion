@@ -43,4 +43,9 @@ Notes:
 
 **Already applied**: `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs::start_watch` (2026-05-28, conf-sync F-003) — both the `list_and_reset` block and the watch block were refactored from `let mut client_guard = grpc_client.write().await; let client = client_guard.as_mut().unwrap();` (held across `list` RPC and the entire watch stream lifetime, respectively) to the clone-and-drop pattern above. `ConfigSyncClientService<Channel>` is the tonic-generated client and is cheaply cloneable.
 
-**When to re-report**: only if a new code path holds an async write/read guard across a network call AND the client type cannot be cloned AND the lock has live readers/writers other than the current task. Pure init-only single-writer cases still deserve the cleanup but can be filed as `Severity: Low`, not as a bug.
+**When to re-report**: a current path holds an async lock across a network round-trip,
+contrary to the graded design rule. A cloneable client supports the canonical fix;
+it is not a reason to suppress the finding. Check actual scope and contention when
+assessing severity, but do not require non-cloneability or an observed waiter to
+recognize the rule violation. The historical benign-case discussion above does not
+override the current no-lock-across-RPC requirement in `skills/00-design-rules.md`.

@@ -149,11 +149,38 @@ The probe port is intentionally **not** added to the gateway Service; kubelet pr
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `server_addrs` | `Array<String>` | **Required** | Controller conf_sync gRPC addresses, e.g. `["http://127.0.0.1:12151"]`. One address is exactly the previous single-address behavior; multiple addresses enable etcd-mode HA — the gateway rotates through the list to find the leader and fails over on `kill`/demotion. `--server-addr` is repeatable on the CLI |
+| `server_addrs` | `Array<String>` | **Required** | Controller conf_sync gRPC addresses, e.g. `["http://127.0.0.1:12151"]`. A single address reconnects in place; multiple addresses enable candidate probing and failover according to the Controller's serving mode. See [Controller failover](#controller-failover). `--server-addr` is repeatable on the CLI |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback (`127.0.0.1:12001`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 12001:12001`. |
 | `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
 | `geoip` | `GeoIpConfig` | *(empty — no `db_path`)* | GeoIP database + updater settings, used by the `GeoIpLocation` plugin (HTTP `EdgionPlugin` and L4 `EdgionStreamPlugin`, one config shape). **Must be nested under `gateway:`** — see [GeoIP Restriction](../gateway/geoip.md) for the full field reference and required pitfalls. |
+
+### Controller failover
+
+With multiple `server_addrs`, the Gateway shuffles the list once and keeps one
+active configuration-sync session. When that session fails, it probes candidates
+on demand and switches only after a candidate answers `GetServerInfo` successfully.
+It reuses the verified channel for synchronization. A reachable Controller that
+cannot currently serve configuration is not selected: leader-only deployments
+require the serving leader, while all-serve deployments may use any ready replica.
+The Controller enforces this eligibility; a successful probe does not reserve its
+leadership or guarantee that the following stream will succeed.
+
+Every configured address is checked for valid gRPC URI syntax at startup. An
+invalid entry fails startup even if another entry is usable; fix the address list
+before restarting. This check does not require the remote endpoints to be online.
+
+Unavailable candidates do not replace the installed channel. Recovery walks the
+address list, including the original address, and backs off after complete failed
+remote laps. Local certificate/channel preparation errors preserve the candidate
+for retry. The Gateway continues using its existing configuration during recovery;
+a new Gateway still needs its initial configuration before it can serve traffic.
+With one address, it reconnects to that address without endpoint rotation.
+
+Certificate reload rebuilds the currently installed address with validated local
+material, even when the Controller is unreachable. A concurrent probe made against
+an older connection generation cannot overwrite that reload. No additional health
+RPC, persistent standby fleet, or operator setting is required.
 
 ### Gateway admin API authentication
 

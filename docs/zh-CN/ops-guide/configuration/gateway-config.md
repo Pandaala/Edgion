@@ -148,10 +148,30 @@ Gateway 采用**三端口模型**：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `server_addrs` | `Array<String>` | **必填** | Controller conf_sync gRPC 地址列表，如 `["http://127.0.0.1:12151"]`。单地址与旧版单地址行为完全一致；多地址启用 etcd 模式 HA，Gateway 会在列表中轮转寻找 leader 并在故障时切换。CLI 的 `--server-addr` 可重复传递 |
+| `server_addrs` | `Array<String>` | **必填** | Controller conf_sync gRPC 地址列表，如 `["http://127.0.0.1:12151"]`。单地址原地重连；多地址按 Controller 的服务模式探测候选并切换，见 [Controller 故障切换](#controller-故障切换)。CLI 的 `--server-addr` 可重复传递 |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:12001`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 12001:12001`。 |
 | `probe_listen` | `String` | `0.0.0.0:12000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
 | `geoip` | `GeoIpConfig` | *(空——未设置 `db_path`)* | GeoIP 数据库与更新器配置，供 `GeoIpLocation` 插件使用（HTTP `EdgionPlugin` 和 L4 `EdgionStreamPlugin` 共用同一套配置结构）。**必须嵌套在 `gateway:` 下**——完整字段参考及必读的坑见 [GeoIP 地理限制](../gateway/geoip.md)。 |
+
+### Controller 故障切换
+
+配置多个 `server_addrs` 时，Gateway 会在启动时随机打乱列表，并保持一套当前配置同步会话。
+当前会话异常后，Gateway 按需探测候选节点，只有候选成功响应 `GetServerInfo` 才切换，
+并沿用已经验证的通道进行同步。能够连接但暂时不能提供配置的 Controller 不会被选中：
+leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署可使用任意就绪副本。
+服务资格由 Controller 执行检查；探测成功不代表获得领导权租约，也不保证后续流一定成功。
+
+启动时会检查全部地址的 gRPC URI 语法。即使其他地址可用，无效地址也会导致启动失败；
+修正地址列表后再启动。此项检查不要求远端节点在线。
+
+不可用的候选不会替换当前已安装通道。恢复过程遍历地址列表，也会重新尝试原地址，
+在完整一圈远端尝试失败后退避。本地证书或通道准备失败会保留候选，等待后重试。
+恢复期间 Gateway 继续使用已有配置；新启动的 Gateway 仍需完成初始配置同步后才能服务。
+只有一个地址时，Gateway 重连该地址，不执行端点轮转。
+
+证书重载使用本地验证通过的新材料重建当前已安装地址，即使 Controller 暂时不可达也可完成。
+并发探测若属于旧连接代次，其结果不能覆盖此次重载。无需新增健康检查 RPC、常驻备用连接，
+也无需增加配置项。
 
 ### conf_sync_security
 

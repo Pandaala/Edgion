@@ -1,5 +1,6 @@
 use crate::conf_sync::conf_client::cert_watch::CertPaths;
-use crate::conf_sync::conf_client::{ConfigClient, EndpointRotator};
+use crate::conf_sync::conf_client::rotation::EndpointRotator;
+use crate::conf_sync::conf_client::ConfigClient;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
@@ -61,41 +62,88 @@ fn mark_confsync_connected() {
     );
 }
 
-/// gRPC conf_client for ConfigSync service
+/// One coherent installed transport generation. Candidates never mutate it.
+struct InstalledChannel {
+    address: String,
+    index: usize,
+    client: ConfigSyncClientService<Channel>,
+    generation: Arc<CancellationToken>,
+}
+
+/// The finite publisher is Arc-owned so caller cancellation cannot interrupt a
+/// sequence of cache-client replacements. No RPC runs under the swap lock.
+struct ChannelManager {
+    installed: ArcSwap<InstalledChannel>,
+    config_client: Arc<ConfigClient>,
+    swap_lock: tokio::sync::Mutex<EndpointRotator>,
+}
+
+impl ChannelManager {
+    fn is_current(&self, expected: &Arc<InstalledChannel>) -> bool {
+        Arc::ptr_eq(&self.installed.load_full(), expected)
+    }
+
+    async fn publish_locked(
+        &self,
+        address: String,
+        index: usize,
+        client: ConfigSyncClientService<Channel>,
+        rotator: &mut EndpointRotator,
+    ) -> Arc<InstalledChannel> {
+        let old = self.installed.load_full();
+        self.config_client.set_all_grpc_clients(client.clone()).await;
+        let generation = Arc::new(CancellationToken::new());
+        let installed = Arc::new(InstalledChannel {
+            address,
+            index,
+            client,
+            generation: generation.clone(),
+        });
+        self.installed.store(installed.clone());
+        rotator.installed();
+        super::set_global_reload_generation(generation);
+        old.generation.cancel();
+        installed
+    }
+
+    async fn commit(
+        self: &Arc<Self>,
+        expected: Arc<InstalledChannel>,
+        index: usize,
+        revision: u64,
+        client: ConfigSyncClientService<Channel>,
+    ) -> anyhow::Result<Option<Arc<InstalledChannel>>> {
+        let manager = self.clone();
+        // Dropping this JoinHandle does not abort a partially completed commit.
+        tokio::spawn(async move {
+            let mut rotator = manager.swap_lock.lock().await;
+            if !manager.is_current(&expected) || !rotator.matches(index, revision) {
+                return None;
+            }
+            let address = rotator.address(index).to_owned();
+            Some(manager.publish_locked(address, index, client, &mut rotator).await)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("conf_sync channel publisher failed: {error}"))
+    }
+}
+
+enum RecoveryOutcome {
+    Installed(ServerInfoResponse),
+    Retry { error: anyhow::Error, local: bool },
+    Superseded,
+}
+
+/// gRPC conf_client for ConfigSync service.
 pub struct ConfigSyncClient {
     config_client: Arc<ConfigClient>,
-    /// Swappable service handle. Held behind `ArcSwap` so `reload_client_tls`
-    /// can atomically install a channel built on freshly-rotated certs without
-    /// tearing down the client (spec §6 T4: WatchServerMeta must not retry a
-    /// retired TLS config forever).
-    conf_client_handle: ArcSwap<ConfigSyncClientService<Channel>>,
-    /// Client ID for WatchServerMeta registration
+    channels: Arc<ChannelManager>,
     client_id: String,
-    /// Client name for WatchServerMeta registration
     client_name: String,
-    /// Reload-generation token. Cancelled on each reload so the WatchServerMeta
-    /// loop breaks out and reconnects on the new channel. Kept in lockstep with
-    /// the process-global token in `conf_client/mod.rs` (which the per-kind
-    /// watch loops read).
-    reload_generation: ArcSwap<CancellationToken>,
-    /// Cert file paths for rebuilding the channel on cert rotation. `None` when
-    /// the channel is plaintext / `skip_tls` (nothing to reload). The address
-    /// deliberately does NOT live here (spec §7.4 H1: a cert reload must rebuild
-    /// on the CURRENT address, not the boot-time one).
     client_tls: Option<CertPaths>,
-    /// The address the installed channel points at. Written only by
-    /// `install_channel` (under `swap_lock`).
-    current_addr: ArcSwap<String>,
-    /// Rotates through `server_addrs` to find the leader (spec §7.2). A
-    /// one-element list never advances — the K8s zero-impact guarantee.
-    rotator: Arc<EndpointRotator>,
-    /// Whether the channel uses TLS (fixed by the security config at startup).
     use_tls: bool,
-    /// Per-request/connect timeout captured for channel rebuilds.
     timeout: Duration,
-    /// Serializes channel swaps: cert reload and rotation are two writers to the
-    /// same channel slots and must not interleave (spec §7.4 H3).
-    swap_lock: tokio::sync::Mutex<()>,
+    single_address: bool,
 }
 
 impl ConfigSyncClient {
@@ -120,8 +168,17 @@ impl ConfigSyncClient {
 
         // Shuffled per gateway (spec §7.5); the initial channel points at the
         // rotator's current address.
-        let rotator = Arc::new(EndpointRotator::new(server_addrs.clone()));
-        let initial_addr = rotator.current();
+        let rotator = EndpointRotator::new(server_addrs.clone());
+        let initial_addr = rotator.address(0).to_owned();
+        let single_address = rotator.is_single();
+        // URI syntax is immutable configuration. Reject it at startup rather
+        // than permanently retrying a malformed candidate during recovery.
+        for address in &server_addrs {
+            tonic::transport::Endpoint::from_shared(build_grpc_uri(
+                address,
+                security.resolve_active_tls().is_some_and(|tls| !tls.skip_tls),
+            ))?;
+        }
 
         let tls_config = security.resolve_active_tls();
         let use_tls = tls_config.is_some_and(|t| !t.skip_tls);
@@ -220,114 +277,170 @@ impl ConfigSyncClient {
         let generation = Arc::new(CancellationToken::new());
         super::set_global_reload_generation(generation.clone());
 
+        let channels = Arc::new(ChannelManager {
+            installed: ArcSwap::from_pointee(InstalledChannel {
+                address: initial_addr,
+                index: 0,
+                client,
+                generation,
+            }),
+            config_client: config_client.clone(),
+            swap_lock: tokio::sync::Mutex::new(rotator),
+        });
         Ok(Self {
             config_client,
-            conf_client_handle: ArcSwap::from_pointee(client),
+            channels,
             client_id,
             client_name,
-            reload_generation: ArcSwap::new(generation),
             client_tls: client_tls_reload,
-            current_addr: ArcSwap::from_pointee(initial_addr),
-            rotator,
             use_tls,
             timeout,
-            swap_lock: tokio::sync::Mutex::new(()),
+            single_address,
         })
     }
 
-    /// Rotate the reload-generation token: cancel the current one (so every
-    /// running watch loop selecting on it breaks out) and install a fresh
-    /// never-cancelled token in both the instance field and the process-global.
-    /// Factored out of `reload_client_tls` so it can be unit-tested directly.
-    fn rotate_generation(&self) {
-        // Instance and global point at the same Arc, so one cancel is enough.
-        self.reload_generation.load().cancel();
-        let new_token = Arc::new(CancellationToken::new());
-        self.reload_generation.store(new_token.clone());
-        super::set_global_reload_generation(new_token);
-    }
-
-    /// Build and install a channel for `addr` — the ONE channel-swap primitive
-    /// shared by cert reload, rotation, and bootstrap (spec §7.2).
-    ///
-    /// Rebuilds TLS from the configured cert paths (validated on every call) or
-    /// plaintext when none are configured, then installs in the fixed order:
-    /// (1) `set_all_grpc_clients` stores the new channel in every per-kind
-    /// cache's client slot; (2) store the new handle for `get_server_info` /
-    /// the meta stream; (3) `rotate_generation` LAST — and ONLY when the address
-    /// actually changed or the caller forces it (a cert reload must recycle
-    /// streams on the same address; a same-address rotation no-op must NOT
-    /// disturb the 18 per-kind loops — the K8s zero-impact rule, spec §10.5 S6).
-    /// The whole body holds `swap_lock` so the two writers (cert reload and
-    /// rotation) cannot interleave (spec §7.4 H3). On any error the current
-    /// channel is left untouched.
-    pub(crate) async fn install_channel(&self, addr: &str, force_generation: bool) -> anyhow::Result<()> {
-        let _guard = self.swap_lock.lock().await;
-        let addr_changed = addr != self.current_addr.load().as_str();
-
-        let tls_opt = match &self.client_tls {
-            Some(paths) => {
-                let (cert, key, ca) = crate::conf_sync::conf_client::cert_watch::read_and_validate(paths).await?;
-                Some(
-                    ClientTlsConfig::new()
-                        .ca_certificate(tonic::transport::Certificate::from_pem(ca))
-                        .identity(tonic::transport::Identity::from_pem(cert, key)),
-                )
+    /// Probe a replacement without disturbing the installed channel. Both the
+    /// installed snapshot and traversal ticket fence asynchronous results.
+    async fn recover_step(&self, expected: Arc<InstalledChannel>) -> anyhow::Result<RecoveryOutcome> {
+        if self.single_address || !self.channels.is_current(&expected) {
+            return Ok(RecoveryOutcome::Superseded);
+        }
+        let (index, revision, address, delay) = {
+            let mut rotator = self.channels.swap_lock.lock().await;
+            if !self.channels.is_current(&expected) {
+                return Ok(RecoveryOutcome::Superseded);
             }
-            // Plaintext / skip_tls: rotation must still work (spec §7.2) — most
-            // non-K8s dev/test deployments run conf_sync in plaintext.
-            None => None,
+            rotator.begin_search(expected.index);
+            let (index, revision) = rotator.candidate();
+            (
+                index,
+                revision,
+                rotator.address(index).to_owned(),
+                rotator.take_lap_delay(),
+            )
         };
-        let uri = build_grpc_uri(addr, self.use_tls);
-        let channel = build_channel(&uri, self.timeout, tls_opt)?;
-        let new_client = ConfigSyncClientService::new(channel);
-
-        // (1) Point every per-kind cache at the new channel BEFORE cancelling, so
-        // a loop that breaks re-clones the new client, never the retired one.
-        self.config_client.set_all_grpc_clients(new_client.clone()).await;
-        // (2) Install the new handle for get_server_info / WatchServerMeta.
-        self.conf_client_handle.store(Arc::new(new_client));
-        self.current_addr.store(Arc::new(addr.to_string()));
-        // (3) Cancel the old generation LAST → running loops break and reconnect.
-        if force_generation || addr_changed {
-            self.rotate_generation();
+        if let Some(delay) = delay {
+            tokio::select! {
+                biased;
+                _ = expected.generation.cancelled() => return Ok(RecoveryOutcome::Superseded),
+                _ = tokio::time::sleep(delay) => {}
+            }
         }
-        Ok(())
-    }
-
-    /// Advance the rotator and re-point the channel at the next address
-    /// (spec §7.2). Always records the failure (for lap/backoff accounting);
-    /// with a single configured address the channel is never touched — the K8s
-    /// deployment cannot rotate anywhere (spec §10.5 S5).
-    pub(crate) async fn rotate(&self) -> anyhow::Result<()> {
-        let next = self.rotator.advance();
-        if self.rotator.is_single() {
-            return Ok(());
+        let prepared = tokio::select! {
+            biased;
+            _ = expected.generation.cancelled() => return Ok(RecoveryOutcome::Superseded),
+            result = prepare_client(&address, self.use_tls, self.timeout, self.client_tls.as_ref()) => result,
+        };
+        let mut client = match prepared {
+            Ok(client) => client,
+            Err(error) => {
+                let rotator = self.channels.swap_lock.lock().await;
+                if !self.channels.is_current(&expected) || !rotator.matches(index, revision) {
+                    return Ok(RecoveryOutcome::Superseded);
+                }
+                return Ok(RecoveryOutcome::Retry { error, local: true });
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            _ = expected.generation.cancelled() => return Ok(RecoveryOutcome::Superseded),
+            result = request_server_info(&mut client, self.timeout) => result,
+        };
+        match result {
+            Ok(info) => match self.channels.commit(expected, index, revision, client).await? {
+                Some(installed) if self.channels.is_current(&installed) => Ok(RecoveryOutcome::Installed(info)),
+                _ => Ok(RecoveryOutcome::Superseded),
+            },
+            Err(error) => {
+                let mut rotator = self.channels.swap_lock.lock().await;
+                if !self.channels.is_current(&expected) || !rotator.matches(index, revision) {
+                    return Ok(RecoveryOutcome::Superseded);
+                }
+                rotator.note_failure();
+                Ok(RecoveryOutcome::Retry {
+                    error: error.into(),
+                    local: false,
+                })
+            }
         }
-        tracing::info!(component = "grpc_client", next_addr = %next, "rotating conf_sync channel");
-        self.install_channel(&next, false).await
     }
 
-    /// The rotator (bootstrap and the meta-stream coordinator share it).
-    pub(crate) fn rotator(&self) -> Arc<EndpointRotator> {
-        self.rotator.clone()
+    /// Bootstrap uses the same candidate probe and transaction as runtime
+    /// recovery. Every initial request or candidate preparation consumes one of
+    /// the twenty attempts; successful candidate info is returned without redial.
+    pub async fn bootstrap_server_info(&self) -> anyhow::Result<ServerInfoResponse> {
+        const MAX_ATTEMPTS: usize = 20;
+        let mut failed: Option<Arc<InstalledChannel>> = None;
+        let mut last_error = anyhow::anyhow!("No conf_sync controller attempt completed");
+        for attempt in 0..MAX_ATTEMPTS {
+            if let Some(expected) = failed.clone() {
+                match self.recover_step(expected.clone()).await? {
+                    RecoveryOutcome::Installed(info) => return Ok(info),
+                    RecoveryOutcome::Superseded => {
+                        failed = None;
+                    }
+                    RecoveryOutcome::Retry { error, local } => {
+                        last_error = error;
+                        if local {
+                            tokio::select! {
+                                _ = expected.generation.cancelled() => { failed = None; }
+                                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                            }
+                        }
+                    }
+                }
+            } else {
+                let installed = self.channels.installed.load_full();
+                let mut handle = installed.client.clone();
+                let result = tokio::select! {
+                    biased;
+                    _ = installed.generation.cancelled() => continue,
+                    result = request_server_info(&mut handle, self.timeout) => result,
+                };
+                match result {
+                    Ok(info) if self.channels.is_current(&installed) => return Ok(info),
+                    Ok(_) => continue,
+                    Err(error) => {
+                        last_error = error.into();
+                        if self.channels.is_current(&installed) && !self.single_address {
+                            failed = Some(installed.clone());
+                        }
+                        if self.single_address && attempt + 1 < MAX_ATTEMPTS {
+                            tokio::select! {
+                                _ = installed.generation.cancelled() => {}
+                                _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(last_error.context(format!(
+            "Failed to obtain controller server info after {MAX_ATTEMPTS} attempts"
+        )))
     }
 
-    /// The address the installed channel currently points at (logging/bootstrap).
-    pub(crate) fn current_addr(&self) -> String {
-        self.current_addr.load_full().as_ref().clone()
-    }
-
-    /// Hot-reload the client TLS identity from disk (spec §6 T4): rebuild on the
-    /// CURRENT address (spec §7.4 H1 — never the boot-time one) with a forced
-    /// generation bump so running streams recycle onto the new TLS identity.
+    /// Reload local identity independently of remote availability. Selecting the
+    /// address, validating files, and publishing are serialized with rotation.
     pub async fn reload_client_tls(self: &Arc<Self>) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.client_tls.is_some(),
-            "conf_sync client TLS reload is not configured (plaintext/skip_tls)"
-        );
-        let addr = self.current_addr.load_full();
-        self.install_channel(&addr, true).await
+        let paths = self
+            .client_tls
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("conf_sync client TLS reload is not configured (plaintext/skip_tls)"))?;
+        let manager = self.channels.clone();
+        let use_tls = self.use_tls;
+        let timeout = self.timeout;
+        tokio::spawn(async move {
+            let mut rotator = manager.swap_lock.lock().await;
+            let installed = manager.installed.load_full();
+            let client = prepare_client(&installed.address, use_tls, timeout, Some(&paths)).await?;
+            manager
+                .publish_locked(installed.address.clone(), installed.index, client, &mut rotator)
+                .await;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("conf_sync TLS publisher failed: {error}"))?
     }
 
     /// Get a reference to the `ConfigClient`.
@@ -339,10 +452,16 @@ impl ConfigSyncClient {
     pub async fn get_server_info(&self) -> Result<ServerInfoResponse, tonic::Status> {
         // Read the current handle through the ArcSwap and clone it out (the
         // service wraps a cheaply-cloneable Channel); do not hold the guard.
-        let mut handle = self.conf_client_handle.load().as_ref().clone();
-        let response = handle.get_server_info(ServerInfoRequest {}).await?;
-
-        let info = response.into_inner();
+        let installed = self.channels.installed.load_full();
+        let mut handle = installed.client.clone();
+        let info = tokio::select! {
+            biased;
+            _ = installed.generation.cancelled() => return Err(tonic::Status::cancelled("Controller channel replaced")),
+            info = request_server_info(&mut handle, self.timeout) => info?,
+        };
+        if !self.channels.is_current(&installed) {
+            return Err(tonic::Status::cancelled("Controller channel replaced"));
+        }
 
         tracing::info!(
             server_id = %info.server_id,
@@ -398,20 +517,26 @@ impl ConfigSyncClient {
             // Load the address, handle, and generation token per reconnect
             // iteration so a hot TLS reload or a rotation is picked up on the
             // very next connect.
-            let addr = self.current_addr.load_full().as_ref().clone();
-            let gen_token = self.reload_generation.load_full();
-            let mut handle = self.conf_client_handle.load().as_ref().clone();
+            let installed = self.channels.installed.load_full();
+            let addr = installed.address.clone();
+            let gen_token = installed.generation.clone();
+            let mut handle = installed.client.clone();
             // A demoted leader actively closes the stream with no switch event
             // (Plan A per-term token); distinguishes "leader gone" from blips.
             let mut demoted_close = false;
 
-            match handle
-                .watch_server_meta(WatchServerMetaRequest {
+            let opened = tokio::select! {
+                biased;
+                _ = gen_token.cancelled() => continue,
+                response = handle.watch_server_meta(WatchServerMetaRequest {
                     client_id: client_id.clone(),
                     client_name: client_name.clone(),
-                })
-                .await
-            {
+                }) => response,
+            };
+            if !self.channels.is_current(&installed) {
+                continue;
+            }
+            match opened {
                 Ok(response) => {
                     mark_confsync_connected();
                     let mut stream = response.into_inner();
@@ -433,6 +558,7 @@ impl ConfigSyncClient {
 
                     loop {
                         tokio::select! {
+                            biased;
                             _ = gen_token.cancelled() => {
                                 tracing::info!(
                                     "WatchServerMeta: channel reinstalled (TLS reload or rotation), reconnecting"
@@ -451,6 +577,8 @@ impl ConfigSyncClient {
                             msg = stream.message() => {
                                 match msg {
                                     Ok(Some(event)) => {
+                                        let mut rotator = self.channels.swap_lock.lock().await;
+                                        if !self.channels.is_current(&installed) { reloaded = true; break; }
                                         set_gateway_instance_count(event.gateway_instance_count);
 
                                         if !event.server_id.is_empty() {
@@ -461,7 +589,7 @@ impl ConfigSyncClient {
                                                     backoff = Duration::from_secs(1);
                                                     delivered.insert(addr.clone());
                                                     failures_on_current = 0;
-                                                    self.rotator.note_success();
+                                                    rotator.note_success();
                                                     stream_server_id = Some(event.server_id.clone());
                                                     self.config_client.set_current_server_id(event.server_id);
                                                 }
@@ -537,12 +665,18 @@ impl ConfigSyncClient {
             // last-known config; this mark is what makes that visible, and it clears
             // on the next successful connect above. Scope note: this tracks THIS
             // stream, not overall sync health — see `reasons::CONFSYNC_DISCONNECTED`.
+            if !self.channels.is_current(&installed) {
+                continue;
+            }
             mark_confsync_disconnected();
 
-            if self.rotator.is_single() {
+            if self.single_address {
                 // Single-address deployment (K8s): rotation cannot help; keep the
                 // previous same-address reconnect-with-backoff behavior verbatim.
-                tokio::time::sleep(backoff).await;
+                tokio::select! {
+                    _ = gen_token.cancelled() => continue,
+                    _ = tokio::time::sleep(backoff) => {}
+                }
                 backoff = (backoff * 2).min(max_backoff);
                 continue;
             }
@@ -552,7 +686,10 @@ impl ConfigSyncClient {
                 RotateDecision::Dwell => {
                     // Reload-vs-follower protection (spec §7.4 H2): give a healthy
                     // ex-deliverer one dwell to come back before rotating away.
-                    tokio::time::sleep(DWELL).await;
+                    tokio::select! {
+                        _ = gen_token.cancelled() => continue,
+                        _ = tokio::time::sleep(DWELL) => {}
+                    }
                 }
                 RotateDecision::RotateNow => {
                     // The dwell is paid at most ONCE per delivery: rotating away
@@ -573,15 +710,28 @@ impl ConfigSyncClient {
                     // Err instead, and this `remove` would turn the ~16-22s
                     // etcd-mode reload into a dwell-less address flap.
                     delivered.remove(&addr);
-                    if let Err(e) = self.rotate().await {
-                        tracing::error!(error = %e, "conf_sync rotation failed; retrying current address");
+                    loop {
+                        match self.recover_step(installed.clone()).await {
+                            Ok(RecoveryOutcome::Installed(_) | RecoveryOutcome::Superseded) => break,
+                            Ok(RecoveryOutcome::Retry { error, local }) => {
+                                tracing::warn!(component = "grpc_client", error = %error, "conf_sync candidate unavailable");
+                                if local {
+                                    tokio::select! {
+                                        _ = gen_token.cancelled() => break,
+                                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                tracing::error!(component = "grpc_client", error = %error, "conf_sync channel publication failed");
+                                tokio::select! {
+                                    _ = gen_token.cancelled() => break,
+                                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                                }
+                            }
+                        }
                     }
                     failures_on_current = 0;
-                    if self.rotator.completed_full_lap() {
-                        // Every address failed since the last success: jittered
-                        // backoff so a fleet does not hammer in lockstep (spec §7.5).
-                        self.rotator.backoff_after_lap().await;
-                    }
                 }
             }
         }
@@ -643,6 +793,42 @@ impl ConfigSyncClient {
 
         Ok(())
     }
+}
+
+/// The endpoint timeout bounds response headers; this timeout also bounds the
+/// entire unary response body. A serving probe is an observation, not a lease.
+async fn request_server_info(
+    client: &mut ConfigSyncClientService<Channel>,
+    timeout: Duration,
+) -> Result<ServerInfoResponse, tonic::Status> {
+    tokio::time::timeout(timeout, client.get_server_info(ServerInfoRequest {}))
+        .await
+        .map_err(|_| tonic::Status::deadline_exceeded("Controller server-info probe timed out"))?
+        .map(|response| response.into_inner())
+}
+
+async fn prepare_client(
+    address: &str,
+    use_tls: bool,
+    timeout: Duration,
+    paths: Option<&CertPaths>,
+) -> anyhow::Result<ConfigSyncClientService<Channel>> {
+    let tls = match paths {
+        Some(paths) => {
+            let (cert, key, ca) = super::cert_watch::read_and_validate(paths).await?;
+            Some(
+                ClientTlsConfig::new()
+                    .ca_certificate(tonic::transport::Certificate::from_pem(ca))
+                    .identity(tonic::transport::Identity::from_pem(cert, key)),
+            )
+        }
+        None => None,
+    };
+    Ok(ConfigSyncClientService::new(build_channel(
+        &build_grpc_uri(address, use_tls),
+        timeout,
+        tls,
+    )?))
 }
 
 /// Build a lazily-connected gRPC [`Channel`] for `uri` with the shared keepalive
@@ -711,21 +897,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn reload_cancels_previous_generation() {
-        // Uses a plaintext (skip_tls) client against no server: connect_lazy never dials.
-        let sec = skip_tls_security();
-        let client = ConfigSyncClient::new(vec!["127.0.0.1:1".into()], "t".into(), Duration::from_secs(1), &sec)
-            .await
-            .unwrap();
-        let client = std::sync::Arc::new(client);
-        let old_gen = client.reload_generation.load_full();
-        assert!(!old_gen.is_cancelled());
-        client.rotate_generation(); // the token-swap half of reload_client_tls, factored out
-        assert!(old_gen.is_cancelled());
-        assert!(!client.reload_generation.load_full().is_cancelled());
-    }
-
     #[test]
     fn rotation_decision_matrix() {
         use super::{rotate_decision, RotateDecision};
@@ -740,54 +911,254 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_channel_generation_guard() {
-        // Spec §10.5 S6: a same-address install must NOT bump the generation (the
-        // 18 per-kind loops stay undisturbed — the K8s no-op); force=true (cert
-        // reload) and a changed address must bump it.
-        let sec = skip_tls_security();
+    async fn committed_candidate_changes_generation_and_rejects_duplicate() {
         let client = ConfigSyncClient::new(
             vec!["127.0.0.1:1".into(), "127.0.0.1:2".into()],
             "t".into(),
             Duration::from_secs(1),
-            &sec,
+            &skip_tls_security(),
         )
         .await
         .unwrap();
-        let current = client.current_addr.load_full().as_ref().clone();
-
-        let g0 = client.reload_generation.load_full();
-        client.install_channel(&current, false).await.unwrap();
-        assert!(
-            !g0.is_cancelled(),
-            "same address without force must not bump the generation"
-        );
-
-        client.install_channel(&current, true).await.unwrap();
-        assert!(g0.is_cancelled(), "force=true (cert reload) must bump the generation");
-
-        let g1 = client.reload_generation.load_full();
-        let other = if current == "127.0.0.1:1" {
-            "127.0.0.1:2"
-        } else {
-            "127.0.0.1:1"
+        let old = client.channels.installed.load_full();
+        let (index, revision) = {
+            let mut rotation = client.channels.swap_lock.lock().await;
+            rotation.begin_search(old.index);
+            rotation.candidate()
         };
-        client.install_channel(other, false).await.unwrap();
-        assert!(g1.is_cancelled(), "a changed address must bump the generation");
-        assert_eq!(client.current_addr.load_full().as_str(), other);
+        let handle = old.client.clone();
+        assert!(client
+            .channels
+            .commit(old.clone(), index, revision, handle.clone())
+            .await
+            .unwrap()
+            .is_some());
+        let new = client.channels.installed.load_full();
+        assert_eq!(new.index, index);
+        assert!(old.generation.is_cancelled());
+        assert!(!new.generation.is_cancelled());
+        assert!(client
+            .channels
+            .commit(old, index, revision, handle)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn same_address_after_full_lap_still_recycles_generation() {
+        let client = ConfigSyncClient::new(
+            vec!["127.0.0.1:1".into(), "127.0.0.1:2".into()],
+            "t".into(),
+            Duration::from_secs(1),
+            &skip_tls_security(),
+        )
+        .await
+        .unwrap();
+        let old = client.channels.installed.load_full();
+        let (index, revision) = {
+            let mut rotation = client.channels.swap_lock.lock().await;
+            rotation.begin_search(old.index);
+            rotation.note_failure();
+            rotation.candidate()
+        };
+        assert_eq!(index, old.index);
+        assert!(client
+            .channels
+            .commit(old.clone(), index, revision, old.client.clone())
+            .await
+            .unwrap()
+            .is_some());
+        assert!(old.generation.is_cancelled());
     }
 
     #[tokio::test]
     async fn rotate_is_noop_for_single_address() {
-        // Spec §10.5 S5: with one configured address the rotator never advances
-        // and rotate() must not touch the channel or the generation.
-        let sec = skip_tls_security();
-        let client = ConfigSyncClient::new(vec!["127.0.0.1:1".into()], "t".into(), Duration::from_secs(1), &sec)
+        let client = ConfigSyncClient::new(
+            vec!["127.0.0.1:1".into()],
+            "t".into(),
+            Duration::from_secs(1),
+            &skip_tls_security(),
+        )
+        .await
+        .unwrap();
+        let old = client.channels.installed.load_full();
+        assert!(matches!(
+            client.recover_step(old.clone()).await.unwrap(),
+            super::RecoveryOutcome::Superseded
+        ));
+        assert!(std::sync::Arc::ptr_eq(&old, &client.channels.installed.load_full()));
+        assert!(!old.generation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn publication_finishes_after_caller_abort_and_notifies_last() {
+        let client = ConfigSyncClient::new(
+            vec!["127.0.0.1:1".into(), "127.0.0.1:2".into()],
+            "t".into(),
+            Duration::from_secs(1),
+            &skip_tls_security(),
+        )
+        .await
+        .unwrap();
+        let old = client.channels.installed.load_full();
+        let (index, revision) = {
+            let mut rotator = client.channels.swap_lock.lock().await;
+            rotator.begin_search(old.index);
+            rotator.candidate()
+        };
+        let cache = client.config_client.publication_test_cache();
+        let mut cache_guard = cache.grpc_client.write().await;
+        *cache_guard = None;
+        let manager = client.channels.clone();
+        let expected = old.clone();
+        let caller = tokio::spawn(async move {
+            manager
+                .commit(expected.clone(), index, revision, expected.client.clone())
+                .await
+        });
+        // The publisher holds the swap lock while it waits for our cache lock.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.channels.swap_lock.try_lock().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(client.channels.is_current(&old));
+        assert!(!old.generation.is_cancelled(), "notification must wait for every cache");
+        caller.abort();
+        assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
+        drop(cache_guard);
+        tokio::time::timeout(Duration::from_secs(2), old.generation.cancelled())
             .await
             .unwrap();
-        let g0 = client.reload_generation.load_full();
-        client.rotate().await.unwrap();
-        assert!(!g0.is_cancelled(), "single-address rotate must be a generation no-op");
-        assert_eq!(client.current_addr.load_full().as_str(), "127.0.0.1:1");
+        let installed = client.channels.installed.load_full();
+        assert_eq!(installed.index, index);
+        assert!(!installed.generation.is_cancelled());
+        assert!(cache.grpc_client.read().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn local_tls_failure_does_not_skip_candidate_or_publish() {
+        let mut client = ConfigSyncClient::new(
+            vec!["127.0.0.1:1".into(), "127.0.0.1:2".into()],
+            "t".into(),
+            Duration::from_secs(1),
+            &skip_tls_security(),
+        )
+        .await
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        client.client_tls = Some(super::CertPaths {
+            cert: dir.path().join("missing-cert"),
+            key: dir.path().join("missing-key"),
+            ca: dir.path().join("missing-ca"),
+        });
+        let old = client.channels.installed.load_full();
+        assert!(matches!(
+            client.recover_step(old.clone()).await.unwrap(),
+            super::RecoveryOutcome::Retry { local: true, .. }
+        ));
+        let ticket = client.channels.swap_lock.lock().await.candidate();
+        assert!(matches!(
+            client.recover_step(old.clone()).await.unwrap(),
+            super::RecoveryOutcome::Retry { local: true, .. }
+        ));
+        assert_eq!(client.channels.swap_lock.lock().await.candidate(), ticket);
+        assert!(client.channels.is_current(&old));
+        assert!(!old.generation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn malformed_uri_anywhere_fails_before_shuffle_selection() {
+        for addresses in [
+            vec![DUMMY_ADDR.into(), "[invalid".into()],
+            vec!["[invalid".into(), DUMMY_ADDR.into()],
+        ] {
+            assert!(
+                ConfigSyncClient::new(addresses, "t".into(), Duration::from_secs(1), &skip_tls_security())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_tls_reload_rebuilds_committed_address_and_fences_old_probe() {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().unwrap();
+        let ca_key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::default();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&ca_key).unwrap();
+        let issuer = Issuer::from_ca_cert_pem(&ca.pem(), ca_key).unwrap();
+        let key = KeyPair::generate().unwrap();
+        let cert = CertificateParams::new(vec!["localhost".into()])
+            .unwrap()
+            .signed_by(&key, &issuer)
+            .unwrap();
+        let paths = super::CertPaths {
+            cert: dir.path().join("cert.pem"),
+            key: dir.path().join("key.pem"),
+            ca: dir.path().join("ca.pem"),
+        };
+        std::fs::write(&paths.cert, cert.pem()).unwrap();
+        std::fs::write(&paths.key, key.serialize_pem()).unwrap();
+        std::fs::write(&paths.ca, ca.pem()).unwrap();
+        let mut client = ConfigSyncClient::new(
+            vec!["localhost:1".into(), "localhost:2".into()],
+            "t".into(),
+            Duration::from_secs(1),
+            &skip_tls_security(),
+        )
+        .await
+        .unwrap();
+        client.client_tls = Some(paths);
+        client.use_tls = true;
+        let client = std::sync::Arc::new(client);
+        let old = client.channels.installed.load_full();
+        let (index, revision) = {
+            let mut rotator = client.channels.swap_lock.lock().await;
+            rotator.begin_search(old.index);
+            rotator.candidate()
+        };
+        let cache = client.config_client.publication_test_cache();
+        let cache_guard = cache.grpc_client.write().await;
+        let manager = client.channels.clone();
+        let expected = old.clone();
+        let commit = tokio::spawn(async move {
+            manager
+                .commit(expected.clone(), index, revision, expected.client.clone())
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.channels.swap_lock.try_lock().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let reloader = client.clone();
+        let reload = tokio::spawn(async move { reloader.reload_client_tls().await });
+        drop(cache_guard);
+        assert!(commit.await.unwrap().unwrap().is_some());
+        reload.await.unwrap().unwrap();
+        let installed = client.channels.installed.load_full();
+        assert_eq!(
+            installed.index, index,
+            "reload must rebuild the address committed ahead of it"
+        );
+        assert_ne!(installed.address, old.address);
+        assert!(old.generation.is_cancelled());
+        assert!(!installed.generation.is_cancelled());
+        assert!(client
+            .channels
+            .commit(old.clone(), index, revision, old.client.clone())
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

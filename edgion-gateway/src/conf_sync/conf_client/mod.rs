@@ -8,14 +8,13 @@ use tokio_util::sync::CancellationToken;
 
 pub use config_client::ConfigClient;
 pub use grpc_client::ConfigSyncClient;
-pub use rotation::EndpointRotator;
 
 /// Process-global "reload generation" token for the conf_sync client TLS.
 ///
 /// The per-kind watch loops (`cache_client::event_dispatch`) have no handle to
 /// the owning [`ConfigSyncClient`], so they read the current generation token
-/// through [`current_reload_generation`]. When `reload_client_tls` swaps the
-/// channel it cancels the previous token and installs a fresh one here; every
+/// through [`current_reload_generation`]. When the channel publisher swaps the
+/// channel it installs a fresh token here, then cancels the previous one; every
 /// running watch loop selecting on the old token breaks out and reconnects on
 /// the new channel. Initialized with a never-cancelled token so the very first
 /// watch loops have something to select on before any reload happens.
@@ -30,7 +29,7 @@ pub fn current_reload_generation() -> Arc<CancellationToken> {
 }
 
 /// Publish a new reload-generation token (called by `ConfigSyncClient::new` at
-/// startup and by `rotate_generation` on each reload).
+/// startup and by the channel publisher on each replacement).
 pub(crate) fn set_global_reload_generation(token: Arc<CancellationToken>) {
     RELOAD_GENERATION.store(token);
 }

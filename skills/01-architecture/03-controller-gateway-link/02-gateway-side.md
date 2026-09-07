@@ -11,25 +11,56 @@ The Gateway connects to the Controller's gRPC service via `ConfigSyncClient`, re
 
 Manages the gRPC connection to the Controller; handles List/Watch calls, version tracking, and reconnection.
 
-```rust
-pub struct ConfigSyncClient {
-    config_client: Arc<ConfigClient>,
-    conf_client_handle: ConfigSyncClientService<Channel>,
-    client_id: String,
-    client_name: String,
-}
-```
+The client separates the installed connection from candidate recovery. The installed
+snapshot combines address, address-list index, service handle, and reload generation.
+The channel manager owns its publication boundary and the candidate traversal state.
+This prevents a meta reconnect from mixing an old address with a new handle or token.
 
 ### Startup sync sequence
 
-1. **Connection establishment**: connect to the Controller's gRPC port (default :12151) via tonic
-2. **GetServerInfo**: fetch `server_id`, `supported_kinds`
+1. **Channel preparation**: prepare a lazy tonic channel for the initially shuffled
+   Controller address (default port :12151); this does not establish remote readiness
+2. **GetServerInfo**: fetch `server_id`, `supported_kinds` within the bounded startup
+   retry budget; failed multi-address startup uses the same candidate recovery as runtime
 3. **Per-kind loops**: concurrently start one loop for every supported kind that has a Gateway cache
 4. **List then Watch**: each loop resets its cache from one List snapshot, marks it ready, then
    Watches from the returned `sync_version`
 5. **WatchServerMeta**: register with the Controller's ClientRegistry and receive `gateway_instance_count` changes
 
 ### Reconnection mechanism
+
+On-demand recovery builds a candidate channel, then calls `GetServerInfo` on that
+exact handle before installing it. Controller provider availability is the existing
+serving gate for leader-only and all-serve deployments. This probe creates no client
+registration; only the active `WatchServerMeta` session registers the Gateway.
+The probe is a point-in-time readiness observation, not a leadership lease.
+
+Candidate traversal and the installed address are different state. A local TLS or
+channel-construction error preserves the candidate and retries with a bounded pause.
+All immutable configured URI strings are syntax-checked at startup, preventing a
+permanently malformed later candidate from blocking traversal after startup.
+An actual failed remote RPC advances traversal, including a later revisit of the
+original address, without replacing any installed client. Full failed remote laps
+receive capped jittered backoff. A successful unary probe does not reset the failure
+history: the first valid event of the current meta session does that. The existing
+leader dwell and single-address reconnect behavior remain.
+
+Network probing holds no swap lock and has a deadline covering the complete unary
+response. Its result carries the installed snapshot identity and a selection revision;
+publication rejects stale results after a TLS reload, another commit, or another
+candidate transition. Meta processing likewise ignores results from retired generations.
+
+Publication is a finite, cancellation-safe operation on the channel manager. It
+updates every per-kind cache client, publishes the coherent installed snapshot and
+global reload token, and cancels the previous generation last. A caller being
+cancelled cannot stop the operation between cache replacements. This orders channel
+publication and watcher notification; it does not make configuration across resource
+kinds atomic or retract a callback that already applied an event.
+
+Certificate reload selects the current address within the same publication boundary,
+validates local material, and publishes the new identity without depending on remote
+availability. An old candidate probe cannot reinstall a pre-reload identity. The
+file watcher's accepted `(mtime, length)` trigger policy is unchanged.
 
 ConfigSyncClient triggers a reconnection in the following situations:
 

@@ -23,5 +23,6 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Transactional Controller channel selection](regression-guards/transactional-controller-channel-selection.md)
 - [Generic Watch decode failure recovery](regression-guards/watch-decode-error-relist.md)
 - [conf_sync Plaintext — Fail-Close (decided 2026-07-14)](regression-guards/conf-sync-plaintext-default-observable.md)

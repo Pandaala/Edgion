@@ -41,6 +41,12 @@ pub struct ConfigClient {
 }
 
 impl ConfigClient {
+    /// Let publication tests hold a real cache lock without changing the runtime API.
+    #[cfg(test)]
+    pub(super) fn publication_test_cache(&self) -> ClientCache<Gateway> {
+        self.gateways.clone()
+    }
+
     /// Create a new ConfigClient
     ///
     /// # Arguments

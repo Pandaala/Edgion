@@ -218,7 +218,7 @@ behavior and are configured per Gateway process; there is no
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `server_addrs` | `String` | **Required** | Controller gRPC address |
+| `server_addrs` | `Array<String>` | **Required** | Controller gRPC addresses. Single-address reconnect or multi-address candidate failover; see [Gateway-side recovery](../../01-architecture/03-controller-gateway-link/02-gateway-side.md). |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
 | `admin_token` | `String?` | — | Shared Gateway Admin API bearer token. Config-file only; `EDGION_GATEWAY_ADMIN_TOKEN` takes precedence. Keep it in a Secret. No token means Admin business routes fail closed with 503. |

@@ -569,47 +569,8 @@ impl EdgionGatewayCli {
         // up". A single-address deployment retries the same address, which is a
         // strict improvement over the previous instant hard-fail.
         let server_info = runtime
-            .block_on(async {
-                const MAX_ATTEMPTS: u32 = 20;
-                const ATTEMPT_PAUSE: Duration = Duration::from_secs(2);
-                let rotator = sync_client.rotator();
-                let mut tried: Vec<String> = Vec::new();
-                let mut attempt: u32 = 0;
-                loop {
-                    attempt += 1;
-                    let addr = sync_client.current_addr();
-                    match sync_client.get_server_info().await {
-                        Ok(info) => return Ok(info),
-                        Err(e) => {
-                            if !tried.contains(&addr) {
-                                tried.push(addr.clone());
-                            }
-                            if attempt >= MAX_ATTEMPTS {
-                                return Err(anyhow!(
-                                    "Failed to get server info after {attempt} attempts across {tried:?}: {e}"
-                                ));
-                            }
-                            tracing::warn!(
-                                component = "startup",
-                                attempt,
-                                max_attempts = MAX_ATTEMPTS,
-                                addr = %addr,
-                                error = %e,
-                                "bootstrap get_server_info failed; rotating to the next controller"
-                            );
-                            if let Err(re) = sync_client.rotate().await {
-                                tracing::warn!(component = "startup", error = %re, "bootstrap rotation failed");
-                            }
-                            if rotator.completed_full_lap() {
-                                rotator.backoff_after_lap().await;
-                            } else {
-                                tokio::time::sleep(ATTEMPT_PAUSE).await;
-                            }
-                        }
-                    }
-                }
-            })
-            .map_err(|e: anyhow::Error| anyhow!("Failed to get server info from Controller: {}", e))?;
+            .block_on(sync_client.bootstrap_server_info())
+            .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
 
         // 10. Initialize integration testing mode from CLI flag (already gated on
         // the env override at the top of this function).
