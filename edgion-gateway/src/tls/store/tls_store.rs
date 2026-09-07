@@ -345,7 +345,7 @@ impl TlsStore {
             "Partial update of TLS certificates"
         );
 
-        // TODO(tls-store-true-incremental-atomic-publication): replace this
+        // TODO(incremental-publication-03-edgion-tls): replace this
         // whole-map clone and matcher rebuild with a genuine per-key update and
         // publish data plus matcher as one immutable generation.
         let current = self.tls_data.load_full();

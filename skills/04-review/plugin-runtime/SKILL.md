@@ -22,5 +22,6 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [EdgionConfigData partial publication is incremental and atomic](regression-guards/edgion-config-data-incremental-atomic-publication.md)
 - [HTTPRoute Native ExternalAuth Construction Failures Must Seal Fail-Closed — FIXED](regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)
 - [Stream plugin key normalization](regression-guards/stream-plugin-key-normalization.md)
