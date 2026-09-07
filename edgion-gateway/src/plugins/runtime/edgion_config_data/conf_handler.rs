@@ -11,6 +11,7 @@
 //!   consumers load the raw entry and type-guard `ConfigEntry` dynamically.
 
 use arc_swap::ArcSwap;
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -26,6 +27,23 @@ pub fn get_global_edgion_config_data_store() -> Arc<EdgionConfigDataStore> {
     GLOBAL_EDGION_CONFIG_DATA_STORE.clone()
 }
 
+pub(crate) fn capture_global_edgion_config_data_snapshot() -> EdgionConfigDataSnapshot {
+    GLOBAL_EDGION_CONFIG_DATA_STORE.capture_snapshot()
+}
+
+/// Capture the current generation only when an authorization decision has live
+/// IpList references. Inline-only decisions retain their zero-store-load path.
+pub(crate) fn capture_global_edgion_config_data_snapshot_for_refs(
+    deny_keys: &[String],
+    allow_keys: &[String],
+) -> Option<EdgionConfigDataSnapshot> {
+    if deny_keys.is_empty() && allow_keys.is_empty() {
+        None
+    } else {
+        Some(capture_global_edgion_config_data_snapshot())
+    }
+}
+
 /// Flatten optional `EdgionConfigDataRef`s into store keys ("namespace/name"),
 /// defaulting an unspecified ref namespace to `parent_namespace`. Pure; called at
 /// plugin construction (cold path).
@@ -37,21 +55,6 @@ pub fn resolve_ip_list_ref_keys(refs: Option<&Vec<EdgionConfigDataRef>>, parent_
             .collect()
     })
     .unwrap_or_default()
-}
-
-/// Resolve already-flattened ref keys to their pre-compiled IpList matchers against
-/// the global store. Unresolved keys (absent/disabled/uncompilable IpList) are
-/// silently skipped — fail-closed direction is enforced by the caller's `allow_mode`.
-/// Empty `keys` returns an empty Vec WITHOUT touching the store (hot-path fast path).
-/// NOTE: runs on the request/connection hot path — MUST NOT log (data-plane no-tracing).
-pub fn resolve_ip_list_matchers(keys: &[String]) -> Vec<Arc<IpRadixMatcher>> {
-    if keys.is_empty() {
-        return Vec::new();
-    }
-    let store = get_global_edgion_config_data_store();
-    keys.iter()
-        .filter_map(|k| store.get_ip_list_matcher_by_key(k))
-        .collect()
 }
 
 pub fn create_edgion_config_data_handler() -> Box<dyn ConfHandler<EdgionConfigData> + Send + Sync> {
@@ -87,6 +90,32 @@ struct TypedIndexes {
 struct Snapshot {
     raw: RawMap,
     indexes: TypedIndexes,
+}
+
+/// One owned, immutable EdgionConfigData generation for a complete authorization
+/// decision. Raw Selector reads and every referenced matcher borrow must come from
+/// this handle so a concurrent publication cannot tear the decision across epochs.
+pub(crate) struct EdgionConfigDataSnapshot {
+    inner: Arc<Snapshot>,
+}
+
+impl EdgionConfigDataSnapshot {
+    pub(crate) fn get_raw_by_key(&self, key: &str) -> Option<&EdgionConfigData> {
+        self.inner.raw.get(key).map(Arc::as_ref)
+    }
+
+    /// Append matchers in configured key order. Missing, disabled, and invalid
+    /// references contribute nothing; the caller retains whitelist intent.
+    pub(crate) fn append_ip_list_matchers<'a>(
+        &'a self,
+        keys: &[String],
+        target: &mut SmallVec<[&'a IpRadixMatcher; 4]>,
+    ) {
+        target.extend(
+            keys.iter()
+                .filter_map(|key| self.inner.indexes.ip_list.get(key).map(Arc::as_ref)),
+        );
+    }
 }
 
 pub struct EdgionConfigDataStore {
@@ -134,11 +163,12 @@ impl EdgionConfigDataStore {
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
 
-    /// Look up the pre-compiled `IpRadixMatcher` for an `IpList` by "namespace/name".
-    /// Returns `None` if absent, disabled, or uncompilable.
-    pub fn get_ip_list_matcher_by_key(&self, key: &str) -> Option<Arc<IpRadixMatcher>> {
-        let snap = self.snapshot.load();
-        snap.indexes.ip_list.get(key).cloned()
+    /// Capture one immutable raw-plus-index generation. Authorization consumers
+    /// retain this handle until every live reference in the decision resolves.
+    pub(crate) fn capture_snapshot(&self) -> EdgionConfigDataSnapshot {
+        EdgionConfigDataSnapshot {
+            inner: self.snapshot.load_full(),
+        }
     }
 
     /// Look up a raw `EdgionConfigData` entry by "namespace/name" key.
@@ -430,6 +460,48 @@ mod stats_tests {
         Arc::new(resource)
     }
 
+    fn selector_resource(name: &str, active: &str) -> Arc<EdgionConfigData> {
+        let spec = EdgionConfigDataSpec {
+            enable: true,
+            active: None,
+            visibility: Default::default(),
+            unknown_fields: Vec::new(),
+            data: ConfigEntry::Selector(Selector {
+                active: Some(active.to_string()),
+                description: None,
+            }),
+        };
+        let mut resource = EdgionConfigData::new(name, spec);
+        resource.metadata.namespace = Some("ns".to_string());
+        Arc::new(resource)
+    }
+
+    fn named_ip_list_resource(name: &str, group: &str, cidr: &str) -> Arc<EdgionConfigData> {
+        let spec = EdgionConfigDataSpec {
+            enable: true,
+            active: None,
+            visibility: Default::default(),
+            unknown_fields: Vec::new(),
+            data: ConfigEntry::IpList(IpListData {
+                items: vec![IpGroup {
+                    name: group.to_string(),
+                    description: None,
+                    cidrs: vec![cidr.to_string()],
+                }],
+            }),
+        };
+        let mut resource = EdgionConfigData::new(name, spec);
+        resource.metadata.namespace = Some("ns".to_string());
+        Arc::new(resource)
+    }
+
+    fn snapshot_matcher<'a>(snapshot: &'a EdgionConfigDataSnapshot, key: &str) -> Option<&'a IpRadixMatcher> {
+        let keys = [key.to_string()];
+        let mut matchers = SmallVec::new();
+        snapshot.append_ip_list_matchers(&keys, &mut matchers);
+        matchers.pop()
+    }
+
     #[derive(Clone, Default)]
     struct LogBuffer(Arc<parking_lot::Mutex<Vec<u8>>>);
 
@@ -524,6 +596,113 @@ mod stats_tests {
     }
 
     #[test]
+    fn captured_snapshot_prevents_torn_selector_ip_list_authorization() {
+        use edgion_resources::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
+        use edgion_resources::resources::edgion_plugins::{AccessDecision, DefaultAction};
+
+        fn selected_deny_matchers<'a>(
+            selector_snapshot: &EdgionConfigDataSnapshot,
+            matcher_snapshot: &'a EdgionConfigDataSnapshot,
+            profile_keys: &HashMap<String, Vec<String>>,
+        ) -> SmallVec<[&'a IpRadixMatcher; 4]> {
+            let selector = selector_snapshot
+                .get_raw_by_key("ns/active")
+                .expect("the selector must exist in every complete test generation");
+            let ConfigEntry::Selector(selector) = &selector.spec.data else {
+                panic!("the active test resource must remain a Selector");
+            };
+            let active = selector
+                .active
+                .as_deref()
+                .expect("the test selector must name an active profile");
+            let keys = profile_keys
+                .get(active)
+                .expect("every test profile must have configured deny keys");
+            let mut matchers = SmallVec::new();
+            matcher_snapshot.append_ip_list_matchers(keys, &mut matchers);
+            matchers
+        }
+
+        let store = EdgionConfigDataStore::new();
+        let probe = "203.0.113.7".parse().unwrap();
+        let profile_keys = HashMap::from([
+            (
+                "blue".to_string(),
+                vec!["ns/blue-first".to_string(), "ns/blue-second".to_string()],
+            ),
+            (
+                "green".to_string(),
+                vec!["ns/green-second".to_string(), "ns/green-first".to_string()],
+            ),
+        ]);
+        store.replace_all(HashMap::from([
+            ("ns/active".to_string(), selector_resource("active", "blue")),
+            (
+                "ns/blue-first".to_string(),
+                named_ip_list_resource("blue-first", "blue-first", "203.0.113.7/32"),
+            ),
+            (
+                "ns/blue-second".to_string(),
+                named_ip_list_resource("blue-second", "blue-second", "203.0.113.7/32"),
+            ),
+        ]));
+        let old_snapshot = store.capture_snapshot();
+
+        store.update(
+            HashMap::from([
+                (
+                    "ns/green-first".to_string(),
+                    named_ip_list_resource("green-first", "green-first", "203.0.113.7/32"),
+                ),
+                (
+                    "ns/green-second".to_string(),
+                    named_ip_list_resource("green-second", "green-second", "203.0.113.7/32"),
+                ),
+            ]),
+            HashMap::from([
+                ("ns/active".to_string(), selector_resource("active", "green")),
+                (
+                    "ns/blue-first".to_string(),
+                    named_ip_list_resource("blue-first", "blue-first", "198.51.100.1/32"),
+                ),
+                (
+                    "ns/blue-second".to_string(),
+                    named_ip_list_resource("blue-second", "blue-second", "198.51.100.2/32"),
+                ),
+            ]),
+            &HashSet::new(),
+        );
+        let new_snapshot = store.capture_snapshot();
+
+        let torn = selected_deny_matchers(&old_snapshot, &new_snapshot, &profile_keys);
+        assert_eq!(torn.len(), 2);
+        assert_eq!(torn[0].matched_group(&probe), None);
+        assert_eq!(torn[1].matched_group(&probe), None);
+        assert!(matches!(
+            evaluate_ip_access_multi(&torn, &[], false, &DefaultAction::Allow, &probe),
+            AccessDecision::Default(DefaultAction::Allow)
+        ));
+
+        let old = selected_deny_matchers(&old_snapshot, &old_snapshot, &profile_keys);
+        assert_eq!(old.len(), 2);
+        assert_eq!(old[0].matched_group(&probe), Some("blue-first"));
+        assert_eq!(old[1].matched_group(&probe), Some("blue-second"));
+        assert!(matches!(
+            evaluate_ip_access_multi(&old, &[], false, &DefaultAction::Allow, &probe),
+            AccessDecision::DenyByGroup(group) if group.as_ref() == "blue-first"
+        ));
+
+        let current = selected_deny_matchers(&new_snapshot, &new_snapshot, &profile_keys);
+        assert_eq!(current.len(), 2);
+        assert_eq!(current[0].matched_group(&probe), Some("green-second"));
+        assert_eq!(current[1].matched_group(&probe), Some("green-first"));
+        assert!(matches!(
+            evaluate_ip_access_multi(&current, &[], false, &DefaultAction::Allow, &probe),
+            AccessDecision::DenyByGroup(group) if group.as_ref() == "green-second"
+        ));
+    }
+
+    #[test]
     fn region_route_override_is_available_from_raw_snapshot() {
         let store = EdgionConfigDataStore::new();
 
@@ -582,9 +761,10 @@ mod stats_tests {
         raw.insert("ns1/ip-allow".to_string(), ed);
         store.replace_all(raw);
 
-        let m = store.get_ip_list_matcher_by_key("ns1/ip-allow").expect("indexed");
+        let snapshot = store.capture_snapshot();
+        let m = snapshot_matcher(&snapshot, "ns1/ip-allow").expect("indexed");
         assert_eq!(m.matched_group(&"10.1.2.3".parse().unwrap()), Some("office"));
-        assert!(store.get_ip_list_matcher_by_key("ns1/missing").is_none());
+        assert!(snapshot_matcher(&snapshot, "ns1/missing").is_none());
     }
 
     #[test]
@@ -612,7 +792,8 @@ mod stats_tests {
         let mut raw: RawMap = HashMap::new();
         raw.insert("ns2/ip-off".to_string(), ed);
         store.replace_all(raw);
-        assert!(store.get_ip_list_matcher_by_key("ns2/ip-off").is_none());
+        let snapshot = store.capture_snapshot();
+        assert!(snapshot_matcher(&snapshot, "ns2/ip-off").is_none());
     }
 
     #[test]
@@ -638,8 +819,8 @@ mod stats_tests {
         // indexed, even with no items — it produces a present-but-empty matcher that matches
         // nothing. For a whitelist (allowRefs) consumer this is deny-all (fail-closed); the
         // *disabled* IpList is the one that resolves as absent/`None` (see `ip_list_disabled`).
-        let m = store
-            .get_ip_list_matcher_by_key("ns3/ip-empty")
+        let snapshot = store.capture_snapshot();
+        let m = snapshot_matcher(&snapshot, "ns3/ip-empty")
             .expect("an enabled IpList is indexed under partial-good, even when empty");
         assert_eq!(m.matched_group(&"10.1.2.3".parse().unwrap()), None);
     }
@@ -658,7 +839,8 @@ mod stats_tests {
 
         let before_ip_raw = store.get_raw_by_key("ns/ip").unwrap();
         let before_route_raw = store.get_raw_by_key("ns/route").unwrap();
-        let before_matcher = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
+        let before_snapshot = store.capture_snapshot();
+        let before_matcher = snapshot_matcher(&before_snapshot, "ns/ip").unwrap();
 
         store.update(
             HashMap::new(),
@@ -674,9 +856,10 @@ mod stats_tests {
             &before_route_raw,
             &store.get_raw_by_key("ns/route").unwrap()
         ));
-        assert!(Arc::ptr_eq(
-            &before_matcher,
-            &store.get_ip_list_matcher_by_key("ns/ip").unwrap()
+        let after_snapshot = store.capture_snapshot();
+        assert!(std::ptr::eq(
+            before_matcher,
+            snapshot_matcher(&after_snapshot, "ns/ip").unwrap()
         ));
     }
 
@@ -704,7 +887,8 @@ mod stats_tests {
         let original = ip_list_resource("ip", true, Some("old"), "10.0.0.0/8");
         store.replace_all(HashMap::from([("ns/ip".to_string(), Arc::clone(&original))]));
         let before_snapshot = store.snapshot.load_full();
-        let before_matcher = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
+        let before_handle = store.capture_snapshot();
+        let before_matcher = snapshot_matcher(&before_handle, "ns/ip").unwrap();
         let mut changed = ip_list_resource("ip", true, Some("new"), "10.0.0.0/8");
         Arc::get_mut(&mut changed)
             .unwrap()
@@ -721,9 +905,10 @@ mod stats_tests {
 
         assert!(!Arc::ptr_eq(&before_snapshot, &store.snapshot.load_full()));
         assert!(Arc::ptr_eq(&changed, &store.get_raw_by_key("ns/ip").unwrap()));
-        assert!(Arc::ptr_eq(
-            &before_matcher,
-            &store.get_ip_list_matcher_by_key("ns/ip").unwrap()
+        let after_handle = store.capture_snapshot();
+        assert!(std::ptr::eq(
+            before_matcher,
+            snapshot_matcher(&after_handle, "ns/ip").unwrap()
         ));
     }
 
@@ -734,15 +919,17 @@ mod stats_tests {
             "ns/ip".to_string(),
             ip_list_resource("ip", true, None, "10.0.0.0/8"),
         )]));
-        let first = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
+        let first_snapshot = store.capture_snapshot();
+        let first = snapshot_matcher(&first_snapshot, "ns/ip").unwrap();
 
         store.update(
             HashMap::new(),
             HashMap::from([("ns/ip".to_string(), ip_list_resource("ip", true, None, "192.0.2.0/24"))]),
             &HashSet::new(),
         );
-        let second = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
-        assert!(!Arc::ptr_eq(&first, &second));
+        let second_snapshot = store.capture_snapshot();
+        let second = snapshot_matcher(&second_snapshot, "ns/ip").unwrap();
+        assert!(!std::ptr::eq(first, second));
         assert_eq!(second.matched_group(&"192.0.2.1".parse().unwrap()), Some("group"));
 
         store.update(
@@ -750,7 +937,8 @@ mod stats_tests {
             HashMap::from([("ns/ip".to_string(), ip_list_resource("ip", false, None, "192.0.2.0/24"))]),
             &HashSet::new(),
         );
-        assert!(store.get_ip_list_matcher_by_key("ns/ip").is_none());
+        let disabled_snapshot = store.capture_snapshot();
+        assert!(snapshot_matcher(&disabled_snapshot, "ns/ip").is_none());
 
         store.update(
             HashMap::new(),
@@ -760,7 +948,8 @@ mod stats_tests {
             )]),
             &HashSet::new(),
         );
-        let restored = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
+        let restored_snapshot = store.capture_snapshot();
+        let restored = snapshot_matcher(&restored_snapshot, "ns/ip").unwrap();
         assert_eq!(restored.matched_group(&"198.51.100.2".parse().unwrap()), Some("group"));
     }
 
@@ -777,7 +966,8 @@ mod stats_tests {
             HashMap::from([("ns/shared".to_string(), region_route_resource("shared", None))]),
             &HashSet::new(),
         );
-        assert!(store.get_ip_list_matcher_by_key("ns/shared").is_none());
+        let region_snapshot = store.capture_snapshot();
+        assert!(snapshot_matcher(&region_snapshot, "ns/shared").is_none());
         assert!(matches!(
             &store.get_raw_by_key("ns/shared").unwrap().spec.data,
             ConfigEntry::RegionRouteOverride(_)
@@ -796,7 +986,8 @@ mod stats_tests {
             HashMap::from([("ns/shared".to_string(), selector)]),
             &HashSet::new(),
         );
-        assert!(store.get_ip_list_matcher_by_key("ns/shared").is_none());
+        let selector_snapshot = store.capture_snapshot();
+        assert!(snapshot_matcher(&selector_snapshot, "ns/shared").is_none());
         assert!(matches!(
             &store.get_raw_by_key("ns/shared").unwrap().spec.data,
             ConfigEntry::Selector(_)
@@ -815,7 +1006,8 @@ mod stats_tests {
         let store = EdgionConfigDataStore::new();
         let initial = ip_list_resource("ip", true, None, "10.0.0.0/8");
         store.replace_all(HashMap::from([("ns/ip".to_string(), Arc::clone(&initial))]));
-        let old_matcher = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
+        let old_snapshot = store.capture_snapshot();
+        let old_matcher = snapshot_matcher(&old_snapshot, "ns/ip").unwrap();
         let recreated = Arc::new(initial.as_ref().clone());
 
         // Cache compression represents delete-then-create as add-only when the
@@ -827,9 +1019,10 @@ mod stats_tests {
         );
 
         assert!(Arc::ptr_eq(&recreated, &store.get_raw_by_key("ns/ip").unwrap()));
-        assert!(!Arc::ptr_eq(
-            &old_matcher,
-            &store.get_ip_list_matcher_by_key("ns/ip").unwrap()
+        let recreated_snapshot = store.capture_snapshot();
+        assert!(!std::ptr::eq(
+            old_matcher,
+            snapshot_matcher(&recreated_snapshot, "ns/ip").unwrap()
         ));
 
         let add_winner = ip_list_resource("ip", true, None, "203.0.113.0/24");
@@ -839,7 +1032,8 @@ mod stats_tests {
             HashMap::from([("ns/ip".to_string(), ignored_update)]),
             &HashSet::from(["ns/ip".to_string()]),
         );
-        let matcher = store.get_ip_list_matcher_by_key("ns/ip").unwrap();
+        let winner_snapshot = store.capture_snapshot();
+        let matcher = snapshot_matcher(&winner_snapshot, "ns/ip").unwrap();
         assert!(Arc::ptr_eq(&add_winner, &store.get_raw_by_key("ns/ip").unwrap()));
         assert_eq!(matcher.matched_group(&"203.0.113.1".parse().unwrap()), Some("group"));
         assert_eq!(matcher.matched_group(&"198.51.100.1".parse().unwrap()), None);
@@ -870,9 +1064,9 @@ mod stats_tests {
         }
         drop((full_snapshot, partial_snapshot));
         for store in [&full, &partial] {
+            let snapshot = store.capture_snapshot();
             assert_eq!(
-                store
-                    .get_ip_list_matcher_by_key("ns/ip")
+                snapshot_matcher(&snapshot, "ns/ip")
                     .unwrap()
                     .matched_group(&"192.0.2.1".parse().unwrap()),
                 Some("group")
@@ -893,7 +1087,8 @@ mod stats_tests {
         full.replace_all(HashMap::new());
         assert_eq!(full.count(), 0);
         assert_eq!(partial.count(), 0);
-        assert!(partial.get_ip_list_matcher_by_key("ns/ip").is_none());
+        let partial_snapshot = partial.capture_snapshot();
+        assert!(snapshot_matcher(&partial_snapshot, "ns/ip").is_none());
         assert!(partial.get_raw_by_key("ns/route").is_none());
     }
 

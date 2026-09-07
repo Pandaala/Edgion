@@ -5,9 +5,12 @@
 //! Applied post-TLS handshake, so it has access to SNI-routed context.
 
 use async_trait::async_trait;
+use smallvec::SmallVec;
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
-use crate::plugins::runtime::edgion_config_data::{resolve_ip_list_matchers, resolve_ip_list_ref_keys};
+use crate::plugins::runtime::edgion_config_data::{
+    capture_global_edgion_config_data_snapshot_for_refs, resolve_ip_list_ref_keys,
+};
 use crate::plugins::stream::stream_plugin_trait::access_decision_to_stream_result;
 use crate::plugins::stream::StreamPluginResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
@@ -62,10 +65,13 @@ impl TlsRoutePlugin for TlsRouteIpRestriction {
         if self.init_failed {
             return StreamPluginResult::Deny("ip init fail".to_string());
         }
-        let deny_arcs = resolve_ip_list_matchers(&self.deny_ref_keys);
-        let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
-        let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
-        let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
+        let snapshot = capture_global_edgion_config_data_snapshot_for_refs(&self.deny_ref_keys, &self.allow_ref_keys);
+        let mut deny_refs: SmallVec<[&IpRadixMatcher; 4]> = SmallVec::new();
+        let mut allow_refs: SmallVec<[&IpRadixMatcher; 4]> = SmallVec::new();
+        if let Some(snapshot) = snapshot.as_ref() {
+            snapshot.append_ip_list_matchers(&self.deny_ref_keys, &mut deny_refs);
+            snapshot.append_ip_list_matchers(&self.allow_ref_keys, &mut allow_refs);
+        }
         let ip = match self.config.ip_source {
             IpSource::RemoteIp => &ctx.remote_ip,
             IpSource::DirectPeerIp => &ctx.direct_peer_ip,
@@ -217,8 +223,8 @@ mod tests {
             "denied allow_ref must yield no key in TLS route"
         );
         // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
-        // resolve_ip_list_matchers on an empty key list produces no arcs, so on_tls_route
-        // reaches check_ip_access_with_refs with empty ref slices — a whitelist miss → Deny.
+        // Empty key lists keep the snapshot absent, so on_tls_route reaches
+        // check_ip_access_with_refs with empty ref slices — a whitelist miss → Deny.
         assert!(
             matches!(plugin.on_tls_route(&ctx("8.8.8.8")).await, StreamPluginResult::Deny(_)),
             "denied allow_ref → empty allow matchers → non-matching IP must be DENIED (deny-all fail-closed)",

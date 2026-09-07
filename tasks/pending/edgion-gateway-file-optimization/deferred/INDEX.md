@@ -49,7 +49,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0045 — Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/tls/regression-guards/dynamic-external-upstream-sni-host-validation.md) |
 | D0046 — Use canonical final HTTP status validation for local replies | needs-implementation | [campaign finding](D0046-final-http-status-validation-local-replies.md) |
 | D0047 — Align HmacAuth documentation with the runtime wire format | needs-implementation | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
-| D0048 — Use one EdgionConfigData snapshot per authorization decision | needs-discussion | [campaign finding](D0048-request-scoped-config-data-snapshot.md) |
+| D0048 — Use one EdgionConfigData snapshot per authorization decision | resolved | [campaign finding](D0048-request-scoped-config-data-snapshot.md) |
 | D0049 — Align IP restriction docs with named IpGroup schema | needs-implementation | [campaign finding](D0049-ip-restriction-named-group-documentation.md) |
 | D0050 — Parse JWE protected headers as strict JSON objects | needs-implementation | [campaign finding](D0050-jwe-protected-header-strict-json.md) |
 | D0051 — Align JWE resolved-credential failure policy | needs-discussion | [campaign finding](D0051-jwe-resolved-credential-auth-failure.md) |
@@ -121,7 +121,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reject unsafe DynamicExternalUpstream SNI and Host overrides | fixed (2026-09-05) | [review rule](../../../../skills/04-review/tls/regression-guards/dynamic-external-upstream-sni-host-validation.md) |
 | Use canonical final HTTP status validation for local replies | pending | [task](../../../todo/use-canonical-final-http-status-validation-for-local-replies.md) |
 | Align HmacAuth documentation with the runtime wire format | completed | [campaign finding](D0047-hmac-auth-wire-format-documentation.md) |
-| Use one EdgionConfigData snapshot per authorization decision | pending | [task](../../../todo/request-scoped-edgion-config-data-snapshot.md) |
+| Use one EdgionConfigData snapshot per authorization decision | completed | [campaign finding](D0048-request-scoped-config-data-snapshot.md) |
 | Align IP restriction docs with named IpGroup schema | pending | [task](../../../todo/align-ip-restriction-named-group-documentation.md) |
 | Harden JWE protected header JSON parsing | pending | [task](../../../todo/harden-jwe-protected-header-json-parsing.md) |
 | Align JWE resolved-credential failure policy | pending | [task](../../../todo/align-jwe-resolved-credential-failure-policy.md) |

@@ -1,8 +1,11 @@
 //! Stream IP Restriction plugin (inline L4 config).
 
 use async_trait::async_trait;
+use smallvec::SmallVec;
 
-use crate::plugins::runtime::edgion_config_data::{resolve_ip_list_matchers, resolve_ip_list_ref_keys};
+use crate::plugins::runtime::edgion_config_data::{
+    capture_global_edgion_config_data_snapshot_for_refs, resolve_ip_list_ref_keys,
+};
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
@@ -69,10 +72,13 @@ impl StreamPlugin for StreamIpRestriction {
         if self.init_failed {
             return StreamPluginResult::Deny("ip init fail".to_string());
         }
-        let deny_arcs = resolve_ip_list_matchers(&self.deny_ref_keys);
-        let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
-        let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
-        let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
+        let snapshot = capture_global_edgion_config_data_snapshot_for_refs(&self.deny_ref_keys, &self.allow_ref_keys);
+        let mut deny_refs: SmallVec<[&IpRadixMatcher; 4]> = SmallVec::new();
+        let mut allow_refs: SmallVec<[&IpRadixMatcher; 4]> = SmallVec::new();
+        if let Some(snapshot) = snapshot.as_ref() {
+            snapshot.append_ip_list_matchers(&self.deny_ref_keys, &mut deny_refs);
+            snapshot.append_ip_list_matchers(&self.allow_ref_keys, &mut allow_refs);
+        }
         let decision = self
             .rules
             .check_ip_with_refs(&ctx.direct_peer_ip, &deny_refs, &allow_refs);
@@ -147,8 +153,8 @@ mod tests {
         // Denied allow_ref → allow_ref_keys is empty → no matcher resolved.
         assert!(plugin.allow_ref_keys.is_empty(), "denied allow_ref must yield no key");
         // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
-        // resolve_ip_list_matchers on an empty key list produces no arcs, so on_connection
-        // reaches check_ip_with_refs with empty ref slices — a whitelist miss → Deny.
+        // Empty key lists keep the snapshot absent, so on_connection reaches
+        // check_ip_with_refs with empty ref slices — a whitelist miss → Deny.
         let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
         assert!(
             matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),

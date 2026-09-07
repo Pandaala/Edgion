@@ -137,8 +137,8 @@
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 1 | 0 | complete |
-| `plugins-runtime` | 34 | 4 | 2 | 1 | pending |
-| `plugins-stream` | 18 | 0 | 0 | 0 | pending |
+| `plugins-runtime` | 34 | 6 | 2 | 1 | pending |
+| `plugins-stream` | 18 | 3 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
 | `routes-shared` | 66 | 1 | 1 | 0 | pending |
@@ -522,10 +522,10 @@
 | `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
 | `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | deferred | B0122 / D0083 |
-| `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | analysis-ready | B0123 |
-| `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | analysis-ready | B0123 |
+| `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | changed | B0123: decision-scoped immutable snapshot capture and torn-generation regression |
+| `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | analysis-ready | B0124 |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | analysis-in-progress | B0125 |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | analysis-ready | B0125 |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_header_modifier.rs` | `plugins-runtime` | source | pending | — |
@@ -558,14 +558,14 @@
 | `edgion-gateway/src/plugins/stream/geoip_location/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/mod.rs` | `plugins-stream` | source | pending | — |
-| `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs` | `plugins-stream` | source | changed | B0123: Selector and profile references share one snapshot generation |
 | `edgion-gateway/src/plugins/stream/ip_restriction/mod.rs` | `plugins-stream` | source | pending | — |
-| `edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
 | `edgion-gateway/src/plugins/stream/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/stream_plugin_store.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs` | `plugins-stream` | source | pending | — |
-| `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
 | `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |

@@ -23,17 +23,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use smallvec::SmallVec;
 
 use crate::observe::metrics::record_conn_ip_restriction_event;
 use crate::plugins::runtime::edgion_config_data::{
-    get_global_edgion_config_data_store, resolve_ip_list_matchers, resolve_ip_list_ref_keys,
+    capture_global_edgion_config_data_snapshot, capture_global_edgion_config_data_snapshot_for_refs,
+    resolve_ip_list_ref_keys, EdgionConfigDataSnapshot,
 };
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
-use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionConfig;
+use edgion_resources::resources::edgion_stream_plugins::{GlobalConnectionIpRestrictionConfig, ProfileRules};
 
 const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
 
@@ -93,45 +95,68 @@ impl GlobalConnectionIpRestrictionPlugin {
     /// name — no rule-data clone on the hot path. Every error / `active: null` / disabled path
     /// returns the base default (`active_profile`), i.e. fail-to-base. The caller indexes
     /// `self.base.profiles` with the returned name (matchers already compiled at construction).
-    fn resolve_active_profile(&self) -> String {
-        let Some(ref key) = self.active_profile_ref_key else {
-            // No selector configured — use the git default.
-            return self.base.active_profile.clone();
-        };
-
-        let store = get_global_edgion_config_data_store();
-        let raw_ed = store.get_raw_by_key(key);
+    fn resolve_active_profile_from_snapshot<'a>(
+        &'a self,
+        snapshot: &'a EdgionConfigDataSnapshot,
+        selector_key: &str,
+    ) -> &'a str {
+        let raw_ed = snapshot.get_raw_by_key(selector_key);
 
         // Envelope kill-switch: spec.enable=false means the operator disabled this
         // EdgionConfigData entirely. Ignore the selector; use base.
-        if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
+        if raw_ed.map(|ed| !ed.spec.enable).unwrap_or(false) {
             record_conn_ip_restriction_event("overlay_disabled");
-            return self.base.active_profile.clone();
+            return self.base.active_profile.as_str();
         }
 
-        match raw_ed.as_deref().map(|ed| &ed.spec.data) {
+        match raw_ed.map(|ed| &ed.spec.data) {
             None => {
                 // activeProfileRef set but EdgionConfigData not found in the store.
                 record_conn_ip_restriction_event("overlay_missing");
-                self.base.active_profile.clone()
+                self.base.active_profile.as_str()
             }
             Some(ConfigEntry::Selector(sel)) => match sel.active.as_deref() {
                 // `active: null` / absent → deliberate no-op (use base).
-                None => self.base.active_profile.clone(),
+                None => self.base.active_profile.as_str(),
                 // Valid switch among the git-owned profiles.
-                Some(name) if self.base.profiles.contains_key(name) => name.to_string(),
+                Some(name) if self.base.profiles.contains_key(name) => name,
                 // Selector names a profile that does not exist in the git-owned profiles.
                 Some(_) => {
                     record_conn_ip_restriction_event("overlay_invalid");
-                    self.base.active_profile.clone()
+                    self.base.active_profile.as_str()
                 }
             },
             Some(_) => {
                 // EdgionConfigData found but it is not a Selector variant.
                 record_conn_ip_restriction_event("overlay_type_mismatch");
-                self.base.active_profile.clone()
+                self.base.active_profile.as_str()
             }
         }
+    }
+
+    fn active_profile_ref_keys(&self, active: &str) -> (&[String], &[String]) {
+        self.profile_ref_keys
+            .get(active)
+            .map(|(deny, allow)| (deny.as_slice(), allow.as_slice()))
+            .unwrap_or_default()
+    }
+
+    fn evaluate_profile(
+        &self,
+        profile: &ProfileRules,
+        deny_keys: &[String],
+        allow_keys: &[String],
+        snapshot: Option<&EdgionConfigDataSnapshot>,
+        ctx: &StreamContext,
+    ) -> StreamPluginResult {
+        let mut deny_refs: SmallVec<[&IpRadixMatcher; 4]> = SmallVec::new();
+        let mut allow_refs: SmallVec<[&IpRadixMatcher; 4]> = SmallVec::new();
+        if let Some(snapshot) = snapshot {
+            snapshot.append_ip_list_matchers(deny_keys, &mut deny_refs);
+            snapshot.append_ip_list_matchers(allow_keys, &mut allow_refs);
+        }
+        let ip_decision = profile.check_ip_with_refs(&ctx.direct_peer_ip, &deny_refs, &allow_refs);
+        access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"))
     }
 }
 
@@ -147,21 +172,27 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
             return StreamPluginResult::Allow;
         }
 
-        let active = self.resolve_active_profile();
-        let Some(profile) = self.base.profiles.get(&active) else {
-            // Should not happen after validate_and_init + membership check, but guard defensively.
+        if let Some(selector_key) = self.active_profile_ref_key.as_deref() {
+            let snapshot = capture_global_edgion_config_data_snapshot();
+            let active = self.resolve_active_profile_from_snapshot(&snapshot, selector_key);
+            let Some(profile) = self.base.profiles.get(active) else {
+                // Should not happen after validate_and_init + membership check, but guard defensively.
+                record_conn_ip_restriction_event("fail_closed_profile_missing");
+                return StreamPluginResult::Deny("ip:deny:profile-missing".to_string());
+            };
+            let (deny_keys, allow_keys) = self.active_profile_ref_keys(active);
+            return self.evaluate_profile(profile, deny_keys, allow_keys, Some(&snapshot), ctx);
+        }
+
+        let active = self.base.active_profile.as_str();
+        let Some(profile) = self.base.profiles.get(active) else {
+            // Should not happen after validate_and_init, but guard defensively.
             record_conn_ip_restriction_event("fail_closed_profile_missing");
             return StreamPluginResult::Deny("ip:deny:profile-missing".to_string());
         };
-
-        static NO_KEYS: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
-        let (deny_keys, allow_keys) = self.profile_ref_keys.get(&active).unwrap_or(&NO_KEYS);
-        let deny_arcs = resolve_ip_list_matchers(deny_keys);
-        let allow_arcs = resolve_ip_list_matchers(allow_keys);
-        let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
-        let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
-        let ip_decision = profile.check_ip_with_refs(&ctx.direct_peer_ip, &deny_refs, &allow_refs);
-        access_decision_to_stream_result(ip_decision, || record_conn_ip_restriction_event("denied"))
+        let (deny_keys, allow_keys) = self.active_profile_ref_keys(active);
+        let snapshot = capture_global_edgion_config_data_snapshot_for_refs(deny_keys, allow_keys);
+        self.evaluate_profile(profile, deny_keys, allow_keys, snapshot.as_ref(), ctx)
     }
 }
 

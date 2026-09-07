@@ -44,7 +44,9 @@ use smallvec::SmallVec;
 use std::net::IpAddr;
 
 use crate::plugins::http::common::auth_common::send_gateway_plain_error_response;
-use crate::plugins::runtime::edgion_config_data::{resolve_ip_list_matchers, resolve_ip_list_ref_keys};
+use crate::plugins::runtime::edgion_config_data::{
+    capture_global_edgion_config_data_snapshot_for_refs, resolve_ip_list_ref_keys,
+};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
@@ -172,14 +174,17 @@ impl RequestFilter for IpRestriction {
 
         let should_deny = match source_ip {
             Some(ip) => match {
-                // Keep the Arc owners and every matcher borrow inside this lexical scope,
-                // which ends before any response-write await below.
-                let deny_arcs = resolve_ip_list_matchers(&self.deny_ref_keys);
-                let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
+                // Keep the optional snapshot and every matcher borrow inside this
+                // lexical scope, which ends before any response-write await below.
+                // Declare the owner first so it outlives the matcher containers.
+                let snapshot =
+                    capture_global_edgion_config_data_snapshot_for_refs(&self.deny_ref_keys, &self.allow_ref_keys);
                 let mut deny_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.deny_matcher.iter().collect();
-                deny_matchers.extend(deny_arcs.iter().map(|matcher| matcher.as_ref()));
                 let mut allow_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.allow_matcher.iter().collect();
-                allow_matchers.extend(allow_arcs.iter().map(|matcher| matcher.as_ref()));
+                if let Some(snapshot) = snapshot.as_ref() {
+                    snapshot.append_ip_list_matchers(&self.deny_ref_keys, &mut deny_matchers);
+                    snapshot.append_ip_list_matchers(&self.allow_ref_keys, &mut allow_matchers);
+                }
                 evaluate_ip_access_multi(
                     &deny_matchers,
                     &allow_matchers,

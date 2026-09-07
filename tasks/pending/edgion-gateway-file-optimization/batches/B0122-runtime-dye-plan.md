@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `486e8fea12bd870325b489839262729d14ecb22c`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned file:
   - `edgion-gateway/src/plugins/runtime/dye_plan.rs`
@@ -27,7 +27,4 @@
 - Independent review: confirmed the defer classification, plugin mismatches, missing design authority, D0083 ownership, and no-integration disposition, but required factual precision about the Wasm session/header lifecycle and broader execution-path parity keys. The records were corrected without runtime edits; re-review is pending.
 - Final re-review: LGTM with no Must Fix or Should Fix. The reviewer confirmed the corrected Wasm session/header lifecycle, runtime-reachable but renderer-unreachable AiProxy/ExtProc producers, stage/path/effective-configuration parity key, generalized future integration ownership, D0083 classification, and unchanged runtime/frozen tests.
 - Verification: no runtime test was needed for this record-only defer. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA force, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen 3,084-file integration guards all passed at `8a0f44c3`; Clippy emitted only the existing warning set.
-- Commit: pending.
-- Review: pending.
-- Verification: pending.
-- Commit: pending.
+- Commit: `5a95df60`.

@@ -14,6 +14,13 @@ only affected keys in cloned Arc-valued outer maps. Unchanged raw resources and
 `IpRadixMatcher`s retain their `Arc` identity; an equivalent update does not
 publish a new snapshot.
 
+Authorization decisions that combine live references capture one owned snapshot
+handle and resolve every raw Selector and IpList matcher through that handle.
+This makes one decision generation-consistent even when publication races with
+the request or connection. Consumers capture lazily: inline-only IP restriction
+decisions, and global-connection decisions with neither a Selector nor selected
+profile references, do not load the store.
+
 Add and update have different generation semantics. An update may reuse an
 equivalent raw or typed value. An add always replaces and rebuilds the affected
 typed value, even when the old store entry has identical content, because the
@@ -29,10 +36,13 @@ Do not infer that every `EdgionConfigDataRef` needs a Gateway typed index.
   The Gateway must not build a second live-reference mechanism for them.
 - `KeyList` and `Misc` have no current Gateway typed consumer.
 - `Selector` is intentionally read from the raw snapshot and type-guarded by its
-  live data-plane consumers.
+  live data-plane consumers. When a selected profile contains live IpList
+  references, both the Selector and those matchers must resolve through the same
+  captured snapshot handle.
 - `IpList` is a live data-plane reference. Its grouped CIDRs are compiled at
   configuration time and looked up dynamically by request and stream IP
-  restriction consumers.
+  restriction consumers. Deny and allow keys are resolved from the same captured
+  handle and preserve their configured order.
 - Region-route overlay consumers read and type-guard the live raw snapshot. The
   former `RegionRouteOverride` typed index and public getter had no production
   caller and were removed; cloning an unused duplicate would not improve the
@@ -77,9 +87,24 @@ re-enabling compiles the current generation.
   maps. It avoids O(n) resource cloning and typed recompilation, but is not a
   persistent-map implementation.
 - `full_set` remains a complete rebuild for reconnect and relist semantics.
-- A single snapshot load is internally generation-consistent. Separate getter
-  calls can straddle a concurrent publication and do not provide request-wide
-  consistency.
+- A captured `EdgionConfigDataSnapshot` is internally generation-consistent and
+  keeps its generation alive while borrowed raw entries and matchers are used.
+  Authorization code must not combine direct store getters or independently
+  captured handles in one decision. Raw-only single-lookup consumers may keep
+  using the direct getter because they cannot tear related values.
+- Reference-free HTTP, stream, and TLS IP restriction decisions avoid snapshot
+  capture. Global connection IP restriction captures unconditionally only when a
+  Selector must be read; without a Selector it captures only when the selected
+  base profile has deny or allow references.
+- HTTP uses one inline-capacity `SmallVec` per authorization side to combine
+  inline and referenced matchers. The three stream consumers use their
+  `SmallVec`s only for resolved reference matchers, then the existing resource
+  helper creates a `Vec` per side to prepend inline matchers. The HTTP `SmallVec`
+  spills when its inline matcher count plus resolved references exceeds four; a
+  stream `SmallVec` spills when resolved references exceed four. The stream helper
+  `Vec`s may heap-allocate. A matched-group result clones an existing `Arc<str>`
+  and performs reference-count work; it does not allocate a new group value. Do
+  not describe these paths as allocation-free.
 - Production load-clone-store publication relies on the conf-sync single-writer
   contract. The test-only insertion helper uses `ArcSwap::rcu` and rebuilds from
   the newest value on each retry so concurrent unique-key inserts are not lost.
@@ -89,7 +114,14 @@ re-enabling compiles the current generation.
 Focused unit coverage checks equivalent-update suppression, unchanged Arc reuse,
 metadata- and description-only updates, matcher input changes, enable toggles,
 variant transitions, removal, add-generation replacement, full/partial effective
-equivalence, warning scope, and concurrent test-helper insertion. The existing
+equivalence, warning scope, and concurrent test-helper insertion. A deterministic
+generation test captures the old handle, atomically migrates a Selector plus
+multiple ordered IpList keys, and proves all of the following: both complete
+generations deny the probe, the deliberately torn old-Selector/new-list tuple
+misses and reaches its allow default, the retained old handle still resolves the
+old ordered pair, and a recaptured handle resolves the new ordered pair.
+
+The existing
 `CanaryHotSwap` dynamic scenario provides related cross-process coverage by
 updating a Selector EdgionConfigData and checking the resulting data-plane route.
 Its update fixture also reapplies the referring EdgionPlugins resource, so it is
@@ -105,3 +137,5 @@ reference becomes a data-plane-live reference.
 
 - `incremental-publication-01-edgion-config-data` — fixed from pending task,
   2026-09-07.
+- `D0048` / campaign batch `B0123` — fixed multi-lookup authorization tearing by
+  introducing decision-scoped snapshot capture, 2026-09-08.
