@@ -49,6 +49,9 @@ pub struct OutboundClientConfig {
     /// applied through the shared [`super::tls`] helpers. The caller is
     /// responsible for the `tls.enabled` gate — pass `None` when TLS is disabled.
     pub tls: Option<TlsConfig>,
+    /// Fully prepared rustls configuration for shared custom-verifier support.
+    /// Mutually exclusive with `tls`; resolution remains the caller's responsibility.
+    pub preconfigured_tls: Option<rustls::ClientConfig>,
     /// Label used in TLS error messages (e.g. "Webhook", "Elasticsearch").
     /// `None` → "OutboundClient".
     pub tls_context: Option<&'static str>,
@@ -65,6 +68,10 @@ pub struct OutboundClientConfig {
 /// callers that need extra builder customization (e.g. `default_headers`) can
 /// chain onto the returned builder before `build()`.
 pub fn apply_outbound_policy(mut builder: ClientBuilder, cfg: OutboundClientConfig) -> anyhow::Result<ClientBuilder> {
+    anyhow::ensure!(
+        cfg.tls.is_none() || cfg.preconfigured_tls.is_none(),
+        "OutboundClient: tls and preconfigured_tls are mutually exclusive"
+    );
     if let Some(n) = cfg.pool_max_idle_per_host {
         builder = builder.pool_max_idle_per_host(n);
     }
@@ -93,6 +100,9 @@ pub fn apply_outbound_policy(mut builder: ClientBuilder, cfg: OutboundClientConf
     if let Some(tls) = cfg.tls.as_ref() {
         let ctx = cfg.tls_context.unwrap_or("OutboundClient");
         builder = apply_resolved_outbound_tls(builder, tls, ctx)?;
+    }
+    if let Some(tls) = cfg.preconfigured_tls {
+        builder = builder.use_preconfigured_tls(tls);
     }
     Ok(builder)
 }

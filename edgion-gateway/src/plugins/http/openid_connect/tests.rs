@@ -2158,7 +2158,7 @@ fn callback_path_normalized_for_absolute_url_redirect_uri() {
 
 #[test]
 fn oidc_san_pinning_config_builds_with_system_ca() {
-    use super::build_oidc_rustls_config_with_san;
+    use crate::tls::validation::build_verified_outbound_tls;
     use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
     use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
 
@@ -2173,13 +2173,13 @@ fn oidc_san_pinning_config_builds_with_system_ca() {
         hostname: Some("idp.example.com".to_string()),
         uri: None,
     }];
-    let cfg = build_oidc_rustls_config_with_san(&resolved, san).expect("build ok");
+    let cfg = build_verified_outbound_tls(&resolved, san, "OpenidConnect").expect("build ok");
     assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
 }
 
 #[test]
 fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
-    use super::build_oidc_rustls_config_with_san;
+    use crate::tls::validation::build_verified_outbound_tls;
     use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
     use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
 
@@ -2194,7 +2194,7 @@ fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
         hostname: Some("idp.example.com".to_string()),
         uri: None,
     }];
-    let r = build_oidc_rustls_config_with_san(&resolved, san);
+    let r = build_verified_outbound_tls(&resolved, san, "OpenidConnect");
     assert!(r.is_err(), "invalid CA PEM should error");
 }
 
