@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `486e8fea12bd870325b489839262729d14ecb22c`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned files:
   - `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs`
@@ -42,4 +42,4 @@
 - Verification: 18 EdgionConfigData, 12 HTTP IpRestriction, 2 stream IpRestriction, 3 TLS-route IpRestriction, and 12 GCIR focused tests passed. `cargo fmt --all`, `cargo check --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets`, `cargo build --locked -p edgion-gateway --bin edgion-gateway`, agent-doc, SSA force, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen 3,084-file integration guards passed; Clippy emitted only the existing warning set.
 - Coverage: both owned runtime files and three previously pending stream support files are changed; the already-terminal HTTP support file was revisited without duplicate credit.
 - Integration disposition: no existing integration file changed and no new integration issue is needed; the publication interleaving is deterministically covered at the store boundary while existing frozen scenarios retain ordinary sync/hot-reload coverage.
-- Commit: pending.
+- Commit: `9ce8c86d`.

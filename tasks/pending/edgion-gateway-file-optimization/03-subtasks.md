@@ -137,7 +137,7 @@
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 1 | 0 | complete |
-| `plugins-runtime` | 34 | 6 | 2 | 1 | pending |
+| `plugins-runtime` | 34 | 7 | 2 | 1 | pending |
 | `plugins-stream` | 18 | 3 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
@@ -524,7 +524,7 @@
 | `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | deferred | B0122 / D0083 |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | changed | B0123: decision-scoped immutable snapshot capture and torn-generation regression |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | analysis-ready | B0124 |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | changed | B0124: bounded inline CORS header pairs and validated-only construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | analysis-ready | B0125 |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | pending | — |

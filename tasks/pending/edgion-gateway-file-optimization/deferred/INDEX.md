@@ -80,6 +80,9 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0081 — Fail closed on plugin IP matcher limit violations | needs-investigation | [campaign finding](D0081-plugin-ip-matcher-limit-activation.md) |
 | D0082 — Fail closed on invalid AiGuard/AiProxy ordering | needs-investigation | [campaign finding](D0082-ai-guard-proxy-order-activation.md) |
 | D0083 — Define stage-aware dye capability and producer parity | needs-discussion | [campaign finding](D0083-stage-aware-dye-capability-parity.md) |
+| D0084 — Define backendRef-scoped native CORS preflight ownership | needs-discussion | [campaign finding](D0084-backendref-native-cors-preflight-ownership.md) |
+| D0085 — Complete native Gateway API CORS validation parity | needs-implementation | [campaign finding](D0085-native-gateway-api-cors-validation-parity.md) |
+| D0086 — Decide credentialed native CORS expose-headers wildcard semantics | needs-discussion | [campaign finding](D0086-credentialed-native-cors-expose-headers-wildcard.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -157,3 +160,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
 | Fail closed on invalid AiGuard/AiProxy ordering | pending | [task](../../../todo/fail-closed-ai-guard-proxy-order-violations.md) |
 | Define stage-aware dye capability and producer parity | pending | [task](../../../todo/define-stage-aware-dye-capability-and-producer-parity.md) |
+| Define backendRef-scoped native CORS preflight ownership | pending | [task](../../../todo/define-backendref-native-cors-preflight-ownership.md) |
+| Complete native Gateway API CORS validation parity | pending | [task](../../../todo/complete-native-gateway-api-cors-validation-parity.md) |
+| Decide credentialed native CORS expose-headers wildcard semantics | pending | [task](../../../todo/decide-credentialed-native-cors-expose-headers-wildcard.md) |

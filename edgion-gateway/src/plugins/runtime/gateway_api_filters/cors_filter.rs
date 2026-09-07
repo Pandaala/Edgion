@@ -6,11 +6,14 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use smallvec::SmallVec;
 
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{PluginSession, PluginSessionHeaderExt, RequestFilter, UpstreamResponseFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPCORSFilter;
+
+type CorsHeaderPairs = SmallVec<[(&'static str, String); 6]>;
 
 #[derive(Clone, Debug)]
 pub struct GapiCorsFilter {
@@ -26,10 +29,6 @@ impl GapiCorsFilter {
             return Err(format!("CORS filter origin validation failed: {}", errors.join("; ")));
         }
         Ok(Self { config })
-    }
-
-    pub fn new(config: HTTPCORSFilter) -> Self {
-        Self { config }
     }
 
     fn is_origin_allowed(&self, origin: &str) -> bool {
@@ -92,13 +91,8 @@ impl GapiCorsFilter {
     /// Compute CORS response headers as key-value pairs.
     /// This allows callers to apply headers to either a ResponseHeader (preflight)
     /// or via session queue (simple requests).
-    fn build_cors_headers(
-        &self,
-        session: &mut dyn PluginSession,
-        origin: &str,
-        is_preflight: bool,
-    ) -> Vec<(&'static str, String)> {
-        let mut headers = Vec::new();
+    fn build_cors_headers(&self, session: &mut dyn PluginSession, origin: &str, is_preflight: bool) -> CorsHeaderPairs {
+        let mut headers = CorsHeaderPairs::new();
         let credentials = self.config.allow_credentials.unwrap_or(false);
 
         // Access-Control-Allow-Origin
@@ -284,17 +278,19 @@ impl UpstreamResponseFilter for GapiCorsFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
 
     #[test]
     fn test_origin_match_exact() {
-        let filter = GapiCorsFilter::new(HTTPCORSFilter {
+        let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
             allow_origins: Some(vec!["https://app.example".to_string()]),
             allow_credentials: None,
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
             max_age: 5,
-        });
+        })
+        .expect("test CORS configuration must be valid");
         assert!(filter.is_origin_allowed("https://app.example"));
         assert!(!filter.is_origin_allowed("https://evil.com"));
         assert!(!filter.is_origin_allowed("http://app.example"));
@@ -302,28 +298,30 @@ mod tests {
 
     #[test]
     fn test_origin_match_wildcard() {
-        let filter = GapiCorsFilter::new(HTTPCORSFilter {
+        let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
             allow_origins: Some(vec!["*".to_string()]),
             allow_credentials: None,
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
             max_age: 5,
-        });
+        })
+        .expect("test CORS configuration must be valid");
         assert!(filter.is_origin_allowed("https://anything.com"));
         assert!(filter.is_origin_allowed("http://localhost:3000"));
     }
 
     #[test]
     fn test_origin_match_subdomain_wildcard() {
-        let filter = GapiCorsFilter::new(HTTPCORSFilter {
+        let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
             allow_origins: Some(vec!["https://*.example.com".to_string()]),
             allow_credentials: None,
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
             max_age: 5,
-        });
+        })
+        .expect("test CORS configuration must be valid");
         assert!(filter.is_origin_allowed("https://app.example.com"));
         assert!(filter.is_origin_allowed("https://foo.bar.example.com"));
         assert!(!filter.is_origin_allowed("https://example.com"));
@@ -332,15 +330,47 @@ mod tests {
 
     #[test]
     fn test_no_origins_rejects_all() {
-        let filter = GapiCorsFilter::new(HTTPCORSFilter {
+        let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
             allow_origins: None,
             allow_credentials: None,
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
             max_age: 5,
-        });
+        })
+        .expect("test CORS configuration must be valid");
         assert!(!filter.is_origin_allowed("https://anything.com"));
+    }
+
+    #[test]
+    fn maximum_header_set_stays_inline_and_preserves_order() {
+        let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
+            allow_origins: Some(vec!["https://app.example".to_string()]),
+            allow_credentials: Some(true),
+            allow_methods: Some(vec!["GET".to_string(), "POST".to_string()]),
+            allow_headers: Some(vec!["Content-Type".to_string(), "X-Trace-Id".to_string()]),
+            expose_headers: Some(vec!["X-Request-Id".to_string()]),
+            max_age: 3600,
+        })
+        .expect("maximum-header CORS test configuration must be valid");
+        let mut session = MockPluginSession::new();
+
+        let headers = filter.build_cors_headers(&mut session, "https://app.example", true);
+
+        assert_eq!(headers.len(), 6);
+        assert!(!headers.spilled());
+        assert_eq!(
+            headers.as_slice(),
+            [
+                ("Access-Control-Allow-Origin", "https://app.example".to_string()),
+                ("Access-Control-Allow-Credentials", "true".to_string()),
+                ("Access-Control-Allow-Methods", "GET, POST".to_string()),
+                ("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id".to_string()),
+                ("Access-Control-Expose-Headers", "X-Request-Id".to_string()),
+                ("Access-Control-Max-Age", "3600".to_string()),
+            ]
+            .as_slice()
+        );
     }
 
     #[test]
