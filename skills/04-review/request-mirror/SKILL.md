@@ -16,4 +16,5 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Unit tests isolate the writer transport](regression-guards/unit-tests-without-network.md)
 - [BODY-014 — RequestMirror Uses the Committed Body Snapshot — FIXED](regression-guards/request-mirror-committed-body-snapshot.md)

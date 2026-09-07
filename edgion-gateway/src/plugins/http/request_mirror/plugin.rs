@@ -14,9 +14,9 @@ use tokio_stream::StreamExt;
 use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
 use crate::ctx::{MirrorAbandonReason, MirrorCancellation};
 use crate::observe::metrics::record_mirror_metric;
-use crate::plugins::http::common::http_client::{
-    connection_listed_hop_by_hop, get_mirror_http_client, is_hop_by_hop_or_listed,
-};
+#[cfg(not(test))]
+use crate::plugins::http::common::http_client::get_mirror_http_client;
+use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::{MirrorConfig, MirrorState};
 use edgion_resources::filters::PluginRunningResult;
@@ -28,6 +28,8 @@ pub struct RequestMirrorPlugin {
     config: HTTPRequestMirrorFilter,
     tuning: MirrorTuning,
     semaphore: Arc<Semaphore>,
+    #[cfg(test)]
+    writer_events: Option<mpsc::UnboundedSender<arming_tests::WriterEvent>>,
 }
 
 async fn wait_for_send_or_cancel<F>(send_result: F, mut cancel_rx: oneshot::Receiver<()>) -> Option<F::Output>
@@ -85,6 +87,8 @@ impl RequestMirrorPlugin {
             semaphore: Arc::new(Semaphore::new(tuning.max_concurrent)),
             config: cfg,
             tuning,
+            #[cfg(test)]
+            writer_events: None,
         }
     }
 
@@ -282,7 +286,13 @@ impl RequestFilter for RequestMirrorPlugin {
 
         let channel_full_timeout_ms = self.tuning.channel_full_timeout_ms;
         let uses_committed_snapshot = committed_body.is_some();
+        #[cfg(not(test))]
         let client = get_mirror_http_client().clone();
+        #[cfg(test)]
+        let writer_events = self
+            .writer_events
+            .clone()
+            .expect("arming tests must observe the writer");
 
         let writer_handle = tokio::spawn(async move {
             let _permit = permit;
@@ -308,31 +318,40 @@ impl RequestFilter for RequestMirrorPlugin {
                 chunk_result
             });
 
-            let mirror_body = match committed_body {
-                Some(body) => reqwest::Body::from(body),
-                None => reqwest::Body::wrap_stream(tracked_stream),
-            };
-            let send_result = tokio::time::timeout(total_timeout, async {
+            #[cfg(not(test))]
+            let send = async {
+                let mirror_body = match committed_body {
+                    Some(body) => reqwest::Body::from(body),
+                    None => reqwest::Body::wrap_stream(tracked_stream),
+                };
+                // The response is irrelevant: drop it after headers, without
+                // aggregating its body or retaining the concurrency permit.
                 client
                     .request(method, &url)
                     .headers(headers)
                     .body(mirror_body)
                     .send()
                     .await
-            });
+                    .map(drop)
+            };
+            // Unit tests exercise the same arming, counters, cancellation and
+            // outcome path, but cannot compile a DNS/socket send into this writer.
+            #[cfg(test)]
+            let send = arming_tests::consume_without_network(
+                &writer_events,
+                method,
+                url,
+                headers,
+                committed_body,
+                tracked_stream,
+            );
+            let send_result = tokio::time::timeout(total_timeout, send);
             let send_result = wait_for_send_or_cancel(send_result, cancel_rx).await;
 
             let (status, error) = match mirror_abandon_status(&abandon_reason) {
                 Some(status) => (status, None),
                 None => match send_result {
-                    Some(Ok(Ok(resp))) => {
-                        // The mirrored response is intentionally irrelevant to the
-                        // main request. Dropping it after the headers avoids both
-                        // unbounded aggregation and letting an infinite response
-                        // retain the mirror concurrency permit.
-                        drop(resp);
-                        ("ok", None)
-                    }
+                    Some(Ok(Ok(()))) => ("ok", None),
                     Some(Ok(Err(e))) => {
                         if e.is_connect() {
                             ("connect_err", Some("connection failed".to_string()))
@@ -363,6 +382,17 @@ impl RequestFilter for RequestMirrorPlugin {
             }
 
             record_mirror_metric(status);
+            #[cfg(test)]
+            {
+                drop(_permit);
+                writer_events
+                    .send(arming_tests::WriterEvent::Finished {
+                        status,
+                        bytes: bytes_sent.load(Ordering::Relaxed),
+                        chunks: chunks_sent.load(Ordering::Relaxed),
+                    })
+                    .unwrap();
+            }
         });
 
         // Only a transport-level END_STREAM on the request headers proves that
@@ -406,6 +436,7 @@ impl RequestFilter for RequestMirrorPlugin {
 mod arming_tests {
     use super::*;
     use crate::backends::get_roundrobin_store;
+    use crate::plugins::http::common::http_client::get_mirror_http_client;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use crate::EdgionHttpContext;
@@ -413,19 +444,110 @@ mod arming_tests {
     use edgion_resources::resources::http_route::BackendObjectReference;
     use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use pingora_core::protocols::http::RequestBodyBuffer;
     use std::collections::{BTreeMap, HashMap};
 
     const TEST_NS: &str = "mirror-arming-test";
     const TEST_SERVICE: &str = "mirror-arming-backend";
-    // TEST-NET-1 (RFC 5737): routable-looking but never reachable, so the
-    // detached writer task cannot connect to anything real.
+    // TEST-NET-1 is only endpoint-selection data. The test writer has no transport.
     const TEST_ADDR: &str = "192.0.2.10";
     const TEST_PORT: i32 = 8080;
 
-    /// Register a single-address EndpointSlice in the process-wide roundrobin
-    /// store (additive `update_data_only`, so other tests sharing the singleton
-    /// are undisturbed) so `resolve_target` finds a selectable endpoint.
+    pub(super) enum WriterEvent {
+        Prepared {
+            method: reqwest::Method,
+            url: String,
+            headers: HeaderMap,
+            snapshot: Option<Bytes>,
+        },
+        Chunk(Bytes),
+        Finished {
+            status: &'static str,
+            bytes: u64,
+            chunks: u64,
+        },
+    }
+
+    pub(super) async fn consume_without_network(
+        events: &mpsc::UnboundedSender<WriterEvent>,
+        method: reqwest::Method,
+        url: String,
+        headers: HeaderMap,
+        snapshot: Option<Bytes>,
+        mut stream: impl tokio_stream::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+    ) -> Result<(), reqwest::Error> {
+        let uses_snapshot = snapshot.is_some();
+        events
+            .send(WriterEvent::Prepared {
+                method,
+                url,
+                headers,
+                snapshot,
+            })
+            .unwrap();
+        if !uses_snapshot {
+            while let Some(chunk) = stream.next().await {
+                events.send(WriterEvent::Chunk(chunk.unwrap())).unwrap();
+            }
+        }
+        Ok(())
+    }
+
+    fn observe_writer(plugin: &mut RequestMirrorPlugin) -> mpsc::UnboundedReceiver<WriterEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        plugin.writer_events = Some(tx);
+        rx
+    }
+
+    async fn next_event(events: &mut mpsc::UnboundedReceiver<WriterEvent>) -> WriterEvent {
+        tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn assert_prepared(events: &mut mpsc::UnboundedReceiver<WriterEvent>, snapshot: Option<Bytes>) {
+        let WriterEvent::Prepared {
+            method,
+            url,
+            headers,
+            snapshot: actual,
+        } = next_event(events).await
+        else {
+            panic!("expected prepared mirror request");
+        };
+        assert_eq!(method, reqwest::Method::POST);
+        assert_eq!(url, format!("http://{TEST_ADDR}:{TEST_PORT}/mirror"));
+        assert_eq!(headers["host"], format!("{TEST_ADDR}:{TEST_PORT}"));
+        assert_eq!(headers["x-mirror"], "true");
+        assert_eq!(actual, snapshot);
+        if snapshot.is_some() {
+            assert!(!headers.contains_key("content-length"));
+            assert!(!headers.contains_key("transfer-encoding"));
+        }
+    }
+
+    async fn assert_finished(
+        events: &mut mpsc::UnboundedReceiver<WriterEvent>,
+        plugin: &RequestMirrorPlugin,
+        expected: (&str, u64, u64),
+    ) {
+        let WriterEvent::Finished { status, bytes, chunks } = next_event(events).await else {
+            panic!("expected completed mirror writer");
+        };
+        assert_eq!((status, bytes, chunks), expected);
+        assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent);
+        assert!(events.try_recv().is_err());
+    }
+
+    /// Publish the shared immutable fixture once: concurrent replacements of
+    /// the same service can transiently invalidate endpoint selection.
     fn insert_test_endpoint_slice() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(publish_test_endpoint_slice);
+    }
+
+    fn publish_test_endpoint_slice() {
         let mut labels = BTreeMap::new();
         labels.insert(SERVICE_NAME.to_string(), TEST_SERVICE.to_string());
         let slice = EndpointSlice {
@@ -500,8 +622,16 @@ mod arming_tests {
     }
 
     fn test_session(headers_end_stream: Option<bool>) -> MockPluginSession {
+        test_session_with_context(headers_end_stream, EdgionHttpContext::new(), &[])
+    }
+
+    fn test_session_with_context(
+        headers_end_stream: Option<bool>,
+        ctx: EdgionHttpContext,
+        headers: &[(&str, &str)],
+    ) -> MockPluginSession {
         let mut session = MockPluginSession::new();
-        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_ctx().return_const(ctx);
         session
             .expect_request_headers_end_stream()
             .return_const(headers_end_stream);
@@ -509,14 +639,89 @@ mod arming_tests {
         session.expect_get_path().return_const("/mirror".to_string());
         session.expect_get_query().return_const(None);
         session.expect_get_method().return_const("POST".to_string());
-        setup_header_mocks(&mut session, &[]);
+        setup_header_mocks(&mut session, headers);
         session
+    }
+
+    #[tokio::test]
+    async fn disabled_sampling_and_saturated_concurrency_do_not_start_writer() {
+        for disabled in [true, false] {
+            let mut plugin = test_plugin();
+            let mut events = observe_writer(&mut plugin);
+            let held = if disabled {
+                plugin.config.percent = Some(0);
+                None
+            } else {
+                Some(
+                    plugin
+                        .semaphore
+                        .clone()
+                        .try_acquire_many_owned(plugin.tuning.max_concurrent as u32)
+                        .unwrap(),
+                )
+            };
+            // Any endpoint/session access would fail an unmet mock expectation.
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new("RequestMirror");
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
+            );
+            assert_eq!(
+                log.render_for_test(),
+                if disabled {
+                    "mirror disabled"
+                } else {
+                    "mirror skipped concurrency"
+                }
+            );
+            assert!(events.try_recv().is_err());
+            drop(held);
+            assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent);
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_snapshot_has_independent_body_and_framing() {
+        insert_test_endpoint_slice();
+        let mut plugin = test_plugin();
+        let mut events = observe_writer(&mut plugin);
+        let (mut storage, view) = crate::request_body::BodyStorage::new(1024, 1024);
+        storage.write(&Bytes::from_static(b"original")).await.unwrap();
+        storage.finish().await.unwrap();
+        view.overwrite_body(Bytes::from_static(b"committed")).unwrap();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_body.install(view.clone());
+        let mut session = test_session_with_context(
+            Some(false),
+            ctx,
+            &[("content-length", "8"), ("transfer-encoding", "chunked")],
+        );
+        let snapshot = view.read_all().await.unwrap();
+        session
+            .expect_read_request_body()
+            .withf(|limit| limit.is_none())
+            .times(1)
+            .return_once(move |_| Ok(snapshot));
+        session.expect_set_mirror_state().never();
+        let mut log = PluginLog::new("RequestMirror");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(log.render_for_test(), "mirror sent");
+        view.overwrite_body(Bytes::from_static(b"later")).unwrap();
+        assert_prepared(&mut events, Some(Bytes::from_static(b"committed"))).await;
+        assert_finished(&mut events, &plugin, ("ok", 9, 1)).await;
+        assert_eq!(view.read_all().await.unwrap(), "later");
     }
 
     #[tokio::test]
     async fn headers_end_stream_does_not_install_armed_streaming_state() {
         insert_test_endpoint_slice();
-        let plugin = test_plugin();
+        let mut plugin = test_plugin();
+        let mut events = observe_writer(&mut plugin);
         let mut session = test_session(Some(true));
         // A transport-level header END_STREAM proves the empty body complete,
         // so no armed mirror state is installed.
@@ -526,19 +731,25 @@ mod arming_tests {
         let result = plugin.run_request(&mut session, &mut log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "mirror sent");
+        assert_prepared(&mut events, None).await;
+        assert_finished(&mut events, &plugin, ("ok", 0, 0)).await;
     }
 
     #[tokio::test]
     async fn headers_without_end_stream_keep_armed_streaming_state() {
         insert_test_endpoint_slice();
-        let plugin = test_plugin();
+        let mut plugin = test_plugin();
+        let mut events = observe_writer(&mut plugin);
         let mut session = test_session(Some(false));
         // This is the H2 `Content-Length: 0` without END_STREAM shape: header
         // declarations cannot replace the transport fact. It also proves the
         // fixture resolves a real mirror target; otherwise the positive test
         // above could pass because of an early mirror-resolution return.
-        session.expect_set_mirror_state().times(1).returning(|state| {
+        let (state_tx, state_rx) = oneshot::channel();
+        session.expect_set_mirror_state().times(1).return_once(|state| {
             assert!(matches!(state, MirrorState::Streaming { .. }));
+            assert!(state_tx.send(state).is_ok());
             true
         });
         let mut log = PluginLog::new("RequestMirror");
@@ -546,17 +757,41 @@ mod arming_tests {
         let result = plugin.run_request(&mut session, &mut log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "mirror sent");
+        assert_prepared(&mut events, None).await;
+        assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent - 1);
+        let MirrorState::Streaming {
+            body_tx,
+            writer_handle,
+            cancellation,
+            ..
+        } = state_rx.await.unwrap()
+        else {
+            panic!("expected streaming mirror");
+        };
+        body_tx.send(Ok(Bytes::from_static(b"streamed body"))).await.unwrap();
+        let WriterEvent::Chunk(body) = next_event(&mut events).await else {
+            panic!("expected streamed body chunk");
+        };
+        assert_eq!(body, "streamed body");
+        cancellation.complete();
+        drop(body_tx);
+        writer_handle.await.unwrap();
+        assert_finished(&mut events, &plugin, ("ok", 13, 1)).await;
     }
 
     #[tokio::test]
     async fn unknown_headers_end_stream_keeps_armed_streaming_state() {
         insert_test_endpoint_slice();
-        let plugin = test_plugin();
+        let mut plugin = test_plugin();
+        let mut events = observe_writer(&mut plugin);
         let mut session = test_session(None);
         // `None` means the session cannot provide the transport fact: stay
         // conservative.
-        session.expect_set_mirror_state().times(1).returning(|state| {
+        let (state_tx, state_rx) = oneshot::channel();
+        session.expect_set_mirror_state().times(1).return_once(|state| {
             assert!(matches!(state, MirrorState::Streaming { .. }));
+            assert!(state_tx.send(state).is_ok());
             true
         });
         let mut log = PluginLog::new("RequestMirror");
@@ -564,12 +799,17 @@ mod arming_tests {
         let result = plugin.run_request(&mut session, &mut log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "mirror sent");
+        assert_prepared(&mut events, None).await;
+        drop(state_rx.await.unwrap());
+        assert_finished(&mut events, &plugin, ("body_abandoned", 0, 0)).await;
     }
 
     #[tokio::test]
     async fn frozen_body_stage_refuses_streaming_mirror_install() {
         insert_test_endpoint_slice();
-        let plugin = test_plugin();
+        let mut plugin = test_plugin();
+        let mut events = observe_writer(&mut plugin);
         let mut session = test_session(Some(false));
         session.expect_set_mirror_state().times(1).return_once(|state| {
             assert!(matches!(state, MirrorState::Streaming { .. }));
@@ -580,6 +820,9 @@ mod arming_tests {
         let result = plugin.run_request(&mut session, &mut log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(log.render_for_test(), "err: mirror body stage frozen");
+        // Cancellation is already ready and wins without polling the body/send future.
+        assert_finished(&mut events, &plugin, ("body_abandoned", 0, 0)).await;
     }
 }
 
