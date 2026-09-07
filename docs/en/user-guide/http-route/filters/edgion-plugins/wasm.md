@@ -307,7 +307,7 @@ Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on
 > if !end_of_stream { return Action::Pause; }       // expects the host to buffer
 > let body = self.get_http_response_body(0, body_size)?;  // expects the WHOLE body
 > ```
-> — would observe **only the last chunk**. For a WAF or secret scanner that is a silent false negative. The host therefore does **not** silently ignore a `Pause` here: it increments `edgion_wasm_body_pause_unsupported_total{module}` and logs a WARN once per module. **Alert on that counter** — it is a reliable signal that a deployed guest expects whole-body buffering. Whole-body mode is available only on the *request* side and is selected by an exported `proxy_on_request_body` hook; an optional `body:` block adds policy. The main upstream response remains streaming-only.
+> — would observe **only the last chunk**. For a WAF or secret scanner that is a silent false negative. The host therefore increments `edgion_wasm_body_pause_unsupported_total{module}` whenever `Pause` cannot be honored. This bounded metric is the only signal on the per-chunk data-plane path; no per-module WARN is emitted. **Alert on that counter** — it reliably indicates that a deployed guest expects whole-body buffering. Whole-body mode is available only on the *request* side and is selected by an exported `proxy_on_request_body` hook; an optional `body:` block adds policy. The main upstream response remains streaming-only.
 
 Working within the per-chunk model:
 

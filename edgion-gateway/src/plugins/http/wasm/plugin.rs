@@ -1,5 +1,6 @@
 //! Wasm plugin — executes proxy-wasm guests at the request-header,
-//! request-body (buffer mode, gated by an operator `body:` block), and
+//! request-body (buffer mode selected by an exported hook, with optional
+//! operator `body:` policy), and
 //! response-header phases. See mod.rs docs for scope and limitations.
 
 use bytes::Bytes;
@@ -240,11 +241,12 @@ impl WasmPlugin {
     }
 
     /// Buffer-mode request-body drive. Runs only when the guest exports
-    /// `proxy_on_request_body` and the body gate has buffered the body (the
-    /// `read_request_body` await returns `Ok`). A binary without the body
-    /// capability returns `Err(Unimplemented)`, which routes through
-    /// `fail_mode` like any other body-read failure. A `NotBuffered` refusal is distinct: it fails
-    /// closed unconditionally regardless of `failOpen`, since the guest's
+    /// `proxy_on_request_body`. `read_request_body` returns bytes already
+    /// captured by an optional pre-execution body gate or lazily captures them
+    /// while the request is still in the request-body phase. A mock or alternate
+    /// adapter may return `Err(Unimplemented)`, which routes through `fail_mode`
+    /// like any other body-read failure. A `NotBuffered` refusal is distinct: it
+    /// fails closed unconditionally regardless of `failOpen`, since the guest's
     /// body hook would otherwise inspect nothing (see the read match below).
     /// A fresh lease is re-acquired from `entry` (the same
     /// already-loaded `ModuleEntry` the headers phase used, passed in so no
@@ -436,19 +438,17 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///
     /// - **Request buffer mode** (see `run_request_body_phase` above —
     ///   a different method on this same type, invoked from the `RequestFilter`
-    ///   impl's `run_request`). Selection requires BOTH an operator `body:`
-    ///   block on the Wasm entry AND the compiled guest module exporting
-    ///   `proxy_on_request_body` (probed once at load via
+    ///   impl's `run_request`). The compiled guest exporting
+    ///   `proxy_on_request_body` selects lazy capture (probed once at load via
     ///   `ModuleEntry::has_request_body_hook()`). `Wasm` has no INTRINSIC
     ///   `body_requirement()` — `EdgionPlugin::body_requirement()` returns
     ///   `None` for every `Wasm` config, because the guest's hooks are only
     ///   known after module load, not from the plugin's own config — but it
-    ///   DOES `accepts_body()`, so `body:` on a Wasm entry IS accepted at
+    ///   DOES `accepts_body()`, so an optional `body:` block on a Wasm entry is accepted at
     ///   preparse (unlike a plugin with no `body_requirement()` and no
     ///   `accepts_body()`, which would be rejected). `resolve_body_requirement`
-    ///   (`plugin_runtime.rs`) treats that operator `body:` as the SOLE source
-    ///   of truth for Wasm and passes it through as-is, which wraps this
-    ///   plugin's `RequestFilter` in a `BodyGatedRequestFilter`. The gate
+    ///   (`plugin_runtime.rs`) passes that operator policy through as-is and
+    ///   wraps this plugin's `RequestFilter` in a `BodyGatedRequestFilter`. The gate
     ///   buffers the body (capped by the resolved gateway-wide physical limit) BEFORE
     ///   the inner Wasm filter runs; `run_request_body_phase` then re-awaits
     ///   the same shared facade (`PluginSession::read_request_body`), which
@@ -458,19 +458,16 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   `get_buffer_bytes(HttpRequestBody)` returns the whole thing), and the
     ///   guest can deny via `proxy_send_local_response` or atomically publish
     ///   a staged request-body rewrite — this is the only body path that can
-    ///   deny or rewrite the request. Without an operator `body:` block the
-    ///   gate is never installed and `run_request_body_phase` still calls
-    ///   `read_request_body` ungated (see that method's doc for why). A
-    ///   `NotBuffered` refusal (the gate was never installed / the request is
+    ///   deny or rewrite the request. Without an operator `body:` block,
+    ///   `run_request_body_phase` starts lazy capture only after the headers
+    ///   hook returns a clean Continue. A `NotBuffered` refusal (the request is
     ///   past the request-body stage) is always fail-close, unconditionally —
     ///   `failOpen` governs wasm *runtime* failures, not admission. A genuine
-    ///   read failure — including `Unimplemented` from a binary built without
-    ///   the request-buffering capability — goes through `fail_mode`, so it honors
-    ///   `failOpen`, whose default is fail-close (`fail_open` defaults to
-    ///   `false`). Either way the failure is recorded via `ctx.record_error` so it
-    ///   is alertable in the access log, not just logged to `PluginLog`. An
-    ///   ungated read must still fail rather than auto-buffer — see the facade contract in
-    ///   `docs/superpowers/specs/2026-07-22-wasm-body-wiring-design.md`.
+    ///   read failure — including `Unimplemented` from a mock or alternate
+    ///   adapter — goes through `fail_mode`, so it honors `failOpen`, whose
+    ///   default is fail-close (`fail_open` defaults to `false`). Either way the
+    ///   failure is recorded via `ctx.record_error` so it is alertable in the
+    ///   access log, not just logged to `PluginLog`.
     /// - **Response streaming observation** (this method, unchanged). `body_size`
     ///   is the CURRENT chunk's length and `get_buffer_bytes(HttpResponseBody)`
     ///   returns only that chunk. It cannot buffer — the `UpstreamResponseBodyFilter`
@@ -479,10 +476,11 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   and no way to see the whole body (headers are already sent by the time a
     ///   response body guest runs).
     ///
-    /// The mode a plugin gets is decided statically — by the operator `body:`
-    /// block (request side only) combined with which hooks the compiled guest
-    /// module exports, and by its placement in the operator's plugin array
-    /// (request stage vs. response body stage) — not by a per-chunk
+    /// The mode a plugin gets is decided statically — by which hooks the
+    /// compiled guest module exports and its placement in the operator's
+    /// plugin array (request stage vs. response body stage). An optional
+    /// request-side `body:` block adds pre-execution policy; it does not select
+    /// capture. The mode is not chosen by a per-chunk
     /// `Continue`/`Pause` decision from the guest at runtime; this is a deliberate deviation from the
     /// proxy-wasm spec, which models buffering as dynamic (Envoy maps `Pause`
     /// onto `StopIterationAndBuffer` and lets its filter manager own the
@@ -540,9 +538,14 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         // Lean phase begin: body observation needs no header snapshot or
         // property map (per-chunk cost discipline).
         state.begin_phase(WasmPhase::ResponseBody, Vec::new(), Vec::new(), HashMap::new());
-        state.body_chunk = body.as_ref().map(|b| b.to_vec()).unwrap_or_default();
+        state.body_chunk = body.clone().unwrap_or_default();
         let size = state.body_chunk.len() as i32;
-        match lease.call_on_response_body(size, end_of_stream) {
+        let action = lease.call_on_response_body(size, end_of_stream);
+        // A healthy lease returns to the module pool when this function ends.
+        // Drop the chunk reference first so an idle VM never pins response
+        // payload storage between callbacks.
+        lease.state_mut().body_chunk = Bytes::new();
+        match action {
             Ok(action) if action != 0 => {
                 // Pause: the guest expects the spec's cumulative-buffer
                 // semantics, which this host does not implement (the guest then
@@ -1311,7 +1314,7 @@ mod tests {
             Vec::new(),
             std::collections::HashMap::new(),
         );
-        lease.state_mut().body_chunk = b"hello-chunk".to_vec();
+        lease.state_mut().body_chunk = Bytes::from_static(b"hello-chunk");
         let seen = lease.call_on_response_body(11, false).expect("hook ok");
         assert_eq!(seen, 11, "guest must observe exactly the staged chunk bytes");
 
@@ -1322,7 +1325,7 @@ mod tests {
             Vec::new(),
             std::collections::HashMap::new(),
         );
-        lease.state_mut().body_chunk = b"x".to_vec();
+        lease.state_mut().body_chunk = Bytes::from_static(b"x");
         let seen = lease.call_on_response_body(1, true).expect("hook ok");
         assert_eq!(seen, 1, "window must be the current chunk only");
     }
@@ -1377,6 +1380,33 @@ mod tests {
                 "a Pausing body guest must never throttle or interrupt the stream"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn body_filter_releases_chunk_before_returning_lease_to_pool() {
+        let f = write_temp_wasm(GUEST_BODY_OBSERVER);
+        let c = config_for(f.path(), false);
+        let entry = global_vm_manager()
+            .get_or_load(&c, &runtime_cache_key(&c))
+            .await
+            .expect("module loads");
+        let plugin = WasmPlugin::create_body_filter(&c).expect("body filter");
+        let mut session = MockPluginSession::new();
+        let chunk = Bytes::from(vec![1, 2, 3, 4]);
+        let body = Some(chunk.clone());
+
+        assert!(plugin
+            .run_upstream_response_body_filter(&body, false, &mut session)
+            .is_none());
+        drop(body);
+
+        let lease = entry.acquire(100).expect("reacquire pooled VM");
+        assert!(lease.state().body_chunk.is_empty());
+        drop(lease);
+        assert!(
+            chunk.try_into_mut().is_ok(),
+            "the returned lease must not retain a reference to the response chunk"
+        );
     }
 
     /// Guest whose body hook traps — the stream must keep flowing.

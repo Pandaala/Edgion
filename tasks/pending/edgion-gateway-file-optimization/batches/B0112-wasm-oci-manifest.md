@@ -31,4 +31,4 @@
 - Final review: approved independently with no Must Fix or optional in-scope findings. The reviewer verified the bounded Serde entry point, PAX state machine and parser-differential closure, exact resource boundaries, first-logical-tar candidate semantics, multi-member atomic drain, generic errors, compatibility behavior, and that the adversarial tests construct the claimed inputs.
 - Final freshness: external work advanced HEAD again to `237928f8` through request-mirror code and review knowledge. The owned baseline blob and OCI call chain were unchanged before implementation, and the final code diff remains confined to the one-file allow-list.
 - Verification: 53 focused OCI tests passed. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards all passed on `237928f8`; Clippy emitted only the existing warning set.
-- Commit: pending
+- Commit: `fe73e84b`

@@ -299,7 +299,7 @@ impl HttpContext for BodyScanner {
 > if !end_of_stream { return Action::Pause; }             // 期望宿主缓冲
 > let body = self.get_http_response_body(0, body_size)?;  // 以为拿到完整 body
 > ```
-> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主在这里**不会**静默忽略 `Pause`：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它是一个可靠信号，说明线上某个 guest 期望完整 body 缓冲。完整 body 模式只在*请求*侧可用，由导出的 `proxy_on_request_body` 钩子选择；可选的 `body:` 块用于添加策略。主上游响应始终仅支持流式处理。
+> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此每次无法兑现 `Pause` 时，宿主都会递增 `edgion_wasm_body_pause_unsupported_total{module}`。该有界指标是每 chunk 数据面路径上的唯一信号；不会再按模块输出 WARN。**请对该指标配告警**——它能可靠表明线上某个 guest 期望完整 body 缓冲。完整 body 模式只在*请求*侧可用，由导出的 `proxy_on_request_body` 钩子选择；可选的 `body:` 块用于添加策略。主上游响应始终仅支持流式处理。
 
 在每 chunk 模型下正确的用法：
 

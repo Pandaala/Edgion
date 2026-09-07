@@ -13,6 +13,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bytes::Bytes;
 use wasmtime::{Caller, Extern, FuncType, Linker, ValType};
 
 use edgion_wasm::{host, HostBehavior, WasmValueType};
@@ -263,7 +264,7 @@ pub struct HostState {
     // ---- Body state ----
     /// Current response-body chunk exposed via
     /// `get_buffer_bytes(HttpResponseBody)`. Never buffers across chunks.
-    pub body_chunk: Vec<u8>,
+    pub body_chunk: Bytes,
 
     /// Full request body staged for buffer mode, exposed via
     /// `get_buffer_bytes(HttpRequestBody)`. Populated once from the body gate's
@@ -348,7 +349,7 @@ impl HostState {
         // Tokens start at 1: some proxy-wasm SDKs treat a 0 call-token as an
         // invalid/sentinel value (Envoy issues nonzero tokens).
         self.next_callout_token = 1;
-        self.body_chunk.clear();
+        self.body_chunk = Bytes::new();
         self.request_body.clear();
         self.request_body_limit = 0;
         self.request_body_modified = false;
@@ -749,22 +750,36 @@ fn collect_header_removals(pairs: &[(String, String)]) -> Result<Vec<String>, i3
 
 /// Resolve a proxy-wasm buffer-type id to the host bytes it exposes.
 /// `None` = unknown buffer type (caller returns `STATUS_NOT_FOUND`).
-fn select_buffer(state: &HostState, buf_type: i32) -> Option<Vec<u8>> {
+enum SelectedBuffer {
+    Owned(Vec<u8>),
+    Shared(Bytes),
+}
+
+impl AsRef<[u8]> for SelectedBuffer {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Shared(bytes) => bytes,
+        }
+    }
+}
+
+fn select_buffer(state: &HostState, buf_type: i32) -> Option<SelectedBuffer> {
     match buf_type {
-        BUF_VM_CONFIGURATION => Some(state.vm_config.clone()),
-        BUF_PLUGIN_CONFIGURATION => Some(state.plugin_config.clone()),
-        BUF_HTTP_CALL_RESPONSE_BODY => Some(
+        BUF_VM_CONFIGURATION => Some(SelectedBuffer::Owned(state.vm_config.clone())),
+        BUF_PLUGIN_CONFIGURATION => Some(SelectedBuffer::Owned(state.plugin_config.clone())),
+        BUF_HTTP_CALL_RESPONSE_BODY => Some(SelectedBuffer::Owned(
             state
                 .callout_response
                 .as_ref()
                 .map(|r| r.body.clone())
                 .unwrap_or_default(),
-        ),
+        )),
         // Buffer mode: the full request body staged by the body gate.
-        BUF_HTTP_REQUEST_BODY => Some(state.request_body.clone()),
+        BUF_HTTP_REQUEST_BODY => Some(SelectedBuffer::Owned(state.request_body.clone())),
         // Read-only chunk window (body observation): the CURRENT chunk only,
         // never an accumulated body.
-        BUF_HTTP_RESPONSE_BODY => Some(state.body_chunk.clone()),
+        BUF_HTTP_RESPONSE_BODY => Some(SelectedBuffer::Shared(state.body_chunk.clone())),
         _ => None,
     }
 }
@@ -773,10 +788,10 @@ fn select_buffer(state: &HostState, buf_type: i32) -> Option<Vec<u8>> {
 /// point past the end of `data`) up to `max_size` bytes. `start` is clamped
 /// to `data.len()` before slicing so that an empty (or short) buffer with
 /// an out-of-range `start` never panics.
-fn slice_buffer(data: &[u8], start: usize, max_size: usize) -> Vec<u8> {
+fn slice_buffer(data: &[u8], start: usize, max_size: usize) -> &[u8] {
     let start = start.min(data.len());
     let end = data.len().min(start.saturating_add(max_size));
-    data[start..end].to_vec()
+    &data[start..end]
 }
 
 /// Apply the proxy-wasm range-replacement contract to the staged request Body.
@@ -1849,11 +1864,12 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             // i.e. -1 as i32) for "the whole buffer". Interpret as u32 —
             // a signed max(0) clamp would silently read 0 bytes there.
             let start = start as u32 as usize;
+            let data = data.as_ref();
             if start >= data.len() && !data.is_empty() {
                 return STATUS_BAD_ARGUMENT;
             }
-            let slice = slice_buffer(&data, start, max_size as u32 as usize);
-            write_to_guest(&mut caller, &slice, ret_ptr, ret_size)
+            let slice = slice_buffer(data, start, max_size as u32 as usize);
+            write_to_guest(&mut caller, slice, ret_ptr, ret_size)
         },
     )?;
 
@@ -2449,15 +2465,15 @@ mod tests {
     /// `start`). Slicing must never panic.
     #[test]
     fn slice_buffer_empty_data_nonzero_start_no_panic() {
-        assert_eq!(slice_buffer(&[], 3, 10), Vec::<u8>::new());
+        assert_eq!(slice_buffer(&[], 3, 10), b"");
     }
 
     #[test]
     fn slice_buffer_normal_cases() {
         let data = b"hello world";
-        assert_eq!(slice_buffer(data, 0, 5), b"hello".to_vec());
-        assert_eq!(slice_buffer(data, 6, 100), b"world".to_vec());
-        assert_eq!(slice_buffer(data, 100, 5), Vec::<u8>::new());
+        assert_eq!(slice_buffer(data, 0, 5), b"hello");
+        assert_eq!(slice_buffer(data, 6, 100), b"world");
+        assert_eq!(slice_buffer(data, 100, 5), b"");
     }
 
     #[test]
@@ -2810,15 +2826,28 @@ mod tests {
     /// request body, keeps the existing response-body chunk-window behavior,
     /// and returns `None` for an unknown buffer-type id.
     #[test]
-    fn buffer_select_returns_request_body() {
+    fn buffer_select_preserves_owned_request_body() {
         let mut state = HostState::default();
         state.request_body = b"POST-BODY".to_vec();
-        assert_eq!(
-            select_buffer(&state, BUF_HTTP_REQUEST_BODY),
-            Some(b"POST-BODY".to_vec())
-        );
-        assert_eq!(select_buffer(&state, BUF_HTTP_RESPONSE_BODY), Some(Vec::new()));
-        assert_eq!(select_buffer(&state, 999), None);
+        let selected = select_buffer(&state, BUF_HTTP_REQUEST_BODY).expect("request body buffer");
+        assert_eq!(selected.as_ref(), b"POST-BODY");
+        assert!(matches!(selected, SelectedBuffer::Owned(_)));
+        let response = select_buffer(&state, BUF_HTTP_RESPONSE_BODY).expect("response body buffer");
+        assert!(response.as_ref().is_empty());
+        assert!(matches!(response, SelectedBuffer::Shared(_)));
+        assert!(select_buffer(&state, 999).is_none());
+    }
+
+    #[test]
+    fn response_buffer_selection_shares_chunk_backing_storage() {
+        let chunk = Bytes::from(vec![1, 2, 3, 4]);
+        let mut state = HostState::default();
+        state.body_chunk = chunk.clone();
+
+        let selected = select_buffer(&state, BUF_HTTP_RESPONSE_BODY).expect("response body buffer");
+        assert_eq!(selected.as_ref(), chunk.as_ref());
+        assert_eq!(selected.as_ref().as_ptr(), chunk.as_ptr());
+        assert!(matches!(selected, SelectedBuffer::Shared(_)));
     }
 
     fn instantiate_guest(wat: &str) -> (Store<HostState>, Instance) {
