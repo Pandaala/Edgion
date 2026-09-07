@@ -16,6 +16,14 @@
 > AI Gateway 相关业务指标见下方 Business 表中的 `edgion_gateway_genai_tokens_total`，
 > 以及 Cardinality budget 中的 `metrics.genai_tokens.enabled`。
 
+通用 Watch 解码失败时，Gateway 每个失败响应输出一条 error，记录首个失败的
+`kind`、`ns`、`name`、`resourceVersion`、`syncVersion` 和安全错误摘要。
+缺失或无效的身份字段省略；顶层 JSON 失败使用响应的同步版本。日志不包含资源正文
+或解码器错误中的原始字段值。同一响应中的其他失败仍会计入指标。通用 Watch 跳过
+无效事件后继续同步，该信号不代表缓存已经恢复。请核对 Controller/Gateway 构建版本
+并排查对应资源；遗漏的变更可能持续到后续有效更新或成功全量同步才恢复。
+EdgionBackend 使用独立的撤销策略。
+
 ## Self（自身）
 
 | metric | type | process | labels | category | description | alert |
@@ -31,7 +39,7 @@
 | edgion_access_log_backfill_failed_total | Counter | gateway | none | self | Access-log lines that failed to backfill into Elasticsearch and are kept on disk for a later retry | - |
 | edgion_config_reload_signals_total | Counter | gateway | none | self | Reload signals received by the Gateway from the Controller over conf_sync | - |
 | edgion_config_relist_total | Counter | gateway | none | self | Config relist operations performed by the Gateway's conf_sync client | - |
-| edgion_config_event_parse_errors_total | Counter | gateway | kind | self | Watch-event JSON parse failures per resource kind — the primary signal for Controller/Gateway schema drift | - |
+| edgion_config_event_parse_errors_total | Counter | gateway | kind | self | 按资源 kind 统计 Watch 解码失败；通用 Watch 每个无效事件外壳或资源计一次，整批无法解码时计一次 | - |
 | edgion_link_sys_es_bulk_channel_full_total | Counter | gateway | none | self | Elasticsearch producer→bulk-loop channel was full at submit time; raise `bulk.channelSize` | - |
 | edgion_link_sys_health | Gauge | gateway | link | self | LinkSys provider health: 1 = healthy, 0 = unhealthy, per provider | - |
 | edgion_link_sys_health_flips_total | Counter | gateway | link, direction (recovered/degraded) | self | LinkSys provider health flip counter — exposes sub-scrape flapping the level gauge cannot | - |

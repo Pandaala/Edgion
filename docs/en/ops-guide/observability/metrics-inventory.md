@@ -16,6 +16,17 @@
 > the Center process now lives in the separate EdgionCenter repository and is out
 > of scope for this guard.
 
+For generic Watch decode failures, the Gateway emits one error per failed response
+with the first failure's `kind`, `ns`, `name`, `resourceVersion`, `syncVersion`, and
+safe error summary. Unavailable or invalid identity fields are omitted; top-level
+JSON failures use the response sync version. Resource bodies and raw decoder error
+values are excluded. Use the counter to detect all failures, including additional
+invalid events in the same response. Generic Watch continues after skipping invalid
+events: the signal does not mean the cache recovered. Compare Controller/Gateway
+builds and investigate the named resource; a skipped change can remain stale until
+a later valid update or a successful full resync. EdgionBackend uses a separate
+withdrawal policy.
+
 ## Self
 
 | metric | type | process | labels | category | description | alert |
@@ -31,7 +42,7 @@
 | edgion_access_log_backfill_failed_total | Counter | gateway | none | self | Access-log lines that failed to backfill into Elasticsearch and are kept on disk for a later retry | - |
 | edgion_config_reload_signals_total | Counter | gateway | none | self | Reload signals received by the Gateway from the Controller over conf_sync | - |
 | edgion_config_relist_total | Counter | gateway | none | self | Config relist operations performed by the Gateway's conf_sync client | - |
-| edgion_config_event_parse_errors_total | Counter | gateway | kind | self | Watch-event JSON parse failures per resource kind — the primary signal for Controller/Gateway schema drift | - |
+| edgion_config_event_parse_errors_total | Counter | gateway | kind | self | Watch decode failures per kind; generic Watch counts each invalid envelope/resource, or one failure for an undecodable batch | - |
 | edgion_gateway_waf_compile_total | Counter | gateway | result (ok/error) | self | Native WAF generation compilation attempts; rule or resource identity stays out of labels | alert on sustained `rate(...{result="error"}[5m]) > 0` |
 | edgion_gateway_waf_compile_microseconds_total | Counter | gateway | result (ok/error) | self | Cumulative native WAF compilation time in microseconds; divide its rate by `edgion_gateway_waf_compile_total` for mean build latency | - |
 | edgion_gateway_waf_generation_bytes | Gauge | gateway | none | self | Retained bytes charged to live compiled native WAF generations, including generations pinned by in-flight requests | alert near the configured process memory envelope |

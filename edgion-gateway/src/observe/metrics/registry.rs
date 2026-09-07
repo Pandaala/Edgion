@@ -667,17 +667,16 @@ pub fn record_acme_challenge_lookup(result: &'static str) {
     counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);
 }
 
-/// Record a watch-event JSON parse failure (per resource kind).
+/// Record a watch payload, event-envelope, or resource decode failure (per kind).
 ///
-/// Triggered from `ClientCache::start_watch` when either the outer
-/// `serde_json::from_str` (events array) or the per-event
-/// `serde_json::from_value::<T>` deserialization fails. `kind` is sourced from
+/// Counts each rejected generic event, or one failure for an undecodable batch.
+/// The backend-specific decoder also uses this counter. `kind` is sourced from
 /// `T::kind_name()` which returns a `&'static str` from a closed set of
 /// registered resource types, so label cardinality is bounded.
 ///
-/// The control flow on parse failure remains "log and continue" — this counter
-/// exists purely so operators can alert on schema drift between controller and
-/// gateway (the most common real-world trigger) without relying on log scraping.
+/// Generic watch failures retain the skip-and-continue policy and emit at most
+/// one safe error log per response. This counter does not imply cache recovery;
+/// backend-specific withdrawal and relist behavior is separate.
 pub fn record_config_event_parse_error(kind: &'static str) {
     counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);
 }

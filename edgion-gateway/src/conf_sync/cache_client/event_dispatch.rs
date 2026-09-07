@@ -56,21 +56,145 @@ fn raw_backend_key(value: &serde_json::Value) -> Option<String> {
 fn take_watch_event_parts(
     mut event: serde_json::Value,
     response_sv: u64,
-) -> Result<(ResourceChange, u64, serde_json::Value), ()> {
-    let event_object = event.as_object_mut().ok_or(())?;
-    let event_type = event_object.get("type").and_then(serde_json::Value::as_str).ok_or(())?;
+) -> Result<(ResourceChange, u64, serde_json::Value), &'static str> {
+    let event_object = event.as_object_mut().ok_or("watch event must be an object")?;
+    let event_type = event_object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("watch event type must be a string")?;
     let change = match event_type {
         "add" => ResourceChange::EventAdd,
         "update" => ResourceChange::EventUpdate,
         "delete" => ResourceChange::EventDelete,
-        _ => return Err(()),
+        _ => return Err("unknown watch event type"),
     };
     let event_sv = event_object
         .get("sync_version")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(response_sv);
-    let event_data = event_object.remove("data").ok_or(())?;
+    let event_data = event_object.remove("data").ok_or("watch event data is missing")?;
     Ok((change, event_sv, event_data))
+}
+
+#[derive(Default)]
+struct WatchLogIdentity {
+    ns: Option<String>,
+    name: Option<String>,
+    resource_version: Option<String>,
+}
+
+impl WatchLogIdentity {
+    fn from_event(event: &serde_json::Value) -> Self {
+        let metadata = &event["data"]["metadata"];
+        // Malformed input is not trusted metadata. Copy only bounded identifiers,
+        // never the payload or the Display text of a deserialization error.
+        Self {
+            ns: metadata["namespace"]
+                .as_str()
+                .filter(|value| valid_dns_label(value))
+                .map(str::to_owned),
+            name: metadata["name"]
+                .as_str()
+                .filter(|value| valid_kube_name(value))
+                .map(str::to_owned),
+            resource_version: metadata["resourceVersion"]
+                .as_str()
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+                })
+                .map(str::to_owned),
+        }
+    }
+}
+
+fn record_watch_parse_failure<T: ResourceMeta>(
+    logged_error: &mut bool,
+    identity: &WatchLogIdentity,
+    sync_version: u64,
+    error: &'static str,
+) {
+    record_config_event_parse_error(T::kind_name());
+    if !*logged_error {
+        tracing::error!(
+            kind = T::kind_name(),
+            ns = identity.ns.as_deref(),
+            name = identity.name.as_deref(),
+            resourceVersion = identity.resource_version.as_deref(),
+            syncVersion = sync_version,
+            error,
+            "Failed to decode watch configuration; skipping invalid events"
+        );
+        *logged_error = true;
+    }
+}
+
+fn apply_generic_watch_payload<T>(cache_data: &Arc<RwLock<CacheData<T>>>, data: &str, response_sv: u64)
+where
+    T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
+{
+    let mut logged_error = false;
+    let events: Vec<serde_json::Value> = match serde_json::from_str(data) {
+        Ok(events) => events,
+        Err(_) => {
+            record_watch_parse_failure::<T>(
+                &mut logged_error,
+                &WatchLogIdentity::default(),
+                response_sv,
+                "watch response must be a valid JSON event array",
+            );
+            return;
+        }
+    };
+
+    // Keep the existing single-guard application and skip-on-error policy.
+    let mut cache = cache_data.write();
+    for event in events {
+        let identity = if logged_error {
+            WatchLogIdentity::default()
+        } else {
+            WatchLogIdentity::from_event(&event)
+        };
+        let event_sv = event["sync_version"].as_u64().unwrap_or(response_sv);
+        let (change, event_sv, event_data) = match take_watch_event_parts(event, event_sv) {
+            Ok(parts) => parts,
+            Err(error) => {
+                record_watch_parse_failure::<T>(&mut logged_error, &identity, event_sv, error);
+                continue;
+            }
+        };
+
+        match serde_json::from_value::<T>(event_data) {
+            Ok(mut resource) => {
+                resource.pre_parse();
+                edgion_resources::resource::meta::set_sync_version(resource.meta_mut(), event_sv);
+                tracing::debug!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
+                let resource_key = resource.key_name();
+                match change {
+                    ResourceChange::EventAdd | ResourceChange::EventUpdate => {
+                        cache.insert(resource_key.clone(), resource);
+                        cache.add_compress_event(resource_key, change);
+                    }
+                    ResourceChange::EventDelete => {
+                        cache.remove(&resource_key);
+                        cache.add_compress_event(resource_key, change);
+                    }
+                    ResourceChange::InitAdd | ResourceChange::InitStart | ResourceChange::InitDone => {}
+                }
+            }
+            Err(_) => {
+                record_watch_parse_failure::<T>(
+                    &mut logged_error,
+                    &identity,
+                    event_sv,
+                    "watch resource does not match the resource schema",
+                );
+            }
+        }
+    }
 }
 
 fn decode_list_payload<T: ResourceMeta>(data: &[u8]) -> Result<Vec<T>, String>
@@ -550,54 +674,7 @@ where
                                     continue;
                                 }
 
-                                let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
-                                    Ok(events) => events,
-                                    Err(error) => {
-                                        record_config_event_parse_error(T::kind_name());
-                                        tracing::error!(kind = T::kind_name(), error = %error, "Failed to parse watch response events");
-                                        continue;
-                                    }
-                                };
-
-                                // Hold a single write guard across all events in this WatchResponse
-                                // to coalesce O(N) lock acquisitions into one batch.
-                                let mut cache = cache_data.write();
-                                for event in events {
-                                    let Ok((change, event_sv, event_data)) = take_watch_event_parts(event, response_sv)
-                                    else {
-                                        continue;
-                                    };
-
-                                    match serde_json::from_value::<T>(event_data) {
-                                        Ok(mut resource) => {
-                                            resource.pre_parse();
-                                            edgion_resources::resource::meta::set_sync_version(
-                                                resource.meta_mut(),
-                                                event_sv,
-                                            );
-
-                                            tracing::debug!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
-                                            let resource_key = resource.key_name();
-                                            match change {
-                                                ResourceChange::EventAdd | ResourceChange::EventUpdate => {
-                                                    cache.insert(resource_key.clone(), resource);
-                                                    cache.add_compress_event(resource_key, change);
-                                                }
-                                                ResourceChange::EventDelete => {
-                                                    cache.remove(&resource_key);
-                                                    cache.add_compress_event(resource_key, change);
-                                                }
-                                                ResourceChange::InitAdd
-                                                | ResourceChange::InitStart
-                                                | ResourceChange::InitDone => {}
-                                            }
-                                        }
-                                        Err(error) => {
-                                            record_config_event_parse_error(T::kind_name());
-                                            tracing::error!(error = %error, kind = T::kind_name(), "Failed to parse resource from watch event");
-                                        }
-                                    }
-                                }
+                                apply_generic_watch_payload(&cache_data, &watch_response.data, response_sv);
                             }
                             Ok(None) => {
                                 tracing::info!(kind = T::kind_name(), "Watch stream ended");
@@ -643,11 +720,9 @@ fn resync_wait_secs(generation_reloaded: bool, backoff_secs: u64) -> Option<u64>
 mod tests {
     //! Unit tests for the `CacheEventDispatch` impl on `ClientCache`.
     //!
-    //! These tests exercise only the lock-protected mutation logic of
-    //! `apply_change` and `set_ready` — the change kind dispatched against a
-    //! freshly constructed `ClientCache` (without a configured processor or
-    //! gRPC channel). The full watch/relist/backoff loop in `start_watch` is
-    //! deferred to integration coverage.
+    //! Covers cache mutations, generic Watch diagnostics and wire decoding, and
+    //! Backend withdrawal/publication with an in-process handler. The full
+    //! watch/relist/backoff loop in `start_watch` needs integration coverage.
     use super::*;
     use crate::ai::AiBackendStore;
     use edgion_common::conf_sync::proto::{ListRequest, ListResponse, WatchResponse};
@@ -656,6 +731,164 @@ mod tests {
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::core::ObjectMeta;
     use std::collections::{HashMap, HashSet};
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<parking_lot::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn capture_watch_diagnostics(run: impl FnOnce()) -> (String, String) {
+        let buffer = LogBuffer::default();
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        metrics::with_local_recorder(&recorder, || tracing::subscriber::with_default(subscriber, run));
+        let logs = String::from_utf8(buffer.0.lock().clone()).unwrap();
+        (logs, recorder.handle().render())
+    }
+
+    #[test]
+    fn generic_watch_counts_each_failure_logs_once_and_keeps_valid_events() {
+        let cache = new_client_cache();
+        cache.set_ready();
+        let mut malformed = serde_json::to_value(make_cm("ns1", "bad")).unwrap();
+        malformed["metadata"]["resourceVersion"] = serde_json::json!("123");
+        // Serde's Display text includes this string when decoding bool fails.
+        malformed["immutable"] = serde_json::json!("private-password-sentinel");
+        let batch = serde_json::json!([
+            {"type": "add", "data": make_cm("ns1", "before")},
+            {"type": "update", "sync_version": 41, "data": malformed},
+            {"type": "private-envelope-sentinel", "data": {}},
+            {"type": "add", "data": make_cm("ns1", "after")}
+        ]);
+        let (logs, metrics) = capture_watch_diagnostics(|| {
+            apply_generic_watch_payload(&cache.cache_data, &batch.to_string(), 42);
+        });
+        assert_eq!(cached_keys(&cache), ["ns1/after", "ns1/before"]);
+        assert!(cache.is_ready());
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        for field in [
+            "kind=\"ConfigMap\"",
+            "ns=\"ns1\"",
+            "name=\"bad\"",
+            "resourceVersion=\"123\"",
+            "syncVersion=41",
+        ] {
+            assert!(logs.contains(field), "{logs}");
+        }
+        assert!(logs.contains("watch resource does not match the resource schema"));
+        assert!(!logs.contains("sentinel"));
+        assert!(
+            metrics.contains("edgion_config_event_parse_errors_total{kind=\"ConfigMap\"} 2"),
+            "{metrics}"
+        );
+    }
+
+    #[test]
+    fn generic_watch_envelope_and_batch_failures_are_observable_without_payloads() {
+        let cache = new_client_cache();
+        let cases = [
+            (
+                "not-json-private-sentinel",
+                "watch response must be a valid JSON event array",
+            ),
+            ("[null]", "watch event must be an object"),
+            (r#"[{"type":"private-sentinel","data":{}}]"#, "unknown watch event type"),
+            (r#"[{"data":{}}]"#, "watch event type must be a string"),
+            (r#"[{"type":"add"}]"#, "watch event data is missing"),
+        ];
+        for (payload, expected) in cases {
+            let (logs, metrics) = capture_watch_diagnostics(|| {
+                apply_generic_watch_payload(&cache.cache_data, payload, 42);
+            });
+            assert_eq!(logs.lines().count(), 1, "{logs}");
+            assert!(logs.contains(expected) && logs.contains("syncVersion=42"), "{logs}");
+            assert!(!logs.contains("sentinel"));
+            assert!(
+                metrics.contains("edgion_config_event_parse_errors_total{kind=\"ConfigMap\"} 1"),
+                "{metrics}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_watch_does_not_log_invalid_or_unbounded_metadata() {
+        let cache = new_client_cache();
+        let batch = serde_json::json!([{"type": "add", "data": {
+            "metadata": {
+                "namespace": "private-sentinel\nforged-log",
+                "name": "private-sentinel".repeat(64),
+                "resourceVersion": {"password": "private-sentinel"}
+            },
+            "immutable": "private-sentinel"
+        }}]);
+        let (logs, _) = capture_watch_diagnostics(|| {
+            apply_generic_watch_payload(&cache.cache_data, &batch.to_string(), 42);
+        });
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        assert!(!logs.contains("sentinel") && !logs.contains("forged-log"));
+        assert!(logs.len() < 512);
+    }
+
+    #[test]
+    fn generic_watch_round_trips_controller_events_and_resolved_tls_secret() {
+        use edgion_common::conf_sync::types::{EventType, WatcherEvent};
+        use edgion_resources::resources::EdgionTls;
+        use k8s_openapi::{api::core::v1::Secret, ByteString};
+
+        let mut tls: EdgionTls = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "ns1", "name": "tls", "resourceVersion": "123"},
+            "spec": {"hosts": ["example.com"], "secretRef": {"name": "cert"}}
+        }))
+        .unwrap();
+        tls.spec.secret = Some(Secret {
+            data: Some(std::collections::BTreeMap::from([(
+                "tls.key".to_string(),
+                ByteString(b"private-test-key".to_vec()),
+            )])),
+            ..Default::default()
+        });
+        let cache = Arc::new(RwLock::new(CacheData::<EdgionTls>::new()));
+        // Match Controller watch_json: serialize the shared typed event array.
+        for (event_type, sv, present) in [
+            (EventType::Add, 41, true),
+            (EventType::Update, 42, true),
+            (EventType::Delete, 43, false),
+        ] {
+            let payload = serde_json::to_string(&vec![WatcherEvent {
+                event_type,
+                sync_version: sv,
+                data: tls.clone(),
+            }])
+            .unwrap();
+            let (logs, metrics) = capture_watch_diagnostics(|| apply_generic_watch_payload(&cache, &payload, 99));
+            assert!(logs.is_empty() && !metrics.contains("edgion_config_event_parse_errors_total"));
+            let data = cache.read();
+            assert_eq!(data.get("ns1/tls").is_some(), present);
+            if let Some(stored) = data.get("ns1/tls") {
+                assert_eq!(stored.metadata.resource_version.as_deref(), Some("123"));
+                assert_eq!(
+                    stored.spec.secret.as_ref().unwrap().data.as_ref().unwrap()["tls.key"].0,
+                    b"private-test-key"
+                );
+                assert_eq!(stored.get_sync_version(), sv);
+            }
+        }
+    }
 
     struct RecordingBackendHandler {
         store: Arc<AiBackendStore>,

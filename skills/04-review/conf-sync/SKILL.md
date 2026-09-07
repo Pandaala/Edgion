@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Generic Watch decode diagnostics and deferred recovery](../observability/intentional-design/conf-sync-watch-parse-error-metric-only.md)
 - [ConfCenter etcd Abstraction Boundary — Audited Design Tradeoff](intentional-design/conf-center-etcd-abstraction.md)
 - [Generic `SimpleMapConfHandler<T>` Extraction — Declined](intentional-design/conf-handler-simple-map-pattern.md)
 - [conf_sync File-Mode Cert Watch Keeps `(mtime, length)` — ACCEPTED-TRADEOFF](intentional-design/conf-sync-cert-watch-mtime-length-signature.md)

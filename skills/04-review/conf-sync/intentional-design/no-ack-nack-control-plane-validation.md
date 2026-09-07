@@ -11,6 +11,16 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
+**Applicability limit (2026-09-07):** the accepted absence of a feedback RPC
+does not establish that generic Watch decoding cannot fail, or that skipping a
+failed update is correct. Ingest status is not a per-Gateway applied-version
+acknowledgment. The user selected safe diagnostics while deferring cache recovery
+in `conf-sync-generic-watch-malformed-event-recovery`; see
+[generic Watch diagnostics and deferred recovery](../../observability/intentional-design/conf-sync-watch-parse-error-metric-only.md).
+Treat the historical validation rationale below as applying to business-config
+validation, not proof of wire-format round trips or permission to close a
+decode-recovery defect as a false positive.
+
 Edgion's config-sync is one-way: `WatchResponse` carries server→client fields
 (`data`, `sync_version`, `err`, `server_id`) and the Gateway never sends a
 structured "applied / rejected version X because Y" message back to the

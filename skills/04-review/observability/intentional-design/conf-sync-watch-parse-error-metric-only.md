@@ -1,100 +1,103 @@
 ---
 name: conf-sync-watch-parse-error-metric-only
-description: Decision record for conf-sync F-013 — added per-kind parse-error metric on the gateway watch loop, declined the "N consecutive failures trigger relist" half.
+description: Generic Watch decode diagnostics, scoped acceptance of skip-and-continue, and deferred recovery boundaries.
 knowledge_type: intentional-design
 ---
 
-# conf-sync F-013 — watch-event parse error: metric added, relist declined
+# Generic Watch decode diagnostics and deferred recovery
 
-## Conclusion
+## Conclusion and scope
 
-`ClientCache::start_watch`'s two `serde_json` parse-failure paths
-(`from_str(&watch_response.data)` for the events array, and
-`from_value::<T>(event_data)` for each per-event payload) in
-`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` now call
-`record_config_event_parse_error(T::kind_name())` before the existing
-`tracing::error!` + `continue` / fall-through. The control flow is otherwise
-unchanged — there is **no** consecutive-failure counter, **no**
-`break 'watch_block` escalation, **no** forced relist.
+The user explicitly selected the observability-only subset of
+`conf-sync-generic-watch-malformed-event-recovery` on 2026-09-07, retaining
+generic Watch's skip-and-continue policy while adding safe diagnostics and wire
+round-trip coverage. Full recovery is deferred in
+[`tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md`](../../../../tasks/todo/conf-sync-generic-watch-malformed-event-recovery.md).
+Skipped updates/deletes can leave stale configuration. This is an accepted risk
+for this scope, not a disproved defect or a completed recovery fix.
 
-The metric `edgion_config_event_parse_errors_total{kind=...}` registered in
-`observe/metrics/registry.rs` is a labeled free function counter on the cold
-path; the `kind` label is sourced from `T::kind_name() -> &'static str` which
-is bounded by the closed set of 17 ClientCache<T> instantiations in
-`conf_sync/conf_client/config_client.rs` (GatewayClass, Gateway,
-EdgionGatewayConfig, HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute,
-LinkSys, Service, EndpointSlice, EdgionTls, EdgionPlugins,
-EdgionStreamPlugins, BackendTLSPolicy, EdgionConfigData, EdgionAcme), so
-worst-case cardinality is 17 series.
+`ClientCache::start_watch` delegates the generic path to
+`apply_generic_watch_payload` in
+`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs`:
 
-## Core rationale (why metric only, not metric+relist)
+- Invalid top-level event arrays increment the existing
+  `edgion_config_event_parse_errors_total{kind}` counter once.
+- Each malformed event envelope or typed resource increments it once.
+- At most one error is emitted per failed response, identifying the first
+  failure using `kind`, `ns`, `name`, `resourceVersion`, `syncVersion`, and
+  static error text. Identity comes only from bounded metadata strings; invalid
+  or unavailable identity fields are omitted. Top-level failures use response
+  `sync_version`; event failures use the event version with the existing
+  response-version fallback.
+- Raw JSON, specs, and Serde error Display strings are excluded. Serde error
+  text can contain the rejected value, including secret material. Logging
+  authority: [`03-coding/01-log-safety.md`](../../../03-coding/01-log-safety.md).
+- Valid events still apply before and after a rejected event in the same
+  response. Readiness, compression, retries, and generation cancellation are
+  unchanged. EdgionBackend retains its separate exact-key withdrawal and
+  unsafe-batch clearing/relist policy.
 
-The original F-013 finding proposed *both* a per-kind parse-error counter
-*and* a consecutive-failure threshold that breaks out to trigger an outer-loop
-relist (the Kubernetes informers "decode-error backoff" pattern). The relist
-half was declined because it does not self-heal in the dominant real-world
-trigger and only adds noise:
+The metric keeps only the registered resource `kind` label. Names, namespaces,
+versions, and error strings must not become metric labels. No new metric or
+consecutive-failure threshold is introduced.
 
-1. **Schema drift (the most common trigger — partial controller upgrade
-   changes a resource wire format).** A relist routes through `list_and_reset`,
-   which calls the *same* `serde_json::from_str::<Vec<T>>(&list_data.data)`
-   decoder; it will fail with `tonic::Status::internal(...)`. The cache stays
-   frozen at last-good (list-failure path doesn't reset the cache); the outer
-   loop walks the 2s → 32s exponential backoff and keeps trying. End state:
-   cache still frozen, plus list-loop log spam. **No self-healing.** The
-   newly-added metric already gives operators the alertable signal they
-   actually need.
-2. **Controller serialization bug producing malformed JSON.** Same as case 1.
-3. **One-off frame-level corruption (single event payload bad, rest fine).**
-   This is the only case where a relist would actually recover the dropped
-   event. But gRPC has already validated the frame at this point — a
-   well-formed frame carrying malformed JSON requires an application-layer
-   bug; in practice this is vanishingly rare. Accepting that one event for one
-   key may remain stale until the next valid update (or operator-triggered
-   restart) is a deliberate tradeoff for not paying scenario-1/2 noise costs.
+## Rationale and evidence
 
-The metric alone resolves the original "no alertable metric, only log spam
-that may be rate-limited or aggregated away" defect that F-013 actually called
-out in its Impact section. Adding relist on top would not address the same
-gap any better.
+Shared resource types make successful round trips the expected normal case.
+Serialization success alone does not prove deserialization success: mixed builds
+and asymmetric/custom Serde implementations can disagree. No measured failure
+frequency or production incident was established in this investigation.
 
-## Fix suggestions not accepted
+Controller `cache_server/cache.rs::watch_json` serializes `Vec<WatcherEvent<T>>`.
+The watch sender advances its local `from_version` after sending, without waiting
+for Gateway application. Gateway `CacheData.sync_version` is set by List/reset;
+it is not a durable applied-Watch cursor. Skipping a bad event does not ask the
+same stream to replay it. Metrics and logs improve detection, not convergence.
 
-- "Add `MAX_CONSECUTIVE_PARSE_ERRORS = N` counter inside `'watch_block` and
-  `break 'watch_block` on threshold." — Declined per the rationale above:
-  doesn't recover schema drift, adds list-backoff noise.
-- "Just bump the log level to `warn!` so it surfaces in operator dashboards."
-  — Insufficient. Logs are subject to per-process rate limiting and downstream
-  aggregation; the whole point of the F-013 finding is that log-only signals
-  are unreliable. A counter is the right channel.
-- "Add `kind` as a free-form label populated from a runtime string." — The
-  `&'static str` signature on `T::kind_name()` is load-bearing for cardinality
-  bounds. Re-reports that propose loosening this signature should be rejected.
-- "Use `tracing::error_span!` plus a span-level metric counter." — Doesn't
-  apply here (no span context across watch iterations) and would not move the
-  cardinality discussion.
+## Alternatives and limits
 
-## Re-evaluation triggers
+The selected scope avoids changing the cache recovery state machine. Complete
+batch validation plus terminating the invalid stream and relisting could recover
+transient omissions; persistent schema incompatibility may also break List and
+requires fixing the producer/consumer contract. A future recovery design must
+cover readiness, pending compressed events, backoff, cancellation, and the Backend
+exception together. Do not add a local parse-error `break` as a complete fix.
 
-- A production incident where a single-event corruption (scenario 3) is the
-  confirmed cause of a stale cache, AND restart-only recovery proves
-  unacceptable for SLA reasons. Then revisit adding the consecutive-counter
-  relist escalation; pair it with a `record_config_event_parse_relist_total`
-  counter so the relist storm itself is alertable.
-- If a future controller change makes `from_version`-based watch jump-resume
-  safe across decoder errors (e.g., per-event `sync_version` allows the
-  gateway to relist with a precise floor instead of full reset). Then the
-  cost-benefit of escalating after N failures shifts.
+Existing logs are not a substitute for the counter: subsequent bad events in one
+response are counted without additional error lines. The first-error summary does
+not claim to identify every rejected key. Safe static errors deliberately omit
+the decoder's value-bearing explanation.
 
-## Reference cases
+## Verification and re-evaluation
 
-- Closed finding: `tasks/conf/conf-sync-F013-watch-event-parse-error-drops-event-silently.md` (closed 2026-05-28).
-- Related pattern: existing transport-level escalation at
-  `event_dispatch.rs` watch loop `Err(e)` branch — that path already breaks to
-  relist because the *stream* is dead; the parse-error paths do **not** mirror
-  it because the stream is healthy and a relist would just route the same
-  bad-decoder failure into the list path.
+Verified on 2026-09-07:
 
-## Resolution references
+- `cargo test -p edgion-gateway --lib conf_sync::cache_client`: 44 passed.
+- `cargo fmt --all` and `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets`: passed with existing warnings;
+  warnings in this file concern unchanged List/Backend helpers.
+- Agent-doc, SSA-force, metrics-inventory, and Pingora-source guards: passed.
+- Independent read-only review: LGTM, including the final test-helper correction.
 
-- `conf-sync-F013` — 2026-05-28.
+Inline tests exercise emitted logs and metric counts, mixed valid/invalid batches,
+invalid metadata, and Controller-format
+add/update/delete events carrying an EdgionTls resolved Secret. This is focused
+same-build evidence, not proof for every resource or version pair, nor a live
+gRPC or recovery-state-machine test.
+
+Reconsider recovery if operational stale-state evidence makes the accepted risk
+unacceptable, if mixed-version support is required, or if the user authorizes the
+deferred task. Do not require a production incident to recognize a proven defect.
+
+## Historical evidence and resolution references
+
+- `conf-sync-F013`, closed 2026-05-28: the original metric was added; an
+  N-consecutive-failures relist threshold was declined. Historical tests were not
+  rerun merely by maintaining this page.
+- `conf-sync-generic-watch-malformed-event-recovery`, 2026-09-07: diagnostics
+  subset selected; full recovery remains deferred and the source task is retained.
+- Earlier wording called schema drift the most common trigger and transient
+  corruption vanishingly rare without measured evidence. Those frequency claims
+  are not current guidance. Earlier hard-coded cardinality counts are replaced
+  by the registered-kind boundary, which includes the Backend-specific consumer.
