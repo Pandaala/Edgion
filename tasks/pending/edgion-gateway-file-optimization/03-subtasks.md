@@ -137,7 +137,7 @@
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 1 | 0 | complete |
-| `plugins-runtime` | 34 | 2 | 0 | 0 | pending |
+| `plugins-runtime` | 34 | 3 | 0 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
@@ -517,7 +517,7 @@
 | `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0117 |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | changed | B0119 |
-| `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | analysis-ready | B0120 |
+| `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | changed | B0120 |
 | `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
