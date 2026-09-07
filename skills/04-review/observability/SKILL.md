@@ -23,7 +23,6 @@ before applying a decision to current code.
 
 - [`BandwidthLimit::create` invalid-rate path — NO RUNTIME LOG, DOC CLARIFIED](intentional-design/bandwidth-limit-invalid-rate-no-tracing.md)
 - [`ServerCache::apply_change` per-change INFO is intentionally kept at INFO](intentional-design/cache-server-apply-change-info-level.md)
-- [Generic Watch decode diagnostics and deferred recovery](intentional-design/conf-sync-watch-parse-error-metric-only.md)
 - [DSL runtime-error line numbers in access log — DESIGN-TRADEOFF (DECLINED)](intentional-design/dsl-error-line-number-declined.md)
 - [observe F-011 — Cold-metric OnceLock boilerplate is not extracted into a macro](intentional-design/metrics-registry-cold-oncelock-pattern-not-extracted.md)
 - [observe F-010 — Protocol logger OnceLock pattern is not extracted](intentional-design/protocol-logger-oncelock-pattern-not-extracted.md)
@@ -31,6 +30,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Generic Watch decode failure recovery and safe diagnostics](../conf-sync/regression-guards/watch-decode-error-relist.md)
 - [observe F-003 (access_log) — all-senders-unhealthy path increments the dropped counter](regression-guards/access-log-all-senders-unhealthy-metric.md)
 - [observe F-B01 (access_log) — disabled mode installs a no-op logger instead of leaving OnceLock empty](regression-guards/access-log-disabled-init-noop.md)
 - [observe F-006 — AccessLogStore TTL cleanup on read paths, no background timer](regression-guards/access-log-store-ttl-read-path-cleanup.md)

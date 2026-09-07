@@ -14,9 +14,9 @@ knowledge_type: intentional-design
 **Applicability limit (2026-09-07):** the accepted absence of a feedback RPC
 does not establish that generic Watch decoding cannot fail, or that skipping a
 failed update is correct. Ingest status is not a per-Gateway applied-version
-acknowledgment. The user selected safe diagnostics while deferring cache recovery
-in `conf-sync-generic-watch-malformed-event-recovery`; see
-[generic Watch diagnostics and deferred recovery](../../observability/intentional-design/conf-sync-watch-parse-error-metric-only.md).
+acknowledgment. Generic decode failures now end the stream and recover via List,
+retaining successful prefix events and existing readiness; see
+[generic Watch decode recovery](../regression-guards/watch-decode-error-relist.md).
 Treat the historical validation rationale below as applying to business-config
 validation, not proof of wire-format round trips or permission to close a
 decode-recovery defect as a false positive.
@@ -26,11 +26,10 @@ Edgion's config-sync is one-way: `WatchResponse` carries server→client fields
 structured "applied / rejected version X because Y" message back to the
 Controller. This is an **accepted design tradeoff**, not a defect, because
 Edgion validates configuration at the **control plane on resource ingest** and
-surfaces the result as a K8s `.status` condition — which is precisely the
-operator-visible "what is actually running / what was rejected and why" signal
-that Envoy's xDS ACK/NACK exists to provide. Edgion places that signal at the
-source of truth (the K8s resource) instead of reconstructing it from data-plane
-acknowledgments.
+surfaces the ingest validation outcome as a K8s `.status` condition. This tells
+operators what the Controller accepted or rejected and why; it does not prove
+what each Gateway has applied. Edgion accepts that visibility limit rather than
+adding a per-Gateway acknowledgment protocol.
 
 Fix suggestions of the form "extend the Watch RPC with a client feedback message
 / add a separate `Ack` RPC carrying `version_info` + `error_detail` / track
@@ -92,13 +91,13 @@ resource `.status` and/or admin API. That is medium-risk cross-layer work
 - "Track per-node per-kind applied versions on the Controller and expose them via
   the admin API" — only meaningful once the feedback channel exists; part of the
   same feature, not an independently shippable fix.
-- "NACK and pin the Gateway to the last-good version instead of skipping the bad
-  event" — last-good retention is a behavior change to the watch apply path;
-  control-plane validation already prevents most bad versions from being pushed,
-  and the residual DSL-deep-failure class fails closed at runtime.
+- "Add NACK and per-Gateway last-good-version tracking" — a protocol expansion
+  outside the accepted scope. Generic decode-error recovery now retains valid
+  events and relists without such a protocol; do not cite this decision against
+  that local recovery behavior.
 - "Treat the absence of ACK/NACK as a regression vs Envoy" — rejected on the
-  facts: Edgion moves validation upstream to ingest + `.status`, achieving the
-  operator-visibility goal of ACK/NACK without the data-plane round trip.
+  accepted scope: Edgion provides ingest validation through `.status`, with the
+  explicit limit that it is not per-Gateway applied-version feedback.
 
 ## Re-evaluation Triggers
 
@@ -120,6 +119,6 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs:76-87` (`preparse` → `validate_plugins`, errors → K8s `.status`)
 - `edgion-resources/src/resources/edgion_plugins/validate.rs:124` (`validate_plugins`, mirrors gateway `compile_plugins` preparse errors minus DSL VM init)
 - `edgion-common/src/conf_sync/proto/config_sync.proto:36-51` (`WatchRequest` / `WatchResponse` — one-way schema)
-- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:270-388` (watch apply loop; parse-error skip at line 306)
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` (`apply_generic_watch_payload` returns on first decode failure; `start_watch` ends the stream and relists)
 - `skills/04-review/conf-sync/intentional-design/gateway-no-local-config-snapshot.md` (sibling Envoy-comparison config-sync tradeoff, sync-05)
 - `tasks/review-envoy/sync-02-no-cross-kind-ordering.md` (sibling config-sync Envoy-comparison finding)

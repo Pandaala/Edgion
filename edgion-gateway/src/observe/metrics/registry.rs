@@ -669,13 +669,14 @@ pub fn record_acme_challenge_lookup(result: &'static str) {
 
 /// Record a watch payload, event-envelope, or resource decode failure (per kind).
 ///
-/// Counts each rejected generic event, or one failure for an undecodable batch.
+/// Counts the first generic decode failure that terminates each watch stream.
+/// The unprocessed tail is not decoded or counted; a fresh List recovers it.
 /// The backend-specific decoder also uses this counter. `kind` is sourced from
 /// `T::kind_name()` which returns a `&'static str` from a closed set of
 /// registered resource types, so label cardinality is bounded.
 ///
-/// Generic watch failures retain the skip-and-continue policy and emit at most
-/// one safe error log per response. This counter does not imply cache recovery;
+/// Generic watch failures emit one safe error and trigger a relist using the
+/// existing retry loop. This counter does not imply successful cache recovery;
 /// backend-specific withdrawal and relist behavior is separate.
 pub fn record_config_event_parse_error(kind: &'static str) {
     counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);

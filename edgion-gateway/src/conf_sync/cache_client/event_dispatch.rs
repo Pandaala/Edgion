@@ -111,59 +111,50 @@ impl WatchLogIdentity {
     }
 }
 
-fn record_watch_parse_failure<T: ResourceMeta>(
-    logged_error: &mut bool,
-    identity: &WatchLogIdentity,
-    sync_version: u64,
-    error: &'static str,
-) {
+fn record_watch_parse_failure<T: ResourceMeta>(identity: &WatchLogIdentity, sync_version: u64, error: &'static str) {
     record_config_event_parse_error(T::kind_name());
-    if !*logged_error {
-        tracing::error!(
-            kind = T::kind_name(),
-            ns = identity.ns.as_deref(),
-            name = identity.name.as_deref(),
-            resourceVersion = identity.resource_version.as_deref(),
-            syncVersion = sync_version,
-            error,
-            "Failed to decode watch configuration; skipping invalid events"
-        );
-        *logged_error = true;
-    }
+    tracing::error!(
+        kind = T::kind_name(),
+        ns = identity.ns.as_deref(),
+        name = identity.name.as_deref(),
+        resourceVersion = identity.resource_version.as_deref(),
+        syncVersion = sync_version,
+        error,
+        "Failed to decode watch configuration; relisting resources"
+    );
 }
 
-fn apply_generic_watch_payload<T>(cache_data: &Arc<RwLock<CacheData<T>>>, data: &str, response_sv: u64)
+fn apply_generic_watch_payload<T>(
+    cache_data: &Arc<RwLock<CacheData<T>>>,
+    data: &str,
+    response_sv: u64,
+) -> Result<(), ()>
 where
     T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
 {
-    let mut logged_error = false;
     let events: Vec<serde_json::Value> = match serde_json::from_str(data) {
         Ok(events) => events,
         Err(_) => {
             record_watch_parse_failure::<T>(
-                &mut logged_error,
                 &WatchLogIdentity::default(),
                 response_sv,
                 "watch response must be a valid JSON event array",
             );
-            return;
+            return Err(());
         }
     };
 
-    // Keep the existing single-guard application and skip-on-error policy.
+    // Keep successful events, but stop at the first failure so the caller relists
+    // before consuming the tail or any newer response from this stream.
     let mut cache = cache_data.write();
     for event in events {
-        let identity = if logged_error {
-            WatchLogIdentity::default()
-        } else {
-            WatchLogIdentity::from_event(&event)
-        };
+        let identity = WatchLogIdentity::from_event(&event);
         let event_sv = event["sync_version"].as_u64().unwrap_or(response_sv);
         let (change, event_sv, event_data) = match take_watch_event_parts(event, event_sv) {
             Ok(parts) => parts,
             Err(error) => {
-                record_watch_parse_failure::<T>(&mut logged_error, &identity, event_sv, error);
-                continue;
+                record_watch_parse_failure::<T>(&identity, event_sv, error);
+                return Err(());
             }
         };
 
@@ -187,30 +178,32 @@ where
             }
             Err(_) => {
                 record_watch_parse_failure::<T>(
-                    &mut logged_error,
                     &identity,
                     event_sv,
                     "watch resource does not match the resource schema",
                 );
+                return Err(());
             }
         }
     }
+    Ok(())
 }
 
-fn decode_list_payload<T: ResourceMeta>(data: &[u8]) -> Result<Vec<T>, String>
+fn decode_list_payload<T: ResourceMeta>(data: &[u8]) -> Result<Vec<T>, &'static str>
 where
     T: serde::de::DeserializeOwned,
 {
     if !is_edgion_backend::<T>() {
-        return serde_json::from_slice(data).map_err(|error| error.to_string());
+        return serde_json::from_slice(data).map_err(|_| "list payload does not match the resource array schema");
     }
-    let raw_resources: Vec<serde_json::Value> = serde_json::from_slice(data).map_err(|error| error.to_string())?;
+    let raw_resources: Vec<serde_json::Value> =
+        serde_json::from_slice(data).map_err(|_| "backend list must be a valid JSON resource array")?;
     if raw_resources.iter().any(|resource| raw_backend_key(resource).is_none()) {
-        return Err("backend list contains an unsafe resource identity".to_string());
+        return Err("backend list contains an unsafe resource identity");
     }
     raw_resources
         .into_iter()
-        .map(|resource| serde_json::from_value(resource).map_err(|error| error.to_string()))
+        .map(|resource| serde_json::from_value(resource).map_err(|_| "backend list resource does not match the schema"))
         .collect()
 }
 
@@ -218,7 +211,7 @@ fn publish_list_payload<T>(
     cache_data: &Arc<RwLock<CacheData<T>>>,
     data: &[u8],
     sync_version: u64,
-) -> Result<usize, String>
+) -> Result<usize, &'static str>
 where
     T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
 {
@@ -674,7 +667,10 @@ where
                                     continue;
                                 }
 
-                                apply_generic_watch_payload(&cache_data, &watch_response.data, response_sv);
+                                if apply_generic_watch_payload(&cache_data, &watch_response.data, response_sv).is_err()
+                                {
+                                    break 'watch_block;
+                                }
                             }
                             Ok(None) => {
                                 tracing::info!(kind = T::kind_name(), "Watch stream ended");
@@ -762,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_watch_counts_each_failure_logs_once_and_keeps_valid_events() {
+    fn generic_watch_stops_at_first_failure_and_keeps_valid_prefix() {
         let cache = new_client_cache();
         cache.set_ready();
         let mut malformed = serde_json::to_value(make_cm("ns1", "bad")).unwrap();
@@ -776,9 +772,9 @@ mod tests {
             {"type": "add", "data": make_cm("ns1", "after")}
         ]);
         let (logs, metrics) = capture_watch_diagnostics(|| {
-            apply_generic_watch_payload(&cache.cache_data, &batch.to_string(), 42);
+            assert!(apply_generic_watch_payload(&cache.cache_data, &batch.to_string(), 42).is_err());
         });
-        assert_eq!(cached_keys(&cache), ["ns1/after", "ns1/before"]);
+        assert_eq!(cached_keys(&cache), ["ns1/before"]);
         assert!(cache.is_ready());
         assert_eq!(logs.lines().count(), 1, "{logs}");
         for field in [
@@ -793,7 +789,7 @@ mod tests {
         assert!(logs.contains("watch resource does not match the resource schema"));
         assert!(!logs.contains("sentinel"));
         assert!(
-            metrics.contains("edgion_config_event_parse_errors_total{kind=\"ConfigMap\"} 2"),
+            metrics.contains("edgion_config_event_parse_errors_total{kind=\"ConfigMap\"} 1"),
             "{metrics}"
         );
     }
@@ -813,7 +809,7 @@ mod tests {
         ];
         for (payload, expected) in cases {
             let (logs, metrics) = capture_watch_diagnostics(|| {
-                apply_generic_watch_payload(&cache.cache_data, payload, 42);
+                assert!(apply_generic_watch_payload(&cache.cache_data, payload, 42).is_err());
             });
             assert_eq!(logs.lines().count(), 1, "{logs}");
             assert!(logs.contains(expected) && logs.contains("syncVersion=42"), "{logs}");
@@ -837,7 +833,7 @@ mod tests {
             "immutable": "private-sentinel"
         }}]);
         let (logs, _) = capture_watch_diagnostics(|| {
-            apply_generic_watch_payload(&cache.cache_data, &batch.to_string(), 42);
+            assert!(apply_generic_watch_payload(&cache.cache_data, &batch.to_string(), 42).is_err());
         });
         assert_eq!(logs.lines().count(), 1, "{logs}");
         assert!(!logs.contains("sentinel") && !logs.contains("forged-log"));
@@ -875,7 +871,8 @@ mod tests {
                 data: tls.clone(),
             }])
             .unwrap();
-            let (logs, metrics) = capture_watch_diagnostics(|| apply_generic_watch_payload(&cache, &payload, 99));
+            let (logs, metrics) =
+                capture_watch_diagnostics(|| apply_generic_watch_payload(&cache, &payload, 99).unwrap());
             assert!(logs.is_empty() && !metrics.contains("edgion_config_event_parse_errors_total"));
             let data = cache.read();
             assert_eq!(data.get("ns1/tls").is_some(), present);
@@ -887,6 +884,96 @@ mod tests {
                 );
                 assert_eq!(stored.get_sync_version(), sv);
             }
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingMapHandler {
+        data: parking_lot::Mutex<HashMap<String, Arc<ConfigMap>>>,
+        publications: parking_lot::Mutex<Vec<&'static str>>,
+    }
+
+    impl ConfHandler<ConfigMap> for RecordingMapHandler {
+        fn full_set(&self, data: &HashMap<String, Arc<ConfigMap>>) {
+            *self.data.lock() = data.clone();
+            self.publications.lock().push("full");
+        }
+
+        fn partial_update(
+            &self,
+            add: HashMap<String, Arc<ConfigMap>>,
+            update: HashMap<String, Arc<ConfigMap>>,
+            remove: HashSet<String>,
+        ) {
+            let mut data = self.data.lock();
+            for key in remove {
+                data.remove(&key);
+            }
+            data.extend(add);
+            data.extend(update);
+            self.publications.lock().push("partial");
+        }
+    }
+
+    #[test]
+    fn generic_relist_preserves_readiness_and_supersedes_pending_events() {
+        // Exercise both possible callback orders around reset: an already
+        // published valid prefix, and a prefix still waiting in the queue.
+        for flush_before_reset in [false, true] {
+            let cache = Arc::new(RwLock::new(CacheData::<ConfigMap>::new()));
+            let handler = Arc::new(RecordingMapHandler::default());
+            cache.write().set_conf_processor_for_test(Box::new(handler.clone()));
+            let initial = serde_json::to_vec(&vec![make_cm("ns1", "old")]).unwrap();
+            publish_list_payload(&cache, &initial, 10).unwrap();
+            let mut ready = false;
+            mark_ready_after_list(&cache, &mut ready);
+
+            let batch = serde_json::json!([
+                {"type": "delete", "data": make_cm("ns1", "old")},
+                {"type": "unknown", "data": {}},
+                {"type": "add", "data": make_cm("ns1", "tail")}
+            ]);
+            assert!(apply_generic_watch_payload(&cache, &batch.to_string(), 11).is_err());
+            assert!(cache.read().is_empty());
+            assert_eq!(cache.read().compressed_event_count_for_test(), 1);
+            assert_eq!(cache.read().sync_version(), 10);
+            assert!(cache.read().is_ready());
+            assert!(handler.data.lock().contains_key("ns1/old"));
+
+            // A failed replacement must not clear old runtime configuration or
+            // publish partially decoded List data, and its error must be safe.
+            let bad_list = serde_json::json!([
+                make_cm("ns1", "must-not-publish"),
+                {"metadata": {"name": "bad"}, "immutable": "private-list-password-sentinel"}
+            ]);
+            let error = publish_list_payload(&cache, &serde_json::to_vec(&bad_list).unwrap(), 12).unwrap_err();
+            assert_eq!(error, "list payload does not match the resource array schema");
+            assert_eq!(handler.data.lock().len(), 1);
+            assert!(handler.data.lock().contains_key("ns1/old"));
+            assert_eq!(cache.read().sync_version(), 10);
+            assert!(cache.read().is_ready());
+            if flush_before_reset {
+                CacheData::flush_compressed_events_for_test(&cache);
+                assert!(handler.data.lock().is_empty());
+            }
+
+            let replacement = serde_json::to_vec(&vec![make_cm("ns1", "tail")]).unwrap();
+            publish_list_payload(&cache, &replacement, 20).unwrap();
+            mark_ready_after_list(&cache, &mut ready);
+            let publications = handler.publications.lock().len();
+            assert_eq!(cache.read().compressed_event_count_for_test(), 0);
+            CacheData::flush_compressed_events_for_test(&cache);
+            assert_eq!(handler.publications.lock().len(), publications);
+            assert_eq!(handler.data.lock().len(), 1);
+            assert!(handler.data.lock().contains_key("ns1/tail"));
+            assert!(cache.read().is_ready());
+            assert_eq!(cache.read().sync_version(), 20);
+
+            let resumed = serde_json::json!([{"type": "delete", "data": make_cm("ns1", "tail")}]);
+            apply_generic_watch_payload(&cache, &resumed.to_string(), 21).unwrap();
+            CacheData::flush_compressed_events_for_test(&cache);
+            assert!(handler.data.lock().is_empty());
+            assert_eq!(handler.publications.lock().last(), Some(&"partial"));
         }
     }
 

@@ -39,9 +39,14 @@ ConfigSyncClient triggers a reconnection in the following situations:
 | Watch/server generation changes | End that loop's stream and relist the kind |
 | gRPC connection broken | Reconnect with exponential backoff and List before the next Watch |
 | TooOld / unexpected version / not-ready | Relist the affected kind |
+| Generic Watch JSON/envelope/resource decode failure | Stop at the first failure, retain valid prefix events and readiness, back off and List before the next Watch |
 
 Each per-kind retry always performs List before Watch and therefore does not resume from a retained
 pre-disconnect cache version. `GetServerInfo` is not rerun for every per-kind retry.
+Generic List decode failure retains existing configuration and retries; readiness
+means initial configuration is available, not that it matches the newest server
+state. EdgionBackend retains its stricter withdrawal behavior. See
+[decode recovery and diagnostics](../../04-review/conf-sync/regression-guards/watch-decode-error-relist.md).
 
 ## ClientCache\<T\>
 
@@ -60,9 +65,10 @@ pub struct ClientCache<T> where T: kube::Resource {
 
 ClientCache internally holds `CacheData<T>` (RwLock-protected), which contains:
 - A full resource snapshot (`HashMap<String, Arc<T>>`)
-- The current `sync_version`
-- `server_id` (used to detect Controller restarts)
+- The last List/reset `sync_version` (not an applied-Watch cursor)
 - `CompressEvent`: a queue of pending incremental events (inside the `handler`)
+
+The Watch loop retains `server_id` separately to detect Controller restarts.
 
 #### Event-batch compression background task
 
@@ -97,8 +103,8 @@ pub trait CacheEventDispatch<T> {
 `ResourceChange` initialization variants are used while building the Controller's `ServerCache`.
 They are not wire frames in a List response. Gateway full sync instead deserializes List's single
 JSON Vec and calls `CacheData::reset`, which invokes `ConfHandler.full_set`; the cache is marked
-ready after that List succeeds. Runtime Watch changes use `apply_change(..., sv)` and the debounce
-path below.
+ready after that List succeeds. Runtime Watch changes go through the generic or
+Backend-specific payload decoder, update the cache, and enter the debounce path below.
 
 | Watch event | ResourceChange | Handling logic |
 |-----------|---------------|---------|

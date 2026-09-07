@@ -11,7 +11,6 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [Generic Watch decode diagnostics and deferred recovery](../observability/intentional-design/conf-sync-watch-parse-error-metric-only.md)
 - [ConfCenter etcd Abstraction Boundary — Audited Design Tradeoff](intentional-design/conf-center-etcd-abstraction.md)
 - [Generic `SimpleMapConfHandler<T>` Extraction — Declined](intentional-design/conf-handler-simple-map-pattern.md)
 - [conf_sync File-Mode Cert Watch Keeps `(mtime, length)` — ACCEPTED-TRADEOFF](intentional-design/conf-sync-cert-watch-mtime-length-signature.md)
@@ -24,4 +23,5 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Generic Watch decode failure recovery](regression-guards/watch-decode-error-relist.md)
 - [conf_sync Plaintext — Fail-Close (decided 2026-07-14)](regression-guards/conf-sync-plaintext-default-observable.md)
