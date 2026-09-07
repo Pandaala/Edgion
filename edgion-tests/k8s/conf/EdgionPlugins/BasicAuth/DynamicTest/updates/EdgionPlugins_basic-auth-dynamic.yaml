@@ -10,7 +10,7 @@ spec:
     - enable: true
       type: BasicAuth
       config:
-        realm: "Dynamic Test Realm"
+        realm: 'Dynamic "Partner"\'
         hideCredentials: false
         secretGroups:
           - name: default

@@ -67,7 +67,7 @@ spec:
 | `validateRequestBody` | Boolean | `false` | Whether to validate request body Digest |
 | `hideCredentials` | Boolean | `false` | After successful authentication, remove `Authorization`, `Proxy-Authorization`, and `Signature` before proxying. `Signature` is stripped only; it is not an authentication source. Anonymous requests that skip authentication do not run this cleanup |
 | `anonymous` | String | none | Anonymous username |
-| `realm` | String | `"edgion"` | Authentication realm |
+| `realm` | String | `"edgion"` | Authentication realm; [Character rules](README.md#authentication-realm) |
 | `authFailureDelayMs` | Integer | `0` | Auth failure response delay (ms) |
 | `minSecretLength` | Integer | `32` | Minimum secret key length |
 | `secretField` | String | `"secret"` | Secret field name in K8s Secret |

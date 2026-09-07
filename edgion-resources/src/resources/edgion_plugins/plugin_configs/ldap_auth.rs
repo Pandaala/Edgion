@@ -1,6 +1,7 @@
 //! LDAP Auth plugin configuration
 
 use crate::resources::common::OutboundTlsLocal;
+use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -161,6 +162,9 @@ impl Default for LdapAuthConfig {
 impl LdapAuthConfig {
     /// Validate configuration and return error message when invalid.
     pub fn get_validation_error(&self) -> Option<&str> {
+        if let Err(error) = validate_auth_realm(&self.realm) {
+            return Some(error);
+        }
         if self.ldap_host.trim().is_empty() {
             return Some("ldapHost is required");
         }

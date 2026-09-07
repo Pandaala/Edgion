@@ -256,10 +256,14 @@ impl Default for JwtAuthConfig {
     }
 }
 
+use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for JwtAuthConfig {
     fn validation_error(&self) -> Option<String> {
+        if let Err(error) = validate_auth_realm(&self.realm) {
+            return Some(error.to_string());
+        }
         // 1. issuer_groups structural validation
         if let Some(groups) = &self.issuer_groups {
             if groups.is_empty() {

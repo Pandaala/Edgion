@@ -748,6 +748,79 @@ mod compile_plugins_tests {
         })
     }
 
+    #[test]
+    fn auth_realm_invalid_configs_match_controller_validation_and_fail_closed() {
+        for kind in [
+            "BasicAuth",
+            "KeyAuth",
+            "JwtAuth",
+            "HmacAuth",
+            "LdapAuth",
+            "OpenidConnect",
+        ] {
+            let mut config = match kind {
+                "LdapAuth" => serde_json::json!({
+                    "ldapHost": "ldap.example.com", "baseDn": "dc=example,dc=com", "attribute": "uid"
+                }),
+                "OpenidConnect" => serde_json::json!({
+                    "discovery": "https://idp.example.com/.well-known/openid-configuration",
+                    "clientId": "test-client", "bearerOnly": true
+                }),
+                _ => serde_json::json!({"anonymous": "guest"}),
+            };
+            config["realm"] = serde_json::json!("private\r\nrealm");
+            let ep: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+                "metadata": {"name": "realm-test", "namespace": "default"},
+                "spec": {"requestPlugins": [{"type": kind, "config": config}]}
+            }))
+            .unwrap();
+            let controller_errors = ep.validate_plugins();
+            assert!(!controller_errors.is_empty(), "{kind}");
+            let compiled = compile_plugins(&ep);
+            assert_eq!(compiled.preparse_errors, controller_errors, "{kind}");
+            assert!(!compiled.is_activatable, "{kind}");
+            assert!(!compiled.retain_previous_on_invalid_update, "{kind}");
+            assert_eq!(
+                compiled.plugin_runtime.request_plugins_count(),
+                1,
+                "fail-closed gate: {kind}"
+            );
+            assert!(!compiled.preparse_errors.join(";").contains("private"));
+        }
+    }
+
+    #[test]
+    fn auth_realm_invalid_reload_replaces_valid_generation_and_recovers() {
+        let resource = |realm: &str, enabled: bool| -> EdgionPlugins {
+            serde_json::from_value(serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+                "metadata": {"name": "realm-test", "namespace": "default"},
+                "spec": {"requestPlugins": [{"type": "BasicAuth", "enable": enabled,
+                    "config": {"anonymous": "guest", "realm": realm}}]}
+            }))
+            .unwrap()
+        };
+        let store = PluginStore::new();
+        let key = "default/realm-test".to_string();
+        let valid = compile_plugins(&resource("initial", true));
+        assert!(valid.is_activatable);
+        store.replace_all(HashMap::from([(key.clone(), valid)]));
+        for (realm, expected_active) in [("bad\0realm", false), ("Partner \"API\"\\", true)] {
+            let next = compile_plugins(&resource(realm, true));
+            assert_eq!(next.is_activatable, expected_active);
+            store.apply_delta(
+                HashMap::new(),
+                HashMap::from([(key.clone(), Arc::clone(&next))]),
+                &HashSet::new(),
+            );
+            assert!(Arc::ptr_eq(store.snapshot.load().plugins.get(&key).unwrap(), &next));
+        }
+        let disabled = resource("bad\0realm", false);
+        assert!(disabled.validate_plugins().is_empty());
+        assert!(compile_plugins(&disabled).is_activatable);
+    }
+
     fn waf_resource(rules: &str) -> EdgionPlugins {
         EdgionPlugins {
             metadata: kube::api::ObjectMeta {

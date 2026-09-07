@@ -64,7 +64,7 @@ filters:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `secretGroups` | Array | none | **Required** (except in anonymous-only mode). List of Secret groups. Each group holds a name and one or more Secret references. Each Secret must be of type `kubernetes.io/basic-auth` and contain `username` and `password` fields |
-| `realm` | String | `"API Gateway"` | Authentication realm name, displayed in the browser login dialog |
+| `realm` | String | `"API Gateway"` | Authentication realm name, displayed in the browser login dialog; [Character rules](README.md#authentication-realm) |
 | `hideCredentials` | Boolean | `false` | Whether to hide the Authorization header from the upstream service |
 | `anonymous` | String | none | Anonymous username. When set, unauthenticated requests are also allowed with this username |
 | `authFailureDelayMs` | Integer | `0` | Fixed delay (milliseconds) applied before returning an auth failure response. Used to mitigate brute-force and username-enumeration attacks — see [Security Best Practices · Mitigating Enumeration and Brute-Force](#6-mitigating-enumeration-and-brute-force-recommended) below |

@@ -30,7 +30,7 @@
 | `unauthAction` | Enum | `Auth` | Behavior on unauthenticated requests. Values: `Auth` (trigger login) | `Deny` (return 401) | `Pass` (pass through) |
 | `scope` | String | `"openid"` | OIDC request scope |
 | `requiredScopes` | Array\<String\> | None | Required scopes; a token missing any is rejected. **Only enforced when `bearerOnly: true`** (see note below) |
-| `realm` | String | `"edgion"` | Realm value in the `WWW-Authenticate` response header |
+| `realm` | String | `"edgion"` | Realm value in the `WWW-Authenticate` response header; [Character rules](../http-route/filters/edgion-plugins/README.md#authentication-realm) |
 
 > **Note on `requiredScopes`:** scope enforcement only applies in bearer-only mode
 > (`bearerOnly: true`). In the default session/login mode (`bearerOnly: false`, which

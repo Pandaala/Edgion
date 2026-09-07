@@ -56,7 +56,7 @@ Use cases:
 | `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding |
 | `authFailureDelayMs` | Integer | `0` | Delay before returning a credential-related 401 response, in milliseconds |
 | `anonymous` | String | none | Anonymous username; applies only when both credential headers are missing |
-| `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
+| `realm` | String | `API Gateway` | `WWW-Authenticate` realm; [Character rules](../http-route/filters/edgion-plugins/README.md#authentication-realm) |
 | `timeout` | Integer | `10000` | LDAP timeout (milliseconds) |
 | `keepalive` | Integer | `60000` | Reserved field |
 | `credentialIdentifierHeader` | String | `X-Credential-Identifier` | Header for passing the authenticated username |

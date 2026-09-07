@@ -30,7 +30,7 @@
 | `unauthAction` | Enum | `Auth` | 未认证时行为。可选值：`Auth`（触发登录流） | `Deny`（返回 401） | `Pass`（放行） |
 | `scope` | String | `"openid"` | OIDC 请求的 scope |
 | `requiredScopes` | Array\<String\> | 无 | 必需的 scope 列表，token 中缺少则拒绝。**仅在 `bearerOnly: true` 时强制校验**（见下方说明） |
-| `realm` | String | `"edgion"` | `WWW-Authenticate` 响应头中的 realm 值 |
+| `realm` | String | `"edgion"` | `WWW-Authenticate` 响应头中的 realm 值; [字符规则](../http-route/filters/edgion-plugins/README.md#authentication-realm) |
 
 > **关于 `requiredScopes` 的说明：** scope 强制校验仅在 bearer-only 模式
 > （`bearerOnly: true`）下生效。在默认的 session/登录模式（`bearerOnly: false`，包括

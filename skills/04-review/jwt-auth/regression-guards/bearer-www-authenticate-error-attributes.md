@@ -12,6 +12,10 @@ When reviewing findings of the form "gateway Bearer `WWW-Authenticate` lacks `er
 
 ## Historical resolution evidence: rfc-refactor-cookie-auth-01
 
+This historical correction covered error attributes, not configurable realm safety.
+The shared realm boundary is documented separately in
+[Authentication challenge realm quoted strings](../../security/regression-guards/auth-challenge-realm-quoted-strings.md).
+
 `send_gateway_auth_error_response` signature extended with `error_code: Option<&str>` (the discriminator that forces each caller to choose a code or `None`). Closed together with cookie-auth-02 — same change. `error_description` was folded into the existing `body` arg rather than added as a separate parameter.
 
 ## Resolution references

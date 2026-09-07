@@ -2,6 +2,26 @@
 
 HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` CRD.
 
+## Authentication realm
+
+BasicAuth, KeyAuth, JwtAuth, HmacAuth, LdapAuth, and OpenidConnect share the same
+character policy for `config.realm`. Set the literal protection-domain name:
+Edgion escapes double quotes and backslashes when writing `WWW-Authenticate`.
+Do not pre-escape the value for HTTP; only use the escaping required by YAML/JSON.
+
+ASCII control characters (`0x00`–`0x1F`, including CR, LF, NUL, and tab) and DEL
+(`0x7F`) are rejected, not removed. Other characters retain their literal value.
+Existing per-plugin defaults and empty-value rules are unchanged.
+
+For example, YAML `realm: 'Partner "API"\'` produces the parameter
+`realm="Partner \"API\"\\"` in the challenge.
+
+An enabled plugin with an invalid realm reports `Accepted=False` on its
+`EdgionPlugins` resource. The Gateway fails requests through that resource closed
+with HTTP 500, including after an invalid hot update; applying a valid value
+restores normal authentication. The validation message identifies the character
+rule without echoing the realm. Disabled entries remain inert.
+
 ## Contents
 
 | Document | Description |

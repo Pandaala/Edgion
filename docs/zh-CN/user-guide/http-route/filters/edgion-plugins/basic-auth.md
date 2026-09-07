@@ -64,7 +64,7 @@ filters:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `secretGroups` | Array | 无 | **必填**（匿名模式除外）。Secret 分组列表。每组包含一个名称和若干 Secret 引用，每个 Secret 必须是 `kubernetes.io/basic-auth` 类型，包含 `username` 和 `password` 字段 |
-| `realm` | String | `"API Gateway"` | 认证域名称，显示在浏览器登录框中 |
+| `realm` | String | `"API Gateway"` | 认证域名称，显示在浏览器登录框中; [字符规则](README.md#authentication-realm) |
 | `hideCredentials` | Boolean | `false` | 是否隐藏 Authorization 头，不传递给上游服务 |
 | `anonymous` | String | 无 | 匿名用户名。设置后，未认证请求也会被允许，并设置此用户名 |
 | `authFailureDelayMs` | Integer | `0` | 认证失败时的固定延迟（毫秒）。用于缓解暴力破解和用户枚举攻击，详见下方[安全最佳实践 · 防枚举与暴力破解](#6-防枚举与暴力破解推荐配置) |

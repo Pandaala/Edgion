@@ -2,6 +2,7 @@
 //!
 //! Supports HTTP Signature style authentication using HMAC algorithms.
 
+use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use std::collections::HashMap;
 
 use schemars::JsonSchema;
@@ -201,6 +202,9 @@ impl Default for HmacAuthConfig {
 
 impl HmacAuthConfig {
     pub fn detect_validation_error(&self) -> Option<String> {
+        if let Err(error) = validate_auth_realm(&self.realm) {
+            return Some(error.to_string());
+        }
         if let Some(error) = self.match_config.detect_validation_error() {
             return Some(error);
         }

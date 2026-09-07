@@ -88,6 +88,37 @@ impl TestSuite for BasicAuthDynamicInitialTestSuite {
 pub struct BasicAuthDynamicUpdateTestSuite;
 
 impl BasicAuthDynamicUpdateTestSuite {
+    fn escaped_realm() -> TestCase {
+        TestCase::new(
+            "basic_auth_dyn_update_escaped_realm",
+            "[UPDATE] challenge preserves quotes and trailing backslash in the new realm",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match ctx
+                        .http_client
+                        .get(format!("{}/health", ctx.http_url()))
+                        .header("host", HOST)
+                        .send()
+                        .await
+                    {
+                        Ok(response)
+                            if response.status().as_u16() == 401
+                                && response.headers().get("www-authenticate").and_then(|v| v.to_str().ok())
+                                    == Some(r#"Basic realm="Dynamic \"Partner\"\\""#) =>
+                        {
+                            TestResult::passed(start.elapsed())
+                        }
+                        Ok(_) => {
+                            TestResult::failed(start.elapsed(), "expected 401 with escaped updated realm".to_string())
+                        }
+                        Err(error) => TestResult::failed(start.elapsed(), format!("request failed: {error}")),
+                    }
+                })
+            },
+        )
+    }
+
     fn alice_200() -> TestCase {
         TestCase::new(
             "basic_auth_dyn_update_alice_200",
@@ -129,7 +160,7 @@ impl TestSuite for BasicAuthDynamicUpdateTestSuite {
         "BasicAuth Dynamic - Update Phase"
     }
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::alice_200(), Self::bob_401()]
+        vec![Self::alice_200(), Self::bob_401(), Self::escaped_realm()]
     }
 }
 

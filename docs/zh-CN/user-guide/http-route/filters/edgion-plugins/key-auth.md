@@ -64,7 +64,7 @@ spec:
 | `hideCredentials` | Boolean | ❌ | `false` | 验证后是否从请求中移除 API Key |
 | `authFailureDelayMs` | Integer | ❌ | `0` | 认证失败后延迟响应毫秒数，防暴力破解 |
 | `anonymous` | String | ❌ | 无 | 匿名用户名，设置后未认证请求也允许通过 |
-| `realm` | String | ❌ | `"API Gateway"` | 认证域名称 |
+| `realm` | String | ❌ | `"API Gateway"` | 认证域名称; [字符规则](README.md#authentication-realm) |
 | `keyField` | String | ❌ | `"key"` | Secret 中存储 key 值的字段名 |
 | `secretGroups` | Array | ✅ | 无 | 按组组织的 Kubernetes Secret 引用列表（见下方说明） |
 | `upstreamHeaderFields` | Array | ❌ | `[]` | 认证成功后传递给上游的额外 header（从 key metadata 提取） |

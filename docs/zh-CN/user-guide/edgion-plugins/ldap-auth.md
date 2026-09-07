@@ -55,7 +55,7 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `hideCredentials` | Boolean | `false` | 是否移除认证头再转发 |
 | `authFailureDelayMs` | Integer | `0` | 返回凭证相关 401 响应前的延迟，单位为毫秒 |
 | `anonymous` | String | 无 | 匿名用户名；仅当两个凭证头都缺失时生效 |
-| `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
+| `realm` | String | `API Gateway` | `WWW-Authenticate` realm; [字符规则](../http-route/filters/edgion-plugins/README.md#authentication-realm) |
 | `timeout` | Integer | `10000` | LDAP 超时（毫秒） |
 | `keepalive` | Integer | `60000` | 保留字段 |
 | `credentialIdentifierHeader` | String | `X-Credential-Identifier` | 认证用户名透传头 |

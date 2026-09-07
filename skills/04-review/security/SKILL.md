@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Authentication challenge realm quoted strings](regression-guards/auth-challenge-realm-quoted-strings.md)
 - [AI backend ReferenceGrant decisions are enforced through dispatch](regression-guards/ai-backend-referencegrant-enforced-through-dispatch.md)
 - [Anthropic translated responses rebuild their headers](regression-guards/anthropic-translated-responses-rebuild-headers.md)
 - [Elasticsearch bulk NDJSON index-action header — serde_json construction](regression-guards/es-ndjson-index-header-serde-json.md)

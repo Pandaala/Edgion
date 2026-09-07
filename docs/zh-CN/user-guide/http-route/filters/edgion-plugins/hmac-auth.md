@@ -67,7 +67,7 @@ spec:
 | `validateRequestBody` | Boolean | ❌ | `false` | 是否验证请求体的 Digest |
 | `hideCredentials` | Boolean | ❌ | `false` | 认证成功后，转发前移除 `Authorization`、`Proxy-Authorization` 和 `Signature`。`Signature` 只被摘掉，不是认证源。跳过认证的匿名请求不会做这次清理 |
 | `anonymous` | String | ❌ | 无 | 匿名用户名 |
-| `realm` | String | ❌ | `"edgion"` | 认证域 |
+| `realm` | String | ❌ | `"edgion"` | 认证域; [字符规则](README.md#authentication-realm) |
 | `authFailureDelayMs` | Integer | ❌ | `0` | 认证失败延迟响应毫秒数 |
 | `minSecretLength` | Integer | ❌ | `32` | 最小密钥长度 |
 | `secretField` | String | ❌ | `"secret"` | Secret 中密钥的字段名 |

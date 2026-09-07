@@ -77,7 +77,7 @@ stringData:
 | `base64Secret` | Boolean | `false` | `false` 直接使用 Controller 提供的 UTF-8 `secret` 字节；`true` 在 Kubernetes 已解码 Secret `.data` 外层后，再把该字符串按 standard Base64 解码 |
 | `maximumExpiration` | Integer | `0` | 最大允许的 exp 时长（秒，从当前时间起）。`0` 表示不限制 |
 | `authFailureDelayMs` | Integer | `0` | 返回认证失败响应前的延迟（毫秒），同时作用于缺少 Token 和 Token 无效的情况 |
-| `realm` | String | `jwt` | Bearer `WWW-Authenticate` challenge 使用的 realm |
+| `realm` | String | `jwt` | Bearer `WWW-Authenticate` challenge 使用的 realm; [字符规则](README.md#authentication-realm) |
 | `storeClaimsInCtx` | Boolean | `false` | 是否将已验证 claims 存储到 ctx 变量 `jwt_claims`（供下游插件通过 `get_ctx_var` 读取；该变量已从 access log 排除，claims 不会被持久化） |
 | `claimsToHeaders` | Object | 无 | 将 JWT claim 名映射到上游请求头名称 |
 

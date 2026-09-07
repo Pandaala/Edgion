@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // Submodules
+pub mod auth_realm;
 pub mod body_requirement;
 pub mod conditions;
 pub mod custom_plugins;

@@ -2,9 +2,11 @@
 
 use crate::plugins::runtime::PluginSessionHeaderExt;
 use bytes::Bytes;
+use edgion_resources::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use edgion_resources::uri_utils::url_decode;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -142,6 +144,9 @@ pub(crate) fn plan_cookie_strip<'a>(cookie_lines: impl Iterator<Item = &'a str>,
 /// Always sets `WWW-Authenticate: <scheme> realm="<realm>"`. When `error_code` is
 /// `Some`, the challenge is extended per RFC 6750 §3.1 with `error="<code>"` and
 /// `error_description="<body>"` (the body text escaped as a `quoted-string`).
+/// Realm quotes and backslashes are escaped; ASCII controls, including HTAB and
+/// DEL, are rejected before constructing a response. Configuration validation
+/// uses the same realm policy, without echoing the configured value in errors.
 ///
 /// Pass `error_code = None` when the request carried no credentials at all — RFC
 /// 6750 §3.1 says a resource server SHOULD NOT include an error code in that case
@@ -161,6 +166,8 @@ pub async fn send_gateway_auth_error_response(
     error_code: Option<&str>,
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    validate_auth_realm(realm)?;
+    let realm = escape_quoted_string(realm);
     let mut resp = ResponseHeader::build(status, None)?;
     resp.insert_header("Content-Type", "text/plain")?;
     let www_auth = match error_code {
@@ -210,7 +217,13 @@ pub async fn send_gateway_plain_error_response(
 /// Escape a string for safe inclusion in an HTTP `quoted-string` (RFC 9110 §5.6.4):
 /// backslash-escape `\` and `"`, and drop control characters that are not valid in
 /// a header value (prevents header injection from dynamic error messages).
-fn escape_quoted_string(value: &str) -> String {
+fn escape_quoted_string(value: &str) -> Cow<'_, str> {
+    if !value
+        .bytes()
+        .any(|byte| byte == b'\\' || byte == b'"' || byte.is_ascii_control())
+    {
+        return Cow::Borrowed(value);
+    }
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
         match c {
@@ -222,7 +235,7 @@ fn escape_quoted_string(value: &str) -> String {
             c => out.push(c),
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Apply authentication failure delay to mitigate brute-force / credential-stuffing attacks.
@@ -373,12 +386,93 @@ pub fn set_claims_headers(
 #[cfg(test)]
 mod tests {
     use super::{
-        escape_quoted_string, plan_cookie_strip, resolve_claim_path, strip_cookie, strip_query_param, Claims,
-        CookieStripPlan,
+        escape_quoted_string, plan_cookie_strip, resolve_claim_path, send_gateway_auth_error_response, strip_cookie,
+        strip_query_param, Claims, CookieStripPlan,
     };
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+    use mockall::Sequence;
     use serde_json::json;
+    use std::borrow::Cow;
+
+    #[tokio::test]
+    async fn auth_realm_challenges_escape_data_and_preserve_response_contract() {
+        for scheme in ["Basic", "ApiKey", "Bearer", "hmac", "ldap", "TLSCert"] {
+            for error_code in [None, Some("invalid_token")] {
+                for (realm, escaped) in [
+                    ("edgion", "edgion"),
+                    ("", ""),
+                    ("Partner \"API\"", "Partner \\\"API\\\""),
+                    ("path\\", "path\\\\"),
+                    ("a, b=c", "a, b=c"),
+                    ("café €", "café €"),
+                ] {
+                    let mut session = MockPluginSession::new();
+                    let mut sequence = Sequence::new();
+                    let mut expected = format!("{scheme} realm=\"{escaped}\"");
+                    if error_code.is_some() {
+                        expected.push_str(", error=\"invalid_token\", error_description=\"Denied \\\"token\\\"\\\\\"");
+                    }
+                    session
+                        .expect_write_response_header()
+                        .withf(move |response, eos| {
+                            !eos && response.status.as_u16() == 401
+                                && response.headers.get("content-type").unwrap() == "text/plain"
+                                && response.headers.get("www-authenticate").unwrap().as_bytes() == expected.as_bytes()
+                        })
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_, _| Ok(()));
+                    session
+                        .expect_write_response_body()
+                        .withf(|body, eos| *eos && body.as_deref() == Some(b"401 Denied \"token\"\\\r\n".as_slice()))
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|_, _| Ok(()));
+                    session
+                        .expect_shutdown()
+                        .times(1)
+                        .in_sequence(&mut sequence)
+                        .returning(|| {});
+                    send_gateway_auth_error_response(
+                        &mut session,
+                        401,
+                        scheme,
+                        realm,
+                        error_code,
+                        "Denied \"token\"\\\r\n",
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_realm_controls_fail_before_any_response_is_written() {
+        for byte in (0..=0x1f).chain(std::iter::once(0x7f)) {
+            for error_code in [None, Some("invalid_token")] {
+                let mut session = MockPluginSession::new();
+                session.expect_write_response_header().never();
+                session.expect_write_response_body().never();
+                session.expect_shutdown().never();
+                let realm = format!("private-realm{}suffix", char::from(byte));
+                let error = send_gateway_auth_error_response(&mut session, 401, "Bearer", &realm, error_code, "Denied")
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    "realm must not contain ASCII control characters (including tabs and DEL)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn auth_realm_plain_values_do_not_allocate_an_escaped_copy() {
+        assert!(matches!(escape_quoted_string("API Gateway café"), Cow::Borrowed(_)));
+    }
 
     #[test]
     fn test_escape_quoted_string() {

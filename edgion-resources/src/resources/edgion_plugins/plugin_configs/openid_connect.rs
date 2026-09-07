@@ -2,6 +2,7 @@
 
 use super::{lru_cache_config::LruCacheConfig, tiny_ufo_ttl_cache_config::TinyUfoTtlCacheConfig};
 use crate::resources::common::OutboundTlsLocal;
+use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::gateway::SecretObjectReference;
 use jsonwebtoken::Algorithm;
 use k8s_openapi::api::core::v1::Secret;
@@ -380,6 +381,9 @@ impl Default for OpenidConnectConfig {
 impl OpenidConnectConfig {
     /// Validate configuration and return first error.
     pub fn get_validation_error(&self) -> Option<&str> {
+        if let Err(error) = validate_auth_realm(&self.realm) {
+            return Some(error);
+        }
         if self.discovery.is_empty() {
             return Some("discovery is required");
         }

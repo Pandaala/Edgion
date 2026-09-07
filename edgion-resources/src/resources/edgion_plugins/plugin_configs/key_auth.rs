@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::common::KeyGet;
 use crate::resources::common::group_name::default_group_name;
+use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::edgion_plugins::plugin_validation::PluginValidation;
 use crate::resources::gateway::SecretObjectReference;
 
@@ -206,6 +207,7 @@ impl KeyAuthConfig {
         }
 
         // realm must not be empty
+        validate_auth_realm(&self.realm).map_err(str::to_owned)?;
         if self.realm.is_empty() {
             return Err("realm cannot be empty".to_string());
         }

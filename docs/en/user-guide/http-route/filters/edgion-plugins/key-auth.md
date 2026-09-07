@@ -64,7 +64,7 @@ spec:
 | `hideCredentials` | Boolean | `false` | Remove API Key from request after validation |
 | `authFailureDelayMs` | Integer | `0` | Delay response on auth failure (brute force protection) |
 | `anonymous` | String | none | Anonymous username; unauthenticated requests pass through |
-| `realm` | String | `"API Gateway"` | Authentication realm name |
+| `realm` | String | `"API Gateway"` | Authentication realm name; [Character rules](README.md#authentication-realm) |
 | `keyField` | String | `"key"` | Field name storing the key value in Secret |
 | `secretGroups` | Array\<Object\> | none | Named groups of Kubernetes Secret references (see sub-table) |
 | `upstreamHeaderFields` | Array\<String\> | `[]` | Extra headers to forward upstream (from key metadata) |

@@ -2,6 +2,21 @@
 
 Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 
+## 认证保护域 {#authentication-realm}
+
+BasicAuth、KeyAuth、JwtAuth、HmacAuth、LdapAuth 和 OpenidConnect 的 `config.realm`
+使用统一的字符规则。填写原始保护域名称，Edgion 会在写入 `WWW-Authenticate` 时
+转义双引号和反斜杠。仅按 YAML/JSON 的语法转义，不要预先做 HTTP 转义。
+
+禁止 ASCII 控制字符（`0x00`–`0x1F`，包括 CR、LF、NUL 和制表符）及 DEL（`0x7F`）；
+这些字符会使配置校验失败，不会被静默删除。其他字符保留原值，各插件现有默认值及空值规则不变。
+
+例如，YAML `realm: 'Partner "API"\'` 对应响应中的参数 `realm="Partner \"API\"\\"`。
+
+启用的插件配置了非法 realm 时，`EdgionPlugins` 会报告 `Accepted=False`。
+Gateway 对经过该资源的请求返回 HTTP 500，包括热更新为非法值的情况；改为合法值后恢复正常认证。
+校验消息只说明字符规则，不回显 realm 内容。禁用的插件条目不参与校验和执行。
+
 ## 内容
 
 | 文档 | 说明 |

@@ -77,7 +77,7 @@ stringData:
 | `base64Secret` | Boolean | `false` | `false` uses the Controller-provided UTF-8 `secret` bytes directly; `true` decodes that string as standard Base64 after Kubernetes has already decoded the outer Secret `.data` layer |
 | `maximumExpiration` | Integer | `0` | Maximum allowed exp duration from now (seconds). `0` disables the check |
 | `authFailureDelayMs` | Integer | `0` | Delay before a failed authentication response (milliseconds). Applies to missing and invalid tokens |
-| `realm` | String | `jwt` | Realm used in the Bearer `WWW-Authenticate` challenge |
+| `realm` | String | `jwt` | Realm used in the Bearer `WWW-Authenticate` challenge; [Character rules](README.md#authentication-realm) |
 | `storeClaimsInCtx` | Boolean | `false` | Store verified claims in the ctx variable `jwt_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
 | `claimsToHeaders` | Object | none | Map JWT claim names to upstream request header names |
 

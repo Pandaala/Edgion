@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::resources::common::group_name::default_group_name;
+use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -106,6 +107,9 @@ impl Default for BasicAuthConfig {
 
 impl BasicAuthConfig {
     pub fn detect_validation_error(&self) -> Option<String> {
+        if let Err(error) = validate_auth_realm(&self.realm) {
+            return Some(error.to_string());
+        }
         if self.realm.trim().is_empty() {
             return Some("realm cannot be empty".to_string());
         }
