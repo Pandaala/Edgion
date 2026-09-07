@@ -512,7 +512,7 @@
 | `edgion-gateway/src/plugins/http/wasm/plugin.rs` | `plugins-http-wasm` | source | changed | B0113 |
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | changed | B0114 |
 | `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | changed | B0115 |
-| `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | analysis-ready | B0116 |
+| `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | analysis-ready | B0117 |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | analysis-ready | B0118 |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | pending | — |

@@ -146,3 +146,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Offload Wasm OCI manifest parsing and archive extraction | pending | [task](../../../todo/offload-wasm-oci-manifest-parsing-and-extraction.md) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |
+| Emit bounded diagnostics for outbound warnIfMissing fields | pending | [task](../../../todo/outbound-warn-if-missing-diagnostics.md) |
