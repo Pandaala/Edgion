@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: aes-tls-dynamic
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AllEndpointStatus
+      config:
+        pathOverride: /echo
+        timeoutMs: 2000
+        wallTimeoutMs: 5000
+        maxEndpoints: 4
+        concurrencyLimit: 2
+        maxBodySize: 4096

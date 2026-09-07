@@ -60,6 +60,32 @@ spec:
 
 ## Configuration Parameters
 
+### Backend TLS and endpoint identity
+
+Probes honor the effective `BackendTLSPolicy` for each Service and the Service
+port named by `backendRefs`. That port is mapped to each ready EndpointSlice
+endpoint's actual serving port, including different target ports during a rollout.
+Missing or invalid Service-port mappings return HTTP 503 before any probe is sent.
+
+Without a policy, probes use HTTP. With a valid policy, probes use HTTPS with its
+CA trust, hostname (SNI and certificate verification), additional SAN constraints,
+and optional client certificate. A policy client certificate takes precedence over
+the matched Gateway's backend client certificate. Plugin/LinkSys global TLS
+defaults do not supply credentials or trust for these backend probes.
+
+Each endpoint has an independent client for the current invocation, so every
+result corresponds to that exact endpoint and later probes cannot reuse a
+connection from an older policy or certificate generation. TLS configuration is
+shared within one Service/port probe group. Queued probes fail if their captured
+discovery, policy, or selected Gateway identity changes; already-started exchanges
+finish under their captured configuration. Clients are not cached across requests.
+
+An invalid policy never falls back to HTTP. Invalid policies and TLS handshake
+failures produce the existing HTTP 200 aggregate with failed endpoint entries
+(`status: null`, `body: null`, and a short generic `error`). Redirects are not
+followed, proxy environment variables are ignored, and existing endpoint, timeout,
+concurrency, and response-body limits still apply.
+
 ### Basic Parameters
 
 | Parameter | Type | Default | Description |

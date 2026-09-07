@@ -21,6 +21,7 @@ static INIT: Once = Once::new();
 static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
+    "AllEndpointStatusTls",
     "AiBackendLifecycle",
     "AiBackendPolicyIntegration",
     "AiBackendSecretRotation",
@@ -1425,7 +1426,8 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "AiBackendLifecycle" | "AiBackendPolicyIntegration" | "AiBackendSecretRotation" | "AiBackendWeighted" => {
             Some(("EdgionBackend/SingleProvider", PortKind::Http))
         }
-        "BasicAuthDynamic"
+        "AllEndpointStatusTls"
+        | "BasicAuthDynamic"
         | "BasicAuthDynamicGrouped"
         | "BodyDynamic"
         | "CanaryHotSwap"

@@ -123,6 +123,23 @@ mod tests {
     }
 
     #[test]
+    fn conflicting_tls_configuration_is_rejected() {
+        let tls =
+            rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth();
+        let error = build_outbound_client(OutboundClientConfig {
+            tls: Some(TlsConfig::default()),
+            preconfigured_tls: Some(tls),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
     fn build_default_client_succeeds() {
         assert!(build_outbound_client(OutboundClientConfig::default()).is_ok());
     }

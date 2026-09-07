@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: aes-tls-dynamic
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: aes-tls-dynamic
+      sectionName: https
+  validation:
+    hostname: backend.example.com
+    caCertificateRefs:
+      - group: ""
+        kind: Secret
+        name: backend-ca
+    subjectAltNames:
+      - type: Hostname
+        hostname: backend.example.com
+  options:
+    edgion.io/client-certificate-ref: backend-client-cert

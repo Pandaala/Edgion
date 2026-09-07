@@ -49,8 +49,7 @@ is a bug" rule also gets a line there.
   a bug.
 - **Verified consumers** (2026-09-04): the default and RequestMirror singletons,
   `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
-  and OCI pulls, openid_connect (default `build_outbound_client` branch and
-  SAN-pinning `apply_outbound_policy` + `use_preconfigured_tls` branch),
+  and OCI pulls, openid_connect (both ordinary and SAN-pinning factory paths),
   request_mirror,
   the elasticsearch link_sys provider, health-check probes,
   all_endpoint_status, the controller ACME DNS-01 providers
@@ -66,15 +65,13 @@ is a bug" rule also gets a line there.
   redirects, and following one would carry the bearer token across an
   https -> http downgrade on the same host.
 - **Exemptions**:
-  - openid_connect SAN-pinning branch
-    (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) still attaches
-    a custom `ServerCertVerifier` with `use_preconfigured_tls` because the
-    factory's high-level TLS helpers cannot. Proxy disable, redirect deny,
-    timeouts, and `EgressResolver` are applied first through
-    `apply_outbound_policy`. Resolver, TLS-config, or client-build failure
-    rejects plugin construction; it must never fall back to a client that omits
-    the declared CA, mTLS, SAN, or egress policy.
   - Test code.
+
+The factory accepts either schema-level `tls` or `preconfigured_tls`, never both.
+Verified HTTPS clients needing SAN constraints use the shared Gateway
+`tls::validation::build_verified_outbound_tls` builder and the latter input.
+OIDC and AllEndpointStatus use this path without bypassing outbound transport
+policy. TLS/client construction failure must never select an unconfigured client.
 
 ### 2. Outbound request semantics (`ExternalHttpConnection`) — Unified for its class
 
@@ -105,6 +102,10 @@ is a bug" rule also gets a line there.
 - **Rule**: every outbound TLS configuration (CA bundle, client cert/mTLS,
   verification toggles) MUST resolve through it — including non-reqwest
   dialers.
+- Backend policy consumers use its pure `resolve_outbound_tls_with_defaults`
+  entry with explicit defaults, so LinkSys global trust or client credentials
+  cannot override backend identity. Configuration audit logging remains in
+  `resolve_outbound_tls`; request-time callers use the pure entry and access logs.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
   custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
   kafka provider (rskafka), the etcd link provider, openid_connect token

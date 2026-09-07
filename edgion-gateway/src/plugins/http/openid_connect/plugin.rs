@@ -29,9 +29,7 @@ use crate::cli::config::{
     get_default_lru_cache_capacity, get_default_lru_cache_shards, get_refresh_singleflight_max_registered_keys,
     resolve_lru_cache_limits, resolve_tiny_ufo_ttl_cache_limits,
 };
-use crate::link_sys::http_client::{
-    build_outbound_client, OutboundClientConfig, OutboundRedirect,
-};
+use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
@@ -146,7 +144,6 @@ impl DiscoveryDoc for DiscoveryDocument {
         &self.jwks_uri
     }
 }
-
 
 /// Build a config-aware discovery validator that fails fetch when a required
 /// endpoint is missing for the configured plugin behavior.
@@ -336,14 +333,15 @@ impl OpenidConnect {
                     );
                     "openid_connect outbound TLS resolution failed".to_string()
                 })?;
-                let rustls_config = build_verified_outbound_tls(&resolved, san_policy, "OpenidConnect").map_err(|error| {
-                    tracing::warn!(
-                        component = "openid_connect",
-                        error = %error,
-                        "SAN-pinning TLS config build failed; OIDC plugin construction rejected"
-                    );
-                    "openid_connect SAN-pinning TLS config build failed".to_string()
-                })?;
+                let rustls_config =
+                    build_verified_outbound_tls(&resolved, san_policy, "OpenidConnect").map_err(|error| {
+                        tracing::warn!(
+                            component = "openid_connect",
+                            error = %error,
+                            "SAN-pinning TLS config build failed; OIDC plugin construction rejected"
+                        );
+                        "openid_connect SAN-pinning TLS config build failed".to_string()
+                    })?;
                 let mut transport = oidc_outbound_client_config(config.timeout, None, dns_resolver);
                 transport.preconfigured_tls = Some(rustls_config);
                 let client = build_outbound_client(transport).map_err(|error| {

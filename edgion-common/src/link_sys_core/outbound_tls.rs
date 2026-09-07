@@ -202,7 +202,44 @@ pub fn resolve_outbound_tls(
     context: &str,
 ) -> Result<ResolvedOutboundTls, EdgionErrorCode> {
     let global = outbound_global_default();
+    let result = resolve_outbound_tls_with_defaults(local, resolved_ca, resolved_client, provider_can_disable, &global);
+    match &result {
+        Err(EdgionErrorCode::OutboundTlsVerifyUnsupported) => {
+            tracing::warn!(
+                provider = context,
+                "outbound TLS verify=false requested but provider does not support skip-verify"
+            );
+        }
+        Ok(resolved) if !resolved.verify => {
+            tracing::warn!(
+                provider = context,
+                "outbound TLS verification disabled (verify=false) — operator-configured, insecure"
+            );
+        }
+        Ok(_) if !local.verify.unwrap_or(global.verify) => {
+            tracing::warn!(
+                provider = context,
+                "outbound TLS verify=false overridden by subjectAltNames policy — full certificate verification enforced (fail-secure)"
+            );
+        }
+        _ => {}
+    }
+    result
+}
 
+/// Resolve outbound TLS against an explicit defaults snapshot.
+///
+/// Backend-policy consumers pass empty defaults to avoid inheriting unrelated
+/// LinkSys trust or client credentials. Ordinary outbound clients use
+/// `resolve_outbound_tls` to retain process-default inheritance.
+/// This pure resolver emits no logs; request-path callers own their diagnostics.
+pub fn resolve_outbound_tls_with_defaults(
+    local: &OutboundTlsLocal,
+    resolved_ca: Option<&[Secret]>,
+    resolved_client: Option<&Secret>,
+    provider_can_disable: bool,
+    global: &OutboundTlsConfig,
+) -> Result<ResolvedOutboundTls, EdgionErrorCode> {
     // Whole-block precedence: a present local `validation` shadows the global
     // block entirely (fields are not merged). CA bytes are sourced from whichever
     // block wins — the per-call `resolved_ca` for a local block, or the
@@ -240,30 +277,15 @@ pub fn resolve_outbound_tls(
 
     if !verify {
         if !provider_can_disable {
-            tracing::warn!(
-                provider = context,
-                "outbound TLS verify=false requested but provider does not support skip-verify"
-            );
             return Err(EdgionErrorCode::OutboundTlsVerifyUnsupported);
         }
         // Operator explicitly disabled verification; honored as their responsibility.
-        tracing::warn!(
-            provider = context,
-            "outbound TLS verification disabled (verify=false) — operator-configured, insecure"
-        );
         return Ok(ResolvedOutboundTls {
             verify: false,
             ca: EffectiveCa::System,
             client_identity: None,
             san: validation.cloned(),
         });
-    }
-
-    if san_pinned && !requested_verify {
-        tracing::warn!(
-            provider = context,
-            "outbound TLS verify=false overridden by subjectAltNames policy — full certificate verification enforced (fail-secure)"
-        );
     }
 
     // verify == true: resolve CA source from the winning validation block.
@@ -615,6 +637,27 @@ mod tests {
         let result = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test");
         assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
         set_outbound_global_default(OutboundTlsConfig::default());
+    }
+
+    #[test]
+    fn explicit_defaults_do_not_inherit_process_client_identity() {
+        let _guard = outbound_tls_test_guard();
+        set_outbound_global_default(OutboundTlsConfig {
+            client_certificate_ref: Some(secret_ref("global-client")),
+            resolved_client_certificate: Some(client_secret()),
+            ..Default::default()
+        });
+        let resolved = resolve_outbound_tls_with_defaults(
+            &OutboundTlsLocal::default(),
+            None,
+            None,
+            false,
+            &OutboundTlsConfig::default(),
+        )
+        .expect("explicit defaults must resolve independently");
+        assert!(resolved.verify);
+        assert!(matches!(resolved.ca, EffectiveCa::System));
+        assert!(resolved.client_identity.is_none());
     }
 
     #[test]

@@ -20,6 +20,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [AllEndpointStatus backend TLS and endpoint identity](regression-guards/all-endpoint-status-tls-identity.md)
+
 - [Retry-budget counters retain coherent epochs and monotonic windows](regression-guards/retry-budget-epoch-coherence.md)
 
 - [lb-06 — Active health-check probes run in parallel within a service — FIXED](regression-guards/active-hc-probes-parallel-within-service.md)

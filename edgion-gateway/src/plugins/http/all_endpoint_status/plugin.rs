@@ -11,21 +11,27 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
+use std::num::NonZeroU16;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
-use crate::backends::discovery::endpoint_slice::{get_roundrobin_store, EndpointSliceExt};
+use crate::backends::discovery::{get_service_discovery_coordinator, ServiceSectionKey, ServiceSelectorGeneration};
+use crate::backends::policy::backend_tls::BackendTLSPolicySnapshot;
+use crate::backends::policy::get_global_backend_tls_policy_store;
 use crate::backends::validate_endpoint_backend_addr;
 use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
 use edgion_resources::resources::edgion_plugins::AllEndpointStatusConfig;
 use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind};
+
+use super::transport::ProbeTransport;
 
 /// Global configuration for AllEndpointStatus plugin.
 /// Stored in YAML config, loaded at gateway startup, applies to all instances.
@@ -155,29 +161,6 @@ fn record_execution_completed_at(state: &AtomicU64, now_ms: u64) {
 }
 
 // ============================================================
-// Dedicated HTTP client (isolated connection pool)
-// ============================================================
-
-/// Dedicated HTTP client for AllEndpointStatus plugin.
-/// Isolated connection pool — does NOT share with get_http_client().
-/// This prevents fan-out requests from starving other plugins' connections.
-static STATUS_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    crate::link_sys::http_client::build_outbound_client(crate::link_sys::http_client::OutboundClientConfig {
-        pool_max_idle_per_host: Some(5),
-        pool_idle_timeout: Some(Duration::from_secs(10)),
-        connect_timeout: Some(Duration::from_secs(3)),
-        disable_proxy: true,
-        redirect: crate::link_sys::http_client::OutboundRedirect::Deny,
-        ..Default::default()
-    })
-    .expect("failed to build AllEndpointStatus HTTP client")
-});
-
-fn get_status_http_client() -> &'static reqwest::Client {
-    &STATUS_HTTP_CLIENT
-}
-
-// ============================================================
 // Response data structures
 // ============================================================
 
@@ -287,11 +270,12 @@ async fn read_body_limited(resp: reqwest::Response, max_size: usize) -> (Vec<u8>
 // ============================================================
 
 /// Information about a resolved endpoint for fan-out
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ResolvedEndpoint {
     address: String,      // "ip:port"
     backend_name: String, // service name (used for Host header)
-    use_tls: bool,
+    transport: Arc<ProbeTransport>,
+    allow_loopback: bool,
 }
 
 struct EndpointCollection {
@@ -300,6 +284,7 @@ struct EndpointCollection {
     discovered_endpoint_count: usize,
     unsafe_endpoint_count: usize,
     denied_ref_count: usize,
+    invalid_ref_count: usize,
 }
 
 impl EndpointCollection {
@@ -311,53 +296,67 @@ impl EndpointCollection {
 fn resolved_endpoint_from_backend(
     backend: pingora_load_balancing::Backend,
     backend_name: &str,
-    use_tls: bool,
+    transport: Arc<ProbeTransport>,
     allow_loopback_upstream: bool,
 ) -> Result<ResolvedEndpoint, ()> {
     validate_endpoint_backend_addr(&backend.addr, allow_loopback_upstream).map_err(|_| ())?;
     Ok(ResolvedEndpoint {
         address: backend.addr.to_string(),
         backend_name: backend_name.to_string(),
-        use_tls,
+        transport,
+        allow_loopback: allow_loopback_upstream,
     })
 }
 
-/// Resolve backend endpoints for a named service from the EndpointSlice store.
+/// Resolve endpoint sockets and policy section from the same published Service proof.
 fn resolve_endpoints(
     backend_name: &str,
     backend_namespace: &str,
     backend_port: u16,
-    use_tls: bool,
     allow_loopback_upstream: bool,
-) -> (Vec<ResolvedEndpoint>, usize) {
+    discovery: &Arc<ServiceSelectorGeneration>,
+    policies: &BackendTLSPolicySnapshot,
+    gateway_key: Option<&str>,
+) -> Result<(Vec<ResolvedEndpoint>, usize), ()> {
     let service_key = format!("{}/{}", backend_namespace, backend_name);
-
-    // Try EndpointSlice first (preferred, newer K8s API)
-    let eps_store = get_roundrobin_store();
-    if let Some(slices) = eps_store.get_slices_for_service(&service_key) {
-        let mut backends = BTreeSet::new();
-        for slice in slices.iter() {
-            backends.extend(slice.build_backends(backend_port));
-        }
-        if !backends.is_empty() {
-            let mut unsafe_count = 0;
-            let endpoints = backends
-                .into_iter()
-                .filter_map(|b| {
-                    match resolved_endpoint_from_backend(b, backend_name, use_tls, allow_loopback_upstream) {
-                        Ok(endpoint) => Some(endpoint),
-                        Err(()) => {
-                            unsafe_count += 1;
-                            None
-                        }
-                    }
-                })
-                .collect();
-            return (endpoints, unsafe_count);
-        }
-    }
-
-    (vec![], 0) // No endpoints found
+    let service = discovery.available(&service_key).ok_or(())?;
+    let section = service
+        .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(backend_port).ok_or(())?))
+        .map_err(|_| ())?;
+    let lookup = policies.lookup(
+        &PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: backend_namespace.to_owned(),
+            name: backend_name.to_owned(),
+        },
+        section.identity.name.as_deref(),
+    );
+    let transport = Arc::new(ProbeTransport::new(
+        lookup,
+        Arc::clone(discovery),
+        policies.generation(),
+        gateway_key,
+    ));
+    let mut unsafe_count = 0;
+    let endpoints = section
+        .ready_slots
+        .iter()
+        .filter_map(|slot| {
+            match resolved_endpoint_from_backend(
+                slot.backend.inner.clone(),
+                backend_name,
+                Arc::clone(&transport),
+                allow_loopback_upstream,
+            ) {
+                Ok(endpoint) => Some(endpoint),
+                Err(()) => {
+                    unsafe_count += 1;
+                    None
+                }
+            }
+        })
+        .collect();
+    Ok((endpoints, unsafe_count))
 }
 
 fn collect_route_endpoints_with<F>(
@@ -368,13 +367,14 @@ fn collect_route_endpoints_with<F>(
     mut resolver: F,
 ) -> EndpointCollection
 where
-    F: FnMut(&str, &str, u16, bool, bool) -> (Vec<ResolvedEndpoint>, usize),
+    F: FnMut(&str, &str, u16, bool) -> Result<(Vec<ResolvedEndpoint>, usize), ()>,
 {
     let mut backends = Vec::new();
     let mut selected_endpoints = Vec::with_capacity(effective_max);
     let mut discovered_endpoint_count = 0usize;
     let mut unsafe_endpoint_count = 0usize;
     let mut denied_ref_count = 0usize;
+    let mut invalid_ref_count = 0usize;
 
     for backend_ref in backend_refs {
         if backend_ref.backend_kind() != HTTPBackendRefKind::Service {
@@ -386,9 +386,18 @@ where
         }
 
         let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
-        let port = backend_ref.port.map(|port| port as u16).unwrap_or(80);
-        let use_tls = backend_ref.backend_tls_policy.is_some();
-        let (resolved, unsafe_count) = resolver(&backend_ref.name, namespace, port, use_tls, allow_loopback_upstream);
+        let Some(port) = backend_ref
+            .port
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0)
+        else {
+            invalid_ref_count += 1;
+            continue;
+        };
+        let Ok((resolved, unsafe_count)) = resolver(&backend_ref.name, namespace, port, allow_loopback_upstream) else {
+            invalid_ref_count += 1;
+            continue;
+        };
 
         let endpoint_count = resolved.len();
         discovered_endpoint_count = discovered_endpoint_count.saturating_add(endpoint_count);
@@ -411,6 +420,7 @@ where
         discovered_endpoint_count,
         unsafe_endpoint_count,
         denied_ref_count,
+        invalid_ref_count,
     }
 }
 
@@ -484,7 +494,6 @@ impl AllEndpointStatus {
             return (Vec::new(), false);
         };
 
-        let client = get_status_http_client();
         let semaphore = std::sync::Arc::new(Semaphore::new(permit_count));
         let timeout = Duration::from_millis(self.config.effective_timeout_ms());
         let wall_timeout = Duration::from_millis(self.config.effective_wall_timeout_ms());
@@ -507,7 +516,8 @@ impl AllEndpointStatus {
                 let sem = semaphore.clone();
                 let addr = ep.address.clone();
                 let backend_name = ep.backend_name.clone();
-                let use_tls = ep.use_tls;
+                let transport = Arc::clone(&ep.transport);
+                let allow_loopback = ep.allow_loopback;
                 let method = method.to_string();
                 let path = path.to_string();
                 let query = original_query.map(|q| q.to_string());
@@ -521,15 +531,17 @@ impl AllEndpointStatus {
                         .expect("Semaphore never closed (created per fan_out_requests call)");
                     let start = Instant::now();
 
-                    let scheme = if use_tls { "https" } else { "http" };
-                    let mut url = format!("{}://{}{}", scheme, addr, path);
-                    if let Some(ref q) = query {
-                        url.push('?');
-                        url.push_str(q);
-                    }
+                    let prepared = addr
+                        .parse()
+                        .map_err(|_| "invalid probe address")
+                        .and_then(|address| transport.client_and_url(address, &path, query.as_deref(), allow_loopback));
+                    let (client, url) = match prepared {
+                        Ok(prepared) => prepared,
+                        Err(error) => return failed_endpoint(ordinal, addr, start, error),
+                    };
 
                     let req_method: reqwest::Method = method.parse().unwrap_or(reqwest::Method::GET);
-                    let mut req = client.request(req_method, &url).timeout(timeout);
+                    let mut req = client.request(req_method, url).timeout(timeout);
 
                     // Forward original headers. Skip hop-by-hop (RFC 9110 §7.6.1),
                     // Host (rewritten below to the backend service), and headers
@@ -579,26 +591,13 @@ impl AllEndpointStatus {
                         }
                         Err(e) => {
                             let error_msg = if e.is_timeout() {
-                                "request timeout".to_string()
+                                "request timeout"
                             } else if e.is_connect() {
-                                format!("connection failed: {}", e)
+                                "connection failed"
                             } else {
-                                format!("request failed: {}", e)
+                                "request failed"
                             };
-
-                            CompletedEndpointResult {
-                                ordinal,
-                                response_body_bytes: 0,
-                                result: EndpointResult {
-                                    address: addr,
-                                    status: None,
-                                    latency_ms: duration_millis(Instant::now().saturating_duration_since(start)),
-                                    body: None,
-                                    body_truncated: false,
-                                    headers: None,
-                                    error: Some(error_msg),
-                                },
-                            }
+                            failed_endpoint(ordinal, addr, start, error_msg)
                         }
                     }
                 }
@@ -607,6 +606,22 @@ impl AllEndpointStatus {
 
         // Wall-clock timeout with partial result preservation
         fan_out_with_wall_timeout(futures, wall_timeout).await
+    }
+}
+
+fn failed_endpoint(ordinal: usize, address: String, start: Instant, error: &'static str) -> CompletedEndpointResult {
+    CompletedEndpointResult {
+        ordinal,
+        response_body_bytes: 0,
+        result: EndpointResult {
+            address,
+            status: None,
+            latency_ms: duration_millis(start.elapsed()),
+            body: None,
+            body_truncated: false,
+            headers: None,
+            error: Some(error.to_owned()),
+        },
     }
 }
 
@@ -728,7 +743,13 @@ mod tests {
         ResolvedEndpoint {
             address: address.to_string(),
             backend_name: backend_name.to_string(),
-            use_tls: false,
+            transport: Arc::new(ProbeTransport::new(
+                crate::backends::policy::BackendTlsPolicyLookup::Absent,
+                get_service_discovery_coordinator().load_generation(),
+                get_global_backend_tls_policy_store().snapshot().generation(),
+                None,
+            )),
+            allow_loopback: false,
         }
     }
 
@@ -863,9 +884,9 @@ mod tests {
             "route-ns",
             10,
             false,
-            |name, namespace, _port, _use_tls, _allow_loopback| {
+            |name, namespace, _port, _allow_loopback| {
                 calls.push((name.to_string(), namespace.to_string()));
-                (vec![resolved_endpoint("10.0.0.1:8080", name)], 0)
+                Ok((vec![resolved_endpoint("10.0.0.1:8080", name)], 0))
             },
         );
 
@@ -885,7 +906,7 @@ mod tests {
             "route-ns",
             10,
             false,
-            |_name, _namespace, _port, _use_tls, _allow_loopback| (Vec::new(), 0),
+            |_name, _namespace, _port, _allow_loopback| Ok((Vec::new(), 0)),
         );
 
         assert_eq!(no_discovery.backends[0].endpoint_count, 0);
@@ -898,14 +919,14 @@ mod tests {
             "route-ns",
             0,
             false,
-            |name, _namespace, _port, _use_tls, _allow_loopback| {
-                (
+            |name, _namespace, _port, _allow_loopback| {
+                Ok((
                     vec![
                         resolved_endpoint("10.0.0.1:8080", name),
                         resolved_endpoint("10.0.0.2:8080", name),
                     ],
                     0,
-                )
+                ))
             },
         );
 
@@ -923,14 +944,14 @@ mod tests {
             "route-ns",
             3,
             false,
-            |name, _namespace, _port, _use_tls, _allow_loopback| {
-                (
+            |name, _namespace, _port, _allow_loopback| {
+                Ok((
                     vec![
                         resolved_endpoint(&format!("{name}-1"), name),
                         resolved_endpoint(&format!("{name}-2"), name),
                     ],
                     0,
-                )
+                ))
             },
         );
 
@@ -959,6 +980,96 @@ mod tests {
         assert_eq!(fan_out_permit_count(usize::MAX, 50), Some(50));
         assert_eq!(fan_out_permit_count(10, 0), None);
         let _semaphore = Semaphore::new(fan_out_permit_count(usize::MAX, 50).unwrap());
+    }
+
+    #[test]
+    fn invalid_service_ports_never_reach_endpoint_resolution() {
+        for port in [None, Some(0), Some(-1), Some(65_536), Some(i32::MAX)] {
+            let mut backend = backend_ref("service", None, false);
+            backend.port = port;
+            let collection = collect_route_endpoints_with(&[backend], "default", 10, false, |_, _, _, _| {
+                panic!("invalid port must fail before resolution")
+            });
+            assert_eq!(collection.invalid_ref_count, 1);
+            assert!(collection.selected_endpoints.is_empty());
+        }
+    }
+
+    #[test]
+    fn probes_use_the_requested_service_section_and_each_slices_serving_port() {
+        use crate::backends::discovery::ServiceDiscoveryCoordinator;
+        use crate::backends::policy::BackendTLSPolicyStore;
+        use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+        use std::collections::BTreeMap;
+
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let service = Service {
+            metadata: ObjectMeta {
+                namespace: Some("default".to_owned()),
+                name: Some("backend".to_owned()),
+                uid: Some("probe-service".to_owned()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                ports: Some(vec![ServicePort {
+                    name: Some("https".to_owned()),
+                    port: 443,
+                    target_port: Some(IntOrString::String("web".to_owned())),
+                    protocol: Some("TCP".to_owned()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        coordinator.replace_services(&HashMap::from([("default/backend".to_owned(), Arc::new(service))]));
+        let slices = [("first", "10.0.0.1", 8443), ("second", "10.0.0.2", 9443)].map(|(name, ip, port)| {
+            (
+                format!("default/{name}"),
+                Arc::new(EndpointSlice {
+                    metadata: ObjectMeta {
+                        namespace: Some("default".to_owned()),
+                        name: Some(name.to_owned()),
+                        uid: Some(name.to_owned()),
+                        labels: Some(BTreeMap::from([(
+                            "kubernetes.io/service-name".to_owned(),
+                            "backend".to_owned(),
+                        )])),
+                        ..Default::default()
+                    },
+                    address_type: "IPv4".to_owned(),
+                    endpoints: vec![Endpoint {
+                        addresses: vec![ip.to_owned()],
+                        conditions: Some(EndpointConditions {
+                            ready: Some(true),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }],
+                    ports: Some(vec![EndpointPort {
+                        name: Some("https".to_owned()),
+                        port: Some(port),
+                        protocol: Some("TCP".to_owned()),
+                        ..Default::default()
+                    }]),
+                }),
+            )
+        });
+        coordinator.replace_endpoint_slices(&HashMap::from(slices));
+        let discovery = coordinator.load_generation();
+        let policies = BackendTLSPolicyStore::new().snapshot();
+        let (endpoints, unsafe_count) =
+            resolve_endpoints("backend", "default", 443, false, &discovery, &policies, None).unwrap();
+        let mut addresses: Vec<_> = endpoints.iter().map(|endpoint| endpoint.address.as_str()).collect();
+        addresses.sort_unstable();
+        assert_eq!(addresses, ["10.0.0.1:8443", "10.0.0.2:9443"]);
+        assert_eq!(unsafe_count, 0);
+        assert!(Arc::ptr_eq(&endpoints[0].transport, &endpoints[1].transport));
+        assert!(resolve_endpoints("backend", "default", 8443, false, &discovery, &policies, None).is_err());
+        assert!(resolve_endpoints("missing", "default", 443, false, &discovery, &policies, None).is_err());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1138,13 +1249,34 @@ impl RequestFilter for AllEndpointStatus {
 
         // 2. Resolve all endpoints from all backends
         let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);
+        let discovery = get_service_discovery_coordinator().load_generation();
+        let policies = get_global_backend_tls_policy_store().snapshot();
+        let gateway_key = ctx.gateway_info.as_ref().map(|gateway| gateway.gateway_key());
         let collection = collect_route_endpoints_with(
             &backend_refs,
             &route_namespace,
             effective_max,
             ctx.allow_loopback_upstream,
-            resolve_endpoints,
+            |name, namespace, port, allow_loopback| {
+                resolve_endpoints(
+                    name,
+                    namespace,
+                    port,
+                    allow_loopback,
+                    &discovery,
+                    &policies,
+                    gateway_key.as_deref(),
+                )
+            },
         );
+
+        if collection.invalid_ref_count > 0 {
+            log.push_err("probe configuration unavailable");
+            return PluginRunningResult::ErrResponse {
+                status: 503,
+                body: Some(Bytes::from_static(b"probe configuration unavailable")),
+            };
+        }
 
         if collection.denied_ref_count > 0 {
             log.push_err("backend ref denied");
@@ -1192,6 +1324,9 @@ impl RequestFilter for AllEndpointStatus {
 
         // 4. Map results back to backends
         let aggregate = assemble_endpoint_results(&all_endpoints, endpoint_results, &mut all_backend_results);
+        if aggregate.failure_count > 0 {
+            log.push_err("endpoint probe failed");
+        }
 
         record_execution_completed_at(&LAST_EXECUTION_MS, elapsed_ms());
 

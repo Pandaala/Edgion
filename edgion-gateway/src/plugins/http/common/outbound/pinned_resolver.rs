@@ -13,6 +13,41 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
 
+/// Pins a single-endpoint exchange without resolving the TLS hostname in DNS.
+/// Classification runs again when the HTTP connector asks for a dial address.
+#[derive(Debug)]
+pub(crate) struct EndpointPinnedResolver {
+    address: SocketAddr,
+    allow_loopback: bool,
+}
+
+impl EndpointPinnedResolver {
+    pub(crate) fn new(address: SocketAddr, allow_loopback: bool) -> Self {
+        Self {
+            address,
+            allow_loopback,
+        }
+    }
+}
+
+impl Resolve for EndpointPinnedResolver {
+    fn resolve(&self, _name: Name) -> Resolving {
+        let address = self.address;
+        let allowed = crate::backends::validate_endpoint_backend_addr(
+            &pingora_core::protocols::l4::socket::SocketAddr::Inet(address),
+            self.allow_loopback,
+        )
+        .is_ok();
+        Box::pin(async move {
+            if !allowed {
+                return Err("unsafe upstream".into());
+            }
+            let addrs: Addrs = Box::new(std::iter::once(address));
+            Ok(addrs)
+        })
+    }
+}
+
 /// Resolves ANY name to the anchor Service's ready endpoints.
 #[derive(Debug)]
 pub struct AnchorPinnedResolver {
@@ -71,6 +106,22 @@ impl Resolve for AnchorPinnedResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn single_endpoint_pin_preserves_socket_and_rejects_unsafe_addresses() {
+        for address in ["10.0.0.1:8443", "[2001:db8::1]:9443"] {
+            let address: SocketAddr = address.parse().unwrap();
+            let resolver = EndpointPinnedResolver::new(address, false);
+            let actual: Vec<_> = resolver
+                .resolve("unrelated.example".parse().unwrap())
+                .await
+                .unwrap()
+                .collect();
+            assert_eq!(actual, [address]);
+        }
+        let resolver = EndpointPinnedResolver::new("169.254.169.254:80".parse().unwrap(), false);
+        assert!(resolver.resolve("backend.example".parse().unwrap()).await.is_err());
+    }
 
     /// With no EndpointSlice data the resolver yields nothing; the caller then
     /// fails the call rather than falling back to a real DNS lookup. (Renamed
