@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0114 reviewed, verified, and at the exact local commit gate |
-| Coverage | 535 current tracked files: 133 changed, 144 examined-no-change, 10 deferred, 248 non-terminal; 3 historical rows are removed |
-| Active batch | B0114 Wasm shared-data concurrency; commit-ready |
-| Analysis queue | B0115 Wasm VM manager candidate awaits post-B0114 current-HEAD refresh; D0073–D0076 retain their separate scopes |
-| Integration freeze | Refreshed at external HEAD `26461c83`: 3,069 tracked `edgion-tests` files, including eight externally added files and four externally changed fingerprints; no campaign integration-test edit occurred |
+| Campaign status | in-progress; B0115 reviewed, verified, and at the exact local commit gate |
+| Coverage | 535 current tracked files: 134 changed, 144 examined-no-change, 10 deferred, 247 non-terminal; 3 historical rows are removed |
+| Active batch | B0115 Wasm VM manager panic isolation; commit-ready |
+| Analysis queue | B0116/B0117 WebhookKeyGet and B0118 plugins root are analysis-ready; D0073–D0077 retain their separate scopes |
+| Integration freeze | Refreshed at external HEAD `884069ac`: 3,084 tracked `edgion-tests` files, including fifteen externally added AllEndpointStatus dynamic files and four changed fingerprints; no campaign integration-test edit occurred |
 
 ## AI guide summary
 

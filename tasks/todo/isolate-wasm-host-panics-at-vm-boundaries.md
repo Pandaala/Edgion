@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-02 |
-| Status | pending |
+| Status | completed |
 | Type | security |
 | Priority | P1 |
 | Issue | N/A |
@@ -30,3 +30,7 @@ Prevent Rust host-function panics resumed by Wasmtime from escaping any Gateway 
 - Every caught panic deterministically prevents VM reuse and returns only a generic error.
 - A crate-local panicking-host regression distinguishes Rust panic from guest `unreachable`, proves discard, and proves a later clean VM recovers.
 - Wasm tests, workspace format/check/Clippy, Gateway build, no-tracing, English-only, observability, source-policy, and frozen-path guards pass.
+
+## Completion evidence
+
+B0115 implemented the complete boundary in `vm_manager.rs`. Independent review approved all initialization, request/response, callout, tick, done, and delete paths. Fifty-nine VM-manager tests, 206 Gateway Wasm tests, 23 `edgion-wasm` tests, workspace format/check/Clippy, Gateway build, and all repository/frozen-path guards passed.

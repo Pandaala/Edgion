@@ -74,7 +74,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0070 — Enforce TraceContext attachment cardinality | needs-discussion | [campaign finding](D0070-trace-context-attachment-cardinality.md) |
 | D0071 — Reduce WAF header materialization | needs-investigation | [campaign finding](D0071-waf-header-materialization.md) |
 | D0072 — Bound outbound HTTP/2 response header lists | needs-investigation | [campaign finding](D0072-outbound-http2-response-header-list-bound.md) |
-| D0073 — Isolate Wasm host panics at VM boundaries | needs-implementation | [campaign finding](D0073-wasm-host-panic-isolation.md) |
+| D0073 — Isolate Wasm host panics at VM boundaries | resolved | [campaign finding](D0073-wasm-host-panic-isolation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -141,7 +141,8 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Enforce TraceContext attachment cardinality | pending | [task](../../../todo/enforce-trace-context-attachment-cardinality.md) |
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
-| Isolate Wasm host panics at VM boundaries | pending | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
+| Isolate Wasm host panics at VM boundaries | completed | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
 | Offload Wasm OCI disk cache I/O | pending | [task](../../../todo/offload-wasm-oci-disk-cache-io.md) |
 | Offload Wasm OCI manifest parsing and archive extraction | pending | [task](../../../todo/offload-wasm-oci-manifest-parsing-and-extraction.md) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
+| Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |

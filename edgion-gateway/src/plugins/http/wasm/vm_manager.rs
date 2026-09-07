@@ -74,6 +74,7 @@ use crate::observe::metrics::registry::{
     record_wasm_instance_instantiate, record_wasm_module_evicted, record_wasm_module_load, record_wasm_trap,
     set_wasm_modules_loaded, set_wasm_pool_size,
 };
+use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::plugin_configs::{WasmConfig, WasmSourceSpec};
 
 /// How often the background thread bumps the engine epoch. Guest deadlines
@@ -100,6 +101,24 @@ const MAX_MODULE_BYTES: usize = 64 * 1024 * 1024;
 const EVICT_GRACE_SECS: u64 = 60;
 /// Floor for guest-requested tick periods (busy-loop protection).
 const MIN_TICK_PERIOD_MS: u64 = 100;
+/// Stable failure returned when Rust host code unwinds through Wasmtime.
+/// Panic payloads may contain request or configuration data and are never
+/// propagated to callers.
+const WASM_HOST_PANIC_ERROR: &str = "wasm host call panicked";
+
+/// Run one synchronous Wasmtime guest boundary under the process-wide panic
+/// redaction policy. Ordinary Wasmtime and host-function errors retain their
+/// existing shape; only a Rust unwind is replaced with the fixed error above.
+fn run_guest_boundary<T>(call: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match catch_redacted_panic(call) {
+        Ok(result) => result,
+        Err(_) => Err(WASM_HOST_PANIC_ERROR.to_string()),
+    }
+}
+
+fn add_production_host_abi(linker: &mut Linker<HostState>) -> Result<(), String> {
+    host_abi::add_to_linker(linker).map_err(|e| format!("linker setup: {e}"))
+}
 
 /// Cache key actually used at runtime: the schema-level `cache_key()` plus,
 /// for `file` sources, the file's current size+mtime, plus a digest of the
@@ -583,6 +602,10 @@ impl CacheInner {
 
 impl WasmVmManager {
     fn new() -> Self {
+        Self::new_with_epoch_ticker_spawner(EpochTicker::spawn)
+    }
+
+    fn new_with_epoch_ticker_spawner(spawn_epoch_ticker: impl FnOnce(Engine) -> std::io::Result<EpochTicker>) -> Self {
         let mut cfg = Config::new();
         cfg.epoch_interruption(true);
         // Pooling allocator: fast instantiation for per-request leases (avoids
@@ -607,7 +630,19 @@ impl WasmVmManager {
         // tests use `new_for_test` and get a ticker that is stopped when that
         // manager is dropped). Only spawned once the engine itself is known
         // good; a failed engine has nothing for the ticker to advance.
-        let epoch_ticker = EpochTicker::spawn(engine.clone()).expect("spawn epoch ticker");
+        let epoch_ticker = match spawn_epoch_ticker(engine.clone()) {
+            Ok(ticker) => ticker,
+            Err(e) => {
+                let msg = format!("wasm epoch ticker init failed: {e}");
+                tracing::error!(error = %msg, "wasm engine unavailable; all Wasm plugins will fail-mode per configured failOpen");
+                return WasmVmManager {
+                    engine: Err(msg),
+                    epoch_ticker: None,
+                    cache: CacheInner::new(),
+                    evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
+                };
+            }
+        };
         WasmVmManager {
             engine: Ok(engine),
             epoch_ticker: Some(epoch_ticker),
@@ -807,6 +842,19 @@ impl WasmVmManager {
     /// in-flight load. Errors are cached for `LOAD_RETRY_SECS` to avoid
     /// hammering a bad source.
     pub async fn get_or_load(&self, config: &WasmConfig, cache_key: &str) -> Result<Arc<ModuleEntry>, String> {
+        self.get_or_load_with_linker(config, cache_key, add_production_host_abi)
+            .await
+    }
+
+    async fn get_or_load_with_linker<F>(
+        &self,
+        config: &WasmConfig,
+        cache_key: &str,
+        add_host_abi: F,
+    ) -> Result<Arc<ModuleEntry>, String>
+    where
+        F: FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send,
+    {
         let engine = self.engine()?.clone();
         let slot = self.get_or_create_slot(config, cache_key);
 
@@ -833,7 +881,8 @@ impl WasmVmManager {
             _ => {}
         }
         let label = config.source.metrics_label();
-        match Self::load_inner(engine, config, self.cache.tick_callout_state(cache_key)).await {
+        match Self::load_inner_with_linker(engine, config, self.cache.tick_callout_state(cache_key), add_host_abi).await
+        {
             Ok(prepared) => {
                 record_wasm_module_load(&label, "ok");
                 slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
@@ -869,6 +918,18 @@ impl WasmVmManager {
         config: &WasmConfig,
         tick_callouts: Arc<TickCalloutState>,
     ) -> Result<PreparedModule, String> {
+        Self::load_inner_with_linker(engine, config, tick_callouts, add_production_host_abi).await
+    }
+
+    async fn load_inner_with_linker<F>(
+        engine: Engine,
+        config: &WasmConfig,
+        tick_callouts: Arc<TickCalloutState>,
+        add_host_abi: F,
+    ) -> Result<PreparedModule, String>
+    where
+        F: FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send,
+    {
         let vm_config = decode_guest_config("vmConfig", config.vm_config.as_ref())?;
         let plugin_config = decode_guest_config("pluginConfig", config.plugin_config.as_ref())?;
         let (bytes, oci_meta) = match &config.source.oci {
@@ -905,7 +966,11 @@ impl WasmVmManager {
                 }
                 let compile_start = Instant::now();
                 let module = Module::new(&compile_engine, &bytes).map_err(|_| "wasm compile failed".to_string())?;
-                Ok((module, compatibility, compile_start.elapsed()))
+                Ok((
+                    module,
+                    compatibility,
+                    Instant::now().saturating_duration_since(compile_start),
+                ))
             },
         )
         .await
@@ -931,7 +996,7 @@ impl WasmVmManager {
         // `has_body_hook`); export lookup on every chunk would otherwise
         // contend the pool mutex for no benefit on large streamed responses.
         let mut linker: Linker<HostState> = Linker::new(&engine);
-        host_abi::add_to_linker(&mut linker).map_err(|e| format!("linker setup: {e}"))?;
+        add_host_abi(&mut linker)?;
         // Defense in depth after the compatibility profile rejects unknown
         // imports. Must run after add_to_linker so real host functions win.
         linker
@@ -1179,7 +1244,9 @@ fn effective_oci_always(config: &WasmConfig) -> bool {
 /// Process-monotonic clock encoded as milliseconds for atomic deadlines.
 fn monotonic_millis() -> u64 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
-    let elapsed = ORIGIN.get_or_init(Instant::now).elapsed().as_millis();
+    let elapsed = Instant::now()
+        .saturating_duration_since(*ORIGIN.get_or_init(Instant::now))
+        .as_millis();
     elapsed.min(u64::MAX as u128) as u64
 }
 
@@ -1601,6 +1668,11 @@ impl ModuleEntry {
                 match lease.call_on_tick() {
                     Err(e) => {
                         tracing::warn!(error = %e, module = %label, "wasm on_tick trapped");
+                        // The failed guest may have partially mutated its
+                        // HostState. Discard it without reading that state and
+                        // retry at the last trusted period with a fresh VM.
+                        drop(lease);
+                        continue;
                     }
                     Ok(()) => {
                         // Deliver callouts the guest dispatched from on_tick.
@@ -1617,7 +1689,12 @@ impl ModuleEntry {
                                         "wasm tick callouts resolved"
                                     ),
                                     Err(e) => {
-                                        tracing::warn!(error = %e, module = %label, "wasm tick callout delivery failed")
+                                        tracing::warn!(error = %e, module = %label, "wasm tick callout delivery failed");
+                                        // Callback failure poisons the lease;
+                                        // no guest-controlled state is trusted
+                                        // after this point.
+                                        drop(lease);
+                                        continue;
                                     }
                                 }
                             }
@@ -1696,35 +1773,40 @@ impl ModuleEntry {
         // within `MAX_GUEST_MEMORY_BYTES`. Must be set before instantiation so
         // the initial memory allocation is also limited.
         store.limiter(|state| state as &mut dyn wasmtime::ResourceLimiter);
-        let instance = self
-            .instance_pre
-            .instantiate(&mut store)
-            .map_err(|e| format!("instantiate: {e}"))?;
+        let instance = run_guest_boundary(|| {
+            self.instance_pre
+                .instantiate(&mut store)
+                .map_err(|e| format!("instantiate: {e}"))
+        })?;
         // Optional module initializers (WASI-style reactors/commands). Not
         // every guest exports one; absence is not an error.
         for init in ["_initialize", "_start"] {
             if let Ok(f) = instance.get_typed_func::<(), ()>(&mut store, init) {
-                f.call(&mut store, ()).map_err(|e| format!("{init}: {e}"))?;
+                run_guest_boundary(|| f.call(&mut store, ()).map_err(|e| format!("{init}: {e}")))?;
                 break;
             }
         }
         // proxy-wasm lifecycle: root context -> vm_start -> configure.
         if let Ok(f) = instance.get_typed_func::<(i32, i32), ()>(&mut store, "proxy_on_context_create") {
-            f.call(&mut store, (ROOT_CONTEXT_ID, 0))
-                .map_err(|e| format!("proxy_on_context_create(root): {e}"))?;
+            run_guest_boundary(|| {
+                f.call(&mut store, (ROOT_CONTEXT_ID, 0))
+                    .map_err(|e| format!("proxy_on_context_create(root): {e}"))
+            })?;
         }
         if let Ok(f) = instance.get_typed_func::<(i32, i32), i32>(&mut store, "proxy_on_vm_start") {
-            let ok = f
-                .call(&mut store, (ROOT_CONTEXT_ID, self.vm_config.len() as i32))
-                .map_err(|e| format!("proxy_on_vm_start: {e}"))?;
+            let ok = run_guest_boundary(|| {
+                f.call(&mut store, (ROOT_CONTEXT_ID, self.vm_config.len() as i32))
+                    .map_err(|e| format!("proxy_on_vm_start: {e}"))
+            })?;
             if ok == 0 {
                 return Err("proxy_on_vm_start returned false".to_string());
             }
         }
         if let Ok(f) = instance.get_typed_func::<(i32, i32), i32>(&mut store, "proxy_on_configure") {
-            let ok = f
-                .call(&mut store, (ROOT_CONTEXT_ID, self.plugin_config.len() as i32))
-                .map_err(|e| format!("proxy_on_configure: {e}"))?;
+            let ok = run_guest_boundary(|| {
+                f.call(&mut store, (ROOT_CONTEXT_ID, self.plugin_config.len() as i32))
+                    .map_err(|e| format!("proxy_on_configure: {e}"))
+            })?;
             if ok == 0 {
                 return Err("proxy_on_configure returned false".to_string());
             }
@@ -1888,14 +1970,16 @@ impl VmLease {
                 .instance
                 .get_typed_func::<(i32, i32, i32, i32, i32), ()>(&mut vm.store, "proxy_on_http_call_response")
                 .map_err(|e| format!("guest dispatched a callout but exports no proxy_on_http_call_response: {e}"))?;
-            f.call(&mut vm.store, (ctx_id, token as i32, num_headers, body_size, 0))
-                .map_err(|e| format!("proxy_on_http_call_response trapped: {e}"))?;
+            run_guest_boundary(|| {
+                f.call(&mut vm.store, (ctx_id, token as i32, num_headers, body_size, 0))
+                    .map_err(|e| format!("proxy_on_http_call_response trapped: {e}"))
+            })?;
             Ok(())
         })();
         record_wasm_hook_duration(
             &self.entry.metrics_label,
             "http_call_response",
-            hook_start.elapsed().as_secs_f64() * 1000.0,
+            Instant::now().saturating_duration_since(hook_start).as_secs_f64() * 1000.0,
         );
         if result.is_err() {
             record_wasm_trap(&self.entry.metrics_label, "http_call_response");
@@ -1916,13 +2000,15 @@ impl VmLease {
             let Ok(f) = vm.instance.get_typed_func::<i32, ()>(&mut vm.store, "proxy_on_tick") else {
                 return Ok(());
             };
-            f.call(&mut vm.store, ROOT_CONTEXT_ID)
-                .map_err(|e| format!("proxy_on_tick trapped: {e}"))
+            run_guest_boundary(|| {
+                f.call(&mut vm.store, ROOT_CONTEXT_ID)
+                    .map_err(|e| format!("proxy_on_tick trapped: {e}"))
+            })
         })();
         record_wasm_hook_duration(
             &self.entry.metrics_label,
             "tick",
-            hook_start.elapsed().as_secs_f64() * 1000.0,
+            Instant::now().saturating_duration_since(hook_start).as_secs_f64() * 1000.0,
         );
         if result.is_err() {
             record_wasm_trap(&self.entry.metrics_label, "tick");
@@ -1939,12 +2025,13 @@ impl VmLease {
             let vm = self.vm.as_mut().expect("lease taken");
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
             if let Ok(f) = vm.instance.get_typed_func::<i32, i32>(&mut vm.store, "proxy_on_done") {
-                f.call(&mut vm.store, ctx_id)
-                    .map_err(|e| format!("proxy_on_done: {e}"))?;
+                run_guest_boundary(|| f.call(&mut vm.store, ctx_id).map_err(|e| format!("proxy_on_done: {e}")))?;
             }
             if let Ok(f) = vm.instance.get_typed_func::<i32, ()>(&mut vm.store, "proxy_on_delete") {
-                f.call(&mut vm.store, ctx_id)
-                    .map_err(|e| format!("proxy_on_delete: {e}"))?;
+                run_guest_boundary(|| {
+                    f.call(&mut vm.store, ctx_id)
+                        .map_err(|e| format!("proxy_on_delete: {e}"))
+                })?;
             }
             Ok(())
         })();
@@ -1987,22 +2074,25 @@ impl VmLease {
                 .instance
                 .get_typed_func::<(i32, i32), ()>(&mut vm.store, "proxy_on_context_create")
             {
-                f.call(&mut vm.store, (ctx_id, ROOT_CONTEXT_ID))
-                    .map_err(|e| format!("proxy_on_context_create: {e}"))?;
+                run_guest_boundary(|| {
+                    f.call(&mut vm.store, (ctx_id, ROOT_CONTEXT_ID))
+                        .map_err(|e| format!("proxy_on_context_create: {e}"))
+                })?;
             }
             let f = vm
                 .instance
                 .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, hook)
                 .map_err(|e| format!("guest missing {hook}: {e}"))?;
-            let action = f
-                .call(&mut vm.store, (ctx_id, arg2, arg3))
-                .map_err(|e| format!("{hook} trapped: {e}"))?;
+            let action = run_guest_boundary(|| {
+                f.call(&mut vm.store, (ctx_id, arg2, arg3))
+                    .map_err(|e| format!("{hook} trapped: {e}"))
+            })?;
             Ok(action)
         })();
         record_wasm_hook_duration(
             &self.entry.metrics_label,
             phase_label,
-            hook_start.elapsed().as_secs_f64() * 1000.0,
+            Instant::now().saturating_duration_since(hook_start).as_secs_f64() * 1000.0,
         );
         match result {
             Ok(action) => Ok((ctx_id, action)),
@@ -2097,6 +2187,136 @@ mod tests {
     )
     "#;
 
+    const HOST_PANIC_SENTINEL: &str = "host-panic-sensitive-sentinel";
+
+    #[derive(Clone, Copy, Debug)]
+    enum PanicSite {
+        Instantiate,
+        Initialize,
+        Start,
+        RootContext,
+        VmStart,
+        Configure,
+        RequestContext,
+        RequestHeaders,
+        ResponseHeaders,
+        RequestBody,
+        ResponseBody,
+        HttpCallResponse,
+        Tick,
+        Done,
+        Delete,
+    }
+
+    fn panic_guest(site: PanicSite) -> String {
+        let call = "(call $host_panic)";
+        let module_start = matches!(site, PanicSite::Instantiate).then_some(call).unwrap_or("");
+        let initializer = match site {
+            PanicSite::Initialize => format!(r#"(func (export "_initialize") {call})"#),
+            PanicSite::Start => format!(r#"(func (export "_start") {call})"#),
+            _ => String::new(),
+        };
+        let root_context = matches!(site, PanicSite::RootContext | PanicSite::RequestContext)
+            .then_some(call)
+            .unwrap_or("");
+        let vm_start = matches!(site, PanicSite::VmStart).then_some(call).unwrap_or("");
+        let configure = matches!(site, PanicSite::Configure).then_some(call).unwrap_or("");
+        let request_headers = matches!(site, PanicSite::RequestHeaders).then_some(call).unwrap_or("");
+        let response_headers = matches!(site, PanicSite::ResponseHeaders).then_some(call).unwrap_or("");
+        let request_body = matches!(site, PanicSite::RequestBody).then_some(call).unwrap_or("");
+        let response_body = matches!(site, PanicSite::ResponseBody).then_some(call).unwrap_or("");
+        let http_call_response = matches!(site, PanicSite::HttpCallResponse)
+            .then_some(call)
+            .unwrap_or("");
+        let tick = matches!(site, PanicSite::Tick).then_some(call).unwrap_or("");
+        let done = matches!(site, PanicSite::Done).then_some(call).unwrap_or("");
+        let delete = matches!(site, PanicSite::Delete).then_some(call).unwrap_or("");
+        format!(
+            r#"
+            (module
+              (import "env" "proxy_log"
+                (func $panic_import (param i32 i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func $host_panic
+                (drop (call $panic_import (i32.const 0) (i32.const 0) (i32.const 0))))
+              (func $module_start {module_start})
+              (start $module_start)
+              {initializer}
+              (func (export "proxy_on_memory_allocate") (param i32) (result i32) (i32.const 1024))
+              (func (export "proxy_on_context_create") (param i32 i32) {root_context})
+              (func (export "proxy_on_vm_start") (param i32 i32) (result i32)
+                {vm_start}
+                (i32.const 1))
+              (func (export "proxy_on_configure") (param i32 i32) (result i32)
+                {configure}
+                (i32.const 1))
+              (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32)
+                {request_headers}
+                (i32.const 0))
+              (func (export "proxy_on_response_headers") (param i32 i32 i32) (result i32)
+                {response_headers}
+                (i32.const 0))
+              (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32)
+                {request_body}
+                (i32.const 0))
+              (func (export "proxy_on_response_body") (param i32 i32 i32) (result i32)
+                {response_body}
+                (i32.const 0))
+              (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32)
+                {http_call_response})
+              (func (export "proxy_on_tick") (param i32) {tick})
+              (func (export "proxy_on_done") (param i32) (result i32)
+                {done}
+                (i32.const 1))
+              (func (export "proxy_on_delete") (param i32) {delete})
+              (func (export "proxy_abi_version_0_2_0"))
+            )
+            "#
+        )
+    }
+
+    fn panicking_linker(
+        should_panic: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+        failed_tick_period: Option<u64>,
+    ) -> impl FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send {
+        move |linker| {
+            linker
+                .func_wrap(
+                    edgion_wasm::host::MODULE,
+                    edgion_wasm::host::PROXY_LOG,
+                    move |mut caller: wasmtime::Caller<'_, HostState>, _level: i32, _ptr: i32, _len: i32| -> i32 {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        if should_panic.load(Ordering::SeqCst) {
+                            if let Some(period) = failed_tick_period {
+                                caller.data_mut().tick_period_ms = period;
+                            }
+                            panic!("{HOST_PANIC_SENTINEL}");
+                        }
+                        host_abi::STATUS_OK
+                    },
+                )
+                .map(|_| ())
+                .map_err(|e| format!("test linker setup: {e}"))
+        }
+    }
+
+    async fn load_with_panicking_linker(
+        manager: &WasmVmManager,
+        config: &WasmConfig,
+        should_panic: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+        failed_tick_period: Option<u64>,
+    ) -> Result<Arc<ModuleEntry>, String> {
+        manager
+            .get_or_load_with_linker(
+                config,
+                &runtime_cache_key(config),
+                panicking_linker(should_panic, calls, failed_tick_period),
+            )
+            .await
+    }
+
     /// Initialization-only guest that rejects unless both Proxy-Wasm config
     /// paths expose the exact configured non-UTF-8 bytes.
     const RAW_CONFIG_GUEST: &str = r#"
@@ -2172,6 +2392,146 @@ mod tests {
         config: &edgion_resources::plugin_configs::WasmConfig,
     ) -> Result<Arc<ModuleEntry>, String> {
         mgr.get_or_load(config, &runtime_cache_key(config)).await
+    }
+
+    fn call_panic_site(lease: &mut VmLease, site: PanicSite) -> Result<(), String> {
+        let phase = match site {
+            PanicSite::ResponseHeaders => WasmPhase::ResponseHeaders,
+            PanicSite::RequestBody => WasmPhase::RequestBody,
+            PanicSite::ResponseBody => WasmPhase::ResponseBody,
+            PanicSite::Tick => WasmPhase::Tick,
+            _ => WasmPhase::RequestHeaders,
+        };
+        lease
+            .state_mut()
+            .begin_phase(phase, Vec::new(), Vec::new(), HashMap::new());
+        match site {
+            PanicSite::RequestContext | PanicSite::RequestHeaders => lease.call_on_request_headers(0).map(|_| ()),
+            PanicSite::ResponseHeaders => lease.call_on_response_headers(0).map(|_| ()),
+            PanicSite::RequestBody => lease.call_on_request_body(0, true).map(|_| ()),
+            PanicSite::ResponseBody => lease.call_on_response_body(0, true).map(|_| ()),
+            PanicSite::HttpCallResponse => lease.call_on_http_call_response(ROOT_CONTEXT_ID, 1, 0, 0),
+            PanicSite::Tick => lease.call_on_tick(),
+            PanicSite::Done | PanicSite::Delete => {
+                let (ctx_id, _) = lease.call_on_request_headers_open(0)?;
+                lease.close_context(ctx_id)
+            }
+            _ => unreachable!("initialization-only panic site"),
+        }
+    }
+
+    fn assert_phase_trap_recorded(snapshotter: &metrics_util::debugging::Snapshotter, module: &str, phase: &str) {
+        use metrics_util::debugging::DebugValue;
+
+        let snapshot = snapshotter.snapshot().into_vec();
+        let value = snapshot
+            .iter()
+            .find(|(key, _, _, _)| {
+                key.key().name() == crate::observe::metrics::registry::names::WASM_TRAP_TOTAL
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "module" && label.value() == module)
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "phase" && label.value() == phase)
+            })
+            .map(|(_, _, _, value)| value)
+            .expect("phase trap metric is registered");
+        assert!(
+            matches!(value, DebugValue::Counter(1)),
+            "unexpected trap value: {value:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_panics_during_initialization_are_redacted_and_never_published() {
+        for site in [
+            PanicSite::Instantiate,
+            PanicSite::Initialize,
+            PanicSite::Start,
+            PanicSite::RootContext,
+            PanicSite::VmStart,
+            PanicSite::Configure,
+        ] {
+            let file = write_temp_wasm(&panic_guest(site));
+            let config = file_config(file.path());
+            let cache_key = runtime_cache_key(&config);
+            let manager = WasmVmManager::new_for_test();
+            let should_panic = Arc::new(AtomicBool::new(true));
+            let calls = Arc::new(AtomicUsize::new(0));
+
+            let error = load_with_panicking_linker(&manager, &config, should_panic, calls.clone(), None)
+                .await
+                .expect_err("host panic must fail eager initialization");
+
+            assert!(error.ends_with(WASM_HOST_PANIC_ERROR), "{site:?}: {error}");
+            assert!(!error.contains(HOST_PANIC_SENTINEL), "{site:?}: {error}");
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "{site:?}");
+            assert!(manager.try_get(&cache_key).is_none(), "{site:?} was published");
+            let slot = manager
+                .cache
+                .modules
+                .get(&cache_key)
+                .expect("failed slot retained")
+                .clone();
+            assert!(slot.published.load_full().is_none(), "{site:?} published a candidate");
+            assert!(
+                matches!(&*slot.state.lock().await, LoadState::Failed { .. }),
+                "{site:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_host_panics_record_phase_traps_discard_and_recover() {
+        use metrics_util::debugging::DebuggingRecorder;
+
+        for (site, phase) in [
+            (PanicSite::RequestContext, "request_headers"),
+            (PanicSite::RequestHeaders, "request_headers"),
+            (PanicSite::ResponseHeaders, "response_headers"),
+            (PanicSite::RequestBody, "request_body"),
+            (PanicSite::ResponseBody, "response_body"),
+            (PanicSite::HttpCallResponse, "http_call_response"),
+            (PanicSite::Tick, "tick"),
+            (PanicSite::Done, "context_close"),
+            (PanicSite::Delete, "context_close"),
+        ] {
+            let file = write_temp_wasm(&panic_guest(site));
+            let config = file_config(file.path());
+            let manager = WasmVmManager::new_for_test();
+            let should_panic = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let entry = load_with_panicking_linker(&manager, &config, should_panic.clone(), calls, None)
+                .await
+                .expect("guest initializes while panic is disabled");
+            assert_eq!(entry.pool_len(), 1, "{site:?} eager pool");
+
+            should_panic.store(true, Ordering::SeqCst);
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            {
+                let mut lease = entry.acquire(100).expect("warm lease");
+                let error = metrics::with_local_recorder(&recorder, || call_panic_site(&mut lease, site))
+                    .expect_err("host panic must surface as an error");
+                assert_eq!(error, WASM_HOST_PANIC_ERROR, "{site:?}");
+                assert!(!error.contains(HOST_PANIC_SENTINEL), "{site:?}");
+            }
+            assert_phase_trap_recorded(&snapshotter, entry.metrics_label(), phase);
+            assert_eq!(entry.pool_len(), 0, "{site:?} poisoned VM returned to pool");
+
+            should_panic.store(false, Ordering::SeqCst);
+            {
+                let mut fresh = entry.acquire(100).expect("fresh VM after discard");
+                call_panic_site(&mut fresh, site).expect("healthy follow-up call");
+            }
+            assert_eq!(entry.pool_len(), 1, "{site:?} healthy VM was not pooled");
+            let reused = entry.acquire(100).expect("reuse healthy VM");
+            assert_eq!(entry.pool_len(), 0, "{site:?} did not pop the healthy VM");
+            drop(reused);
+        }
     }
 
     /// Regression (contract-01): two plugins sharing one module source but
@@ -2417,8 +2777,18 @@ mod tests {
             lease
                 .state_mut()
                 .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
-            let res = lease.call_on_request_headers(0);
-            assert!(res.is_err(), "trap must surface as error");
+            let error = lease
+                .call_on_request_headers(0)
+                .expect_err("trap must surface as error");
+            assert!(
+                error.starts_with("proxy_on_request_headers trapped:"),
+                "ordinary Wasmtime trap shape changed: {error}"
+            );
+            assert!(
+                error.contains("wasm backtrace:"),
+                "ordinary trap lost its shape: {error}"
+            );
+            assert_ne!(error, WASM_HOST_PANIC_ERROR);
             // call_on_request_headers poisons on trap internally
         }
         assert_eq!(entry.pool_len(), 0, "trapped instance must be dropped");
@@ -3271,6 +3641,79 @@ mod tests {
     )
     "#;
 
+    const TICK_CALLOUT_PANIC_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_log"
+        (func $panic_import (param i32 i32 i32) (result i32)))
+      (import "env" "proxy_http_call"
+        (func $dispatch (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32) (i32.const 1024))
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_tick") (param i32)
+        (drop (call $dispatch
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+      (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32)
+        (drop (call $panic_import (i32.const 0) (i32.const 0) (i32.const 0))))
+      (func (export "proxy_abi_version_0_2_0"))
+    )
+    "#;
+
+    fn panicking_tick_callout_linker(
+        should_panic: Arc<AtomicBool>,
+        callback_calls: Arc<AtomicUsize>,
+        dispatch_calls: Arc<AtomicUsize>,
+    ) -> impl FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send {
+        move |linker| {
+            panicking_linker(should_panic, callback_calls, Some(0))(linker)?;
+            linker
+                .func_wrap(
+                    edgion_wasm::host::MODULE,
+                    edgion_wasm::host::PROXY_HTTP_CALL,
+                    move |mut caller: wasmtime::Caller<'_, HostState>,
+                          _cluster_ptr: i32,
+                          _cluster_len: i32,
+                          _headers_ptr: i32,
+                          _headers_len: i32,
+                          _body_ptr: i32,
+                          _body_len: i32,
+                          _trailers_ptr: i32,
+                          _trailers_len: i32,
+                          _timeout_ms: i32,
+                          _token_ptr: i32|
+                          -> i32 {
+                        dispatch_calls.fetch_add(1, Ordering::SeqCst);
+                        caller.data_mut().pending_callouts.push(host_abi::PendingCallout {
+                            token: 7,
+                            origin: "http://example.invalid:80".to_string(),
+                            path: "/".to_string(),
+                            method: "bad method".to_string(),
+                            authority: None,
+                            headers: Vec::new(),
+                            body: Vec::new(),
+                            timeout_ms: 1,
+                        });
+                        host_abi::STATUS_OK
+                    },
+                )
+                .map(|_| ())
+                .map_err(|e| format!("test callout linker setup: {e}"))
+        }
+    }
+
+    async fn wait_for_test_calls(calls: &AtomicUsize, minimum: usize) {
+        for _ in 0..40 {
+            if calls.load(Ordering::SeqCst) >= minimum {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("timed out waiting for {minimum} host calls");
+    }
+
     /// Shared data is visible across leases (and thus across pooled VMs) of
     /// the same module entry.
     #[tokio::test]
@@ -3289,6 +3732,64 @@ mod tests {
         let (v, cas) = entry.shared_data_for_test().get("k").expect("key visible to host");
         assert_eq!(v, b"hello");
         assert!(cas >= 1);
+    }
+
+    #[tokio::test]
+    async fn tick_host_panic_discards_vm_without_adopting_failed_state() {
+        let file = write_temp_wasm(&panic_guest(PanicSite::Tick));
+        let config = file_config(file.path());
+        let manager = WasmVmManager::new_for_test();
+        let should_panic = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let entry = load_with_panicking_linker(&manager, &config, should_panic.clone(), calls.clone(), Some(0))
+            .await
+            .expect("tick panic guest loads");
+
+        should_panic.store(true, Ordering::SeqCst);
+        entry.activate_tick(MIN_TICK_PERIOD_MS);
+        wait_for_test_calls(&calls, 2).await;
+        entry.stop_tick().await;
+
+        assert_eq!(
+            entry.tick_period_ms.load(Ordering::Acquire),
+            MIN_TICK_PERIOD_MS,
+            "failed on_tick state must not replace the last trusted period"
+        );
+        assert_eq!(entry.pool_len(), 0, "each panicking tick VM must be discarded");
+    }
+
+    #[tokio::test]
+    async fn tick_callout_callback_panic_discards_vm_without_adopting_failed_state() {
+        let file = write_temp_wasm(TICK_CALLOUT_PANIC_GUEST);
+        let config = file_config(file.path());
+        let manager = WasmVmManager::new_for_test();
+        let should_panic = Arc::new(AtomicBool::new(false));
+        let callback_calls = Arc::new(AtomicUsize::new(0));
+        let dispatch_calls = Arc::new(AtomicUsize::new(0));
+        let entry = manager
+            .get_or_load_with_linker(
+                &config,
+                &runtime_cache_key(&config),
+                panicking_tick_callout_linker(should_panic.clone(), callback_calls.clone(), dispatch_calls.clone()),
+            )
+            .await
+            .expect("tick callout panic guest loads");
+        entry
+            .tick_callouts
+            .add(grant(vec!["http://example.invalid".to_string()], 10));
+
+        should_panic.store(true, Ordering::SeqCst);
+        entry.activate_tick(MIN_TICK_PERIOD_MS);
+        wait_for_test_calls(&callback_calls, 2).await;
+        entry.stop_tick().await;
+
+        assert!(dispatch_calls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(
+            entry.tick_period_ms.load(Ordering::Acquire),
+            MIN_TICK_PERIOD_MS,
+            "failed callout callback state must not replace the last trusted period"
+        );
+        assert_eq!(entry.pool_len(), 0, "each panicking callback VM must be discarded");
     }
 
     /// on_tick fires periodically once the guest sets a period during
@@ -3578,6 +4079,30 @@ mod tests {
         // The module never gets far enough to populate the cache, so a
         // sync-path caller sees a plain miss rather than a panic too.
         assert!(mgr.try_get(&runtime_cache_key(&config)).is_none());
+    }
+
+    #[tokio::test]
+    async fn epoch_ticker_spawn_failure_uses_engine_unavailable_path() {
+        let manager = Arc::new(WasmVmManager::new_with_epoch_ticker_spawner(|_| {
+            Err(std::io::Error::other("forced ticker spawn failure"))
+        }));
+        assert!(manager.epoch_ticker.is_none());
+        let engine_error = manager.engine().expect_err("ticker failure disables the engine");
+        assert!(engine_error.starts_with("wasm epoch ticker init failed:"));
+
+        let file = write_temp_wasm(MINI_GUEST);
+        let config = file_config(file.path());
+        let cache_key = runtime_cache_key(&config);
+        let load_error = load(&manager, &config).await.expect_err("load uses unavailable state");
+        assert_eq!(load_error, engine_error);
+        assert!(manager.try_get(&cache_key).is_none());
+        assert!(manager.cache.modules.is_empty());
+        assert!(manager.cache.tick_callouts.is_empty());
+
+        manager.spawn_preload_for_test(&config, cache_key);
+        tokio::task::yield_now().await;
+        assert!(manager.cache.modules.is_empty(), "preload created a load slot");
+        assert!(manager.cache.tick_callouts.is_empty(), "preload created tick state");
     }
 
     #[tokio::test]
