@@ -507,7 +507,7 @@
 | `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | examined-no-change | B0109 |
 | `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | changed | B0110 |
 | `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | changed | B0111 |
-| `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | pending | — |
+| `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | changed | B0112 |
 | `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | changed | B0110 |
 | `edgion-gateway/src/plugins/http/wasm/plugin.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | pending | — |
@@ -692,4 +692,5 @@
 | `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | changed | UTIL-001 / `a909f16f`; support reopened in B0098 |
 | `edgion-gateway/src/util/redacted.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
+| `edgion-gateway/tests/conf_sync_failover.rs` | `external-tests` | test | pending | Added by external commit `715e20d5`; full audit pending |
 | `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | pending | — |

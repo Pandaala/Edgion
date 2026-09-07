@@ -143,3 +143,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
 | Isolate Wasm host panics at VM boundaries | pending | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
 | Offload Wasm OCI disk cache I/O | pending | [task](../../../todo/offload-wasm-oci-disk-cache-io.md) |
+| Offload Wasm OCI manifest parsing and archive extraction | pending | [task](../../../todo/offload-wasm-oci-manifest-parsing-and-extraction.md) |
