@@ -169,6 +169,7 @@ struct RegistrySession {
     auth: Option<RegistryAuth>,
     bearer: Option<String>,
     registry_origin: Origin,
+    registry_uses_tls: bool,
     egress_policy: EgressPolicy,
     client_deny: reqwest::Client,
     client_blob: reqwest::Client,
@@ -188,9 +189,9 @@ impl RegistrySession {
             None => None,
         };
         let base = registry_base(&api_host);
-        let registry_origin = Url::parse(&base)
-            .map_err(|_| "wasm oci registry URL is invalid".to_string())?
-            .origin();
+        let registry_url = Url::parse(&base).map_err(|_| "wasm oci registry URL is invalid".to_string())?;
+        let registry_uses_tls = registry_url.scheme() == "https";
+        let registry_origin = registry_url.origin();
         let egress_policy = EgressPolicy {
             block_private: default_block_private(),
         };
@@ -200,6 +201,7 @@ impl RegistrySession {
             auth,
             bearer: None,
             registry_origin: registry_origin.clone(),
+            registry_uses_tls,
             egress_policy,
             client_deny: outbound_client(OutboundRedirect::Deny, pull_timeout(), egress_policy)?,
             client_blob: outbound_client(
@@ -333,6 +335,11 @@ impl RegistrySession {
         }
         let realm = Url::parse(&challenge.realm)
             .map_err(|_| GetError::Definitive("token endpoint URL is invalid".to_string()))?;
+        if token_realm_downgrades_tls(self.registry_uses_tls, &realm) {
+            return Err(GetError::Definitive(
+                "token endpoint blocked by transport policy".to_string(),
+            ));
+        }
         guard_remote_target_and_record(&realm, &self.registry_origin, self.egress_policy)
             .map_err(|_| GetError::Definitive("token endpoint blocked by egress policy".to_string()))?;
         let mut req = self.client_deny.get(realm).query(&query);
@@ -381,6 +388,10 @@ impl RegistrySession {
             .filter(|t| !t.is_empty())
             .ok_or_else(|| GetError::Definitive("token response contains no token".to_string()))
     }
+}
+
+fn token_realm_downgrades_tls(registry_uses_tls: bool, realm: &Url) -> bool {
+    registry_uses_tls && realm.scheme() == "http"
 }
 
 /// `https://` everywhere except loopback (`localhost` / 127.0.0.0/8 / `::1`),
@@ -724,6 +735,47 @@ mod tests {
                 permissive,
             ),
             Err(RemoteTargetError::Blocked("loopback"))
+        );
+    }
+
+    #[test]
+    fn token_realm_transport_policy_preserves_http_registries_and_https_realms() {
+        let http_realm = Url::parse("http://auth.example/token").unwrap();
+        let https_realm = Url::parse("https://auth.example/token").unwrap();
+
+        assert!(token_realm_downgrades_tls(true, &http_realm));
+        assert!(!token_realm_downgrades_tls(false, &http_realm));
+        assert!(!token_realm_downgrades_tls(true, &https_realm));
+    }
+
+    #[tokio::test]
+    async fn https_registry_http_token_realm_is_rejected_before_target_request() {
+        let target = MockServer::start().await;
+        let spec = spec_for(&target, "test/wasm:1.0.0");
+        let image = OciImageRef::parse(&spec.image).unwrap();
+        let mut session = RegistrySession::new(&image, &spec).unwrap();
+        session.registry_origin = Url::parse("https://registry.example").unwrap().origin();
+        session.registry_uses_tls = true;
+        session.auth = Some(RegistryAuth {
+            username: "alice".to_string(),
+            password: "s3cret".to_string(),
+        });
+        let challenge = BearerChallenge {
+            realm: format!("{}/token", target.uri()),
+            service: Some("registry.example".to_string()),
+            scope: None,
+        };
+
+        let error = match session.fetch_token(&challenge).await {
+            Err(GetError::Definitive(error)) => error,
+            Err(GetError::Retryable(error)) => panic!("downgrade must be definitive, got retryable: {error}"),
+            Ok(_) => panic!("downgrade must not return a token"),
+        };
+
+        assert_eq!(error, "token endpoint blocked by transport policy");
+        assert!(
+            target.received_requests().await.unwrap().is_empty(),
+            "the plaintext token realm must receive zero credential-bearing requests"
         );
     }
 
