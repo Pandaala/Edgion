@@ -7,6 +7,7 @@
 //! atomic rename, safe across processes. A background task purges files not
 //! used for `ttl` (mtime is touched on every hit).
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,6 +109,57 @@ fn entry_path(dir: &Path, kind: CacheKind, digest_hex: &str) -> Option<PathBuf> 
     Some(dir.join(format!("{}.{}", digest_hex.to_ascii_lowercase(), kind.suffix())))
 }
 
+/// Return whether `name` is one of the exact filenames this cache can write.
+///
+/// Final entries use `<digest>.blob` or `<digest>.manifest.json`. Temporary
+/// entries use the same `Path::with_extension` forms as [`try_store`]:
+/// `<digest>.tmp.<pid>` and `<digest>.manifest.tmp.<pid>`.
+fn is_cache_owned_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let name = name.as_bytes();
+
+    for suffix in [b".blob".as_slice(), b".manifest.json".as_slice()] {
+        if name.strip_suffix(suffix).is_some_and(is_lowercase_sha256_hex) {
+            return true;
+        }
+    }
+
+    if name.len() >= 64 {
+        let (digest, suffix) = name.split_at(64);
+        if is_lowercase_sha256_hex(digest) {
+            for separator in [b".tmp.".as_slice(), b".manifest.tmp.".as_slice()] {
+                if suffix.strip_prefix(separator).is_some_and(is_canonical_positive_pid) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn is_lowercase_sha256_hex(value: &[u8]) -> bool {
+    value.len() == 64
+        && value
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+fn is_canonical_positive_pid(value: &[u8]) -> bool {
+    if !matches!(value.first(), Some(b'1'..=b'9')) {
+        return false;
+    }
+    value
+        .iter()
+        .try_fold(0_u32, |pid, byte| {
+            let digit = byte.checked_sub(b'0').filter(|digit| *digit <= 9)?;
+            pid.checked_mul(10)?.checked_add(u32::from(digit))
+        })
+        .is_some()
+}
+
 /// Load a cached entry, verifying content against its name. Touches mtime on
 /// a hit (feeds the TTL purge). A verification failure deletes the file.
 pub fn load(kind: CacheKind, digest_hex: &str) -> Option<Vec<u8>> {
@@ -157,11 +209,7 @@ fn cache_entries_by_age(dir: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)
     };
     let mut out: Vec<_> = rd
         .flatten()
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name.ends_with(".manifest.json") || name.ends_with(".blob") || name.contains(".tmp.")
-        })
+        .filter(|e| is_cache_owned_name(&e.file_name()))
         .filter_map(|e| {
             let md = e.metadata().ok()?;
             Some((e.path(), md.len(), md.modified().ok()?))
@@ -213,10 +261,7 @@ pub fn purge_once(cfg: &OciDiskCacheConfig) -> usize {
     let mut removed = 0;
     let now = std::time::SystemTime::now();
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let is_ours = name.ends_with(".manifest.json") || name.ends_with(".blob") || name.contains(".tmp.");
-        if !is_ours {
+        if !is_cache_owned_name(&entry.file_name()) {
             continue;
         }
         let expired = entry
@@ -271,6 +316,41 @@ mod tests {
         hex::encode(Sha256::digest(bytes))
     }
 
+    #[test]
+    fn cache_owned_filename_classifier_matches_writer_grammar_exactly() {
+        let digest = "0123456789abcdef".repeat(4);
+        for name in [
+            format!("{digest}.blob"),
+            format!("{digest}.manifest.json"),
+            format!("{digest}.tmp.1"),
+            format!("{digest}.tmp.4294967295"),
+            format!("{digest}.manifest.tmp.42"),
+        ] {
+            assert!(is_cache_owned_name(OsStr::new(&name)), "expected cache-owned: {name}");
+        }
+
+        let uppercase_digest = digest.to_ascii_uppercase();
+        for name in [
+            "notes.blob".to_string(),
+            format!("prefix-{digest}.blob"),
+            format!("{digest}.blob.backup"),
+            format!("{digest}.manifest.json.tmp.7"),
+            format!("{digest}.tmp."),
+            format!("{digest}.tmp.0"),
+            format!("{digest}.tmp.01"),
+            format!("{digest}.tmp.+1"),
+            format!("{digest}.tmp. 1"),
+            format!("{digest}.tmp.4294967296"),
+            format!("{digest}.manifest.tmp.1x"),
+            format!("{uppercase_digest}.blob"),
+            format!("{}.blob", &digest[..63]),
+            format!("{}g.blob", &digest[..63]),
+            "report.tmp.data".to_string(),
+        ] {
+            assert!(!is_cache_owned_name(OsStr::new(&name)), "expected foreign: {name}");
+        }
+    }
+
     /// One test drives the global-config path end to end (store → hit →
     /// corrupt → repull-miss) to avoid parallel tests racing the global.
     #[test]
@@ -314,18 +394,35 @@ mod tests {
             purge_interval: Duration::from_secs(60),
             max_bytes: 0,
         };
-        let old = dir.path().join(format!("{}.blob", "a".repeat(64)));
-        let fresh = dir.path().join(format!("{}.blob", "b".repeat(64)));
-        let foreign = dir.path().join("keep.txt");
-        for p in [&old, &fresh, &foreign] {
+        let expired = [
+            dir.path().join(format!("{}.blob", "a".repeat(64))),
+            dir.path().join(format!("{}.manifest.json", "b".repeat(64))),
+            dir.path().join(format!("{}.tmp.7", "c".repeat(64))),
+            dir.path().join(format!("{}.manifest.tmp.42", "d".repeat(64))),
+        ];
+        let fresh = dir.path().join(format!("{}.blob", "e".repeat(64)));
+        let foreign = [
+            dir.path().join("keep.txt"),
+            dir.path().join("notes.blob"),
+            dir.path().join(format!("prefix-{}.blob", "f".repeat(64))),
+            dir.path().join(format!("{}.manifest.json.tmp.7", "1".repeat(64))),
+            dir.path().join(format!("{}.tmp.01", "2".repeat(64))),
+            dir.path().join("report.tmp.data"),
+        ];
+        for p in expired.iter().chain(std::iter::once(&fresh)).chain(foreign.iter()) {
             std::fs::write(p, b"x").unwrap();
         }
         let past = filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 3600, 0);
-        filetime::set_file_mtime(&old, past).unwrap();
-        assert_eq!(purge_once(&cfg), 1);
-        assert!(!old.exists());
+        for path in expired.iter().chain(foreign.iter()) {
+            filetime::set_file_mtime(path, past).unwrap();
+        }
+        assert_eq!(purge_once(&cfg), expired.len());
+        assert!(expired.iter().all(|path| !path.exists()));
         assert!(fresh.exists());
-        assert!(foreign.exists(), "non-cache files must never be touched");
+        assert!(
+            foreign.iter().all(|path| path.exists()),
+            "foreign files must never be touched"
+        );
     }
 
     #[test]
@@ -352,20 +449,73 @@ mod tests {
         };
         let a = dir.path().join(format!("{}.blob", "a".repeat(64)));
         let b = dir.path().join(format!("{}.blob", "b".repeat(64)));
+        let foreign = dir.path().join("notes.blob");
         std::fs::write(&a, b"aaaa").unwrap();
         std::fs::write(&b, b"bbbb").unwrap();
+        std::fs::write(&foreign, [b'x'; 64]).unwrap();
         // Make `a` unambiguously the LRU entry (mtime granularity guard).
         let past = filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 60, 0);
         filetime::set_file_mtime(&a, past).unwrap();
+        filetime::set_file_mtime(
+            &foreign,
+            filetime::FileTime::from_unix_time(past.unix_seconds() - 60, 0),
+        )
+        .unwrap();
         // 4 more bytes need room: the LRU entry (`a`) is evicted, `b` stays.
         assert!(make_room(&cfg, 4));
         assert!(!a.exists());
         assert!(b.exists());
+        assert!(
+            foreign.exists(),
+            "foreign suffix collisions must not count toward or be evicted by the cache"
+        );
         // An entry that can never fit is refused without evicting anything.
         assert!(!make_room(&cfg, 9));
         assert!(b.exists());
         // max_bytes = 0 disables the cap entirely.
         let uncapped = OciDiskCacheConfig { max_bytes: 0, ..cfg };
         assert!(make_room(&uncapped, u64::MAX));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_utf8_filename_ending_in_blob_is_foreign() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(!is_cache_owned_name(OsStr::from_bytes(b"\xff.blob")));
+    }
+
+    // Apple filesystems reject invalid UTF-8 path components with EILSEQ, so
+    // the filesystem survival half is exercised on Unix targets that admit
+    // such names. The raw-name classifier assertion above runs on all Unix.
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    #[test]
+    fn invalid_utf8_filename_ending_in_blob_survives_cache_maintenance() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = OciDiskCacheConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::ZERO,
+            purge_interval: Duration::from_secs(60),
+            max_bytes: 1,
+        };
+        let mut name = vec![0xff];
+        name.extend_from_slice(b".blob");
+        let foreign = dir.path().join(std::ffi::OsString::from_vec(name));
+        std::fs::write(&foreign, b"foreign").unwrap();
+        let past = filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 60, 0);
+        filetime::set_file_mtime(&foreign, past).unwrap();
+
+        assert_eq!(purge_once(&cfg), 0);
+        assert!(
+            foreign.exists(),
+            "invalid UTF-8 filenames must never be treated as cache-owned"
+        );
+        assert!(make_room(&cfg, 1));
+        assert!(
+            foreign.exists(),
+            "size eviction must also preserve invalid UTF-8 filenames"
+        );
     }
 }

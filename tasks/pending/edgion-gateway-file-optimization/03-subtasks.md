@@ -506,7 +506,7 @@
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | changed | B0108 |
 | `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | examined-no-change | B0109 |
 | `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | changed | B0110 |
-| `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | analysis-ready | B0111 |
+| `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | changed | B0111 |
 | `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | changed | B0110 |
 | `edgion-gateway/src/plugins/http/wasm/plugin.rs` | `plugins-http-wasm` | source | pending | — |
