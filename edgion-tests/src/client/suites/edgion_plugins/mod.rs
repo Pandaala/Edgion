@@ -94,7 +94,7 @@ pub use dsl::{
     DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite,
 };
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
-pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;
+pub use dynamic_internal_upstream::{DeniedNamedJumpTestSuite, DynamicInternalUpstreamTestSuite};
 pub use edgion_config_data_managed::EdgionConfigDataManagedTestSuite;
 pub use edgion_config_data_status::{
     EdgionConfigDataFlapInitialTestSuite, EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite,

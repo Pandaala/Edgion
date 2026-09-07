@@ -156,11 +156,96 @@ Re-open this decision only if:
   `diu_rejects_denied_backend_before_setting_jump`,
   `diu_falls_back_on_denied_backend_without_setting_jump`,
   `diu_selects_explicit_weight_zero_backend` (DIU plugin).
-- End-to-end coverage is deliberately deferred to
-  `tasks/todo/add-denied-named-jump-integration-coverage.md`.
+- End-to-end coverage: `DeniedNamedJumpTestSuite` in
+  `edgion-tests/src/client/suites/edgion_plugins/dynamic_internal_upstream/denied_named_jump.rs`.
 - Docs: `docs/en/user-guide/http-route/filters/edgion-plugins/dynamic-upstream.md` and its
   `docs/zh-CN/` counterpart (`onInvalid` now also covers a ReferenceGrant-denied target).
+
+## End-to-end coverage boundary
+
+`add-denied-named-jump-integration-coverage` adds an independent suite to the existing
+`EdgionPlugins/DynamicInternalUpstream` dispatch in local mode without rewriting the older
+assertions. The shared dispatch excludes this suite when `EDGION_TEST_K8S_MODE=true`, as
+set by the Kubernetes runner. Isolation happens before any fixture mutation: the local
+`default` namespace, loopback EndpointSlice and shared-process receipt store assumptions
+must never be applied to the K8s suite's namespace/Pod topology. The existing 11 DIU cases
+remain registered in both modes. A future K8s version needs converted manifests, backend
+Pod discovery and per-Pod receipt aggregation; merely changing the target host is insufficient.
+It applies dedicated plugin/route YAML from that conf tree and an existing, reachable Service
+and EndpointSlice in `named-jump-target` from `Status/RefGrant`. No ReferenceGrant authorizes
+the route in `default` to that namespace. The same-namespace legal sibling uses the existing
+`diu-backend-stable` fixture. Controller status and both siblings' `refDenied` values are
+asserted, then processed resource payloads are polled at the Gateway before sending cases.
+
+- Both DIU and Canary address the denied Service while it has weight zero and the legal
+  sibling has weight one. This makes an incorrect plugin acceptance observable even though
+  ordinary weighted selection would never choose the denied slot.
+- `onInvalid: reject` returns exactly 403 / `Target backend not allowed`, with the Reject
+  Dye outcome, no selected backend, no upstream attempts and no backend receipt.
+- `onInvalid: fallback` returns the legal sibling's response, a Fallback Dye outcome and
+  exactly one backend receipt. A spoofed success Dye header is stripped, and no successful
+  Dye reaches the backend. Explicit fallback is permitted to reach a legal sibling; the
+  original task's blanket prohibition contradicted this configured policy and was corrected
+  with user approval before implementation.
+- DIU also receives a genuinely absent name under `onInvalid: fallback`. Its outcome remains
+  fallback, while the PluginLog differentiates `backend ref not found` from `backend ref denied`.
+- A separate rule reverses the weights, uses no plugin, and asserts 500 plus the typed
+  `RefDenied` error diagnostic with zero upstream attempts and zero backend receipts.
+  This is **weighted selection** evidence. It does not exercise the selector's denied
+  `Internal` branch or its `BackendNotFound` fall-through: neither invalid jump can pass the
+  current production publishers' pre-validation. Their existing selector unit tests remain
+  the evidence for those defensive branches; no production injection hook is added.
+
+Each request has a unique trace ID. The existing test-server capture endpoint records
+ordinary proxied requests synchronously, and positive controls exercise both backend ports
+and the receipt store. For negative receipt assertions the completed access log is the
+request-completion barrier; there is no asynchronous RequestMirror plugin. This coverage
+does not claim ReferenceGrant hot-reload or Kubernetes API-server admission verification.
+No user-visible behavior, resource schema, runtime logging or public API changes.
+
+The follow-up review found that the initial unconditional registration also ran the local
+fixture writer in Kubernetes. That was a real integration-runner regression, despite both
+local runs passing. The registration boundary above corrects it; saying the suite does not
+claim K8s admission coverage is not a substitute for excluding incompatible execution.
+
+### Initial local verification
+
+On 2026-09-07, after rebuilding the product/test binaries together, two fresh-process runs of
+`./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i DynamicInternalUpstream`
+passed all 12 tests (the 11 existing DIU cases and the new seven-path scenario). Both runner
+reports ended in `Status: PASS`, including metrics-label, unknown-config-field, requeue-loop
+and cache-residue gates. Local evidence is in the gitignored run directories
+`tmp/integration_testing/testing_20260907_152011` and
+`tmp/integration_testing/testing_20260907_152100`. The initial attempt exposed a test setup
+race: applying a new fixture precedes its Controller worker publication. The final test
+polls that publication rather than treating an immediate cache 404 as a failure.
+
+`cargo fmt --all`, `cargo check --workspace --all-targets`,
+`cargo clippy --workspace --all-targets`, agent-doc validation, SSA-force, metrics inventory
+and Pingora source-policy checks passed. Clippy retained existing workspace warnings; no
+warning points into the new scenario. An independent read-only reviewer approved the test
+and knowledge changes. No full workspace test run was requested or performed.
+
+### Registration isolation verification
+
+After the follow-up K8s-dispatch correction on 2026-09-07, the rebuilt `test_client` was
+exercised through the same narrow local-process runner with both explicit environment modes:
+
+- `EDGION_TEST_K8S_MODE=true`: 11/11 original DIU cases passed, the denied-jump suite was
+  absent, and the runner report ended in `Status: PASS` under
+  `tmp/integration_testing/testing_20260907_153137`.
+- `EDGION_TEST_K8S_MODE=false`: 12/12 cases passed, including the denied-jump scenario,
+  with `Status: PASS` under `tmp/integration_testing/testing_20260907_153218`.
+
+These two runs verify dispatch isolation against a local topology, not a live Kubernetes
+deployment. Source review separately confirms both K8s runner paths set the exact `true`
+token before invoking this dispatch. The fixture writer is unreachable in that mode.
+Workspace check/clippy, formatting, agent-doc, SSA-force, metrics inventory and Pingora
+source-policy checks passed again; existing workspace Clippy warnings remain. An independent
+reviewer confirmed the registration and knowledge boundary. No production behavior changed.
 
 ## Resolution references
 
 - `task-fail-closed-on-denied-l7-named-jumps` — 2026-09-05.
+- `add-denied-named-jump-integration-coverage` — test gap corrected, 2026-09-07;
+  dedicated integration coverage with the explicit reachability limits above.

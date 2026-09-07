@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: named-jump-canary-reject
+  namespace: default
+spec:
+  requestPlugins:
+    - type: Canary
+      dye:
+        request:
+          - name: X-Named-Jump-Success
+        response:
+          - name: X-Named-Jump-Outcome
+            on: [reject, fallback]
+      config:
+        enable: true
+        activeProfile: denied
+        profiles:
+          denied:
+            name: named-jump-denied
+            namespace: named-jump-target
+        onInvalid: reject

@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: named-jump-diu-fallback
+  namespace: default
+spec:
+  requestPlugins:
+    - type: DynamicInternalUpstream
+      dye:
+        request:
+          - name: X-Named-Jump-Success
+        response:
+          - name: X-Named-Jump-Outcome
+            on: [reject, fallback]
+      config:
+        from:
+          type: header
+          name: X-Backend-Target
+        onInvalid: fallback

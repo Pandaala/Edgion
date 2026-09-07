@@ -2501,6 +2501,11 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::DynamicInternalUpstreamTestSuite));
+            // The extra suite applies local loopback fixtures. K8s shares this
+            // dispatch but must keep using its existing namespace/Pod fixtures.
+            if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+                runner.add_suite(Box::new(suites::DeniedNamedJumpTestSuite));
+            }
         }
         "EdgionPlugins/DynamicExternalUpstream" => {
             if !gateway {

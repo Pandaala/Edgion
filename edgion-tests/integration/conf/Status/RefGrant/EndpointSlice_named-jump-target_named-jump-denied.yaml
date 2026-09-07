@@ -1,0 +1,16 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: named-jump-denied
+  namespace: named-jump-target
+  labels:
+    kubernetes.io/service-name: named-jump-denied
+addressType: IPv4
+ports:
+  - name: http
+    port: 30002
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true

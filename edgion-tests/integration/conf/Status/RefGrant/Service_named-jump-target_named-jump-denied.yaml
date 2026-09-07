@@ -1,0 +1,12 @@
+# No ReferenceGrant authorizes default/HTTPRoute to this namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: named-jump-denied
+  namespace: named-jump-target
+spec:
+  ports:
+    - name: http
+      port: 30002
+      targetPort: 30002
+      protocol: TCP
