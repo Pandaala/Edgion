@@ -159,6 +159,10 @@ print(executables[-1])
     done
 
     if $FULL_TEST; then
+        log_section "Build LDAP system resolver fixture"
+        bash "${PROJECT_ROOT}/edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh" \
+            --build-resolver-only "${target_root}/debug"
+
         log_section "Build external ExtProc fixture"
         local fixture_dir="${PROJECT_ROOT}/edgion-tests/integration/fixtures/ext_proc_external"
         local fixture_bin="${target_root}/debug/ext_proc_external_processor"

@@ -15,7 +15,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
-- [LDAP Auth Dial-time Egress Policy — FIXED](regression-guards/dial-time-egress-policy.md)
+- [LDAP Auth Dial-time Egress Policy and TLS Integration Coverage](regression-guards/dial-time-egress-policy.md)
 
 ## Review evidence
 

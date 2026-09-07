@@ -89,6 +89,57 @@ Runs code quality checks such as formatting, linting, and unit tests.
 
 ## Integration Test Scripts
 
+### LDAP dial-time egress and TLS
+
+`integration/test_ldap_auth_egress.sh` runs D0054 against one dedicated
+Controller/Gateway and the same OpenLDAP 1.5.0 image and bootstrap data used by
+the existing LDAP TLS suite. It is included in the default `run_integration.sh
+--full-test` sweep. A targeted invocation is:
+
+```bash
+# Build the product binaries first, or use utils/prepare.sh --full-test.
+cargo build -p edgion-controller -p edgion-gateway -p edgion-cli --bins
+bash edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh --build-resolver-only
+docker pull osixia/openldap:1.5.0
+bash edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh
+```
+
+The build-only command needs `cc` and produces `ldap_egress_resolver.dylib`
+(macOS) or `ldap_egress_resolver.so` (Linux) beside the selected Gateway binary.
+`prepare.sh --full-test` also builds it. Execution is build-free and fails if
+an artifact is missing. `EDGION_GATEWAY_BIN` must point to the selected
+`edgion-gateway` executable; its directory must also contain `edgion-controller`,
+`edgion-cli`, and the resolver fixture, including for coverage builds.
+Runtime prerequisites are Python 3, OpenSSL, Docker, and working IPv6 loopback.
+
+The dedicated topology is necessary because LDAP uses the system resolver:
+a process-local loader fixture supplies ordered results for three reserved
+`.test` names without changing host DNS or production code. Real egress
+classification and TCP/TLS remain active. An IPv6 trap is calibrated as
+reachable, then must receive zero Gateway connections. An opaque IPv4 relay
+records the original ClientHello SNI while OpenLDAP performs the handshake
+and bind. Certificates contain only the expected DNS SAN, with no IP SAN.
+
+Both LDAPS and StartTLS exercise mixed and all-blocked candidates, online
+recovery, wrong hostname/CA, matching and mismatched SAN policy, and required
+mTLS with and without an identity. The matrix runs twice per invocation.
+Each blocked case checks the fixed public 503 body, static diagnostics,
+and connection counts. Readiness is state-polled; there are no public DNS or
+external LDAP dependencies. The OpenLDAP image must be pre-pulled; runtime
+uses `--pull=never`. Logs and `results.json` are retained under the
+printed `tmp/integration_testing/ldap_egress.*` directory. Cleanup is attempted
+on exit, but a timeout or interrupted cleanup may leave OpenLDAP containers
+available for inspection. Retention on these failure paths is allowed; automatic
+container removal is not an acceptance requirement for this scenario.
+Existing LDAP scenario files are unchanged.
+
+To inspect retained containers, list `docker ps -a --filter
+name=edgion-ldap-egress-`. Use `docker inspect <container-name>` to match its
+certificate bind mount to the relevant `ldap_egress.*` artifact directory,
+then inspect it with `docker logs <container-name>`. When finished, remove only
+that run's containers with `docker rm -f <container-name>`. Avoid removing all
+matching containers because another scenario invocation may still be running.
+
 ### `run_direct.sh`
 
 Tests connectivity between `test_client` and `test_server` directly, without passing through the Gateway.

@@ -56,7 +56,88 @@ connect timeouts are not accepted here; they would diverge from
 - Rewriting the LDAP URL to an IP — breaks LDAPS/StartTLS hostname verification
 - Controller or plugin-init DNS with a later hostname connect — TOCTOU / DNS rebinding
 - A new LinkSys or plugin-local address table — duplicates `EgressResolver`
-- Changing existing LDAP integration tests — tracked separately as D0054
+- Weakening existing LDAP integration assertions — D0054 adds independent
+  cross-process coverage instead.
+
+## Cross-process regression coverage
+
+D0054 (`add-ldap-auth-egress-integration-coverage`) adds
+`edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh` and its
+`ldap_egress/` fixtures. The standalone exception is process-local system
+resolution: the Gateway must start with a loader fixture because `ldap_auth`
+uses `ResolverSpec::System`. Host DNS and production resolver code are not
+modified. All scenario generations share one Controller/Gateway pair, and
+updates are applied through the Controller Admin API.
+
+The fixture supplies an ordered denied IPv6 unspecified address followed by
+allowed IPv4 loopback (per the existing integration-mode exception). Both
+unspecified address families are used for the all-blocked case. A calibrated,
+reachable IPv6 trap and an opaque IPv4 TCP relay provide connection counts;
+the canonical egress metric proves that candidates were actually classified.
+The `osixia/openldap:1.5.0` fixture performs the real handshake and bind behind the relay, which
+observes the original ClientHello SNI without terminating TLS.
+
+`LdapAuthConfig.ldap_host` remains the identity used by `LdapAuth.ldap_url`,
+while `egress` selects the fixed socket and `conn_settings` carries the TLS
+policy. Both LDAPS and StartTLS use a DNS-only certificate and exercise wrong
+hostname, wrong custom CA, SAN match/mismatch, and required mTLS with/without
+the resolved client identity. All-blocked results must be the fixed public
+503 body with the `ldap unreachable` PluginLog tag and `unreachable` error
+metric. A subsequent allowed generation must recover without process restart.
+The complete matrix repeats twice per invocation.
+
+This coverage does not prove every OS resolver's DNS behavior, private-network
+policy, arbitrary LDAP-server interoperability, or timeout fairness. The
+system resolver replacement is limited to three reserved fixture names and
+does not replace TCP, the egress filter, ldap3, TLS, or OpenLDAP. Existing
+LDAP integration scenarios remain unchanged. User configuration, defaults,
+and production behavior are unchanged.
+
+### Accepted failure-path container retention
+
+On 2026-09-07, the user accepted retaining OpenLDAP containers after a timeout
+or interrupted cleanup for inspection. `Scenario.close()` attempts cleanup,
+but its Gateway wait can consume the outer deadline runner's default 10-second
+termination grace before container removal; Docker commands also have a
+60-second per-command timeout. Container removal on these failure paths is
+therefore not guaranteed and is not a D0054 acceptance gate. Retained containers
+consume Docker resources until manually removed. The integration scripts README
+documents identification by container name and certificate bind mount, inspection,
+and removal for one run. This decision is specific to the standalone LDAP
+scenario; it does not change shared runner lifecycle requirements. Re-evaluate
+if unattended repeated runs require automatic reclamation or retained containers
+cause resource pressure.
+
+## Verification
+
+Fresh checks on 2026-09-07:
+
+- `cargo build -p edgion-gateway -p edgion-controller -p edgion-cli --bins`
+  passed before the final scenario runs.
+- `bash edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh`
+  passed the 36-stage matrix repeatedly on macOS arm64, including the
+  API-only update path. Each invocation creates fresh certificates and
+  OpenLDAP containers and performs two full matrix repetitions.
+- A Debian bookworm arm64 container with Bash 5.2 compiled the Linux fixture
+  through `--build-resolver-only`; loader probes verified ordered results for
+  all three names, ordinary libc fallback, and `freeaddrinfo` ownership.
+  Additional probes on macOS and Linux verified byte-fragmented LDAPS and
+  StartTLS ClientHello parsing and reachability of the unspecified IPv6 trap.
+  This is Linux fixture validation, not a full Linux Gateway matrix run.
+- `cargo fmt --all`, `cargo check --workspace --all-targets`, and
+  `cargo clippy --workspace --all-targets` passed; Clippy emitted existing
+  warnings outside this test-only change.
+- Agent-doc, SSA-force, metrics-inventory, Pingora-source-policy,
+  English-only and Bash arithmetic guards passed. Changed shell scripts
+  passed syntax checks with macOS Bash and Linux Bash 5.
+- Independent read-only review approved the test boundary and knowledge
+  classification. Existing LDAP test files and product Rust code were not
+  modified; the full `cargo test --all` suite was not run.
+
+The D0053 closure date above is historical implementation evidence. D0054
+adds cross-process verification; it does not reopen or change that runtime
+implementation. Revisit the fixture when libc loader/interposition behavior,
+the LDAP TLS dependency, egress defaults, or diagnostic vocabulary changes.
 
 ## Re-evaluation Triggers
 
@@ -77,3 +158,5 @@ Re-open this decision only if:
 ## Resolution references
 
 - `D0053` — 2026-09-04.
+- `D0054` / `add-ldap-auth-egress-integration-coverage` — verified test gap
+  corrected with independent egress/TLS integration coverage, 2026-09-07.

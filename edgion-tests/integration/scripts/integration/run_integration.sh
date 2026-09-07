@@ -639,6 +639,10 @@ run_isolated_scenarios() {
     )
 
     local proxy_scenarios_skipped=false
+    if $FULL_TEST; then
+        names+=("ldap_auth_egress")
+        commands+=("${SCRIPT_DIR}/test_ldap_auth_egress.sh")
+    fi
     local docker_probe_timeout=15
     local probe_now probe_elapsed probe_remaining
     probe_now=$(date +%s)
