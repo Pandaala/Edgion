@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0107 independently approved and fully verified on the refreshed external baseline |
-| Coverage | 534 current tracked files: 126 changed, 143 examined-no-change, 10 deferred, 255 non-terminal; 3 historical rows are removed |
-| Active batch | B0107 Wasm HTTP callout; ready for the local commit gate |
-| Analysis queue | B0108/B0109/B0110 are analysis-ready behind B0107; D0073 records the adjudicated Wasm host-panic boundary for the future `vm_manager.rs` batch |
-| Integration freeze | Refreshed mechanically at external HEAD `3ca80316`: 3,061 tracked `edgion-tests` files; no campaign integration-test edit |
+| Campaign status | in-progress; B0108 verified and at the exact commit gate |
+| Coverage | 534 current tracked files: 127 changed, 143 examined-no-change, 10 deferred, 254 non-terminal; 3 historical rows are removed |
+| Active batch | B0108 Wasm HTTP host ABI; verified and awaiting the local commit |
+| Analysis queue | B0109/B0110/B0111 are analysis-ready behind B0108; D0073 records Wasm host-panic isolation and D0074 owns OCI disk-cache I/O offload |
+| Integration freeze | Refreshed mechanically at external HEAD `d49e732b`: 3,061 tracked `edgion-tests` files; exactly one external review-knowledge fingerprint changed and no campaign integration-test edit occurred |
 
 ## AI guide summary
 

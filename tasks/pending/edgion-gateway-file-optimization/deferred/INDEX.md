@@ -142,3 +142,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
 | Isolate Wasm host panics at VM boundaries | pending | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
+| Offload Wasm OCI disk cache I/O | pending | [task](../../../todo/offload-wasm-oci-disk-cache-io.md) |

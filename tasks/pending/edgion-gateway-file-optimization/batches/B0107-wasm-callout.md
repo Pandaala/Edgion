@@ -2,7 +2,7 @@
 
 ## Scope
 - Baseline: `3ca80316`
-- Pipeline state: ready-to-commit
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Owned file: `edgion-gateway/src/plugins/http/wasm/callout.rs`
 - Baseline blob: `84cca95f42b651653f50761a68771425f3178f03`
@@ -34,4 +34,4 @@
 - Mechanical containment: current HEAD and both baseline blobs remained unchanged; implementation diff is exactly the two-file allow-list and `edgion-tests/**` remains untouched.
 - Review: LGTM with no Must Fix or Should Fix. The independent reviewer confirmed reqwest builder/execute equivalence, duplicate-header order, exact framing ownership, minimal visibility, preserved egress/deadline/semaphore/response-cap/VM lifecycle, and continued D0072 ownership.
 - Verification: Wasm callout 7/7, shared outbound request 11/11, request-hook callout 4/4, reference guest callout 2/2, reference guest tick callout 1/1, and VM tick callout 5/5 passed. `cargo fmt --all` and `--check`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and refreshed frozen-path guards passed on `3ca80316`; Clippy retained only the existing warning set.
-- Commit: pending
+- Commit: `16613ca6`

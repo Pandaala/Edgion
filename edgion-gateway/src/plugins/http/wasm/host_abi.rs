@@ -7,13 +7,17 @@
 //! the guest returns. Buffers returned to the guest are allocated by calling
 //! the guest's own `proxy_on_memory_allocate` export.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::mem::size_of;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use wasmtime::{Caller, Extern, FuncType, Linker, ValType};
 
 use edgion_wasm::{host, HostBehavior, WasmValueType};
+
+use super::shared_data::{SharedData, SharedDataError, ENTRY_OVERHEAD_BYTES, MAX_SHARED_VALUE_BYTES};
 
 pub const MAP_HTTP_REQUEST_HEADERS: i32 = 0;
 pub const MAP_HTTP_RESPONSE_HEADERS: i32 = 2;
@@ -72,6 +76,61 @@ const MAX_REQUEST_BODY_MUTATION_WORK_PASSES: usize = 2;
 /// accounted at their real heap footprint. Mirrors `shared_data`'s
 /// `ENTRY_OVERHEAD_BYTES`.
 const ABI_OP_OVERHEAD_BYTES: usize = 64;
+/// Conservative hash-table storage used by preflight profiles. The standard
+/// tables keep spare buckets and control bytes; four value slots per inserted
+/// item also covers their small-table minimum without depending on internals.
+const HASH_TABLE_SLOTS_PER_ITEM: usize = 4;
+const HASH_TABLE_CONTROL_BYTES: usize = 16;
+
+/// Per-host-call allocation ceiling. The guest-memory limiter already bounds
+/// one input range to 128 MiB; applying that same envelope to the complete
+/// concurrently-live host representation prevents decoding from multiplying
+/// one valid range into a much larger allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AbiAllocationLimits {
+    transient_bytes: usize,
+    retained_bytes: usize,
+    retained_ops: usize,
+}
+
+impl Default for AbiAllocationLimits {
+    fn default() -> Self {
+        Self {
+            transient_bytes: MAX_GUEST_MEMORY_BYTES,
+            retained_bytes: MAX_RETAINED_ABI_BYTES,
+            retained_ops: MAX_RETAINED_ABI_OPS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AllocationProfile {
+    bytes: usize,
+}
+
+impl AllocationProfile {
+    fn add_bytes(mut self, bytes: usize) -> Result<Self, i32> {
+        self.bytes = self.bytes.checked_add(bytes).ok_or(STATUS_INTERNAL_FAILURE)?;
+        Ok(self)
+    }
+
+    fn add_items<T>(self, count: usize) -> Result<Self, i32> {
+        self.add_bytes(count.checked_mul(size_of::<T>()).ok_or(STATUS_INTERNAL_FAILURE)?)
+    }
+
+    fn repeated(self, count: usize) -> Result<Self, i32> {
+        Ok(Self {
+            bytes: self.bytes.checked_mul(count).ok_or(STATUS_INTERNAL_FAILURE)?,
+        })
+    }
+
+    fn checked_against(self, limit: usize, status: i32) -> Result<Self, i32> {
+        if self.bytes > limit {
+            return Err(status);
+        }
+        Ok(self)
+    }
+}
 
 /// Max guest linear-memory size (bytes) enforced by the Store `ResourceLimiter`
 /// in `WasmVmManager::new_vm`. The pooling allocator's default per-instance
@@ -230,7 +289,7 @@ pub struct HostState {
 
     /// Module-wide shared KV (proxy-wasm shared data). Shared by every
     /// pooled VM of the same `ModuleEntry`; process-local by design.
-    pub shared_data: Arc<super::shared_data::SharedData>,
+    pub shared_data: Arc<SharedData>,
 
     // ---- Per-phase ABI retention budget (see `charge_abi`) ----
     /// Host-retained ABI payload bytes charged this phase across the
@@ -242,6 +301,10 @@ pub struct HostState {
     /// Host-retained ABI operation count charged this phase. Reset by
     /// `begin_phase`. Complements `retained_bytes` for tiny-op floods.
     retained_ops: usize,
+    /// Internal safety limits. Production always uses [`AbiAllocationLimits::default`];
+    /// inline tests may lower them to exercise boundaries without attack-sized
+    /// allocations.
+    allocation_limits: AbiAllocationLimits,
 }
 
 impl HostState {
@@ -249,7 +312,7 @@ impl HostState {
         vm_config: Vec<u8>,
         plugin_config: Vec<u8>,
         metrics_label: String,
-        shared_data: Arc<super::shared_data::SharedData>,
+        shared_data: Arc<SharedData>,
     ) -> Self {
         HostState {
             vm_config,
@@ -306,7 +369,11 @@ impl HostState {
     }
 
     fn checked_abi_charge(&self, payload: usize) -> Result<(usize, usize), i32> {
-        self.checked_abi_charge_with_limits(payload, MAX_RETAINED_ABI_BYTES, MAX_RETAINED_ABI_OPS)
+        self.checked_abi_charge_with_limits(
+            payload,
+            self.allocation_limits.retained_bytes,
+            self.allocation_limits.retained_ops,
+        )
     }
 
     fn checked_abi_charge_with_limits(
@@ -327,6 +394,12 @@ impl HostState {
     fn commit_abi_charge(&mut self, checked: (usize, usize)) {
         self.retained_bytes = checked.0;
         self.retained_ops = checked.1;
+    }
+
+    fn check_transient_allocation(&self, profile: AllocationProfile) -> Result<(), i32> {
+        profile
+            .checked_against(self.allocation_limits.transient_bytes, STATUS_INTERNAL_FAILURE)
+            .map(drop)
     }
 
     /// Validate a request-body mutation charge without changing counters.
@@ -353,14 +426,6 @@ impl HostState {
         self.dispatch_enabled = true;
         self.callout_allowlist = allowlist;
         self.callout_timeout_cap_ms = timeout_cap_ms;
-    }
-
-    fn map_mut(&mut self, map: i32) -> Option<&mut Vec<(String, String)>> {
-        match map {
-            MAP_HTTP_REQUEST_HEADERS => Some(&mut self.request_headers),
-            MAP_HTTP_RESPONSE_HEADERS => Some(&mut self.response_headers),
-            _ => None,
-        }
     }
 
     fn map_ref(&self, map: i32) -> Option<&[(String, String)]> {
@@ -446,9 +511,21 @@ fn lossy_utf8_output_len(mut bytes: &[u8]) -> Result<usize, i32> {
     }
 }
 
-fn string_from_utf8_lossy_with_capacity(bytes: &[u8], capacity: usize) -> String {
-    let mut output = String::with_capacity(capacity);
-    let mut remaining = bytes;
+fn try_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, i32> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| STATUS_INTERNAL_FAILURE)?;
+    Ok(values)
+}
+
+fn try_string_with_capacity(capacity: usize) -> Result<String, i32> {
+    let mut value = String::new();
+    value.try_reserve_exact(capacity).map_err(|_| STATUS_INTERNAL_FAILURE)?;
+    Ok(value)
+}
+
+fn push_utf8_lossy(output: &mut String, mut remaining: &[u8]) {
     loop {
         match std::str::from_utf8(remaining) {
             Ok(valid) => {
@@ -457,6 +534,7 @@ fn string_from_utf8_lossy_with_capacity(bytes: &[u8], capacity: usize) -> String
             }
             Err(error) => {
                 let valid = error.valid_up_to();
+                // `valid_up_to` always names a valid UTF-8 prefix.
                 if let Ok(valid_prefix) = std::str::from_utf8(&remaining[..valid]) {
                     output.push_str(valid_prefix);
                 }
@@ -466,8 +544,95 @@ fn string_from_utf8_lossy_with_capacity(bytes: &[u8], capacity: usize) -> String
             }
         }
     }
+}
+
+fn string_from_utf8_lossy_with_capacity(bytes: &[u8], capacity: usize) -> Result<String, i32> {
+    let mut output = try_string_with_capacity(capacity)?;
+    push_utf8_lossy(&mut output, bytes);
     debug_assert_eq!(output.len(), capacity);
-    output
+    Ok(output)
+}
+
+fn try_clone_string(value: &str) -> Result<String, i32> {
+    let mut clone = try_string_with_capacity(value.len())?;
+    clone.push_str(value);
+    Ok(clone)
+}
+
+fn try_ascii_lowercase(value: &str) -> Result<String, i32> {
+    let mut normalized = try_string_with_capacity(value.len())?;
+    normalized.extend(value.chars().map(|character| character.to_ascii_lowercase()));
+    debug_assert_eq!(normalized.len(), value.len());
+    Ok(normalized)
+}
+
+fn conservative_hash_table_allocation<T>(items: usize) -> Result<AllocationProfile, i32> {
+    if items == 0 {
+        return Ok(AllocationProfile::default());
+    }
+    AllocationProfile::default()
+        .add_items::<T>(
+            items
+                .checked_mul(HASH_TABLE_SLOTS_PER_ITEM)
+                .ok_or(STATUS_INTERNAL_FAILURE)?,
+        )?
+        .add_bytes(HASH_TABLE_CONTROL_BYTES)
+}
+
+fn vector_growth_allocation<T>(len: usize, capacity: usize, additional: usize) -> Result<AllocationProfile, i32> {
+    let required = len.checked_add(additional).ok_or(STATUS_INTERNAL_FAILURE)?;
+    if required <= capacity {
+        return Ok(AllocationProfile::default());
+    }
+    AllocationProfile::default().add_items::<T>(required)
+}
+
+fn decoded_map_allocation(profile: SerializedMapProfile) -> Result<AllocationProfile, i32> {
+    AllocationProfile::default()
+        .add_bytes(profile.lossy_string_bytes)?
+        .add_items::<(String, String)>(profile.pair_count)
+}
+
+fn local_response_allocation(response: &LocalResponse) -> Result<AllocationProfile, i32> {
+    let mut profile = AllocationProfile::default()
+        .add_bytes(response.body.capacity())?
+        .add_items::<(String, String)>(response.headers.capacity())?;
+    for (name, value) in &response.headers {
+        profile = profile.add_bytes(name.capacity())?.add_bytes(value.capacity())?;
+    }
+    Ok(profile)
+}
+
+fn decode_profiled_map(bytes: &[u8], profile: SerializedMapProfile) -> Result<Vec<(String, String)>, i32> {
+    let table_end = 4 + profile.pair_count * 8;
+    let mut data_offset = table_end;
+    let mut pairs = try_vec_with_capacity(profile.pair_count)?;
+    for index in 0..profile.pair_count {
+        let size_offset = 4 + index * 8;
+        let key_len = u32::from_le_bytes(
+            bytes[size_offset..size_offset + 4]
+                .try_into()
+                .map_err(|_| STATUS_BAD_ARGUMENT)?,
+        ) as usize;
+        let value_len = u32::from_le_bytes(
+            bytes[size_offset + 4..size_offset + 8]
+                .try_into()
+                .map_err(|_| STATUS_BAD_ARGUMENT)?,
+        ) as usize;
+        let key_end = data_offset + key_len;
+        let value_start = key_end + 1;
+        let value_end = value_start + value_len;
+        let key_bytes = &bytes[data_offset..key_end];
+        let value_bytes = &bytes[value_start..value_end];
+        let key_capacity = lossy_utf8_output_len(key_bytes)?;
+        let value_capacity = lossy_utf8_output_len(value_bytes)?;
+        pairs.push((
+            string_from_utf8_lossy_with_capacity(key_bytes, key_capacity)?,
+            string_from_utf8_lossy_with_capacity(value_bytes, value_capacity)?,
+        ));
+        data_offset = value_end + 1;
+    }
+    Ok(pairs)
 }
 
 fn scan_serialized_map(bytes: &[u8]) -> Result<SerializedMapProfile, i32> {
@@ -527,27 +692,59 @@ fn scan_serialized_map(bytes: &[u8]) -> Result<SerializedMapProfile, i32> {
 
 pub fn decode_map(bytes: &[u8]) -> Option<Vec<(String, String)>> {
     let profile = scan_serialized_map(bytes).ok()?;
-    let table_end = 4 + profile.pair_count * 8;
-    let mut data_offset = table_end;
-    let mut pairs = Vec::with_capacity(profile.pair_count);
-    for index in 0..profile.pair_count {
-        let size_offset = 4 + index * 8;
-        let key_len = u32::from_le_bytes(bytes[size_offset..size_offset + 4].try_into().ok()?) as usize;
-        let value_len = u32::from_le_bytes(bytes[size_offset + 4..size_offset + 8].try_into().ok()?) as usize;
-        let key_end = data_offset + key_len;
-        let value_start = key_end + 1;
-        let value_end = value_start + value_len;
-        let key_bytes = &bytes[data_offset..key_end];
-        let value_bytes = &bytes[value_start..value_end];
-        let key_capacity = lossy_utf8_output_len(key_bytes).ok()?;
-        let value_capacity = lossy_utf8_output_len(value_bytes).ok()?;
-        pairs.push((
-            string_from_utf8_lossy_with_capacity(key_bytes, key_capacity),
-            string_from_utf8_lossy_with_capacity(value_bytes, value_capacity),
-        ));
-        data_offset = value_end + 1;
+    decode_profiled_map(bytes, profile).ok()
+}
+
+fn simple_header_mutation_profile(
+    key_bytes: usize,
+    value_bytes: usize,
+    snapshot_copy: bool,
+) -> Result<AllocationProfile, i32> {
+    let one_copy = AllocationProfile::default()
+        .add_bytes(key_bytes)?
+        .add_bytes(value_bytes)?;
+    let mut profile = one_copy;
+    if snapshot_copy {
+        profile = profile.add_bytes(one_copy.bytes)?.add_items::<(String, String)>(1)?;
     }
-    Some(pairs)
+    Ok(profile)
+}
+
+fn try_clone_pairs(pairs: &[(String, String)]) -> Result<Vec<(String, String)>, i32> {
+    let mut cloned = try_vec_with_capacity(pairs.len())?;
+    for (name, value) in pairs {
+        cloned.push((try_clone_string(name)?, try_clone_string(value)?));
+    }
+    Ok(cloned)
+}
+
+fn header_removal_profiles(pairs: &[(String, String)]) -> Result<(AllocationProfile, AllocationProfile), i32> {
+    let name_bytes = pairs.iter().try_fold(0usize, |total, (name, _)| {
+        total.checked_add(name.len()).ok_or(STATUS_INTERNAL_FAILURE)
+    })?;
+    // `remove` retains at most one original-spelling String per input pair.
+    let retained = AllocationProfile::default()
+        .add_bytes(name_bytes)?
+        .add_items::<String>(pairs.len())?;
+    // Include both canonical name allocations and a conservative upper bound
+    // for the HashSet's spare buckets/control bytes.
+    let transient = retained
+        .add_bytes(name_bytes)?
+        .add_bytes(conservative_hash_table_allocation::<String>(pairs.len())?.bytes)?;
+    Ok((retained, transient))
+}
+
+fn collect_header_removals(pairs: &[(String, String)]) -> Result<Vec<String>, i32> {
+    let mut seen = HashSet::new();
+    seen.try_reserve(pairs.len()).map_err(|_| STATUS_INTERNAL_FAILURE)?;
+    let mut remove = try_vec_with_capacity(pairs.len())?;
+    for (name, _) in pairs {
+        let canonical = try_ascii_lowercase(name)?;
+        if seen.insert(canonical) {
+            remove.push(try_clone_string(name)?);
+        }
+    }
+    Ok(remove)
 }
 
 /// Resolve a proxy-wasm buffer-type id to the host bytes it exposes.
@@ -664,26 +861,153 @@ fn guest_memory(caller: &mut Caller<'_, HostState>) -> Option<wasmtime::Memory> 
     }
 }
 
-fn read_guest(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<Vec<u8>, i32> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GuestRangeProfile {
+    range: Range<usize>,
+}
+
+impl GuestRangeProfile {
+    fn len(&self) -> usize {
+        self.range.len()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GuestStringProfile {
+    guest: GuestRangeProfile,
+    decoded_len: usize,
+}
+
+#[derive(Clone)]
+struct GuestMapProfile {
+    guest: GuestRangeProfile,
+    map: SerializedMapProfile,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PropertyPathProfile {
+    guest: GuestRangeProfile,
+    decoded_len: usize,
+    segment_count: usize,
+}
+
+fn profile_guest_range(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestRangeProfile, i32> {
+    // Preserve ABI precedence: negative arguments are malformed even when the
+    // guest failed to export memory.
     if ptr < 0 || len < 0 {
         return Err(STATUS_BAD_ARGUMENT);
     }
-    let mem = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
-    let (ptr, len) = (ptr as usize, len as usize);
-    // Bounds-check against the guest's ACTUAL memory size BEFORE allocating.
-    // `len` is guest-controlled (up to ~2GiB); a blind `vec![0u8; len]` would
-    // let a guest drive the host toward OOM before the subsequent `mem.read`
-    // bounds check ever fires. Same hazard `decode_map` guards against, applied
-    // one level lower so every guest-input ABI (dispatch, set_shared_data,
-    // set_header_map_pairs, send_local_response, …) is covered.
-    let mem_size = mem.data_size(&*caller);
-    if ptr.checked_add(len).map_or(true, |end| end > mem_size) {
-        return Err(STATUS_INVALID_MEMORY_ACCESS);
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let range = guest_range(ptr, len, memory.data_size(&*caller))?;
+    Ok(GuestRangeProfile { range })
+}
+
+fn profile_guest_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestStringProfile, i32> {
+    let guest = profile_guest_range(caller, ptr, len)?;
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = memory
+        .data(&*caller)
+        .get(guest.range.clone())
+        .ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let decoded_len = lossy_utf8_output_len(bytes)?;
+    Ok(GuestStringProfile { guest, decoded_len })
+}
+
+fn profile_guest_map(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<GuestMapProfile, i32> {
+    let guest = profile_guest_range(caller, ptr, len)?;
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = memory
+        .data(&*caller)
+        .get(guest.range.clone())
+        .ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let map = scan_serialized_map(bytes)?;
+    Ok(GuestMapProfile { guest, map })
+}
+
+fn profile_property_path(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<PropertyPathProfile, i32> {
+    let guest = profile_guest_range(caller, ptr, len)?;
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = memory
+        .data(&*caller)
+        .get(guest.range.clone())
+        .ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let mut decoded_len = 0usize;
+    let mut segment_count = 0usize;
+    for segment in bytes.split(|byte| *byte == 0).filter(|segment| !segment.is_empty()) {
+        if segment_count != 0 {
+            decoded_len = decoded_len.checked_add(1).ok_or(STATUS_INTERNAL_FAILURE)?;
+        }
+        decoded_len = decoded_len
+            .checked_add(lossy_utf8_output_len(segment)?)
+            .ok_or(STATUS_INTERNAL_FAILURE)?;
+        segment_count = segment_count.checked_add(1).ok_or(STATUS_INTERNAL_FAILURE)?;
     }
-    let mut buf = vec![0u8; len];
-    mem.read(&mut *caller, ptr, &mut buf)
-        .map_err(|_| STATUS_INVALID_MEMORY_ACCESS)?;
-    Ok(buf)
+    Ok(PropertyPathProfile {
+        guest,
+        decoded_len,
+        segment_count,
+    })
+}
+
+fn guest_bytes<'a>(
+    caller: &'a Caller<'_, HostState>,
+    memory: wasmtime::Memory,
+    profile: &GuestRangeProfile,
+) -> Result<&'a [u8], i32> {
+    memory
+        .data(caller)
+        .get(profile.range.clone())
+        .ok_or(STATUS_INVALID_MEMORY_ACCESS)
+}
+
+fn copy_profiled_guest(caller: &mut Caller<'_, HostState>, profile: &GuestRangeProfile) -> Result<Vec<u8>, i32> {
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = guest_bytes(&*caller, memory, profile)?;
+    let mut output = try_vec_with_capacity(bytes.len())?;
+    output.extend_from_slice(bytes);
+    Ok(output)
+}
+
+fn decode_profiled_guest_string(
+    caller: &mut Caller<'_, HostState>,
+    profile: &GuestStringProfile,
+) -> Result<String, i32> {
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = guest_bytes(&*caller, memory, &profile.guest)?;
+    string_from_utf8_lossy_with_capacity(bytes, profile.decoded_len)
+}
+
+fn decode_profiled_guest_map(
+    caller: &mut Caller<'_, HostState>,
+    profile: &GuestMapProfile,
+) -> Result<Vec<(String, String)>, i32> {
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = guest_bytes(&*caller, memory, &profile.guest)?;
+    decode_profiled_map(bytes, profile.map)
+}
+
+fn decode_property_path(caller: &mut Caller<'_, HostState>, profile: &PropertyPathProfile) -> Result<String, i32> {
+    let memory = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
+    let bytes = guest_bytes(&*caller, memory, &profile.guest)?;
+    let mut key = try_string_with_capacity(profile.decoded_len)?;
+    let mut first = true;
+    let mut segment_count = 0usize;
+    for segment in bytes.split(|byte| *byte == 0).filter(|segment| !segment.is_empty()) {
+        if !first {
+            key.push('.');
+        }
+        push_utf8_lossy(&mut key, segment);
+        first = false;
+        segment_count += 1;
+    }
+    debug_assert_eq!(key.len(), profile.decoded_len);
+    debug_assert_eq!(segment_count, profile.segment_count);
+    Ok(key)
+}
+
+fn read_guest(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<Vec<u8>, i32> {
+    let profile = profile_guest_range(caller, ptr, len)?;
+    copy_profiled_guest(caller, &profile)
 }
 
 fn guest_range(ptr: i32, len: i32, memory_size: usize) -> Result<std::ops::Range<usize>, i32> {
@@ -699,7 +1023,11 @@ fn guest_range(ptr: i32, len: i32, memory_size: usize) -> Result<std::ops::Range
 }
 
 fn read_guest_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<String, i32> {
-    Ok(String::from_utf8_lossy(&read_guest(caller, ptr, len)?).into_owned())
+    let profile = profile_guest_string(caller, ptr, len)?;
+    caller
+        .data()
+        .check_transient_allocation(AllocationProfile::default().add_bytes(profile.decoded_len)?)?;
+    decode_profiled_guest_string(caller, &profile)
 }
 
 /// Allocate `data.len()` bytes in the guest via its `proxy_on_memory_allocate`
@@ -1008,21 +1336,44 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_LOG,
         |mut caller: Caller<'_, HostState>, level: i32, ptr: i32, len: i32| -> i32 {
-            match read_guest_string(&mut caller, ptr, len) {
-                Ok(msg) => {
-                    // Data-plane hot path (Iron rule 3) and a guest-controlled
-                    // message (Iron rule 1): never tracing the raw text. The
-                    // line is stored for bounded in-memory diagnostics only and
-                    // reported as a count via PluginLog by `finish_phase`.
-                    let state = caller.data_mut();
-                    if let Err(s) = state.charge_abi(msg.len()) {
-                        return s;
-                    }
-                    state.log_lines.push((level, msg));
-                    STATUS_OK
-                }
-                Err(s) => s,
+            let profile = match profile_guest_string(&mut caller, ptr, len) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let allocation = match AllocationProfile::default().add_bytes(profile.decoded_len) {
+                Ok(profile) => match vector_growth_allocation::<(i32, String)>(
+                    caller.data().log_lines.len(),
+                    caller.data().log_lines.capacity(),
+                    1,
+                )
+                .and_then(|growth| profile.add_bytes(growth.bytes))
+                {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                },
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
             }
+            let checked_charge = match caller.data().checked_abi_charge(allocation.bytes) {
+                Ok(charge) => charge,
+                Err(status) => return status,
+            };
+            let msg = match decode_profiled_guest_string(&mut caller, &profile) {
+                Ok(msg) => msg,
+                Err(status) => return status,
+            };
+            let state = caller.data_mut();
+            if state.log_lines.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
+            }
+            // Data-plane hot path (Iron rule 3) and a guest-controlled
+            // message (Iron rule 1): never tracing the raw text. The line is
+            // retained only for bounded diagnostics and reported as a count.
+            state.commit_abi_charge(checked_charge);
+            state.log_lines.push((level, msg));
+            STATUS_OK
         },
     )?;
 
@@ -1065,24 +1416,44 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_GET_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, ret_ptr: i32, ret_size: i32| -> i32 {
-            let key = match read_guest_string(&mut caller, kp, kl) {
-                Ok(k) => k,
-                Err(s) => return s,
+            let key_profile = match profile_guest_string(&mut caller, kp, kl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let key_allocation = match AllocationProfile::default().add_bytes(key_profile.decoded_len) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(key_allocation) {
+                return status;
+            }
+            let key = match decode_profiled_guest_string(&mut caller, &key_profile) {
+                Ok(key) => key,
+                Err(status) => return status,
             };
             let value = {
                 let Some(pairs) = caller.data().map_ref(map) else {
                     return STATUS_BAD_ARGUMENT;
                 };
-                // Clone only the single matched value (not the whole map).
-                pairs
-                    .iter()
-                    .find(|(n, _)| n.eq_ignore_ascii_case(&key))
-                    .map(|(_, v)| v.clone())
+                let Some((_, value)) = pairs.iter().find(|(name, _)| name.eq_ignore_ascii_case(&key)) else {
+                    return STATUS_NOT_FOUND;
+                };
+                let allocation = match AllocationProfile::default()
+                    .add_bytes(key.len())
+                    .and_then(|profile| profile.add_bytes(value.len()))
+                {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+                if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                    return status;
+                }
+                match try_clone_string(value) {
+                    Ok(value) => value,
+                    Err(status) => return status,
+                }
             };
-            match value {
-                Some(v) => write_to_guest(&mut caller, v.as_bytes(), ret_ptr, ret_size),
-                None => STATUS_NOT_FOUND,
-            }
+            write_to_guest(&mut caller, value.as_bytes(), ret_ptr, ret_size)
         },
     )?;
 
@@ -1090,25 +1461,99 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_REPLACE_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, vp: i32, vl: i32| -> i32 {
-            let key = match read_guest_string(&mut caller, kp, kl) {
-                Ok(k) => k,
-                Err(s) => return s,
+            let key_profile = match profile_guest_string(&mut caller, kp, kl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
             };
-            let value = match read_guest_string(&mut caller, vp, vl) {
-                Ok(v) => v,
-                Err(s) => return s,
+            let value_profile = match profile_guest_string(&mut caller, vp, vl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let allocation =
+                match simple_header_mutation_profile(key_profile.decoded_len, value_profile.decoded_len, true) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            if let Err(status) = caller.data().checked_abi_charge(allocation.bytes) {
+                return status;
+            }
+            if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
+                return STATUS_BAD_ARGUMENT;
+            }
+            let allocation = {
+                let state = caller.data();
+                let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                    &state.request_headers
+                } else {
+                    &state.response_headers
+                };
+                let snapshot_growth =
+                    match vector_growth_allocation::<(String, String)>(pairs.len(), pairs.capacity(), 1) {
+                        Ok(profile) => profile,
+                        Err(status) => return status,
+                    };
+                let pending_growth = match vector_growth_allocation::<HeaderOp>(
+                    state.pending_ops.len(),
+                    state.pending_ops.capacity(),
+                    1,
+                ) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+                match allocation
+                    .add_bytes(snapshot_growth.bytes)
+                    .and_then(|profile| profile.add_bytes(pending_growth.bytes))
+                {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                }
+            };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            let checked_charge = match caller.data().checked_abi_charge(allocation.bytes) {
+                Ok(charge) => charge,
+                Err(status) => return status,
+            };
+            let key = match decode_profiled_guest_string(&mut caller, &key_profile) {
+                Ok(value) => value,
+                Err(status) => return status,
+            };
+            let value = match decode_profiled_guest_string(&mut caller, &value_profile) {
+                Ok(value) => value,
+                Err(status) => return status,
+            };
+            let snapshot_key = match try_clone_string(&key) {
+                Ok(value) => value,
+                Err(status) => return status,
+            };
+            let snapshot_value = match try_clone_string(&value) {
+                Ok(value) => value,
+                Err(status) => return status,
             };
             let state = caller.data_mut();
-            // Charge the retained `pending_ops` op (append-only) before any
-            // mutation, so a rejected op leaves no partial header change.
-            if let Err(s) = state.charge_abi(key.len() + value.len()) {
-                return s;
+            if state.pending_ops.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
             }
-            let Some(pairs) = state.map_mut(map) else {
-                return STATUS_BAD_ARGUMENT;
+            let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                &mut state.request_headers
+            } else {
+                &mut state.response_headers
             };
-            pairs.retain(|(n, _)| !n.eq_ignore_ascii_case(&key));
-            pairs.push((key.clone(), value.clone()));
+            if pairs.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
+            }
+            state.commit_abi_charge(checked_charge);
+            let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                &mut state.request_headers
+            } else {
+                &mut state.response_headers
+            };
+            pairs.retain(|(name, _)| !name.eq_ignore_ascii_case(&key));
+            pairs.push((snapshot_key, snapshot_value));
             state.pending_ops.push(HeaderOp::Set { map, name: key, value });
             STATUS_OK
         },
@@ -1118,24 +1563,98 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_ADD_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, vp: i32, vl: i32| -> i32 {
-            let key = match read_guest_string(&mut caller, kp, kl) {
-                Ok(k) => k,
-                Err(s) => return s,
+            let key_profile = match profile_guest_string(&mut caller, kp, kl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
             };
-            let value = match read_guest_string(&mut caller, vp, vl) {
-                Ok(v) => v,
-                Err(s) => return s,
+            let value_profile = match profile_guest_string(&mut caller, vp, vl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let allocation =
+                match simple_header_mutation_profile(key_profile.decoded_len, value_profile.decoded_len, true) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            if let Err(status) = caller.data().checked_abi_charge(allocation.bytes) {
+                return status;
+            }
+            if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
+                return STATUS_BAD_ARGUMENT;
+            }
+            let allocation = {
+                let state = caller.data();
+                let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                    &state.request_headers
+                } else {
+                    &state.response_headers
+                };
+                let snapshot_growth =
+                    match vector_growth_allocation::<(String, String)>(pairs.len(), pairs.capacity(), 1) {
+                        Ok(profile) => profile,
+                        Err(status) => return status,
+                    };
+                let pending_growth = match vector_growth_allocation::<HeaderOp>(
+                    state.pending_ops.len(),
+                    state.pending_ops.capacity(),
+                    1,
+                ) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+                match allocation
+                    .add_bytes(snapshot_growth.bytes)
+                    .and_then(|profile| profile.add_bytes(pending_growth.bytes))
+                {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                }
+            };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            let checked_charge = match caller.data().checked_abi_charge(allocation.bytes) {
+                Ok(charge) => charge,
+                Err(status) => return status,
+            };
+            let key = match decode_profiled_guest_string(&mut caller, &key_profile) {
+                Ok(value) => value,
+                Err(status) => return status,
+            };
+            let value = match decode_profiled_guest_string(&mut caller, &value_profile) {
+                Ok(value) => value,
+                Err(status) => return status,
+            };
+            let snapshot_key = match try_clone_string(&key) {
+                Ok(value) => value,
+                Err(status) => return status,
+            };
+            let snapshot_value = match try_clone_string(&value) {
+                Ok(value) => value,
+                Err(status) => return status,
             };
             let state = caller.data_mut();
-            // Append-only in both the snapshot and `pending_ops` (the strongest
-            // amplifier): charge before mutating so a rejected op is atomic.
-            if let Err(s) = state.charge_abi(key.len() + value.len()) {
-                return s;
+            if state.pending_ops.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
             }
-            let Some(pairs) = state.map_mut(map) else {
-                return STATUS_BAD_ARGUMENT;
+            let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                &mut state.request_headers
+            } else {
+                &mut state.response_headers
             };
-            pairs.push((key.clone(), value.clone()));
+            if pairs.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
+            }
+            state.commit_abi_charge(checked_charge);
+            let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                &mut state.request_headers
+            } else {
+                &mut state.response_headers
+            };
+            pairs.push((snapshot_key, snapshot_value));
             state.pending_ops.push(HeaderOp::Add { map, name: key, value });
             STATUS_OK
         },
@@ -1145,19 +1664,60 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_REMOVE_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32| -> i32 {
-            let key = match read_guest_string(&mut caller, kp, kl) {
-                Ok(k) => k,
-                Err(s) => return s,
+            let key_profile = match profile_guest_string(&mut caller, kp, kl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let allocation = match simple_header_mutation_profile(key_profile.decoded_len, 0, false) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            if let Err(status) = caller.data().checked_abi_charge(allocation.bytes) {
+                return status;
+            }
+            if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
+                return STATUS_BAD_ARGUMENT;
+            }
+            let allocation = {
+                let state = caller.data();
+                let pending_growth = match vector_growth_allocation::<HeaderOp>(
+                    state.pending_ops.len(),
+                    state.pending_ops.capacity(),
+                    1,
+                ) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+                match allocation.add_bytes(pending_growth.bytes) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                }
+            };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            let checked_charge = match caller.data().checked_abi_charge(allocation.bytes) {
+                Ok(charge) => charge,
+                Err(status) => return status,
+            };
+            let key = match decode_profiled_guest_string(&mut caller, &key_profile) {
+                Ok(value) => value,
+                Err(status) => return status,
             };
             let state = caller.data_mut();
-            // Charge the retained `pending_ops` Remove op before mutating.
-            if let Err(s) = state.charge_abi(key.len()) {
-                return s;
+            if state.pending_ops.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
             }
-            let Some(pairs) = state.map_mut(map) else {
-                return STATUS_BAD_ARGUMENT;
+            state.commit_abi_charge(checked_charge);
+            let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                &mut state.request_headers
+            } else {
+                &mut state.response_headers
             };
-            pairs.retain(|(n, _)| !n.eq_ignore_ascii_case(&key));
+            pairs.retain(|(name, _)| !name.eq_ignore_ascii_case(&key));
             state.pending_ops.push(HeaderOp::Remove { map, name: key });
             STATUS_OK
         },
@@ -1167,39 +1727,101 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_SET_HEADER_MAP_PAIRS,
         |mut caller: Caller<'_, HostState>, map: i32, ptr: i32, len: i32| -> i32 {
-            let bytes = match read_guest(&mut caller, ptr, len) {
-                Ok(b) => b,
-                Err(s) => return s,
+            let map_profile = match profile_guest_map(&mut caller, ptr, len) {
+                Ok(profile) => profile,
+                Err(status) => return status,
             };
-            let Some(new_pairs) = decode_map(&bytes) else {
+            let decoded_allocation = match decoded_map_allocation(map_profile.map) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let base_allocation = match decoded_allocation.repeated(2) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(base_allocation) {
+                return status;
+            }
+            if let Err(status) = caller.data().checked_abi_charge(base_allocation.bytes) {
+                return status;
+            }
+            if !matches!(map, MAP_HTTP_REQUEST_HEADERS | MAP_HTTP_RESPONSE_HEADERS) {
                 return STATUS_BAD_ARGUMENT;
+            }
+
+            let (removal_retained, removal_transient) = {
+                let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                    &caller.data().request_headers
+                } else {
+                    &caller.data().response_headers
+                };
+                match header_removal_profiles(pairs) {
+                    Ok(profiles) => profiles,
+                    Err(status) => return status,
+                }
+            };
+            let pending_growth = match vector_growth_allocation::<HeaderOp>(
+                caller.data().pending_ops.len(),
+                caller.data().pending_ops.capacity(),
+                1,
+            ) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let retained_allocation = match base_allocation
+                .add_bytes(removal_retained.bytes)
+                .and_then(|profile| profile.add_bytes(pending_growth.bytes))
+            {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let transient_allocation = match base_allocation
+                .add_bytes(removal_transient.bytes)
+                .and_then(|profile| profile.add_bytes(pending_growth.bytes))
+            {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(transient_allocation) {
+                return status;
+            }
+            let checked_charge = match caller.data().checked_abi_charge(retained_allocation.bytes) {
+                Ok(charge) => charge,
+                Err(status) => return status,
+            };
+            let new_pairs = match decode_profiled_guest_map(&mut caller, &map_profile) {
+                Ok(pairs) => pairs,
+                Err(status) => return status,
+            };
+            let snapshot = match try_clone_pairs(&new_pairs) {
+                Ok(pairs) => pairs,
+                Err(status) => return status,
+            };
+            let remove = {
+                let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                    &caller.data().request_headers
+                } else {
+                    &caller.data().response_headers
+                };
+                match collect_header_removals(pairs) {
+                    Ok(remove) => remove,
+                    Err(status) => return status,
+                }
             };
             let state = caller.data_mut();
-            // Each call appends a whole owned `ReplaceAll` op to `pending_ops`
-            // (append-only) — a strong amplifier. Charge the new payload before
-            // mutating so a rejected op leaves the snapshot untouched.
-            let payload: usize = new_pairs.iter().map(|(k, v)| k.len() + v.len()).sum();
-            if let Err(s) = state.charge_abi(payload) {
-                return s;
+            if state.pending_ops.try_reserve_exact(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
             }
-            let Some(pairs) = state.map_mut(map) else {
-                return STATUS_BAD_ARGUMENT;
-            };
             // Capture the names present before the replacement (case-insensitive
-            // dedup) so apply_ops removes every header the guest dropped. One
-            // remove per unique name suffices — the session remove clears all
-            // values for that name. The snapshot only holds str-representable
-            // headers (the session filters non-UTF-8 values out before the
-            // guest ever sees them), so a header the guest cannot observe is
-            // also not captured here — realistic credential/identity headers
-            // are ASCII and are covered.
-            let mut remove: Vec<String> = Vec::new();
-            for (name, _) in pairs.iter() {
-                if !remove.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-                    remove.push(name.clone());
-                }
-            }
-            *pairs = new_pairs.clone();
+            // dedup) in expected-linear time. `remove` keeps the first observed
+            // spelling while `seen` (discarded above) owns canonical keys.
+            state.commit_abi_charge(checked_charge);
+            let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
+                &mut state.request_headers
+            } else {
+                &mut state.response_headers
+            };
+            *pairs = snapshot;
             state.pending_ops.push(HeaderOp::ReplaceAll {
                 map,
                 remove,
@@ -1292,22 +1914,77 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
          headers_size: i32,
          _grpc_status: i32|
          -> i32 {
-            let body = if body_size > 0 {
-                match read_guest(&mut caller, body_ptr, body_size) {
-                    Ok(b) => b,
-                    Err(s) => return s,
+            // Nonpositive sizes intentionally ignore their pointer. For
+            // positive inputs preserve body-range validation before headers.
+            let body_profile = if body_size > 0 {
+                match profile_guest_range(&mut caller, body_ptr, body_size) {
+                    Ok(profile) => Some(profile),
+                    Err(status) => return status,
                 }
             } else {
-                Vec::new()
+                None
             };
-            let headers = if headers_size > 0 {
-                let bytes = match read_guest(&mut caller, headers_ptr, headers_size) {
-                    Ok(b) => b,
-                    Err(s) => return s,
+            let headers_profile = if headers_size > 0 {
+                let guest = match profile_guest_range(&mut caller, headers_ptr, headers_size) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
                 };
-                decode_map(&bytes).unwrap_or_default()
+                let memory = match guest_memory(&mut caller) {
+                    Some(memory) => memory,
+                    None => return STATUS_INVALID_MEMORY_ACCESS,
+                };
+                let bytes = match guest_bytes(&caller, memory, &guest) {
+                    Ok(bytes) => bytes,
+                    Err(status) => return status,
+                };
+                match scan_serialized_map(bytes) {
+                    Ok(map) => Some(GuestMapProfile { guest, map }),
+                    // Compatibility: malformed local-response header maps are
+                    // accepted as an empty header list.
+                    Err(STATUS_BAD_ARGUMENT) => None,
+                    Err(status) => return status,
+                }
             } else {
-                Vec::new()
+                None
+            };
+            let mut allocation = AllocationProfile::default();
+            if let Some(profile) = &body_profile {
+                allocation = match allocation.add_bytes(profile.len()) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+            }
+            if let Some(profile) = &headers_profile {
+                allocation =
+                    match decoded_map_allocation(profile.map).and_then(|headers| allocation.add_bytes(headers.bytes)) {
+                        Ok(profile) => profile,
+                        Err(status) => return status,
+                    };
+            }
+            if let Some(existing) = caller.data().local_response.as_ref() {
+                allocation = match local_response_allocation(existing)
+                    .and_then(|existing| allocation.add_bytes(existing.bytes))
+                {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+            }
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            let body = match &body_profile {
+                Some(profile) => match copy_profiled_guest(&mut caller, profile) {
+                    Ok(body) => body,
+                    Err(status) => return status,
+                },
+                None => Vec::new(),
+            };
+            let headers = match &headers_profile {
+                Some(profile) => match decode_profiled_guest_map(&mut caller, profile) {
+                    Ok(headers) => headers,
+                    Err(status) => return status,
+                },
+                None => Vec::new(),
             };
             let status = if (100..=599).contains(&status) {
                 status as u16
@@ -1327,21 +2004,38 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_GET_PROPERTY,
         |mut caller: Caller<'_, HostState>, pp: i32, pl: i32, ret_ptr: i32, ret_size: i32| -> i32 {
-            let raw = match read_guest(&mut caller, pp, pl) {
-                Ok(b) => b,
-                Err(s) => return s,
+            let path_profile = match profile_property_path(&mut caller, pp, pl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
             };
-            // proxy-wasm property paths are NUL-separated segments.
-            let key = raw
-                .split(|b| *b == 0)
-                .filter(|s| !s.is_empty())
-                .map(|s| String::from_utf8_lossy(s).into_owned())
-                .collect::<Vec<_>>()
-                .join(".");
-            match caller.data().properties.get(&key).cloned() {
-                Some(v) => write_to_guest(&mut caller, v.as_bytes(), ret_ptr, ret_size),
-                None => STATUS_NOT_FOUND,
+            let key_allocation = match AllocationProfile::default().add_bytes(path_profile.decoded_len) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(key_allocation) {
+                return status;
             }
+            let key = match decode_property_path(&mut caller, &path_profile) {
+                Ok(key) => key,
+                Err(status) => return status,
+            };
+            let value = {
+                let Some(value) = caller.data().properties.get(&key) else {
+                    return STATUS_NOT_FOUND;
+                };
+                let allocation = match key_allocation.add_bytes(value.len()) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+                if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                    return status;
+                }
+                match try_clone_string(value) {
+                    Ok(value) => value,
+                    Err(status) => return status,
+                }
+            };
+            write_to_guest(&mut caller, value.as_bytes(), ret_ptr, ret_size)
         },
     )?;
 
@@ -1349,26 +2043,42 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_SET_PROPERTY,
         |mut caller: Caller<'_, HostState>, pp: i32, pl: i32, vp: i32, vl: i32| -> i32 {
-            let raw = match read_guest(&mut caller, pp, pl) {
-                Ok(b) => b,
-                Err(s) => return s,
+            let path_profile = match profile_property_path(&mut caller, pp, pl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
             };
-            let key = raw
-                .split(|b| *b == 0)
-                .filter(|s| !s.is_empty())
-                .map(|s| String::from_utf8_lossy(s).into_owned())
-                .collect::<Vec<_>>()
-                .join(".");
-            let value = match read_guest_string(&mut caller, vp, vl) {
-                Ok(v) => v,
-                Err(s) => return s,
+            let value_profile = match profile_guest_string(&mut caller, vp, vl) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let allocation = match AllocationProfile::default()
+                .add_bytes(path_profile.decoded_len)
+                .and_then(|profile| profile.add_bytes(value_profile.decoded_len))
+                .and_then(|profile| profile.add_bytes(conservative_hash_table_allocation::<(String, String)>(1)?.bytes))
+            {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            if let Err(status) = caller.data().check_transient_allocation(allocation) {
+                return status;
+            }
+            let checked_charge = match caller.data().checked_abi_charge(allocation.bytes) {
+                Ok(charge) => charge,
+                Err(status) => return status,
+            };
+            let key = match decode_property_path(&mut caller, &path_profile) {
+                Ok(key) => key,
+                Err(status) => return status,
+            };
+            let value = match decode_profiled_guest_string(&mut caller, &value_profile) {
+                Ok(value) => value,
+                Err(status) => return status,
             };
             let state = caller.data_mut();
-            // Distinct guest-generated keys grow `properties` unboundedly.
-            // Charge before inserting so a rejected set does not grow the map.
-            if let Err(s) = state.charge_abi(key.len() + value.len()) {
-                return s;
+            if !state.properties.contains_key(&key) && state.properties.try_reserve(1).is_err() {
+                return STATUS_INTERNAL_FAILURE;
             }
+            state.commit_abi_charge(checked_charge);
             state.properties.insert(key, value);
             STATUS_OK
         },
@@ -1404,9 +2114,23 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
          ret_value_size: i32,
          ret_cas_ptr: i32|
          -> i32 {
-            let key = match read_guest_string(&mut caller, key_ptr, key_size) {
-                Ok(k) => k,
-                Err(s) => return s,
+            let key_profile = match profile_guest_string(&mut caller, key_ptr, key_size) {
+                Ok(profile) => profile,
+                Err(status) => return status,
+            };
+            let allocation = match AllocationProfile::default()
+                .add_bytes(key_profile.decoded_len)
+                .and_then(|profile| profile.add_bytes(MAX_SHARED_VALUE_BYTES))
+            {
+                Ok(profile) => profile,
+                Err(_) => return STATUS_BAD_ARGUMENT,
+            };
+            if allocation.bytes > caller.data().allocation_limits.transient_bytes {
+                return STATUS_BAD_ARGUMENT;
+            }
+            let key = match decode_profiled_guest_string(&mut caller, &key_profile) {
+                Ok(key) => key,
+                Err(status) => return status,
             };
             let Some((value, cas)) = caller.data().shared_data.get(&key) else {
                 return STATUS_NOT_FOUND;
@@ -1435,20 +2159,51 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
          value_size: i32,
          cas: i32|
          -> i32 {
-            let key = match read_guest_string(&mut caller, key_ptr, key_size) {
-                Ok(k) => k,
-                Err(s) => return s,
+            let key_profile = match profile_guest_string(&mut caller, key_ptr, key_size) {
+                Ok(profile) => profile,
+                Err(status) => return status,
             };
-            // Null value = delete (proxy-wasm convention).
-            let value = if value_ptr == 0 && value_size == 0 {
+            // Null value means delete. A non-null pointer with a zero size is
+            // an ordinary empty-value write and still validates its range.
+            let value_profile = if value_ptr == 0 && value_size == 0 {
                 None
             } else {
-                match read_guest(&mut caller, value_ptr, value_size) {
-                    Ok(v) => Some(v),
-                    Err(s) => return s,
+                let profile = match profile_guest_range(&mut caller, value_ptr, value_size) {
+                    Ok(profile) => profile,
+                    Err(status) => return status,
+                };
+                // Preserve precedence: validate the guest range before the
+                // shared-data 64 KiB semantic cap.
+                if profile.len() > MAX_SHARED_VALUE_BYTES {
+                    return STATUS_BAD_ARGUMENT;
                 }
+                Some(profile)
             };
-            use super::shared_data::SharedDataError;
+            let value_len = value_profile.as_ref().map_or(0, GuestRangeProfile::len);
+            let allocation = match AllocationProfile::default()
+                // The SharedData map clones the decoded key on insertion.
+                .add_bytes(key_profile.decoded_len)
+                .and_then(|profile| profile.add_bytes(key_profile.decoded_len))
+                .and_then(|profile| profile.add_bytes(value_len))
+                .and_then(|profile| profile.add_bytes(ENTRY_OVERHEAD_BYTES))
+            {
+                Ok(profile) => profile,
+                Err(_) => return STATUS_BAD_ARGUMENT,
+            };
+            if allocation.bytes > caller.data().allocation_limits.transient_bytes {
+                return STATUS_BAD_ARGUMENT;
+            }
+            let key = match decode_profiled_guest_string(&mut caller, &key_profile) {
+                Ok(key) => key,
+                Err(status) => return status,
+            };
+            let value = match &value_profile {
+                Some(profile) => match copy_profiled_guest(&mut caller, profile) {
+                    Ok(value) => Some(value),
+                    Err(status) => return status,
+                },
+                None => None,
+            };
             match caller.data().shared_data.set(&key, value, cas as u32) {
                 Ok(()) => STATUS_OK,
                 Err(SharedDataError::CasMismatch) => STATUS_CAS_MISMATCH,
@@ -1531,7 +2286,7 @@ fn linker_value_type(value: WasmValueType) -> ValType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::http::wasm::shared_data::SharedData;
+    use crate::plugins::http::wasm::shared_data::{SharedData, MAX_SHARED_TOTAL_BYTES};
     use edgion_wasm::HostFunction;
     use wasmtime::{Engine, Instance, Module, Store};
 
@@ -2383,5 +3138,447 @@ mod tests {
             f.call(&mut store, (BUF_HTTP_RESPONSE_BODY, 0, 0, 0, 0)).unwrap(),
             STATUS_UNIMPLEMENTED
         );
+    }
+
+    const ALLOCATION_PREFLIGHT_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_log"
+        (func $log (param i32 i32 i32) (result i32)))
+      (import "env" "proxy_replace_header_map_value"
+        (func $replace (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_set_header_map_pairs"
+        (func $set_pairs (param i32 i32 i32) (result i32)))
+      (import "env" "proxy_send_local_response"
+        (func $local (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_set_property"
+        (func $set_property (param i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_set_shared_data"
+        (func $set_shared (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 4)
+      (global $heap (mut i32) (i32.const 196608))
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32)
+        (local $ptr i32)
+        global.get $heap
+        local.set $ptr
+        global.get $heap
+        local.get 0
+        i32.add
+        global.set $heap
+        local.get $ptr)
+      (func (export "log") (param i32 i32) (result i32)
+        (call $log (i32.const 1) (local.get 0) (local.get 1)))
+      (func (export "replace") (param i32 i32 i32 i32 i32) (result i32)
+        (call $replace (local.get 0) (local.get 1) (local.get 2)
+                       (local.get 3) (local.get 4)))
+      (func (export "set_pairs") (param i32 i32 i32) (result i32)
+        (call $set_pairs (local.get 0) (local.get 1) (local.get 2)))
+      (func (export "local") (param i32 i32 i32 i32 i32) (result i32)
+        (call $local (local.get 0) (i32.const 0) (i32.const 0)
+                     (local.get 1) (local.get 2) (local.get 3) (local.get 4)
+                     (i32.const 0)))
+      (func (export "set_property") (param i32 i32 i32 i32) (result i32)
+        (call $set_property (local.get 0) (local.get 1)
+                            (local.get 2) (local.get 3)))
+      (func (export "set_shared") (param i32 i32 i32 i32 i32) (result i32)
+        (call $set_shared (local.get 0) (local.get 1) (local.get 2)
+                          (local.get 3) (local.get 4)))
+    )
+    "#;
+
+    fn instantiate_allocation_guest() -> (Store<HostState>, Instance) {
+        instantiate_guest(ALLOCATION_PREFLIGHT_GUEST)
+    }
+
+    fn set_test_allocation_limits(store: &mut Store<HostState>, transient_bytes: usize, retained_bytes: usize) {
+        store.data_mut().allocation_limits = AbiAllocationLimits {
+            transient_bytes,
+            retained_bytes,
+            retained_ops: 16,
+        };
+    }
+
+    fn write_guest(instance: &Instance, store: &mut Store<HostState>, offset: usize, bytes: &[u8]) {
+        instance
+            .get_memory(&mut *store, "memory")
+            .expect("guest memory")
+            .write(store, offset, bytes)
+            .expect("guest write");
+    }
+
+    #[test]
+    fn allocation_profiles_enforce_exact_boundaries_and_utf8_expansion() {
+        let profile = AllocationProfile::default().add_bytes(17).unwrap();
+        assert_eq!(profile.checked_against(17, STATUS_INTERNAL_FAILURE), Ok(profile));
+        assert_eq!(
+            profile.checked_against(16, STATUS_INTERNAL_FAILURE),
+            Err(STATUS_INTERNAL_FAILURE)
+        );
+
+        let invalid = [0xFF, b'x', 0xF0, 0x80, 0x80, 0x80];
+        assert_eq!(lossy_utf8_output_len(&invalid), Ok(16));
+        let encoded = encode_raw_map(&[(&invalid, b"v")]);
+        let map = scan_serialized_map(&encoded).unwrap();
+        let allocation = decoded_map_allocation(map).unwrap();
+        assert_eq!(allocation.bytes, 17 + size_of::<(String, String)>());
+    }
+
+    #[test]
+    fn log_preflight_rejection_has_no_partial_state_or_accounting() {
+        let (mut store, instance) = instantiate_allocation_guest();
+        write_guest(&instance, &mut store, 0, b"abc");
+        let log = instance.get_typed_func::<(i32, i32), i32>(&mut store, "log").unwrap();
+
+        let allocation = 3 + size_of::<(i32, String)>();
+        set_test_allocation_limits(&mut store, allocation, allocation + ABI_OP_OVERHEAD_BYTES);
+        assert_eq!(log.call(&mut store, (0, 3)).unwrap(), STATUS_OK);
+        let charged = store.data().retained_bytes;
+        assert_eq!(charged, allocation + ABI_OP_OVERHEAD_BYTES);
+        assert_eq!(store.data().log_lines.len(), 1);
+        assert_eq!(log.call(&mut store, (0, 3)).unwrap(), STATUS_INTERNAL_FAILURE);
+        assert_eq!(store.data().retained_bytes, charged);
+        assert_eq!(store.data().retained_ops, 1);
+        assert_eq!(store.data().log_lines.len(), 1);
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        write_guest(&instance, &mut store, 0, b"abc");
+        let log = instance.get_typed_func::<(i32, i32), i32>(&mut store, "log").unwrap();
+        set_test_allocation_limits(&mut store, 2, usize::MAX);
+        assert_eq!(log.call(&mut store, (0, 3)).unwrap(), STATUS_INTERNAL_FAILURE);
+        assert!(store.data().log_lines.is_empty());
+        assert_eq!(store.data().retained_bytes, 0);
+        assert_eq!(store.data().retained_ops, 0);
+    }
+
+    #[test]
+    fn replace_all_profiles_structure_and_keeps_first_header_spelling() {
+        let existing = vec![
+            ("First".to_string(), "1".to_string()),
+            ("FIRST".to_string(), "2".to_string()),
+            ("Second".to_string(), "3".to_string()),
+            ("second".to_string(), "4".to_string()),
+        ];
+        assert_eq!(collect_header_removals(&existing).unwrap(), vec!["First", "Second"]);
+
+        let encoded = encode_raw_map(&[(b"new", b"value")]);
+        let map_profile = scan_serialized_map(&encoded).unwrap();
+        let base = decoded_map_allocation(map_profile).unwrap().repeated(2).unwrap();
+        let (removal_retained, removal_transient) = header_removal_profiles(&existing).unwrap();
+        let pending_growth = vector_growth_allocation::<HeaderOp>(0, 0, 1).unwrap();
+        let retained = base
+            .add_bytes(removal_retained.bytes)
+            .and_then(|profile| profile.add_bytes(pending_growth.bytes))
+            .unwrap();
+        let transient = base
+            .add_bytes(removal_transient.bytes)
+            .and_then(|profile| profile.add_bytes(pending_growth.bytes))
+            .unwrap();
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        store.data_mut().request_headers = existing.clone();
+        write_guest(&instance, &mut store, 0, &encoded);
+        set_test_allocation_limits(&mut store, transient.bytes, retained.bytes + ABI_OP_OVERHEAD_BYTES);
+        let set_pairs = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "set_pairs")
+            .unwrap();
+        assert_eq!(
+            set_pairs
+                .call(&mut store, (MAP_HTTP_REQUEST_HEADERS, 0, encoded.len() as i32))
+                .unwrap(),
+            STATUS_OK
+        );
+        assert_eq!(
+            store.data().request_headers,
+            vec![("new".to_string(), "value".to_string())]
+        );
+        assert!(matches!(
+            store.data().pending_ops.as_slice(),
+            [HeaderOp::ReplaceAll { remove, .. }] if remove == &["First", "Second"]
+        ));
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        store.data_mut().request_headers = existing.clone();
+        write_guest(&instance, &mut store, 0, &encoded);
+        set_test_allocation_limits(&mut store, transient.bytes - 1, usize::MAX);
+        let set_pairs = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "set_pairs")
+            .unwrap();
+        assert_eq!(
+            set_pairs
+                .call(&mut store, (MAP_HTTP_REQUEST_HEADERS, 0, encoded.len() as i32))
+                .unwrap(),
+            STATUS_INTERNAL_FAILURE
+        );
+        assert_eq!(store.data().request_headers, existing);
+        assert!(store.data().pending_ops.is_empty());
+        assert_eq!(store.data().retained_bytes, 0);
+        assert_eq!(store.data().retained_ops, 0);
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        store.data_mut().request_headers = vec![("kept".to_string(), "value".to_string())];
+        write_guest(&instance, &mut store, 0, &encoded);
+        let set_pairs = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "set_pairs")
+            .unwrap();
+        assert_eq!(
+            set_pairs.call(&mut store, (99, 0, encoded.len() as i32)).unwrap(),
+            STATUS_BAD_ARGUMENT
+        );
+        let malformed = [0xFF, 0xFF, 0xFF, 0xFF];
+        write_guest(&instance, &mut store, 64, &malformed);
+        assert_eq!(
+            set_pairs
+                .call(&mut store, (MAP_HTTP_REQUEST_HEADERS, 64, malformed.len() as i32),)
+                .unwrap(),
+            STATUS_BAD_ARGUMENT
+        );
+        assert_eq!(
+            store.data().request_headers,
+            vec![("kept".to_string(), "value".to_string())]
+        );
+        assert!(store.data().pending_ops.is_empty());
+        assert_eq!(store.data().retained_bytes, 0);
+        assert_eq!(store.data().retained_ops, 0);
+    }
+
+    #[test]
+    fn high_segment_property_uses_exact_single_string_profile() {
+        let (mut store, instance) = instantiate_allocation_guest();
+        let mut path = Vec::new();
+        for index in 0..2048 {
+            if index != 0 {
+                path.push(0);
+            }
+            path.push(if index == 1024 { 0xFF } else { b'a' });
+        }
+        let decoded_len = path.len() + 2;
+        let value = b"v";
+        write_guest(&instance, &mut store, 0, &path);
+        write_guest(&instance, &mut store, 8192, value);
+        let structural = conservative_hash_table_allocation::<(String, String)>(1).unwrap().bytes;
+        let allocation = decoded_len + value.len() + structural;
+        set_test_allocation_limits(&mut store, allocation, allocation + ABI_OP_OVERHEAD_BYTES);
+        let set_property = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "set_property")
+            .unwrap();
+        assert_eq!(
+            set_property
+                .call(&mut store, (0, path.len() as i32, 8192, value.len() as i32))
+                .unwrap(),
+            STATUS_OK
+        );
+        assert_eq!(store.data().properties.len(), 1);
+        let key = store.data().properties.keys().next().unwrap();
+        assert_eq!(key.len(), decoded_len);
+        assert!(key.contains('\u{FFFD}'));
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        write_guest(&instance, &mut store, 0, &path);
+        write_guest(&instance, &mut store, 8192, value);
+        set_test_allocation_limits(&mut store, allocation - 1, usize::MAX);
+        let set_property = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "set_property")
+            .unwrap();
+        assert_eq!(
+            set_property
+                .call(&mut store, (0, path.len() as i32, 8192, value.len() as i32))
+                .unwrap(),
+            STATUS_INTERNAL_FAILURE
+        );
+        assert!(store.data().properties.is_empty());
+        assert_eq!(store.data().retained_bytes, 0);
+        assert_eq!(store.data().retained_ops, 0);
+    }
+
+    #[test]
+    fn local_response_preflight_is_atomic_and_keeps_compatibility_precedence() {
+        let body = b"body";
+        let headers = encode_raw_map(&[(b"x-test", b"yes")]);
+        let header_allocation = decoded_map_allocation(scan_serialized_map(&headers).unwrap())
+            .unwrap()
+            .bytes;
+        let allocation = body.len() + header_allocation;
+        let (mut store, instance) = instantiate_allocation_guest();
+        write_guest(&instance, &mut store, 0, body);
+        write_guest(&instance, &mut store, 64, &headers);
+        set_test_allocation_limits(&mut store, allocation, usize::MAX);
+        let local = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "local")
+            .unwrap();
+        assert_eq!(
+            local
+                .call(&mut store, (418, 0, body.len() as i32, 64, headers.len() as i32))
+                .unwrap(),
+            STATUS_OK
+        );
+        let accepted = store.data().local_response.clone().unwrap();
+        assert_eq!(accepted.body, body);
+        assert_eq!(accepted.headers, vec![("x-test".to_string(), "yes".to_string())]);
+
+        set_test_allocation_limits(&mut store, allocation - 1, usize::MAX);
+        assert_eq!(
+            local
+                .call(&mut store, (500, 0, body.len() as i32, 64, headers.len() as i32))
+                .unwrap(),
+            STATUS_INTERNAL_FAILURE
+        );
+        assert_eq!(store.data().local_response.as_ref().unwrap().status, accepted.status);
+        assert_eq!(store.data().local_response.as_ref().unwrap().body, accepted.body);
+        assert_eq!(store.data().local_response.as_ref().unwrap().headers, accepted.headers);
+
+        let malformed = [0xFF, 0xFF, 0xFF, 0xFF];
+        write_guest(&instance, &mut store, 128, &malformed);
+        let existing_allocation = local_response_allocation(store.data().local_response.as_ref().unwrap())
+            .unwrap()
+            .bytes;
+        set_test_allocation_limits(&mut store, existing_allocation, usize::MAX);
+        assert_eq!(
+            local
+                .call(&mut store, (204, i32::MAX, 0, 128, malformed.len() as i32))
+                .unwrap(),
+            STATUS_OK,
+            "nonpositive body ignores its pointer and malformed headers become empty"
+        );
+        assert!(store.data().local_response.as_ref().unwrap().body.is_empty());
+        assert!(store.data().local_response.as_ref().unwrap().headers.is_empty());
+        assert_eq!(
+            local.call(&mut store, (204, 300_000, 1, 300_000, 1)).unwrap(),
+            STATUS_INVALID_MEMORY_ACCESS,
+            "positive body validation remains first"
+        );
+    }
+
+    fn local_response_with_spare_capacity() -> LocalResponse {
+        let mut body = Vec::with_capacity(32);
+        body.extend_from_slice(b"old");
+        let mut name = String::with_capacity(16);
+        name.push_str("x-old");
+        let mut value = String::with_capacity(24);
+        value.push_str("present");
+        let mut headers = Vec::with_capacity(4);
+        headers.push((name, value));
+        LocalResponse {
+            status: 409,
+            body,
+            headers,
+        }
+    }
+
+    #[test]
+    fn local_response_replacement_profiles_old_and_candidate_peak() {
+        let candidate_body = b"new-body";
+        let candidate_headers = encode_raw_map(&[(b"x-new", b"accepted")]);
+        let candidate_allocation = AllocationProfile::default()
+            .add_bytes(candidate_body.len())
+            .and_then(|profile| {
+                profile.add_bytes(
+                    decoded_map_allocation(scan_serialized_map(&candidate_headers).unwrap())
+                        .unwrap()
+                        .bytes,
+                )
+            })
+            .unwrap();
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        store.data_mut().local_response = Some(local_response_with_spare_capacity());
+        let old_allocation = local_response_allocation(store.data().local_response.as_ref().unwrap()).unwrap();
+        let exact_peak = old_allocation.add_bytes(candidate_allocation.bytes).unwrap().bytes;
+        write_guest(&instance, &mut store, 0, candidate_body);
+        write_guest(&instance, &mut store, 64, &candidate_headers);
+        set_test_allocation_limits(&mut store, exact_peak, usize::MAX);
+        let local = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "local")
+            .unwrap();
+        assert_eq!(
+            local
+                .call(
+                    &mut store,
+                    (201, 0, candidate_body.len() as i32, 64, candidate_headers.len() as i32,),
+                )
+                .unwrap(),
+            STATUS_OK
+        );
+        assert_eq!(store.data().local_response.as_ref().unwrap().body, candidate_body);
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        store.data_mut().local_response = Some(local_response_with_spare_capacity());
+        let preserved_allocation = local_response_allocation(store.data().local_response.as_ref().unwrap()).unwrap();
+        let rejected_peak = preserved_allocation
+            .add_bytes(candidate_allocation.bytes)
+            .unwrap()
+            .bytes;
+        store.data_mut().retained_bytes = 123;
+        store.data_mut().retained_ops = 2;
+        write_guest(&instance, &mut store, 0, candidate_body);
+        write_guest(&instance, &mut store, 64, &candidate_headers);
+        set_test_allocation_limits(&mut store, rejected_peak - 1, usize::MAX);
+        let local = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "local")
+            .unwrap();
+        assert_eq!(
+            local
+                .call(
+                    &mut store,
+                    (201, 0, candidate_body.len() as i32, 64, candidate_headers.len() as i32,),
+                )
+                .unwrap(),
+            STATUS_INTERNAL_FAILURE
+        );
+        let preserved = store.data().local_response.as_ref().unwrap();
+        assert_eq!(preserved.status, 409);
+        assert_eq!(preserved.body, b"old");
+        assert_eq!(preserved.body.capacity(), 32);
+        assert_eq!(preserved.headers, vec![("x-old".to_string(), "present".to_string())]);
+        assert_eq!(preserved.headers.capacity(), 4);
+        assert_eq!(preserved.headers[0].0.capacity(), 16);
+        assert_eq!(preserved.headers[0].1.capacity(), 24);
+        assert_eq!(store.data().retained_bytes, 123);
+        assert_eq!(store.data().retained_ops, 2);
+    }
+
+    #[test]
+    fn shared_data_preflight_preserves_ranges_empty_writes_and_cas() {
+        let (mut store, instance) = instantiate_allocation_guest();
+        write_guest(&instance, &mut store, 0, b"k");
+        write_guest(&instance, &mut store, 16, b"xy");
+        let set_shared = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "set_shared")
+            .unwrap();
+
+        assert_eq!(set_shared.call(&mut store, (0, 1, 16, 0, 0)).unwrap(), STATUS_OK);
+        assert_eq!(store.data().shared_data.get("k").unwrap().0, Vec::<u8>::new());
+        assert_eq!(
+            set_shared.call(&mut store, (0, 1, 250_000, 65_537, 0)).unwrap(),
+            STATUS_INVALID_MEMORY_ACCESS,
+            "an invalid range precedes the 64 KiB value cap"
+        );
+
+        let shared = store.data().shared_data.clone();
+        shared.set("k", Some(b"x".to_vec()), 0).unwrap();
+        let target_bytes = ENTRY_OVERHEAD_BYTES + 2;
+        let filler_len = MAX_SHARED_TOTAL_BYTES - target_bytes - ENTRY_OVERHEAD_BYTES;
+        let filler = "f".repeat(filler_len);
+        shared.set(&filler, Some(Vec::new()), 0).unwrap();
+        assert_eq!(shared.total_bytes(), MAX_SHARED_TOTAL_BYTES);
+        assert_eq!(
+            set_shared.call(&mut store, (0, 1, 16, 2, 999)).unwrap(),
+            STATUS_CAS_MISMATCH,
+            "CAS mismatch remains authoritative over the total-byte cap"
+        );
+        assert_eq!(shared.get("k").unwrap().0, b"x");
+
+        let (mut store, instance) = instantiate_allocation_guest();
+        write_guest(&instance, &mut store, 0, b"k");
+        write_guest(&instance, &mut store, 16, b"v");
+        set_test_allocation_limits(&mut store, 130, usize::MAX);
+        let set_shared = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "set_shared")
+            .unwrap();
+        assert_eq!(
+            set_shared.call(&mut store, (0, 1, 16, 1, 0)).unwrap(),
+            STATUS_BAD_ARGUMENT
+        );
+        assert!(store.data().shared_data.get("k").is_none());
+        assert_eq!(store.data().retained_bytes, 0);
+        assert_eq!(store.data().retained_ops, 0);
     }
 }
