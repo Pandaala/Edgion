@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `da2567094703a53ad928698be10388b450e39e43`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned files:
   - `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs`
@@ -32,4 +32,4 @@
 - Implementation: introduced one shared immutable compiled target containing the name, lookup key, and preserved supported-kind decision; stage clones share it through `Arc`, lookup borrows the precomputed key, and prepare success is non-optional. Added a narrow zero-allocation accessor regression and corrected both composition guides without changing failure or stage behavior.
 - Independent final review: LGTM with no Must Fix. The reviewer confirmed immutable sharing, exact support predicate, infallible construction, rule/backend lookup ownership, failure/log attribution, WAF/dye/identity/streaming behavior, meaningful allocation coverage, paired docs, and `mod.rs` examined-no-change. It also confirmed D0089 as high-severity, nonduplicate, and correctly scoped.
 - Verification: 7 ExtensionRef, 36 PluginRuntime, 5 ExtensionRef-index, and 1 named smoke test passed; `cargo fmt --all`, `cargo check --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets`, and the locked Gateway binary build passed. Agent-doc, SSA, metrics-inventory, Pingora-source, Gateway no-tracing, English-only, diff, and frozen-path guards passed.
-- Commit: pending.
+- Commit: `2cae2cfc`.

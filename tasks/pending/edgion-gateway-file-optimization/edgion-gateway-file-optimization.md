@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0126 is commit-ready after implementation, independent review, and all required gates |
-| Coverage | 538 current tracked files: 147 changed, 149 examined-no-change, 11 deferred, 231 non-terminal; 3 historical rows are removed |
-| Active batch | B0126 Gateway API ExtensionRef/root; commit-ready at `da256709` |
-| Analysis queue | B0127 header modifiers and B0128 redirect/rewrite are analysis-ready at `da256709`; two externally added Gateway files remain pending; D0074–D0093 retain their separate scopes |
+| Campaign status | in-progress; B0127 passed corrected plan review, final review, and all required gates |
+| Coverage | 539 current Gateway files: 150 changed, 149 examined-no-change, 11 deferred, 229 non-terminal; 3 historical rows are removed |
+| Active batch | B0127 Gateway API header modifiers; commit-ready at `2cae2cfc` |
+| Analysis queue | B0128 redirect/rewrite, B0129 bounded plugin-runtime formatting, and B0130 runtime façade are analysis-ready; two externally added Gateway files remain pending; D0074–D0094 retain their separate scopes |
 | Integration freeze | Refreshed at external HEAD `6ab45e17`: 3,084 tracked `edgion-tests` files, including six externally changed BasicAuth/integration-runner fingerprints from `f3b346fd` and `6ab45e17`; no campaign integration-test edit occurred |
 
 ## AI guide summary

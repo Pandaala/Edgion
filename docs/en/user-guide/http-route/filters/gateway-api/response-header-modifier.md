@@ -26,7 +26,7 @@ filters:
 | `add` | Array\<Object\> | none | Each entry `{name, value}` appends a value, keeping existing values |
 | `remove` | Array\<String\> | none | Header names to delete from the response |
 
-The three operations are applied in order: `set`, then `add`, then `remove`.
+The three operations are applied in order: `set`, then `add`, then `remove`. Gateway API configuration allows only one action for each case-insensitive header name, so equivalent names cannot be repeated within a list or used across multiple lists.
 
 ## Examples
 
@@ -63,7 +63,7 @@ spec:
 
 ### Example 2: Multi-value headers with add
 
-`add` appends without removing existing values, so the response below carries both `Vary` values from the upstream and the gateway.
+`add` appends without removing existing values. If the upstream response contains `Vary: Accept-Encoding`, the example below returns both `Vary: Accept-Encoding` and the gateway-added `Vary: Origin` to the client.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -84,8 +84,6 @@ spec:
           responseHeaderModifier:
             add:
               - name: Vary
-                value: Accept-Encoding
-              - name: Vary
                 value: Origin
       backendRefs:
         - name: backend-service
@@ -95,6 +93,8 @@ spec:
 ## Notes
 
 - Header names are case-insensitive.
+- Supported Gateway API configuration assigns each case-insensitive header name to exactly one action and contains no equivalent duplicate names.
+- **Defensive behavior for invalid input:** if a non-admission source supplies duplicates, the Gateway keeps only the first case-insensitive equivalent entry within each of `set`, `add`, and `remove`, then applies the lists in `set` → `add` → `remove` order. This fallback does not make duplicate or cross-action names supported configuration.
 - Values are treated as literals; no variable expansion is performed.
 - This filter runs in the response stage; to modify request headers use [RequestHeaderModifier](./request-header-modifier.md).
 - For status-code rewriting or richer response transformations, see the [ResponseRewrite plugin](../edgion-plugins/response-rewrite.md).

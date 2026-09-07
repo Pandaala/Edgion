@@ -26,7 +26,7 @@ filters:
 | `add` | Array\<Object\> | none | Each entry `{name, value}` appends a value, keeping existing values |
 | `remove` | Array\<String\> | none | Header names to delete from the request |
 
-The three operations are applied in order: `set`, then `add`, then `remove`.
+The three operations are applied in order: `set`, then `add`, then `remove`. Gateway API configuration allows only one action for each case-insensitive header name, so equivalent names cannot be repeated within a list or used across multiple lists.
 
 ## Examples
 
@@ -61,9 +61,9 @@ spec:
           port: 8080
 ```
 
-### Example 2: Multi-value headers with set vs add
+### Example 2: Append to an existing multi-value header
 
-`set` replaces the header entirely; `add` appends. The example below results in a single `Accept-Encoding: gzip` (replaced) and two `X-Trace` values (appended).
+`set` replaces a header entirely, while `add` preserves values already present on the incoming request. If the client sends `X-Trace: client`, the example below forwards both `X-Trace: client` and `X-Trace: edge` to the upstream. It also replaces any incoming `Accept-Encoding` values with the single value `gzip`.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -88,8 +88,6 @@ spec:
             add:
               - name: X-Trace
                 value: edge
-              - name: X-Trace
-                value: prod
       backendRefs:
         - name: backend-service
           port: 8080
@@ -98,6 +96,8 @@ spec:
 ## Notes
 
 - Header names are case-insensitive.
+- Supported Gateway API configuration assigns each case-insensitive header name to exactly one action and contains no equivalent duplicate names.
+- **Defensive behavior for invalid input:** if a non-admission source supplies duplicates, the Gateway keeps only the first case-insensitive equivalent entry within each of `set`, `add`, and `remove`, then applies the lists in `set` → `add` → `remove` order. This fallback does not make duplicate or cross-action names supported configuration.
 - Values are treated as literals; path parameters (`:name`) and template variables are **not** expanded here. If you need dynamic substitution, use the [ProxyRewrite plugin](../edgion-plugins/proxy-rewrite.md).
 - To modify response headers instead, use [ResponseHeaderModifier](./response-header-modifier.md).
 

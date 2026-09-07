@@ -137,7 +137,7 @@
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 1 | 0 | complete |
-| `plugins-runtime` | 34 | 9 | 3 | 1 | pending |
+| `plugins-runtime` | 35 | 12 | 3 | 1 | pending |
 | `plugins-stream` | 18 | 3 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
@@ -527,13 +527,14 @@
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | changed | B0124: bounded inline CORS header pairs and validated-only construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | changed | B0125: suppress raw Wrap-mode client exposure before snapshot construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | changed | B0126: shared precomputed ExtensionRef target and non-optional prepare success |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/header_modifier.rs` | `plugins-runtime` | source | changed | B0127: shared construction-time first-equivalent header plan |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | examined-no-change | B0126: minimal Gateway API filter façade retained |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_header_modifier.rs` | `plugins-runtime` | source | analysis-ready | B0127 |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_header_modifier.rs` | `plugins-runtime` | source | changed | B0127: borrowed prepared request-header operations with append/error regressions |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_redirect.rs` | `plugins-runtime` | source | analysis-ready | B0128 |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/response_header_modifier.rs` | `plugins-runtime` | source | analysis-ready | B0127 |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/response_header_modifier.rs` | `plugins-runtime` | source | changed | B0127: borrowed prepared response-header operations with append/error regressions |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | analysis-ready | B0128 |
-| `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | analysis-ready | B0129 |
+| `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | analysis-ready | B0130 |
 | `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | B0121 condition-publication support; full audit pending |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | pending | — |

@@ -26,7 +26,7 @@ filters:
 | `add` | Array\<Object\> | 无 | 每条 `{name, value}` 追加一个值，保留已有值 |
 | `remove` | Array\<String\> | 无 | 从请求中删除的请求头名称列表 |
 
-三个操作按顺序应用：`set`，然后 `add`，然后 `remove`。
+三个操作按顺序应用：`set`，然后 `add`，然后 `remove`。Gateway API 配置要求每个不区分大小写的请求头名称只能执行一种操作，因此同等名称不能在一个列表中重复，也不能跨多个列表使用。
 
 ## 示例
 
@@ -61,9 +61,9 @@ spec:
           port: 8080
 ```
 
-### 示例 2：多值请求头中 set 与 add 的区别
+### 示例 2：向已有的多值请求头追加值
 
-`set` 完全替换请求头；`add` 追加值。以下示例的结果是单个 `Accept-Encoding: gzip`（已替换）和两个 `X-Trace` 值（已追加）。
+`set` 完全替换请求头，而 `add` 保留传入请求中已有的值。如果客户端发送 `X-Trace: client`，以下示例会向上游转发 `X-Trace: client` 和 `X-Trace: edge`。任何传入的 `Accept-Encoding` 值也会被替换为单个值 `gzip`。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -88,8 +88,6 @@ spec:
             add:
               - name: X-Trace
                 value: edge
-              - name: X-Trace
-                value: prod
       backendRefs:
         - name: backend-service
           port: 8080
@@ -98,6 +96,8 @@ spec:
 ## 注意事项
 
 - 请求头名称不区分大小写。
+- 受支持的 Gateway API 配置会将每个不区分大小写的请求头名称分配给恰好一种操作，并且不包含同等名称的重复项。
+- **无效输入的防御性行为：**如果非准入来源提供了重复项，网关会在 `set`、`add` 和 `remove` 各列表中仅保留第一个不区分大小写的同等项，然后按 `set` → `add` → `remove` 的顺序应用这些列表。此回退行为并不代表支持包含重复名称或跨操作同名项的配置。
 - 值按字面量处理；路径参数（`:name`）和模板变量**不会**在此展开。如需动态替换，请使用 [ProxyRewrite 插件](../edgion-plugins/proxy-rewrite.md)。
 - 如需修改响应头，请使用 [ResponseHeaderModifier](./response-header-modifier.md)。
 

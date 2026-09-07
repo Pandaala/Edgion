@@ -26,7 +26,7 @@ filters:
 | `add` | Array\<Object\> | 无 | 每条 `{name, value}` 追加一个值，保留已有值 |
 | `remove` | Array\<String\> | 无 | 从响应中删除的响应头名称列表 |
 
-三个操作按顺序应用：`set`，然后 `add`，然后 `remove`。
+三个操作按顺序应用：`set`，然后 `add`，然后 `remove`。Gateway API 配置要求每个不区分大小写的响应头名称只能执行一种操作，因此同等名称不能在一个列表中重复，也不能跨多个列表使用。
 
 ## 示例
 
@@ -63,7 +63,7 @@ spec:
 
 ### 示例 2：多值响应头与 add
 
-`add` 在不移除已有值的情况下追加，因此下面的响应会同时携带来自上游和网关的两个 `Vary` 值。
+`add` 在不移除已有值的情况下追加。如果上游响应包含 `Vary: Accept-Encoding`，以下示例会向客户端返回 `Vary: Accept-Encoding` 和网关追加的 `Vary: Origin`。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -84,8 +84,6 @@ spec:
           responseHeaderModifier:
             add:
               - name: Vary
-                value: Accept-Encoding
-              - name: Vary
                 value: Origin
       backendRefs:
         - name: backend-service
@@ -95,6 +93,8 @@ spec:
 ## 注意事项
 
 - 响应头名称不区分大小写。
+- 受支持的 Gateway API 配置会将每个不区分大小写的响应头名称分配给恰好一种操作，并且不包含同等名称的重复项。
+- **无效输入的防御性行为：**如果非准入来源提供了重复项，网关会在 `set`、`add` 和 `remove` 各列表中仅保留第一个不区分大小写的同等项，然后按 `set` → `add` → `remove` 的顺序应用这些列表。此回退行为并不代表支持包含重复名称或跨操作同名项的配置。
 - 值按字面量处理，不进行变量展开。
 - 本过滤器在响应阶段运行；如需修改请求头，请使用 [RequestHeaderModifier](./request-header-modifier.md)。
 - 如需重写状态码或进行更丰富的响应转换，请参阅 [ResponseRewrite 插件](../edgion-plugins/response-rewrite.md)。

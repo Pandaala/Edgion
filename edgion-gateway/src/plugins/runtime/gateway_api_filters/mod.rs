@@ -5,6 +5,7 @@
 pub mod cors_filter;
 pub mod debug_access_log;
 pub mod extension_ref;
+mod header_modifier;
 pub mod request_header_modifier;
 pub mod request_redirect;
 pub mod response_header_modifier;
