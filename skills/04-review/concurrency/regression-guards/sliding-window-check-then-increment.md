@@ -1,28 +1,31 @@
 ---
 name: sliding-window-check-then-increment
-description: SlidingWindowCounter::try_acquire (webhook rate limiter) now decides and increments atomically via a compare_exchange retry loop, so concurrent webhook callers cannot over-admit past the window limit. Reject re-reports claiming the check-then-fetch_add gap allows bursts over the limit.
+description: SlidingWindowCounter admission CAS closes the fixed-epoch check/increment gap; it does not establish coherent window rotation.
 knowledge_type: regression-guards
 ---
 
-# link-sys F-006 — `SlidingWindowCounter::try_acquire` decide+increment is now atomic via CAS retry
+# Webhook admission CAS: fixed-epoch correction and rotation limits
 
-**Status:** ✅ fixed · 2026-05-25
-**Severity:** Low (BadLogic) — concurrent webhook callers could admit a few requests over the configured window limit
+## Conclusion and scope
 
-## Conclusion
+The historical `link-sys-F006` fix (2026-05-25, Low severity) replaced the
+separate admission check and `current.fetch_add(1)` in
+`SlidingWindowCounter::try_acquire` with a `compare_exchange_weak` retry loop.
+Current source in `edgion-gateway/src/link_sys/providers/webhook/runtime.rs`
+retains that loop. Within a fixed epoch it closes the original check/increment
+gap; it does not prove correctness across rotation.
 
-`SlidingWindowCounter::try_acquire`
-(`edgion-gateway/src/link_sys/providers/webhook/runtime.rs`) previously did the
-rate-limit decision as two non-atomic atomic ops: it loaded `current`, computed
-`estimated` and compared it to `limit`, then — in a separate step — called
-`self.current.fetch_add(1)`. Between the check and the increment there was no
-serialization, so N concurrent async webhook-call tasks could all read the same
-sub-limit `estimated`, all pass the check, and all increment, admitting up to N
-requests when only 1 permit remained (over-admission bounded by the number of
-concurrent callers).
+The historical assertion that timestamp-first rotation was "already correct"
+was too broad. The current implementation publishes `window_start` before
+`current.swap(0)` and `previous.store`. A paused rotator can move a new-window
+increment into previous, and a reader caches `prev`/`ratio` outside the CAS loop.
+This remains a real unresolved defect, tracked in
+[webhook-sliding-window-epoch-coherence](../../../../tasks/todo/webhook-sliding-window-epoch-coherence.md).
+The retry-budget fix does not modify this Webhook limiter.
 
-The decision and the increment are now fused into a single
-`compare_exchange_weak` retry loop:
+## Rationale and evidence
+
+The current fixed-epoch admission loop is:
 
 ```rust
 let prev = self.previous.load(Ordering::Acquire) as f64;
@@ -42,70 +45,42 @@ loop {
 }
 ```
 
-The increment only commits when `current` is unchanged since the read; on
-contention the CAS fails and the loop re-reads, so concurrent callers serialize
-on the counter and the limit holds exactly. The window-rotation CAS (the
-`compare_exchange` on `window_start` + `swap(0)` at the top of the function) was
-already correct and is unchanged. Re-reports of the form "the check-then-`fetch_add`
-gap lets concurrent webhook calls burst over the rate limit / TOCTOU between the
-`estimated >= limit` check and the increment" are **not accepted** — verify the
-current `try_acquire` uses the `compare_exchange_weak` loop before re-reporting.
+A competing increment invalidates the CAS and forces a fresh current count.
+However, a rotation is not guaranteed to fail that CAS: the count can return to
+the same value (ABA), while the cached previous count and ratio describe another
+epoch. The historical decision to leave these values outside the loop was a
+scope limit of the original fix, not evidence that they remain coherent.
 
-## Core Rationale
+The original fix retained the pre-increment `>=` comparison and reported that
+`allows_within_limit`, `rejects_over_limit`, and `zero_limit` passed unchanged.
+Those are historical results, not fresh verification of epoch races.
 
-**1. Single-threaded semantics are byte-identical.** The fix keeps the original
-`>=` comparison against the *pre-increment* `curr`, so each existing unit test
-(`allows_within_limit`, `rejects_over_limit`, `zero_limit`) passes unchanged: the
-loop grants exactly `limit` permits per window, then rejects.
+## Alternatives and limits
 
-**2. CAS retry, not optimistic `fetch_add` + rollback.** The issue file's primary
-suggestion (optimistic `fetch_add` then conditional `fetch_sub` on rejection) was
-**not adopted**: if the window rotates (`swap(0)`) between the speculative
-`fetch_add` and the rollback `fetch_sub`, the `fetch_sub` underflows the freshly
-zeroed `current` to `u64::MAX`, rejecting every request for the rest of that
-window — a worse failure mode than the mild over-admission it fixes. The CAS loop
-has no rollback: a concurrent rotation between the `load` and the
-`compare_exchange` simply fails the CAS and the loop retries with the fresh value,
-so there is no underflow window.
+Do not replace admission with optimistic `fetch_add` followed by rejection
+`fetch_sub`: if a rotation resets the counter between them, rollback can
+underflow into `u64::MAX`. The current CAS loop avoids that rollback failure;
+it does not establish that all rotation races are closed.
 
-**3. `prev`/`ratio` stay a pre-loop snapshot.** Only the decision+increment on
-`current` was racy, so only that is wrapped in the loop. `prev` and `ratio` are
-read once before the loop exactly as the original code did — minimal scope, no
-semantic change to the sliding-window interpolation.
+The old recommendation against a Mutex concerned the small fixed-epoch
+admission correction. It is not permission to ignore the remaining epoch
+publication problem or to borrow RetryBudget's accepted soft-cap semantics for
+a Webhook rate limiter.
 
-**4. Same atomic-mutation principle as the sibling link-sys / backends fixes.**
-This is the "make the multi-step read-modify-write on a shared atomic/structure
-atomic via compare-and-swap with retry" class, identical in spirit to
-[link-sys-runtime-insert-remove-rcu](link-sys-runtime-insert-remove-rcu.md)
-(`ArcSwap::rcu`) and backends-F002 / F004 / F005.
+## Verification and re-evaluation
 
-## Fix Suggestions Not Accepted
+Current source inspection for `retry-budget-generation-and-window-coherence`
+confirmed the CAS loop and the timestamp-first rotation sequence. No new Webhook
+runtime tests or acceptance of its remaining defect are claimed here.
 
-- "Optimistic `fetch_add` then `fetch_sub` rollback on rejection" — introduces a
-  `u64` underflow at the window-rotation boundary (see Core Rationale 2). The CAS
-  loop is the rollback-free correct form.
-- "Wrap `try_acquire` in a `Mutex`" — unnecessary; the counter is a handful of
-  atomics and the CAS loop already serializes writers without blocking reads.
-
-## Re-evaluation Triggers
-
-Re-open only if:
-
-- `try_acquire` reverts to a separate check-then-`fetch_add` (reopening the
-  over-admission window), or
-- a new optimistic-`fetch_add`+`fetch_sub` variant is introduced (reopening the
-  rotation-underflow window).
-
-## Reference Cases
-
-- link-sys-F006 (review finding, `tasks/link/`, 2026-05-25)
-- [link-sys-runtime-insert-remove-rcu](link-sys-runtime-insert-remove-rcu.md) —
-  sibling link-sys atomic-mutation fix (`rcu`).
-- backends-F002 / F004 / F005 — same atomic-CAS-with-retry principle on
-  config-sync–driven shared state.
-- `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` — `SlidingWindowCounter`
-  and its only production caller `call.rs::webhook_call` (rate-limit gate).
+Re-evaluate if the check/increment gap or rollback is reintroduced, or when
+epoch publication, cached estimates, or multi-window expiry is assessed. The
+epoch-boundary trigger fired in this investigation; the linked task stays open.
 
 ## Resolution references
 
-- `link-sys-F006` — 2026-05-25.
+- `link-sys-F006` — historical fixed-epoch correction, 2026-05-25.
+- `retry-budget-generation-and-window-coherence` — narrowed the knowledge claim
+  using current code; Webhook rotation remains separately tracked.
+- [Shared-store atomic mutation](link-sys-runtime-insert-remove-rcu.md) is a
+  related mechanism, not proof of this counter's rotation correctness.

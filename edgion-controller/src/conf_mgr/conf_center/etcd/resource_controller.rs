@@ -164,6 +164,15 @@ where
                         }
                     },
                     EtcdEvent::InitDone => {
+                        if init_done {
+                            tracing::warn!(
+                                component = "etcd_resource_controller",
+                                kind = kind,
+                                "Received duplicate InitDone event, ignoring"
+                            );
+                            continue;
+                        }
+
                         let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
                         tracing::info!(
                             component = "etcd_resource_controller",

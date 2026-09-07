@@ -204,6 +204,7 @@ time = { version = "0.3", features = ["std"] }
 uuid = { version = "1.19", features = ["v4"] }
 parking_lot = "0.12"
 arc-swap = "1.8"
+portable-atomic = "1.14"
 dashmap = "6.1"
 indexmap = "2"
 smallvec = "1.15"

@@ -1220,7 +1220,11 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);
-    capture_service_effective_policy(ctx);
+    // A missing policy is also a captured result. Never recapture it after a
+    // hot reload adds a policy between attempts of this request.
+    if ctx.try_cnt == 1 {
+        capture_service_effective_policy(ctx);
+    }
 
     if ctx.upstream_start_time.is_none() {
         ctx.upstream_start_time = Some(std::time::Instant::now());
@@ -2997,6 +3001,45 @@ mod tests {
     }
 
     #[test]
+    fn service_retry_preserves_missing_policy_after_reload() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        store.full_set_policies(std::collections::HashMap::new());
+        let mut ctx = capture_service_ctx("empty-cap/svc");
+        assert!(super::retry_budget_for(&ctx).is_none());
+
+        store.full_set_policies(std::collections::HashMap::from([(
+            "empty-cap/p1".to_string(),
+            service_policy_fields("empty-cap", "p1", "svc", None, None, None, Some(100), None, None),
+        )]));
+        let live = store
+            .snapshot()
+            .get_effective(
+                &crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore::service_target(
+                    "empty-cap/svc",
+                ),
+            )
+            .and_then(|policy| policy.retry_budget.clone())
+            .expect("new policy has a budget");
+
+        // The first failure gate skips the budget, and the next attempt must
+        // preserve that absence instead of charging an unadmitted retry to it.
+        assert!(super::retry_budget_for(&ctx).is_none());
+        for _ in 0..2 {
+            super::begin_upstream_attempt(&mut ctx);
+            assert!(ctx.backend_context.as_ref().unwrap().effective_policy.is_none());
+            assert!(super::retry_budget_for(&ctx).is_none());
+        }
+        assert!(!live.try_retry(), "old request must not fund the new budget");
+
+        let later = capture_service_ctx("empty-cap/svc");
+        let captured = super::retry_budget_for(&later).expect("new request captures the new policy");
+        assert!(Arc::ptr_eq(&captured, &live));
+        assert!(captured.try_retry(), "new request funds its captured budget");
+        store.full_set_policies(std::collections::HashMap::new());
+    }
+
+    #[test]
     fn service_try_retry_uses_same_captured_budget_arc() {
         use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
 
@@ -3032,12 +3075,27 @@ mod tests {
                 None,
             ),
         )]));
+        let live = store.get_retry_budget("try-retry/svc").expect("reloaded budget");
+        assert!(!live.try_retry(), "new generation has no attempt denominator yet");
+        assert!(
+            super::retry_budget_for(&ctx).unwrap().try_retry(),
+            "the pre-reload attempt must fund the post-reload failure's retry"
+        );
         super::begin_upstream_attempt(&mut ctx);
         let on_retry = super::retry_budget_for(&ctx).expect("retry still uses capture");
         assert!(
             Arc::ptr_eq(&first, &on_retry),
             "fail-to-connect retry_budget_for must keep the first-attempt Arc"
         );
+        assert!(
+            !on_retry.try_retry(),
+            "one retry exhausts the captured 20% budget for two attempts"
+        );
+        let later = capture_service_ctx("try-retry/svc");
+        let later_budget = super::retry_budget_for(&later).unwrap();
+        assert!(Arc::ptr_eq(&live, &later_budget));
+        assert!(!Arc::ptr_eq(&first, &later_budget));
+        assert!(later_budget.try_retry(), "a new request counts into the new generation");
         store.full_set_policies(std::collections::HashMap::new());
     }
 

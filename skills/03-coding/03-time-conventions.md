@@ -10,14 +10,16 @@
 | Concern (what the value *means*) | Shape | Helper / API | Why this shape |
 |----------------------------------|-------|--------------|----------------|
 | **Operator-facing duration** (timeout / interval / ttl — "a length of time") | GEP-2257 string (`30s`, `5m`, `1h30m`, `500ms`) | `parse_duration()` / `GEP2257_PATTERN` (`edgion-resources/src/duration.rs`) | Gateway API standard; no bare numbers/decimals/`d` |
-| **Monotonic elapsed** ("how long has passed") | `std::time::Duration` from a monotonic clock | `Instant::now().saturating_duration_since(prior)` | Wall-clock skew (NTP / clock step) makes `.elapsed()` / `.duration_since()` **panic** — a panic on the data-plane hot path is a 5xx |
+| **Monotonic elapsed** ("how long has passed", including process-local retry windows) | `std::time::Duration` from a monotonic clock | `Instant::now().saturating_duration_since(prior)` | Wall-clock adjustments must not change elapsed windows; saturating subtraction also handles anomalous or reversed monotonic samples without panicking |
 | **Operator- / K8s-facing timestamp** (status `lastTransitionTime`, ACME `lastRenewalTime`/`lastFailureTime`, EndpointSlice `resolved_at` — "a point in time, persisted") | RFC3339 UTC, **second** precision, `Z`-suffixed (`2026-07-21T10:00:00Z`) | `now_rfc3339()` (`edgion-common/src/time.rs`) | Matches `metav1.Time` serialization — see below |
 | **Hot-path wire-/access-log timestamp** ("a point in time, on the fast path") | Unix epoch **millis** (`i64`) | `chrono::Utc::now().timestamp_millis()` | Cheaper to encode / index per request; deliberately diverges from the RFC3339 shape |
-| **Internal epoch math** (token/nonce expiry, rate-limit windows — never leaves the process) | `std::time::SystemTime` | `duration_since(UNIX_EPOCH)` — **never** a bare `.unwrap()`; use `.unwrap_or_default()` | Process-local; no serialized shape to honor |
+| **Internal epoch math** (comparison with a token/nonce's absolute expiry) | `std::time::SystemTime` | `duration_since(UNIX_EPOCH)` — **never** a bare `.unwrap()`; use `.unwrap_or_default()` | An absolute timestamp requires a wall-clock comparison; this is not authority to use wall time for elapsed retry windows |
 
 **Rule of thumb:** `chrono` RFC3339 for anything persisted / human- / K8s-facing;
-`std::time::SystemTime` only for internal epoch math that never crosses a process
-boundary.
+`std::time::SystemTime` for absolute epoch comparisons; monotonic time for
+elapsed windows. `RetryBudget` samples elapsed milliseconds once per public
+operation and passes that sample to both its percentage and minimum-rate windows.
+Preserve GEP-2257 millisecond precision when resolving the intervals.
 
 ## Why operator/K8s timestamps are RFC3339 seconds + `Z` (Gateway-API alignment)
 

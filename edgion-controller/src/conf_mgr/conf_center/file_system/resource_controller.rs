@@ -249,6 +249,15 @@ where
                             }
                         }
                         FileSystemEvent::InitDone => {
+                            if init_done {
+                                tracing::warn!(
+                                    component = "fs_resource_controller",
+                                    kind = kind,
+                                    "Received duplicate InitDone event, ignoring"
+                                );
+                                continue;
+                            }
+
                             let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
                             tracing::info!(
                                 component = "fs_resource_controller",
@@ -1138,16 +1147,80 @@ mod tests {
     use crate::conf_mgr::conf_center::common::{clear_runtime_invalid, store_runtime_invalid, RuntimeInvalidEnvelopes};
     use crate::conf_mgr::conf_center::file_system::path_registry::PathRegistry;
     use crate::conf_mgr::conf_center::file_system::status::FileSystemStatusHandler;
-    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ProcessorHandler};
+    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, LocalRawStore, ProcessorHandler};
+    use crate::conf_mgr::sync_runtime::ShutdownHandle;
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::prelude_resources::HTTPRoute;
     use edgion_resources::resources::http_route::HTTPRouteSpec;
     use kube::api::ObjectMeta;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::broadcast;
+    use tokio::time::timeout;
 
     struct FsNoopHandler;
     #[async_trait::async_trait]
     impl ProcessorHandler<HTTPRoute> for FsNoopHandler {}
+
+    #[tokio::test]
+    async fn duplicate_init_done_keeps_one_worker() {
+        struct InitCountingHandler(AtomicUsize);
+        #[async_trait::async_trait]
+        impl ProcessorHandler<HTTPRoute> for InitCountingHandler {
+            fn on_init_done(&self, _ctx: &HandlerContext) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = Arc::new(InitCountingHandler(AtomicUsize::new(0)));
+        let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+            "HTTPRoute",
+            100,
+            handler.clone(),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let (event_tx, event_rx) = broadcast::channel(16);
+        let shutdown = ShutdownHandle::new();
+        let controller = FileSystemResourceController::new(
+            "HTTPRoute",
+            processor.clone(),
+            tmp.path().to_path_buf(),
+            Arc::new(PathRegistry::default()),
+            event_rx,
+        )
+        .with_shutdown(shutdown.signal());
+        let mut run = Box::pin(controller.run());
+
+        event_tx.send(FileSystemEvent::Init).unwrap();
+        event_tx.send(FileSystemEvent::InitDone).unwrap();
+        assert!(futures::poll!(&mut run).is_pending());
+        // With no resources or awaits in the init sequence, this poll drains
+        // all events. Only the test, controller, and sole worker own the processor.
+        assert_eq!(Arc::strong_count(&processor), 3);
+        assert_eq!(handler.0.load(Ordering::Relaxed), 1);
+
+        // Cover both a duplicate completion and a repeated empty init sequence.
+        for repeat_init in [false, true] {
+            if repeat_init {
+                event_tx.send(FileSystemEvent::Init).unwrap();
+            }
+            event_tx.send(FileSystemEvent::InitDone).unwrap();
+            assert!(futures::poll!(&mut run).is_pending());
+            assert_eq!(
+                Arc::strong_count(&processor),
+                3,
+                "duplicate InitDone spawned another worker"
+            );
+            assert_eq!(handler.0.load(Ordering::Relaxed), 1, "init callback ran more than once");
+        }
+
+        shutdown.shutdown();
+        timeout(Duration::from_secs(1), &mut run).await.unwrap().unwrap();
+        drop(run);
+        assert_eq!(Arc::strong_count(&processor), 1, "worker was not joined on shutdown");
+    }
 
     fn make_route(ns: &str, name: &str) -> HTTPRoute {
         HTTPRoute {

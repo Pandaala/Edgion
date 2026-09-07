@@ -20,6 +20,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Retry-budget counters retain coherent epochs and monotonic windows](regression-guards/retry-budget-epoch-coherence.md)
+
 - [lb-06 — Active health-check probes run in parallel within a service — FIXED](regression-guards/active-hc-probes-parallel-within-service.md)
 - [BackendTLSPolicyStore::update Rebuild-Strategy Complexity Comment](regression-guards/backend-tls-policy-rebuild-strategy-comment.md)
 - [backends-F008 — build_client_cert_key duplicate PEM-parse block](regression-guards/build-client-cert-key-dedup.md)

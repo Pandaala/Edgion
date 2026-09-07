@@ -113,6 +113,7 @@ chrono.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
 arc-swap.workspace = true
+portable-atomic.workspace = true
 notify.workspace = true
 dashmap.workspace = true
 regex.workspace = true

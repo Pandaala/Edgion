@@ -32,3 +32,9 @@ requests capture the same Arc once at first `begin_upstream_attempt` onto
 and outlier **status** stay live; only configuration (including the outlier handle Arc) is
 captured. HTTPRoute retry configuration authorizes retries, while `retryConstraint` only limits
 aggregate retry volume.
+
+The captured retry-budget Arc owns a monotonic origin and epoch-tagged atomic
+counter buckets. Budget and minimum-rate windows share one elapsed sample per
+operation but retain their independent intervals. See
+[retry-budget epochs](../../12-algorithms/retry-budget-epoch-buckets.md) for
+publication, saturation, delayed-operation, and lock-free platform boundaries.

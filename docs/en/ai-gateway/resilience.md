@@ -113,6 +113,19 @@ request; other requests continue to bypass that destination until the probe succ
 `retryConstraint: {}` enables defaults. Absence disables the aggregate gate. HTTPRoute retry still
 decides whether a request may retry; EBTP only limits aggregate retry volume.
 
+The budget and minimum retry rate use monotonic sliding windows with millisecond
+precision. System clock adjustments do not change their lifetime, and traffic
+older than the immediately preceding window contributes nothing. Each request
+retains its captured policy generation through retries, including after a policy
+update. Concurrent decisions retain the soft allowance of at most N-1 additional
+admissions for N concurrent deciders.
+
+A decision delayed until its sampled history has been overwritten is denied.
+Counters never wrap: either counter in a bucket reaching the internal saturation
+sentinel (2^40 - 1) denies retries until that history expires.
+Exhausting the 48-bit window identifier also denies retries for that budget
+instance. These guards apply to both Service and AI backend budgets.
+
 ## Related
 
 - [Routing and Selection](./routing.md)

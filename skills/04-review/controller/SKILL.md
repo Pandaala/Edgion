@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Initialization completion starts only one worker](regression-guards/single-worker-initialization.md)
 - [Etcd resource keys are authoritative over content identity — FIXED](regression-guards/etcd-key-content-identity.md)
 - [Leader-Job Call Sites — FIXED (helpers), three hardening proposals REJECTED](regression-guards/leader-jobs-call-site-consolidation.md)
 - [Wedged Leader Never Restarts / Never Fails Over — FIXED (supervised loop + deadline + deadman + gauge)](regression-guards/liveness-probe-and-lifecycle-supervision.md)

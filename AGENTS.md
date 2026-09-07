@@ -263,12 +263,10 @@ code that violates them is wrong even if it "works":
 5. Handler processing must contain **no API calls, timers, sleeps, or other
    latency** — one slow item stalls every resource of that kind.
 
-Known outstanding violations (tracked, not condoned):
-
-- Rule 1: one-worker-per-kind is a convention, not a guarantee — a second
-  `InitDone` spawns a second worker (FS/etcd double-Init, and K8s
-  multi-namespace mode passes through post-completion `InitDone`s) →
-  `tasks/todo/initdone-double-spawn-second-worker.md`
+Initialization completion is idempotent within each resource-controller run:
+FS, etcd, and Kubernetes ignore duplicate `InitDone` events before completion
+callbacks or worker creation. Keep the first worker handle until shutdown; see
+`skills/04-review/controller/regression-guards/single-worker-initialization.md`.
 
 Deliberate, accepted exception to Rule 5:
 

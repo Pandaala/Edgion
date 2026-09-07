@@ -354,6 +354,15 @@ where
                             }
                         }
                         Event::InitDone => {
+                            if init_done {
+                                tracing::warn!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Received duplicate InitDone event, ignoring"
+                                );
+                                continue;
+                            }
+
                             let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
                             tracing::info!(
                                 component = "resource_controller",

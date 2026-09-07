@@ -4,6 +4,14 @@ This page answers one question first: which Edgion deployment path should you st
 
 ## Choose a deployment mode
 
+Gateway requires lock-free 128-bit atomic operations for retry-budget accounting.
+On amd64, the CPU (including a VM's exposed CPU features) must support CMPXCHG16B.
+Supported arm64 hosts provide the native atomic implementation. Gateway checks this
+capability before starting services and exits with an error if it is unavailable;
+it does not fall back to locks. This requirement applies even when no retry budget
+is currently configured, because policies can be added through hot reload.
+Controller and edgion-cli do not have this requirement.
+
 Edgion currently has two primary paths:
 
 1. **Kubernetes mode**
