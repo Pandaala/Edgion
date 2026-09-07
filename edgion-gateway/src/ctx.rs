@@ -1761,7 +1761,8 @@ pub struct BackendContext {
     #[serde(skip)]
     pub backend_ref_idx: Option<usize>,
     /// Captured Service `EdgionBackendTrafficPolicy` generation. Set once at
-    /// first `begin_upstream_attempt` and reused for retries. AI keeps its
+    /// first `begin_upstream_attempt` and reused for retries, including `None`
+    /// when no policy matched. The request's attempt count gates capture. AI keeps its
     /// own capture on `AiHttpState`.
     #[serde(skip)]
     pub effective_policy:
