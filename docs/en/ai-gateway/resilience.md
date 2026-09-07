@@ -117,7 +117,9 @@ The budget and minimum retry rate use monotonic sliding windows with millisecond
 precision. System clock adjustments do not change their lifetime, and traffic
 older than the immediately preceding window contributes nothing. Each request
 retains its captured policy generation through retries, including after a policy
-update. Concurrent decisions retain the soft allowance of at most N-1 additional
+update. A Service request that initially has no policy also retains that absence;
+a newly added policy applies to new requests. Concurrent decisions retain the
+soft allowance of at most N-1 additional
 admissions for N concurrent deciders.
 
 A decision delayed until its sampled history has been overwritten is denied.

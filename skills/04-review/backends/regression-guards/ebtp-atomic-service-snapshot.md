@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-HTTP/gRPC Service requests capture one `Arc<EffectiveBackendTrafficPolicy>` at
+HTTP/gRPC Service requests capture an optional `Arc<EffectiveBackendTrafficPolicy>` at
 first `begin_upstream_attempt` and reuse it for later attempts of that request.
 Live `get_lb_policy` / `get_authority` / `get_retry_budget` /
 `get_circuit_breaker_limit` / `get_connect_timeout` / `resolve_lb_policy` /
@@ -39,6 +39,15 @@ Service/gRPC readers must not fall back to the live store when
 `BackendContext.effective_policy` is `None`. gRPC capture must not require
 `selected_backend`. AI continues to capture at plan time onto `AiHttpState`.
 
+Absence must also survive retries: `begin_upstream_attempt` captures only when
+the request's incremented `try_cnt` is one. Testing only `effective_policy.is_some()`
+does not establish that capture is complete: a first attempt with no matching
+policy leaves `None`, and a later attempt could otherwise adopt a newly added
+policy. The 2026-09-05 fix covered existing policy Arcs but missed this absence
+case; the 2026-09-07 retry-budget follow-up adds the first-attempt gate and a
+`None -> Some` hot-reload regression. Existing requests retain absence, new
+requests capture the added policy, and old retries do not fund its budget.
+
 ## Fix Suggestions Not Accepted
 
 - Restore live `get_lb_policy` / `resolve_lb_policy` on the HTTP/gRPC `try_get_peer`
@@ -65,14 +74,18 @@ Re-open this decision only if:
   contract (separate task; do not silently change L4 LB away from RoundRobin).
 - A new Service request reader is added that loads policy configuration after
   `begin_upstream_attempt` without using the captured Arc.
+- Attempt counting or capture initialization changes, including the case where
+  the first lookup returns no policy.
 
 ## Reference Cases
 
 - `tasks/todo/backend-traffic-policy-atomic-service-snapshot.md`
 - `edgion-gateway/src/backends/policy/backend_traffic/store.rs`
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
-- Sibling todos remain out of scope: retry-budget window rotation, LB runtime-handle
-  capture, degrade-mode gauge lifecycle.
+- Retry-budget window rotation is covered by
+  [retry-budget epoch coherence](retry-budget-epoch-coherence.md).
+- Sibling todos remain out of scope: LB runtime-handle capture and degrade-mode
+  gauge lifecycle.
 
 ## Resolution references
 

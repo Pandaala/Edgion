@@ -32,12 +32,15 @@ predecessor contribute. It preserves millisecond configuration precision.
 See the [algorithm contract](../../../12-algorithms/retry-budget-epoch-buckets.md)
 for the atomic ordering argument, fixed-grid math, and representation bounds.
 
-The original task's Service generation claim was already addressed by
-[Service snapshot capture](ebtp-atomic-service-snapshot.md). Current
+The original task's Service generation claim was partly addressed by
+[Service snapshot capture](ebtp-atomic-service-snapshot.md): existing policy Arcs
+were retained, but an initial `None` could be recaptured after a hot reload added
+a policy. Independent follow-up review reproduced that gap. Capture now runs only
+on the first request attempt, preserving absence as well as existing Arcs. Current
 `begin_upstream_attempt` captures policy before `on_attempt`, and
 `retry_budget_for` reads that Arc for later gates. AI dispatch and retry gates
 likewise use `AiHttpState.effective_policy`. Keep those call chains; this fix
-does not reimplement policy capture.
+adds the missing first-attempt boundary without changing AI policy capture.
 
 Authority: the user-approved task requires monotonic time, coherent epochs,
 one sampled instant, allocation-free nonblocking accounting, and the existing
@@ -59,7 +62,7 @@ Its remaining defect is tracked separately, not accepted as correct behavior.
 
 ## Verification and re-evaluation
 
-Current verification on 2026-09-07:
+Window-fix verification on 2026-09-07, before the absent-policy follow-up:
 
 - `cargo test -p edgion-gateway --lib backends::policy::backend_traffic::retry_budget::tests -- --test-threads=1`: 18 passed.
 - `cargo test -p edgion-gateway --lib retry_budget -- --test-threads=1`: 24 passed,
@@ -84,10 +87,21 @@ Current verification on 2026-09-07:
 - Independent read-only review: LGTM, including epoch coherence, delayed floor
   accounting, native-atomic startup gating, and knowledge applicability.
 
-Service/AI capture logic was not changed; current hot-reload store tests verify
-old-budget admission and new-request generation capture. The unchanged capture
-path did not require a new dynamic scenario. No full `cargo test --all` or
-amd64 runtime validation is claimed.
+The absent-policy follow-up reran the Gateway test executable after rebuilding:
+all 87 `pg_upstream_peer::tests`, 22 `ai::dispatch::tests`, and 24 `retry_budget`
+filtered tests passed. The new regression also passed individually. Counts
+overlap; they are not a unique-test total. Workspace check and Clippy, format,
+agent-doc, SSA-force, metrics-inventory, Pingora-source, and Gateway no-tracing
+checks passed again; Clippy retained existing warnings. A fresh independent
+review approved the absence fix and checked the attempt-count lifecycle across
+Service, gRPC, DirectEndpoint, and AI paths.
+
+The follow-up `service_retry_preserves_missing_policy_after_reload` regression
+publishes a new policy between attempts through the real store. It checks that
+old requests keep no policy, their retries do not fund the new budget, and new
+requests capture and fund it. Existing tests cover retained nonempty captures.
+This is an in-process hot-reload scenario, not a network-level dynamic test.
+No full `cargo test --all` or amd64 runtime validation is claimed.
 
 The new deterministic tests pause writers after publication and before CAS,
 interleave snapshot loads, expire floor commits, and test counts, saturation,
@@ -101,5 +115,6 @@ fresh verification of this window implementation.
 ## Resolution references
 
 - `retry-budget-generation-and-window-coherence` — real window defect; Service
-  Arc generation capture already corrected separately; fixed and verified
+  Arc generation capture originally missed absent-policy retention, corrected
+  by the first-attempt capture gate; fixed and verified
   2026-09-07. The original open task is removed after its close gate.
