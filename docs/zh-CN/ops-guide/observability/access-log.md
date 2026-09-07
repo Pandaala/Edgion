@@ -405,7 +405,7 @@ spec:
 
 - **`redirect_http` 监听器（纯 HTTP→HTTPS 重定向服务）永不输出 `ext`。** 它使用一套独立的极简日志 schema，根本没有 `ext` 字段——该路径上没有插件链可供声明挂载。
 - **gRPC-web/WebSocket 连接建立时产生的第二条 access log 行不带 `ext`**——只有该请求的最终日志行才带。这是正确行为：采集器只针对最终那条日志行运行。
-- **`debug-access-log` 插件写入的 `X-Debug-Access-Log` 响应头故意永不携带 `ext`。** 若填充它，将把操作员声明的字段值回传给发起请求的客户端。
+- **`X-Debug-Access-Log` 响应头是非终态快照，而不是终态 access log 记录。** `debug-access-log` 插件在上游响应头阶段运行。其快照始终不包含 `ext` 和 `waf`。顶层 `request_info.status` 始终为 `0`，因为该字段稍后才在终态 `logging()` 阶段完成写入；与之独立，`backend_context.upstreams[].status` 可能已经包含某次上游尝试所观察到的状态码。响应体及总耗时、最终 AI 或流式处理汇总、后续诊断信息，以及当前或后续响应阶段插件的日志都可能缺失或尚未完成。使用 `access_log_sensitive.mode: replace`（默认）时，响应头包含可解析的 JSON，并替换其中的敏感字段。`off` 会输出未经脱敏、未经标记的原始值，是显式的调试退出选项。`wrap` 不输出响应头，因为带包装标记的值仍保留原始数据；请求继续处理，`wrap mode:header suppressed` 稍后出现在终态 access log 中。
 
 ### 完整示例
 
@@ -637,7 +637,7 @@ cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7
 
 ### Q5：如何获取某个路由的更详细插件诊断？
 
-**A**：使用 debug-access-log 插件提升每插件的详细程度。见 [debug-access-log](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)。
+**A**：使用 debug-access-log 插件暴露非终态的响应头阶段快照；它不会提高插件日志的详细程度。见 [debug-access-log](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)。
 
 ## 获取帮助
 

@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `486e8fea12bd870325b489839262729d14ecb22c`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned file:
   - `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs`
@@ -32,4 +32,4 @@
 - Independent final review: LGTM with no Must Fix or Should Fix. The reviewer independently passed all 13 focused tests, confirmed the six-entry bound/order and sole production `try_new` caller, and approved D0084–D0086 as evidenced, nonduplicate scopes distinct from D0040.
 - Deferred findings: [`D0084`](../deferred/D0084-backendref-native-cors-preflight-ownership.md), [`D0085`](../deferred/D0085-native-gateway-api-cors-validation-parity.md), and [`D0086`](../deferred/D0086-credentialed-native-cors-expose-headers-wildcard.md). Each canonical task owns its future tests; no separate integration-only issue is needed now.
 - Verification: 13 focused CORS tests passed. `cargo fmt --all`, `cargo check --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets`, `cargo build --locked -p edgion-gateway --bin edgion-gateway`, agent-doc, SSA force, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen 3,084-file integration guards passed; Clippy emitted only the existing warning set.
-- Commit: pending.
+- Commit: `5db12c3f`.

@@ -93,6 +93,11 @@ pub fn is_enabled() -> bool {
     SENSITIVE_MODE.load(Ordering::Acquire) != 0
 }
 
+#[inline]
+pub fn is_wrap() -> bool {
+    SENSITIVE_MODE.load(Ordering::Acquire) == SensitiveMode::Wrap as u8
+}
+
 /// Returns the total byte overhead added by Wrap mode (`prefix.len() + suffix.len()`).
 /// Returns 0 when mode is Off or Replace.
 pub fn wrap_overhead() -> usize {
@@ -240,6 +245,24 @@ mod tests {
     fn test_is_enabled_replace() {
         let _g = set_mode(1);
         assert!(is_enabled());
+    }
+
+    #[test]
+    fn test_is_wrap_off() {
+        let _g = set_mode(SensitiveMode::Off as u8);
+        assert!(!is_wrap());
+    }
+
+    #[test]
+    fn test_is_wrap_replace() {
+        let _g = set_mode(SensitiveMode::Replace as u8);
+        assert!(!is_wrap());
+    }
+
+    #[test]
+    fn test_is_wrap_wrap() {
+        let _g = set_mode(SensitiveMode::Wrap as u8);
+        assert!(is_wrap());
     }
 
     #[test]

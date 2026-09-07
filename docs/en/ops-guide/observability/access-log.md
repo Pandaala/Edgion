@@ -470,9 +470,20 @@ third option that keeps built-ins clear while masking `ext`.
 - **A second access-log line for gRPC-web/WebSocket connection establishment
   carries no `ext`** — only the request's final log line does. This is
   correct: the final line is the one the collector runs against.
-- **The `X-Debug-Access-Log` response header (from the `debug-access-log`
-  plugin) never carries `ext`, on purpose.** Populating it would ship
-  operator-declared field values back to the client that sent the request.
+- **The `X-Debug-Access-Log` response header is a non-terminal snapshot, not
+  the terminal access-log record.** The `debug-access-log` plugin runs during
+  the upstream-response-header stage. Its snapshot always omits `ext` and
+  `waf`. Top-level `request_info.status` is always `0` because terminal
+  `logging()` finalizes it later; independently,
+  `backend_context.upstreams[].status` may already carry a status observed from
+  an upstream attempt. Response-body and elapsed timing, final AI or streaming
+  summaries, late diagnostics, and the current or later response-stage plugin
+  logs may be absent or unfinished. With `access_log_sensitive.mode: replace`
+  (the default), the header contains parseable JSON with sensitive fields
+  replaced. `off` emits unmasked, unmarked raw values as an explicit debugging
+  opt-out. `wrap` emits no header because wrapped values retain raw data;
+  request processing continues, and `wrap mode:header suppressed` appears later
+  in the terminal access log.
 
 ### Full example
 
@@ -731,7 +742,7 @@ Key fields to watch:
 
 ### Q5: How do I get more detailed plugin diagnostics for one route?
 
-**A**: Use the debug access-log plugin to raise per-plugin verbosity. See [debug-access-log](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md).
+**A**: Use the debug access-log plugin to expose the non-terminal response-header-stage snapshot. It does not increase plugin verbosity. See [debug-access-log](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md).
 
 ## Get help
 

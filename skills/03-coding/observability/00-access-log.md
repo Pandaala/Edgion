@@ -290,10 +290,21 @@ a reverse dependency from global config to every route.
 - **Two other call sites emit no `ext`, both correctly:**
   `pg_connected_to_upstream.rs` writes a *second* access-log line for
   grpc-web/websocket at connection establishment (the request's final
-  `logging()` line still carries `ext`); and `DebugAccessLogToHeader` echoes
-  the entry JSON into the `X-Debug-Access-Log` **response header** — `ext`
-  staying absent there is desirable, since populating it would ship
-  operator-declared values back to the client.
+  `logging()` line still carries `ext`); and `DebugAccessLogToHeader` exposes
+  a non-terminal upstream-response-header-stage snapshot in the
+  `X-Debug-Access-Log` **response header**, not the terminal access-log record.
+  That snapshot always omits both `ext` and `waf`. Its top-level
+  `request_info.status` is always `0` because terminal `logging()` finalizes it
+  later; independently, `backend_context.upstreams[].status` may already carry
+  a status observed from an upstream attempt. Response-body and elapsed timing,
+  final AI or streaming summaries, late diagnostics, and the current or later
+  response-stage plugin logs may be absent or unfinished. With the default
+  `access_log_sensitive.mode: replace`, the header contains parseable JSON with
+  sensitive fields replaced; `off` exposes unmasked, unmarked raw values only
+  as an explicit debugging opt-out. `wrap` exposes no header because wrapped
+  values retain raw data; processing continues, and the ordinary PluginLog
+  decision `wrap mode:header suppressed` appears later in the terminal access
+  log.
 
 **EGC masking whitelist** — `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`,
 keyed by source type (`header`/`respHeader`/`query`/`cookie`/`ctx`). Full

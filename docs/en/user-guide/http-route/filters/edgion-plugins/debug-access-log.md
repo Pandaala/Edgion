@@ -6,7 +6,7 @@
 
 ## Overview
 
-The DebugAccessLogToHeader plugin serializes the request's access log to JSON and injects it into a response header. Use it to inspect routing, timing, and upstream details directly from a browser network tab or `curl -v`, without reading gateway logs.
+The DebugAccessLogToHeader plugin serializes the request's current, non-terminal access-log snapshot to JSON and injects it into a response header. Use it to inspect routing and upstream-response-header-stage details directly from a browser network tab or `curl -v`, without reading gateway logs.
 
 The injected header is `X-Debug-Access-Log`.
 
@@ -38,15 +38,15 @@ This plugin takes no configuration parameters. Enable it by adding the entry wit
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| _(none)_ | — | — | No parameters; the plugin always injects the full access log |
+| _(none)_ | — | — | No plugin parameters; header exposure follows the gateway's global `access_log_sensitive.mode` policy |
 
 ---
 
 ## How it works
 
 1. The request is proxied to the upstream as normal.
-2. In the upstream-response-filter phase, the plugin serializes the access log (the same structured record the gateway would write to its access log) to a JSON string.
-3. It adds that JSON string to the response under the `X-Debug-Access-Log` header.
+2. In the upstream-response-filter phase, the plugin serializes the request state available at that moment to a JSON string.
+3. When the global sensitive mode permits exposure, it adds that JSON string to the response under the `X-Debug-Access-Log` header.
 
 Inspect it on the client side:
 
@@ -54,7 +54,21 @@ Inspect it on the client side:
 curl -v https://api.example.com/path 2>&1 | grep -i x-debug-access-log
 ```
 
-The header value contains fields such as the matched route, upstream endpoint, status code, and timing — exactly what the access log records for that request.
+### Snapshot boundary
+
+The header is a response-header-stage snapshot, not the terminal access-log record. Its top-level `request_info.status` is always `0` because terminal `logging()` finalizes that field later. Separately, `backend_context.upstreams[].status` may already contain the status observed from an upstream attempt.
+
+The snapshot always omits `ext` and `waf`. Response-body and elapsed timing, final AI or streaming summaries, late diagnostics, and the current or later response-stage plugin logs may be absent or unfinished. Use the terminal access log for the complete request outcome.
+
+### Sensitive-mode behavior
+
+The gateway-wide `access_log_sensitive.mode` setting controls whether the header can be exposed:
+
+| Mode | Header behavior |
+|------|-----------------|
+| `replace` (default) | Emits parseable JSON with sensitive fields replaced by the configured replacement string |
+| `off` | Emits parseable JSON with unmasked, unmarked raw values; this is an explicit debugging opt-out |
+| `wrap` | Emits no debug header because wrapped values retain raw data; request processing continues, and `wrap mode:header suppressed` appears later in the terminal access log |
 
 ---
 
@@ -116,7 +130,7 @@ spec:
 
 ### Q1: I added the plugin but no `X-Debug-Access-Log` header appears?
 
-**A**: Make sure the entry is under `upstreamResponseFilterPlugins`. The plugin only runs in the upstream-response-filter phase. If you place it under `requestPlugins`, its filter is never invoked.
+**A**: Make sure the entry is under `upstreamResponseFilterPlugins`. The plugin only runs in the upstream-response-filter phase. If it is configured correctly but the gateway uses `access_log_sensitive.mode: wrap`, the missing header is expected; check the terminal access log for `wrap mode:header suppressed`.
 
 ### Q2: Is it safe to leave this on in production?
 
