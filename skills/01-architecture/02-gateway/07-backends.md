@@ -165,6 +165,15 @@ circuit_breaker/
 
 ### Prometheus metrics
 
+Service degrade selections use `edgion_lb_degrade_selections_total{service}`.
+Runtime snapshots retain the cached Counter; the Gateway scrape boundary pins
+live handles against exporter idle eviction. Last-owner release removes the
+weak registry entry without blocking; on contention, the next registration,
+scrape, or stats call cleans deferred dead entries. Store stats expose
+`service_discovery.degrade_metric_handles` and bounded Service key samples,
+including owners retained by in-flight old snapshots. See
+[the lifecycle regression guard](../../04-review/lb/regression-guards/degrade-selection-counter-ownership.md).
+
 | Metric | Type | Label | Recorded when |
 |--------|------|-------|---------------|
 | `edgion_circuit_breaker_ejections_total` | Counter | `service` | An ejection succeeds |
@@ -194,10 +203,11 @@ requests capture the same Arc at first `begin_upstream_attempt` onto
 `BackendContext.effective_policy` and do **not** re-read the store on later
 attempts. A missing capture means “no policy”, not “read the live generation”.
 The store is also the **sole writer** of `HealthCheckConfigStore`, Service
-outlier configuration, and the `DegradeThresholdStore` per-service override used
-only by the L4/`request_mirror` residual. HTTP/gRPC `pick` takes the captured
-`load_balancer` and `degrade_threshold_override`; it does not call
-`resolve_lb_policy` or `resolve_degrade_threshold`. This replaced the former
+outlier configuration, and the `DegradeThresholdStore` per-service override.
+The current shared section selector uses `ServiceRuntimeSnapshot.degrade_threshold`
+from the active runtime cell. This differs from the required captured HTTP/gRPC
+panic-override contract; see `tasks/todo/service-degrade-threshold-capture-coherence.md`.
+The policy store replaced the former
 route-fed, ref-counted `lb/lb_policy/PolicyStore` (deleted) and the later
 request-visible DashMaps.
 
@@ -222,9 +232,9 @@ request-visible DashMaps.
 
 Accepted residuals (not mixed-generation Service HTTP/gRPC reads):
 
-- TCP/UDP/TLS passthrough and `request_mirror` call
-  `select_roundrobin_backend_key` with no `BackendContext`. They keep
-  RoundRobin and read `DegradeThresholdStore` live (`degrade_engaged_l4`).
+- TCP/UDP/TLS passthrough and `request_mirror` use the shared section selector
+  without the HTTP/gRPC captured-policy context. The former
+  `select_roundrobin_backend_key`/`degrade_engaged_l4` helpers have been removed.
 - `request_mirror` uses the backend address as Host and does **not** apply
   `upstreamAuthority`.
 - The EdgionGatewayConfig panic default is a **cross-store** window versus the

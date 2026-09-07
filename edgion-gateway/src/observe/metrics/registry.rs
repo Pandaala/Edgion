@@ -4,7 +4,10 @@
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
 use metrics::{counter, gauge, histogram, Counter, Gauge, Label};
-use std::sync::{LazyLock, OnceLock};
+use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 use crate::plugins::StreamLayer;
 
@@ -52,8 +55,8 @@ pub mod names {
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
     pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
-    // Load-balancing degrade mode: 1 = engaged, 0 = normal (per service)
-    pub const LB_DEGRADE_MODE: &str = "edgion_lb_degrade_mode";
+    // Selection events that bypass health filtering (per Service, across sections).
+    pub const LB_DEGRADE_SELECTIONS_TOTAL: &str = "edgion_lb_degrade_selections_total";
     // ACME HTTP-01 challenge lookup metrics
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
@@ -301,7 +304,99 @@ fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) 
     slot.get_or_init(|| counter!(name))
 }
 
+/// Weak ownership lets current and in-flight Service snapshots pin a real
+/// exporter Counter without keeping deleted Services alive. Registration,
+/// and scrape keepalive/render share this lock. Final-owner removal never waits.
+type DegradeCounters = HashMap<Arc<str>, Weak<DegradeSelectionCounter>>;
+static LB_DEGRADE_COUNTERS: LazyLock<Mutex<DegradeCounters>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static LB_DEGRADE_CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
+
+fn lock_degrade_counters() -> parking_lot::MutexGuard<'static, DegradeCounters> {
+    let mut counters = LB_DEGRADE_COUNTERS.lock();
+    if LB_DEGRADE_CLEANUP_PENDING.swap(false, Ordering::AcqRel) {
+        counters.retain(|_, entry| entry.strong_count() > 0);
+    }
+    counters
+}
+
+pub(crate) struct DegradeSelectionCounter {
+    service_key: Arc<str>,
+    counter: Counter,
+}
+
+impl DegradeSelectionCounter {
+    #[inline]
+    pub(crate) fn record_selection(&self) {
+        self.counter.increment(1);
+    }
+}
+
+impl Drop for DegradeSelectionCounter {
+    fn drop(&mut self) {
+        let Some(mut counters) = LB_DEGRADE_COUNTERS.try_lock() else {
+            // An in-flight request can release the last snapshot. Defer cleanup
+            // to the next registration, scrape, or stats call rather than wait.
+            LB_DEGRADE_CLEANUP_PENDING.store(true, Ordering::Release);
+            return;
+        };
+        // A new owner may already have replaced a weak entry whose last Arc
+        // was being dropped. Never remove that replacement's registration.
+        if counters
+            .get(self.service_key.as_ref())
+            .is_some_and(|entry| std::ptr::eq(entry.as_ptr(), self))
+        {
+            counters.remove(self.service_key.as_ref());
+        }
+    }
+}
+
 impl GatewayMetrics {
+    /// Register once on the Service configuration path, then retain the handle
+    /// in runtime snapshots. Only Services with degrade capability register a
+    /// series; request selection never constructs labels or queries the registry.
+    pub(crate) fn lb_degrade_selections(service_key: &str) -> Arc<DegradeSelectionCounter> {
+        let mut counters = lock_degrade_counters();
+        if let Some(counter) = counters.get(service_key).and_then(Weak::upgrade) {
+            return counter;
+        }
+        let service_key: Arc<str> = service_key.into();
+        let counter = Arc::new(DegradeSelectionCounter {
+            counter: counter!(names::LB_DEGRADE_SELECTIONS_TOTAL, "service" => service_key.to_string()),
+            service_key: Arc::clone(&service_key),
+        });
+        counters.insert(service_key, Arc::downgrade(&counter));
+        counter
+    }
+
+    /// `metrics-util` advances the update generation even for increment(0).
+    /// Touching live handles immediately before render prevents idle eviction
+    /// from detaching them from the exporter. Dead owners are not touched and
+    /// their series remain eligible for the configured idle timeout.
+    pub(crate) fn with_live_lb_degrade_counters<R>(render: impl FnOnce() -> R) -> R {
+        // Keep upgraded Arcs outside the lock scope: dropping the last owner
+        // removes its weak entry and must never recursively acquire this lock.
+        let live;
+        let result;
+        {
+            let counters = lock_degrade_counters();
+            live = counters.values().filter_map(Weak::upgrade).collect::<Vec<_>>();
+            for counter in &live {
+                counter.counter.increment(0);
+            }
+            result = render();
+        }
+        result
+    }
+
+    /// Bounded store-residue signal; includes handles retained by old snapshots.
+    pub(crate) fn lb_degrade_metric_stats(key_limit: usize) -> (usize, Vec<String>) {
+        let counters = lock_degrade_counters();
+        let mut keys: Vec<_> = counters.keys().map(|key| key.to_string()).collect();
+        keys.sort_unstable();
+        keys.truncate(key_limit);
+        (counters.len(), keys)
+    }
+
     /// Create a new GatewayMetrics instance.
     ///
     /// Hot per-request handles register immediately; cold handles stay
@@ -630,17 +725,10 @@ pub fn record_cb_rejection(service_key: &str) {
     counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
-/// Set the degrade-mode gauge for a service: 1.0 when degrade mode is engaged
-/// (health filtering bypassed), 0.0 when selecting normally. Called from the
-/// selection path; cheap (atomic gauge set), no logging — Iron Rule 3 safe.
-pub fn record_lb_degrade_mode(service_key: &str, engaged: bool) {
-    gauge!(names::LB_DEGRADE_MODE, "service" => service_key.to_string()).set(if engaged { 1.0 } else { 0.0 });
-}
-
 /// Set the link-sys provider health gauge: 1.0 = healthy, 0.0 = unhealthy.
 ///
 /// Called on a healthy<->unhealthy transition and once at init() to establish a
-/// `=1` baseline. Free-function `gauge!` (like `record_lb_degrade_mode`) keeps the
+/// `=1` baseline. Cold-path free-function `gauge!` registration keeps the
 /// series absent from `/metrics` until first emit. `link` cardinality = provider count.
 pub fn record_link_sys_health(name: &str, healthy: bool) {
     gauge!(names::LINK_SYS_HEALTH, "link" => name.to_string()).set(if healthy { 1.0 } else { 0.0 });
@@ -1004,8 +1092,8 @@ pub fn record_cb_shed(service_key: &str) {
 // and `record_geoip_denied` are not on the per-request hot path (the first two
 // are process-lifecycle state, the latter two fire from the background updater
 // and from an L4 connection-filter deny path respectively), so all four follow
-// the cold free-function `gauge!`/`counter!` pattern (like `record_lb_degrade_mode`
-// / `record_link_sys_health` above): the series is absent from `/metrics` until
+// the cold free-function `gauge!`/`counter!` pattern (like `record_link_sys_health`
+// above): the series is absent from `/metrics` until
 // the first call. `record_geoip_lookup_panic`, below, is the one exception in
 // this block — it fires from `GeoIpProvider::lookup`, which every geo-consuming
 // request calls; it uses the same cold-registration pattern anyway since a
@@ -1305,14 +1393,85 @@ mod tests {
 }
 
 #[cfg(test)]
-mod lb_degrade_metric_tests {
+mod lb_degrade_counter_tests {
     use super::*;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use std::sync::Barrier;
 
     #[test]
-    fn record_lb_degrade_mode_does_not_panic() {
-        // Smoke test: the gauge set path is callable for engaged/cleared.
-        record_lb_degrade_mode("default/svc", true);
-        record_lb_degrade_mode("default/svc", false);
+    fn degrade_counter_last_owner_does_not_wait_for_scrape_before_weak_upgrade() {
+        let counter = GatewayMetrics::lb_degrade_selections("pin/unpinned-drop");
+        let weak = Arc::downgrade(&counter);
+        let locked = LB_DEGRADE_COUNTERS.lock();
+        let (completed, completion) = std::sync::mpsc::channel();
+        let release = std::thread::spawn(move || {
+            drop(counter);
+            completed.send(()).unwrap();
+        });
+        let completed_while_locked = completion.recv_timeout(std::time::Duration::from_secs(1)).is_ok();
+        drop(locked);
+        release.join().unwrap();
+        assert!(
+            completed_while_locked,
+            "last-owner release must not wait for metric rendering"
+        );
+        assert!(weak.upgrade().is_none());
+        GatewayMetrics::lb_degrade_metric_stats(0);
+        assert!(!lock_degrade_counters().contains_key("pin/unpinned-drop"));
+    }
+
+    #[test]
+    fn degrade_counter_scrape_pins_the_last_owner_without_blocking_event_writes() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let counter = metrics::with_local_recorder(&recorder, || GatewayMetrics::lb_degrade_selections("pin/inflight"));
+        let weak = Arc::downgrade(&counter);
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        let scrape = {
+            let reached = Arc::clone(&reached);
+            let resume = Arc::clone(&resume);
+            std::thread::spawn(move || {
+                GatewayMetrics::with_live_lb_degrade_counters(|| {
+                    reached.wait();
+                    resume.wait();
+                    handle.render()
+                })
+            })
+        };
+        reached.wait();
+        // The scrape holds the cold-path lock. Selection must not acquire it.
+        counter.record_selection();
+        drop(counter);
+        let pinned_during_render = weak.strong_count() > 0;
+        resume.wait();
+        let rendered = scrape.join().unwrap();
+        assert!(pinned_during_render);
+        assert!(rendered.contains("edgion_lb_degrade_selections_total{service=\"pin/inflight\"} 1"));
+        assert!(weak.upgrade().is_none());
+        assert!(!lock_degrade_counters().contains_key("pin/inflight"));
+    }
+
+    #[test]
+    fn degrade_counter_recreation_reuses_history_and_cleans_weak_entries_without_scrapes() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let first = GatewayMetrics::lb_degrade_selections("pin/recreated");
+            let overlap = GatewayMetrics::lb_degrade_selections("pin/recreated");
+            assert!(Arc::ptr_eq(&first, &overlap));
+            first.record_selection();
+            drop(first);
+            overlap.record_selection();
+            drop(overlap);
+            assert!(!lock_degrade_counters().contains_key("pin/recreated"));
+            let recreated = GatewayMetrics::lb_degrade_selections("pin/recreated");
+            recreated.record_selection();
+            let rendered = GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
+            assert!(rendered.contains("edgion_lb_degrade_selections_total{service=\"pin/recreated\"} 3"));
+            drop(recreated);
+            assert!(!lock_degrade_counters().contains_key("pin/recreated"));
+        });
     }
 }
 
@@ -1323,7 +1482,7 @@ mod link_sys_health_metric_tests {
 
     #[test]
     fn record_link_sys_health_sets_gauge_and_does_not_panic() {
-        // Smoke: gauge set path is callable for both states (mirrors lb_degrade smoke test).
+        // Smoke: gauge set path is callable for both states.
         record_link_sys_health("default/kafka-main", true);
         record_link_sys_health("default/kafka-main", false);
     }

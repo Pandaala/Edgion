@@ -124,12 +124,20 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_circuit_breaker_ejected_endpoints | Gauge | gateway | service | business | Currently ejected endpoint count per service | - |
 | edgion_circuit_breaker_rejections_total | Counter | gateway | service | business | Requests blocked by an already-ejected backend | - |
 | edgion_gateway_circuit_breaker_shed_total | Counter | gateway | service | business | Requests shed by the per-endpoint circuit-breaker concurrency cap (`CbPermit::try_acquire` at cap) — distinct from the outlier-detection ejection/rejection metrics above, which trip on backend health rather than in-flight count | - |
-| edgion_lb_degrade_mode | Gauge | gateway | service | business | 1 when load-balancer degrade mode is engaged for the named service (healthy fraction below the configured threshold), 0 when normal | - |
+| edgion_lb_degrade_selections_total | Counter | gateway | service | business | Cumulative selections entering the degrade branch across all Service port sections; retries count separately and selection does not imply successful forwarding. Registered when a Service gains degrade capability; lifecycle changes do not clear totals, but unowned idle series may expire | `sum by (service) (rate(edgion_lb_degrade_selections_total[5m]))` |
 | edgion_rr_selector_truncated_total | Counter | gateway | none | business | RoundRobin selector backend-count truncation (backend count exceeded `u16::MAX`) — an alarm for an extreme configuration anomaly | - |
 | edgion_region_route_overlay_events_total | Counter | gateway | result (overlay_missing/overlay_disabled/overlay_type_mismatch/overlay_invalid) | business | `RegionRoute` overlay resolution events (fail-to-base outcomes when an EdgionConfigData overlay is missing, disabled, mismatched, or invalid) | - |
 | edgion_acme_challenge_lookup_total | Counter | gateway | result (hit/expired/domain_mismatch/not_found/empty_host) | business | ACME HTTP-01 challenge token lookup outcomes | - |
 
 ## 基数预算
+
+降级选路 Counter 累计同一 Service 各端口的选路事件，不表示 Service 当前是否健康。
+速率为零可能表示正常选路、降级已禁用或没有流量。从未具备降级能力的 Service
+不会创建对应序列。已经捕获快照的选路可以在 Service 删除后继续计数，策略更新不清空历史；
+存活快照会在采集时保活指标。最后一个快照释放后，序列可按配置的空闲超时淘汰，
+此后重建会从新计数开始；进程重启也会重置 Counter。
+附带告警检测最近 15 分钟的增量，并要求条件持续 5 分钟，
+因此流量恢复后仍可能暂时保持告警。
 
 Known high-cardinality levers, their defaults, and worst-case series counts.
 

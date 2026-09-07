@@ -106,6 +106,13 @@ pub fn recorder_installed() -> bool {
 /// text. Returns 500 with a diagnostic body if the recorder was not
 /// installed before the server started serving.
 pub async fn metrics_handler() -> Response {
+    render_metrics()
+}
+
+/// Synchronous render boundary for callers that must coordinate live metric
+/// handles with exporter idle eviction. Do not hold a non-Send guard across
+/// the asynchronous handler; wrap this function instead.
+pub fn render_metrics() -> Response {
     match PROMETHEUS_HANDLE.get() {
         Some(handle) => {
             let body = handle.render();

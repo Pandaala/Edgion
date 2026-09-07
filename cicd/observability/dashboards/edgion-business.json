@@ -55,12 +55,12 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "LB degrade mode",
+      "title": "LB degrade selections per second (5m)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "edgion_lb_degrade_mode" }
+          "expr": "sum by (service) (rate(edgion_lb_degrade_selections_total[5m]))" }
       ]
     },
     {

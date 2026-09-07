@@ -1009,6 +1009,37 @@ mod walk_tests {
     }
 
     #[test]
+    fn retained_degrade_metric_owner_is_residue_until_the_last_snapshot_releases() {
+        let mut retained = Snapshot::default();
+        walk_json(
+            "gateway",
+            &json!({ "service_discovery": {
+                "service_sources": 0,
+                "degrade_metric_handles": 1,
+                "degrade_metric_service_keys": ["default/deleted"],
+                "degrade_metric_service_keys_truncated": false
+            }}),
+            &mut retained,
+        );
+        assert_eq!(
+            retained.residue.get("gateway.service_discovery.degrade_metric_handles"),
+            Some(&1)
+        );
+        let mut released = Snapshot::default();
+        walk_json(
+            "gateway",
+            &json!({ "service_discovery": {
+                "service_sources": 0,
+                "degrade_metric_handles": 0,
+                "degrade_metric_service_keys": [],
+                "degrade_metric_service_keys_truncated": false
+            }}),
+            &mut released,
+        );
+        assert!(released.is_empty());
+    }
+
+    #[test]
     fn controller_configmap_ignores_require_exact_namespaced_keys() {
         let values = vec!["app/kube-root-ca.crt".to_string(), "test/kube-root-ca.crt".to_string()];
         let parsed = parse_controller_configmap_ignores(&values).unwrap();

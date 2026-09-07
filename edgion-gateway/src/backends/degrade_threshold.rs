@@ -22,15 +22,64 @@ static DEGRADE_THRESHOLD_STORE: LazyLock<Arc<DegradeThresholdStore>> =
 /// Initialized to 0 (degrade disabled) so the feature is strictly opt-in.
 static GLOBAL_DEFAULT: AtomicU8 = AtomicU8::new(0);
 
-/// Serializes tests that mutate process-global gateway and backend stores.
-///
-/// Several test modules exercise configuration publication through different
-/// entry points. They must share one guard across modules because resetting an
-/// atomic after each individual test does not prevent parallel assertions from
-/// observing another test's intermediate value.
+/// Serializes cross-module global-store tests and restores the degrade default
+/// and overrides on both normal return and unwind.
 #[cfg(test)]
-pub(crate) static GLOBAL_STORE_TEST_LOCK: LazyLock<parking_lot::Mutex<()>> =
-    LazyLock::new(|| parking_lot::Mutex::new(()));
+pub(crate) static GLOBAL_STORE_TEST_LOCK: GlobalStoreTestLock = GlobalStoreTestLock(parking_lot::Mutex::new(()));
+
+#[cfg(test)]
+pub(crate) struct GlobalStoreTestLock(parking_lot::Mutex<()>);
+
+#[cfg(test)]
+impl GlobalStoreTestLock {
+    pub(crate) fn lock(&self) -> GlobalStoreTestGuard<'_> {
+        let lock = self.0.lock();
+        GlobalStoreTestGuard {
+            _state: DegradeTestState::capture(),
+            _lock: lock,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct GlobalStoreTestGuard<'a> {
+    // Fields drop in declaration order: restore while the shared lock is held.
+    _state: DegradeTestState,
+    _lock: parking_lot::MutexGuard<'a, ()>,
+}
+
+#[cfg(test)]
+struct DegradeTestState {
+    default: u8,
+    overrides: Vec<(String, u8)>,
+}
+
+#[cfg(test)]
+impl DegradeTestState {
+    fn capture() -> Self {
+        Self {
+            default: get_lb_degrade_default(),
+            overrides: get_degrade_threshold_store()
+                .services
+                .iter()
+                .map(|entry| (entry.key().clone(), *entry.value()))
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for DegradeTestState {
+    fn drop(&mut self) {
+        let store = get_degrade_threshold_store();
+        store.services.clear();
+        for (key, value) in self.overrides.drain(..) {
+            store.services.insert(key, value);
+        }
+        GLOBAL_DEFAULT.store(self.default, Ordering::Relaxed);
+        crate::backends::discovery::get_service_discovery_coordinator().refresh_all_degrade_thresholds();
+    }
+}
 
 pub fn get_degrade_threshold_store() -> Arc<DegradeThresholdStore> {
     DEGRADE_THRESHOLD_STORE.clone()
@@ -134,7 +183,6 @@ mod tests {
         assert_eq!(resolve_degrade_threshold("default/no-override"), 30);
         store.set_service_threshold("default/a", None);
         assert_eq!(resolve_degrade_threshold("default/a"), 30);
-        configure_lb_degrade_default(0); // reset global for other tests
     }
 
     #[test]
@@ -142,6 +190,28 @@ mod tests {
         let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         configure_lb_degrade_default(200);
         assert_eq!(get_lb_degrade_default(), 0);
-        configure_lb_degrade_default(0);
+    }
+
+    #[test]
+    fn test_state_restores_default_and_all_overrides_on_unwind() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_degrade_threshold_store();
+        configure_lb_degrade_default(25);
+        store.set_service_threshold("guard/retained", Some(40));
+        store.set_service_threshold("guard/removed", Some(60));
+        let snapshot = DegradeTestState::capture();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _restore = snapshot;
+            configure_lb_degrade_default(90);
+            store.set_service_threshold("guard/retained", Some(80));
+            store.set_service_threshold("guard/removed", None);
+            store.set_service_threshold("guard/added", Some(100));
+            panic!("exercise unwind restoration");
+        }));
+        assert!(result.is_err());
+        assert_eq!(get_lb_degrade_default(), 25);
+        assert_eq!(store.get_override("guard/retained"), Some(40));
+        assert_eq!(store.get_override("guard/removed"), Some(60));
+        assert_eq!(store.get_override("guard/added"), None);
     }
 }

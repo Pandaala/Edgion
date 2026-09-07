@@ -184,6 +184,9 @@ pub struct ServiceDiscoveryStatsSnapshot {
     pub health_policy_services: usize,
     pub outlier_policy_services: usize,
     pub degrade_policy_services: usize,
+    pub degrade_metric_handles: usize,
+    pub degrade_metric_service_keys: Vec<String>,
+    pub degrade_metric_service_keys_truncated: bool,
     pub draining_backends: usize,
     pub service_keys: Vec<String>,
     pub service_keys_truncated: bool,
@@ -222,6 +225,7 @@ pub struct ServiceRuntimeSnapshot {
     pub health_policy_present: bool,
     pub outlier_policy_present: bool,
     pub degrade_threshold: u8,
+    pub(crate) degrade_selections: Option<Arc<crate::observe::metrics::registry::DegradeSelectionCounter>>,
 }
 
 impl ServiceRuntimeSnapshot {
@@ -232,7 +236,19 @@ impl ServiceRuntimeSnapshot {
             health_policy_present: false,
             outlier_policy_present: false,
             degrade_threshold: 0,
+            degrade_selections: None,
         }
+    }
+
+    /// Metric ownership follows the Service snapshots, not individual requests
+    /// or sections. Keep a registered handle across policy/membership changes;
+    /// historical selection events are never reset when capability is removed.
+    fn with_degrade_counter(mut self, service_key: &str, previous: &Self) -> Self {
+        self.degrade_selections = previous.degrade_selections.clone().or_else(|| {
+            (self.degrade_threshold > 0 && (self.health_policy_present || self.outlier_policy_present))
+                .then(|| crate::observe::metrics::GatewayMetrics::lb_degrade_selections(service_key))
+        });
+        self
     }
 }
 
@@ -461,8 +477,13 @@ impl ServiceDiscoveryCoordinator {
     /// Runtime membership is counted only when it belongs to that generation.
     pub fn stats(&self) -> ServiceDiscoveryStatsSnapshot {
         let generation = self.load_generation();
+        let (degrade_metric_handles, degrade_metric_service_keys) =
+            crate::observe::metrics::GatewayMetrics::lb_degrade_metric_stats(STATS_KEY_LIMIT);
         let mut stats = ServiceDiscoveryStatsSnapshot {
             generation: generation.stats.clone(),
+            degrade_metric_handles,
+            degrade_metric_service_keys_truncated: degrade_metric_handles > degrade_metric_service_keys.len(),
+            degrade_metric_service_keys,
             ..Default::default()
         };
         let mut service_keys: Vec<_> = generation.services.keys().cloned().collect();
@@ -495,19 +516,24 @@ impl ServiceDiscoveryCoordinator {
     }
 
     fn publish_policy_snapshot(
+        service_key: &str,
         cell: &ServiceRuntimeCell,
         active: &Arc<ServiceRuntimeSnapshot>,
         health_policy_present: bool,
         outlier_policy_present: bool,
         degrade_threshold: u8,
     ) {
-        cell.active.store(Arc::new(ServiceRuntimeSnapshot {
-            membership_identity: active.membership_identity,
-            entries: Arc::clone(&active.entries),
-            health_policy_present,
-            outlier_policy_present,
-            degrade_threshold,
-        }));
+        cell.active.store(Arc::new(
+            ServiceRuntimeSnapshot {
+                membership_identity: active.membership_identity,
+                entries: Arc::clone(&active.entries),
+                health_policy_present,
+                outlier_policy_present,
+                degrade_threshold,
+                degrade_selections: None,
+            }
+            .with_degrade_counter(service_key, active),
+        ));
     }
 
     pub(crate) fn set_health_policy(&self, service_key: &str, policy: Option<Arc<HealthPolicyIdentity>>) {
@@ -541,6 +567,7 @@ impl ServiceDiscoveryCoordinator {
         let current = cell.active.load_full();
         if Arc::ptr_eq(&active, &current) {
             Self::publish_policy_snapshot(
+                service_key,
                 &cell,
                 &active,
                 policy.is_some(),
@@ -580,6 +607,7 @@ impl ServiceDiscoveryCoordinator {
         let current = cell.active.load_full();
         if Arc::ptr_eq(&active, &current) {
             Self::publish_policy_snapshot(
+                service_key,
                 &cell,
                 &active,
                 active.health_policy_present,
@@ -601,6 +629,7 @@ impl ServiceDiscoveryCoordinator {
             return;
         }
         Self::publish_policy_snapshot(
+            service_key,
             &cell,
             &active,
             active.health_policy_present,
@@ -960,13 +989,17 @@ impl ServiceDiscoveryCoordinator {
                         crate::observe::metrics::record_cb_recovery(service_key);
                     }
                 }
-                cell.active.store(Arc::new(ServiceRuntimeSnapshot {
-                    membership_identity: Some(projection.membership_identity),
-                    entries: Arc::new(entries),
-                    health_policy_present: health_policy.is_some(),
-                    outlier_policy_present: outlier_policy.is_some(),
-                    degrade_threshold: crate::backends::degrade_threshold::resolve_degrade_threshold(service_key),
-                }));
+                cell.active.store(Arc::new(
+                    ServiceRuntimeSnapshot {
+                        membership_identity: Some(projection.membership_identity),
+                        entries: Arc::new(entries),
+                        health_policy_present: health_policy.is_some(),
+                        outlier_policy_present: outlier_policy.is_some(),
+                        degrade_threshold: crate::backends::degrade_threshold::resolve_degrade_threshold(service_key),
+                        degrade_selections: None,
+                    }
+                    .with_degrade_counter(service_key, &old_active),
+                ));
                 let _guard = cell.sp_build_lock.lock();
                 cell.sp.store(Arc::new(BTreeMap::new()));
             }

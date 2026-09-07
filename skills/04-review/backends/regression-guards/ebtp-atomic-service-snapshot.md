@@ -11,6 +11,13 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
+**Current verification limit (2026-09-07):** the shared section selector now reads
+`ServiceRuntimeSnapshot.degrade_threshold`, not the captured EBTP override. The
+panic-capture claims below describe the required contract and historical fix,
+not verified current compliance. The discrepancy is tracked in
+`tasks/todo/service-degrade-threshold-capture-coherence.md`. The selection Counter
+fix uses the actual selector snapshot and does not resolve this policy boundary.
+
 HTTP/gRPC Service requests capture an optional `Arc<EffectiveBackendTrafficPolicy>` at
 first `begin_upstream_attempt` and reuse it for later attempts of that request.
 Live `get_lb_policy` / `get_authority` / `get_retry_budget` /
@@ -84,8 +91,8 @@ Re-open this decision only if:
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
 - Retry-budget window rotation is covered by
   [retry-budget epoch coherence](retry-budget-epoch-coherence.md).
-- Sibling todos remain out of scope: LB runtime-handle capture and degrade-mode
-  gauge lifecycle.
+- LB runtime-handle capture remains out of scope. Degrade metric lifecycle is
+  covered by [selection Counter ownership](../../lb/regression-guards/degrade-selection-counter-ownership.md).
 
 ## Resolution references
 

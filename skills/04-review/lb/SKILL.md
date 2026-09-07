@@ -17,6 +17,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Service degrade selection Counter ownership and lifecycle](regression-guards/degrade-selection-counter-ownership.md)
+
 - [lb-F004 — consistent-hash walk charges budget per distinct backend, not per ring slot](regression-guards/consistent-hash-duplicate-node-budget.md)
 - [ConsistentHashRing::select Per-Request HashSet Allocation](regression-guards/consistent-hash-ring-seenset-no-heap.md)
 - [LB Backend Wrapper Name Boundary — FIXED](regression-guards/lb-backend-wrapper-name-boundary.md)

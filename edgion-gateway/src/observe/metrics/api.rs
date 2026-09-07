@@ -6,12 +6,12 @@
 //! that primitive and exposes a standalone `serve`/`serve_with_shutdown`
 //! suitable for Gateway's dedicated metrics port.
 
-use axum::Router;
+use axum::{response::Response, routing::get, Router};
 use metrics_exporter_prometheus::Matcher;
 
 use crate::cli::config::MetricsConfig;
 use edgion_common::observe::metrics_api::{
-    create_metrics_router as common_create_metrics_router, install_global_recorder, recorder_installed, RecorderConfig,
+    health_handler, install_global_recorder, recorder_installed, render_metrics, RecorderConfig,
 };
 
 /// Initialize the Prometheus metrics exporter with Gateway configuration.
@@ -40,10 +40,18 @@ pub fn init_metrics_exporter(cfg: &MetricsConfig) -> Result<(), String> {
     })
 }
 
-/// Re-export the shared `/metrics` + `/health` router for Gateway's
-/// standalone metrics listener.
+/// Preserve live Service metric handles before the shared exporter can evict
+/// idle series. The synchronous section contains no await or data-plane lock.
+async fn metrics_handler() -> Response {
+    crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(render_metrics)
+}
+
+/// Gateway's standalone metrics listener. All Gateway scrapes must use the
+/// keepalive boundary rather than mounting the shared handler directly.
 pub fn create_metrics_router() -> Router {
-    common_create_metrics_router()
+    Router::new()
+        .route("/metrics", get(metrics_handler))
+        .route("/health", get(health_handler))
 }
 
 /// Serve the metrics API with graceful shutdown support.

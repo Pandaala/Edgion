@@ -71,11 +71,11 @@ spec:
           for: 5m
           labels: {severity: warning}
           annotations: {summary: "Wasm guest {{ $labels.module }} trapping or failing closed"}
-        - alert: EdgionLbDegradeMode
-          expr: edgion_lb_degrade_mode == 1
+        - alert: EdgionLbDegradeSelections
+          expr: increase(edgion_lb_degrade_selections_total[15m]) > 0
           for: 5m
           labels: {severity: warning}
-          annotations: {summary: "Load-balancer degrade mode engaged for service {{ $labels.service }}"}
+          annotations: {summary: "Degrade selections observed for service {{ $labels.service }} in the last 15m"}
         - alert: EdgionUnexpectedApplyDuringInit
           expr: increase(edgion_controller_unexpected_apply_during_init_total[15m]) > 0
           for: 5m

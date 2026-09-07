@@ -62,7 +62,7 @@ Every Edgion metric is classified `self` (gateway/controller own health) or `bus
 (tenant traffic outcomes) in the inventory. The split is documentation only — there is
 no runtime `category` label. Dashboards mirror the split (self vs business boards). A few
 `business` metrics (`ip_deny_entries_skipped`, `connection_rate_limit_redis_failure`,
-`lb_degrade_mode`) are alerted as operational health — the category label is documentation,
+`lb_degrade_selections_total`) are alerted as operational health — the category label is documentation,
 not an alerting boundary.
 
 ## Deploy decision (is it shipped with Edgion?)
