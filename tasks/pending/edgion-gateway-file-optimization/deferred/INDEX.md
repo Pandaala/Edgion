@@ -79,6 +79,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0080 — Reduce per-chunk condition extraction cost | needs-investigation | [campaign finding](D0080-response-body-condition-extraction-cost.md) |
 | D0081 — Fail closed on plugin IP matcher limit violations | needs-investigation | [campaign finding](D0081-plugin-ip-matcher-limit-activation.md) |
 | D0082 — Fail closed on invalid AiGuard/AiProxy ordering | needs-investigation | [campaign finding](D0082-ai-guard-proxy-order-activation.md) |
+| D0083 — Define stage-aware dye capability and producer parity | needs-discussion | [campaign finding](D0083-stage-aware-dye-capability-parity.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -155,3 +156,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reduce per-chunk response-body condition extraction cost | pending | [task](../../../todo/reduce-response-body-condition-extraction-cost.md) |
 | Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
 | Fail closed on invalid AiGuard/AiProxy ordering | pending | [task](../../../todo/fail-closed-ai-guard-proxy-order-violations.md) |
+| Define stage-aware dye capability and producer parity | pending | [task](../../../todo/define-stage-aware-dye-capability-and-producer-parity.md) |

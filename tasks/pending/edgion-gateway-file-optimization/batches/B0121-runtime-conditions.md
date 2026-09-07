@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `86ea7498`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned files:
   - `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs`
@@ -53,4 +53,4 @@
 - Correction: the valid and invalid generations now derive from the same body-consuming DSL entry; the invalid generation changes only its TimeRange condition while the DSL source, body requirement, name, and every unrelated field remain identical. The exact hot-update test and all 18 PluginStore compilation/publication tests pass; production logic and the other allow-list files are unchanged.
 - Final re-review: LGTM with no Must Fix or Should Fix. The reviewer independently confirmed the condition-only DSL delta, all prior production conclusions, exact four-file implementation scope, D0081/D0082 separation, and frozen integration-test disposition.
 - Verification: 18 PluginStore publication, 40 evaluator, 36 PluginRuntime, 27 BodyGate, and 18 conditional-wrapper tests passed after the final correction. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA force, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen 3,084-file integration guards all passed at `486e8fea`; Clippy emitted only the existing warning set.
-- Commit: pending.
+- Commit: `8a0f44c3`.
