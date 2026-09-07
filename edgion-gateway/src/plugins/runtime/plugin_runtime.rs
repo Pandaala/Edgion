@@ -299,11 +299,13 @@ impl PluginRuntime {
         !self.invalid_plugins.is_empty()
     }
 
-    /// Record an active plugin entry whose condition references were not
-    /// resolved by the controller. The plugin store detects this transport
-    /// state before runtime construction; sealing then installs the canonical
-    /// fail-closed request gate.
-    pub(crate) fn record_unresolved_condition(&mut self, plugin: &EdgionPlugin) {
+    /// Record an active plugin entry whose conditions cannot be activated.
+    ///
+    /// The plugin store detects condition compile/validation failures and
+    /// load-bearing unresolved references before runtime construction. These
+    /// failures always replace the generation with the canonical fail-closed
+    /// request gate, including when the wrapped plugin is DSL.
+    pub(crate) fn record_invalid_condition(&mut self, plugin: &EdgionPlugin) {
         self.invalid_plugins
             .record_non_retainable(Self::get_plugin_name(plugin));
     }

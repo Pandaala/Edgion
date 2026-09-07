@@ -28,4 +28,4 @@
 - Implementation: corrected only Rustdoc and `#[cfg(test)]` code. The shared request mock now exposes its `Arc<AtomicUsize>` invocation count; run/skip cases assert exactly one/zero calls. Six new tests cover synchronous response headers, response chunks including chunk/EOS/duration passthrough, and asynchronous responses. Production executable logic is unchanged.
 - Review: independent final review at `4d42b973` approved worktree blob `f7ad025f` with no Must Fix, Should Fix, deferred finding, or integration issue. It confirmed all wrapper results, `cond_skip`, invocation counts, body/error semantics, streaming/no-log chunk behavior, forwarding metadata, and shared condition invariants.
 - Verification: 18 focused conditional-wrapper tests passed. Locked workspace all-target check and Clippy, locked Gateway binary build, format, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen 3,084-file integration guards passed at `4d42b973`; Clippy retained only existing warnings.
-- Commit: pending.
+- Commit: `486e8fea`.

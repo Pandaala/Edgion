@@ -44,13 +44,15 @@ pub struct CompiledPlugins {
     pub spec: Arc<EdgionPlugins>,
     /// The compiled plugin runtime, built once per (ns/name) and Arc-shared.
     pub plugin_runtime: Arc<PluginRuntime>,
-    /// Preparse/validation errors collected while building the runtime
-    /// (surfaced into the resource's K8s status condition by the controller).
+    /// Gateway-side preparse/validation diagnostics collected while building
+    /// the runtime. The Controller independently mirrors static diagnostics via
+    /// `EdgionPlugins::validate_plugins` when writing the resource status.
     pub preparse_errors: Vec<String>,
     /// Whether this compiled resource is safe to activate.
     ///
     /// Some preparse errors only sanitize non-runtime declarations, so
-    /// `preparse_errors.is_empty()` is not an activation predicate.
+    /// `preparse_errors.is_empty()` is not an activation predicate. Activation
+    /// is derived from `PluginRuntime::invalid_plugins` before sealing.
     pub is_activatable: bool,
     /// Whether an invalid update should retain the prior activatable runtime.
     ///
@@ -219,10 +221,16 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
 }
 
 /// Compile regex patterns and validate static config in conditions for all
-/// plugin entries. Both compile failures (regex) and validate failures (e.g.
-/// malformed `timeRange` bounds) record error diagnostics, which `compile_plugins`
-/// then forwards to `seal_fail_closed`.
+/// plugin entries. Detailed compile, validation, and unresolved-reference
+/// diagnostics are retained in `preparse_errors`; activation-critical failures
+/// are also recorded in `PluginRuntime` so `compile_plugins` installs the
+/// canonical fail-closed gate.
 fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, runtime: &mut PluginRuntime) {
+    // One entry may fail in its primary gate, secondary body gate, and several
+    // dye rules. Preserve every detailed diagnostic, but record its plugin name
+    // only once for the eventual RejectFilter access-log entry.
+    let mut invalid_entries = HashSet::<(&'static str, usize)>::new();
+
     macro_rules! compile_entries {
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
@@ -233,8 +241,10 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                     if !entry.is_enabled() || entry.policy_action.is_some() {
                         continue;
                     }
+                    let mut invalid = false;
                     if let Some(conds) = entry.conditions.as_mut() {
                         if let Err(errs) = conds.compile() {
+                            invalid = true;
                             for e in errs {
                                 let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
                                 tracing::warn!("{}", msg);
@@ -242,6 +252,7 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                             }
                         }
                         if let Err(errs) = conds.validate() {
+                            invalid = true;
                             for e in errs {
                                 let msg = format!("{}[{}] conditions: {}", $label, i, e);
                                 tracing::warn!("{}", msg);
@@ -252,8 +263,11 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                             let msg = format!("{}[{}] conditions contain unresolved references", $label, i);
                             tracing::warn!("{}", msg);
                             errors.push(msg);
-                            runtime.record_unresolved_condition(&entry.plugin);
+                            invalid = true;
                         }
+                    }
+                    if invalid && invalid_entries.insert(($label, i)) {
+                        runtime.record_invalid_condition(&entry.plugin);
                     }
                 }
             }
@@ -283,17 +297,16 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                     if !entry.is_enabled() || entry.policy_action.is_some() {
                         continue;
                     }
-                    let entry_refs_unresolved = entry
-                        .conditions
-                        .as_ref()
-                        .is_some_and(PluginConditionsExt::has_unresolved_refs);
+                    let mut invalid = false;
                     if let Some(conds) = entry.body.as_mut().and_then(|b| b.conditions.as_mut()) {
                         if let Err(errs) = conds.compile() {
+                            invalid = true;
                             for e in errs {
                                 errors.push(format!("{}[{}] body conditions regex: {}", $label, i, e));
                             }
                         }
                         if let Err(errs) = conds.validate() {
+                            invalid = true;
                             for e in errs {
                                 errors.push(format!("{}[{}] body conditions: {}", $label, i, e));
                             }
@@ -303,10 +316,11 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                                 "{}[{}] body conditions contain unresolved references",
                                 $label, i
                             ));
-                            if !entry_refs_unresolved {
-                                runtime.record_unresolved_condition(&entry.plugin);
-                            }
+                            invalid = true;
                         }
+                    }
+                    if invalid && invalid_entries.insert(($label, i)) {
+                        runtime.record_invalid_condition(&entry.plugin);
                     }
                 }
             }
@@ -324,21 +338,30 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                     if !entry.is_enabled() || entry.policy_action.is_some() {
                         continue;
                     }
+                    let mut invalid = false;
                     if let Some(dye) = entry.dye.as_mut() {
                         for rule in dye.request.iter_mut().chain(dye.response.iter_mut()) {
                             if let Some(conds) = rule.conditions.as_mut() {
                                 if let Err(errs) = conds.compile() {
+                                    invalid = true;
                                     for e in errs {
                                         errors.push(format!("{}[{}] dye conditions regex: {}", $label, i, e));
                                     }
                                 }
                                 if let Err(errs) = conds.validate() {
+                                    invalid = true;
                                     for e in errs {
                                         errors.push(format!("{}[{}] dye conditions: {}", $label, i, e));
                                     }
                                 }
                             }
                         }
+                    }
+                    // Dye references are observational. An unresolved dye
+                    // predicate simply does not match and must not invalidate
+                    // the entry; only compile/validation failures reach here.
+                    if invalid && invalid_entries.insert(($label, i)) {
+                        runtime.record_invalid_condition(&entry.plugin);
                     }
                 }
             }
@@ -728,14 +751,20 @@ mod access_log_extern_flag_tests {
 #[cfg(test)]
 mod compile_plugins_tests {
     use super::*;
+    use crate::plugins::runtime::log::PluginLog;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::filters::PluginRunningResult;
+    use edgion_resources::resources::edgion_plugins::conditions::PluginConditions;
     use edgion_resources::resources::edgion_plugins::plugin_configs::access_log_extern::{
         AccessLogExternField, LogExtSource,
     };
     use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
     use edgion_resources::resources::edgion_plugins::{
-        EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry, WafConfig, WafMode,
+        BodyRequirement, DyeOutcome, DyeRule, DyeSuite, EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry,
+        UpstreamResponseFilterEntry, WafConfig, WafMode,
     };
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
+    use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 
     fn header_modifier() -> EdgionPlugin {
         EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
@@ -746,6 +775,317 @@ mod compile_plugins_tests {
             add: None,
             remove: None,
         })
+    }
+
+    fn conditions(value: serde_json::Value) -> PluginConditions {
+        serde_json::from_value(value).expect("condition fixture must deserialize")
+    }
+
+    fn malformed_time_range_conditions() -> PluginConditions {
+        conditions(serde_json::json!({
+            "run": { "allOf": [{ "type": "timeRange", "after": "not-rfc3339" }] }
+        }))
+    }
+
+    fn bad_regex_conditions() -> PluginConditions {
+        conditions(serde_json::json!({
+            "run": { "allOf": [{
+                "type": "keyMatch",
+                "key": { "type": "header", "name": "X-Test" },
+                "regex": ["("]
+            }] }
+        }))
+    }
+
+    fn unresolved_conditions() -> PluginConditions {
+        conditions(serde_json::json!({
+            "run": { "allOf": [{
+                "type": "remoteIpMatch",
+                "ipRefs": [{ "name": "missing" }],
+                "negate": true
+            }] }
+        }))
+    }
+
+    fn body_dsl_entry() -> RequestFilterEntry {
+        RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "body-condition-test".to_string(),
+            source: Some("let found = req.body.contains(\"needle\")".to_string()),
+            ..Default::default()
+        }))
+    }
+
+    fn dsl_resource(entry: RequestFilterEntry) -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some("condition-test".to_string()),
+                ..Default::default()
+            },
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    fn response_dye(conditions: Vec<PluginConditions>) -> DyeSuite {
+        DyeSuite {
+            request: Vec::new(),
+            response: conditions
+                .into_iter()
+                .enumerate()
+                .map(|(index, conditions)| DyeRule {
+                    name: format!("X-Condition-Dye-{index}"),
+                    on: vec![DyeOutcome::FailOpen, DyeOutcome::FailClose],
+                    value: None,
+                    conditions: Some(conditions),
+                })
+                .collect(),
+        }
+    }
+
+    fn entry_condition_resource(condition: PluginConditions) -> EdgionPlugins {
+        let mut entry = body_dsl_entry();
+        entry.conditions = Some(condition);
+        dsl_resource(entry)
+    }
+
+    fn body_condition_resource(condition: PluginConditions) -> EdgionPlugins {
+        let mut entry = body_dsl_entry();
+        entry.body = Some(BodyRequirement {
+            conditions: Some(condition),
+            ..Default::default()
+        });
+        dsl_resource(entry)
+    }
+
+    fn dye_condition_resource(condition: PluginConditions) -> EdgionPlugins {
+        let mut entry = body_dsl_entry();
+        entry.dye = Some(response_dye(vec![condition]));
+        dsl_resource(entry)
+    }
+
+    fn assert_leading_reject(compiled: &CompiledPlugins) {
+        assert_eq!(
+            compiled
+                .plugin_runtime
+                .request_plugins_iter()
+                .next()
+                .map(|filter| filter.name()),
+            Some("RejectInvalidConfig")
+        );
+    }
+
+    #[test]
+    fn active_condition_error_matrix_seals_fail_closed() {
+        let cases = [
+            (
+                "entry timeRange",
+                entry_condition_resource(malformed_time_range_conditions()),
+                "conditions: timeRange.after",
+            ),
+            (
+                "entry regex",
+                entry_condition_resource(bad_regex_conditions()),
+                "conditions regex:",
+            ),
+            (
+                "body timeRange",
+                body_condition_resource(malformed_time_range_conditions()),
+                "body conditions: timeRange.after",
+            ),
+            (
+                "body regex",
+                body_condition_resource(bad_regex_conditions()),
+                "body conditions regex:",
+            ),
+            (
+                "dye timeRange",
+                dye_condition_resource(malformed_time_range_conditions()),
+                "dye conditions: timeRange.after",
+            ),
+            (
+                "dye regex",
+                dye_condition_resource(bad_regex_conditions()),
+                "dye conditions regex:",
+            ),
+        ];
+
+        for (name, resource, expected_error) in cases {
+            let mut controller_errors = resource.validate_plugins();
+            controller_errors.sort();
+            let compiled = compile_plugins(&resource);
+            let mut gateway_errors = compiled.preparse_errors.clone();
+            gateway_errors.sort();
+
+            assert_eq!(gateway_errors, controller_errors, "static validation parity: {name}");
+            assert!(
+                compiled
+                    .preparse_errors
+                    .iter()
+                    .any(|error| error.contains(expected_error)),
+                "missing {expected_error:?} for {name}: {:?}",
+                compiled.preparse_errors
+            );
+            assert!(!compiled.is_activatable, "{name}");
+            assert!(!compiled.retain_previous_on_invalid_update, "{name}");
+            assert_leading_reject(&compiled);
+        }
+    }
+
+    #[test]
+    fn unresolved_body_condition_is_nonactivatable_nonretainable_and_sealed() {
+        let compiled = compile_plugins(&body_condition_resource(unresolved_conditions()));
+
+        assert!(compiled
+            .preparse_errors
+            .iter()
+            .any(|error| { error == "requestPlugins[0] body conditions contain unresolved references" }));
+        assert!(!compiled.is_activatable);
+        assert!(!compiled.retain_previous_on_invalid_update);
+        assert_leading_reject(&compiled);
+    }
+
+    #[test]
+    fn unresolved_dye_condition_remains_observational_while_malformed_dye_is_invalid() {
+        let unresolved = compile_plugins(&dye_condition_resource(unresolved_conditions()));
+        assert!(unresolved.is_activatable);
+        assert!(unresolved.preparse_errors.is_empty());
+        assert!(unresolved
+            .plugin_runtime
+            .request_plugins_iter()
+            .all(|filter| filter.name() != "RejectInvalidConfig"));
+
+        for resource in [
+            dye_condition_resource(malformed_time_range_conditions()),
+            dye_condition_resource(bad_regex_conditions()),
+        ] {
+            let compiled = compile_plugins(&resource);
+            assert!(!compiled.is_activatable);
+            assert!(!compiled.retain_previous_on_invalid_update);
+            assert_leading_reject(&compiled);
+        }
+    }
+
+    #[test]
+    fn dsl_condition_failure_replaces_last_known_good_generation() {
+        let key = "default/condition-test".to_string();
+        let valid_entry = body_dsl_entry();
+        let mut invalid_entry = valid_entry.clone();
+        invalid_entry.conditions = Some(malformed_time_range_conditions());
+        let valid = compile_plugins(&dsl_resource(valid_entry));
+        let invalid = compile_plugins(&dsl_resource(invalid_entry));
+        assert!(valid.is_activatable);
+        assert!(!invalid.is_activatable);
+        assert!(!invalid.retain_previous_on_invalid_update);
+        assert_leading_reject(&invalid);
+
+        let store = PluginStore::new();
+        store.apply_delta(
+            HashMap::from([(key.clone(), Arc::clone(&valid))]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        store.apply_delta(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::clone(&invalid))]),
+            &HashSet::new(),
+        );
+
+        let snapshot = store.snapshot.load();
+        let published = snapshot.plugins.get(&key).expect("updated generation is published");
+        assert!(Arc::ptr_eq(published, &invalid));
+        assert!(!Arc::ptr_eq(published, &valid));
+        assert_leading_reject(published);
+    }
+
+    #[tokio::test]
+    async fn condition_invalid_entry_is_logged_once_across_all_condition_sites() {
+        let mut entry = body_dsl_entry();
+        entry.conditions = Some(malformed_time_range_conditions());
+        entry.body = Some(BodyRequirement {
+            conditions: Some(bad_regex_conditions()),
+            ..Default::default()
+        });
+        entry.dye = Some(response_dye(vec![
+            malformed_time_range_conditions(),
+            bad_regex_conditions(),
+        ]));
+        let compiled = compile_plugins(&dsl_resource(entry));
+
+        for expected in [
+            "conditions: timeRange.after",
+            "body conditions regex:",
+            "dye conditions: timeRange.after",
+            "dye conditions regex:",
+        ] {
+            assert!(
+                compiled.preparse_errors.iter().any(|error| error.contains(expected)),
+                "missing {expected:?}: {:?}",
+                compiled.preparse_errors
+            );
+        }
+        assert_leading_reject(&compiled);
+
+        let reject = compiled
+            .plugin_runtime
+            .request_plugins_iter()
+            .next()
+            .expect("reject gate is installed");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(reject.name());
+        let result = reject.run_request(&mut session, &mut log).await;
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+
+        let serialized = serde_json::to_value(&log).expect("PluginLog serializes");
+        let entries = serialized["log"].as_array().expect("reject log entries");
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.as_str() == Some("err: invalid plugin config"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.as_str() == Some("err: Dsl"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn inactive_and_policy_stamped_malformed_conditions_remain_inert() {
+        for (name, mut entry) in [("disabled", body_dsl_entry()), ("policy bypass", body_dsl_entry())] {
+            entry.conditions = Some(malformed_time_range_conditions());
+            entry.body = Some(BodyRequirement {
+                conditions: Some(bad_regex_conditions()),
+                ..Default::default()
+            });
+            entry.dye = Some(response_dye(vec![malformed_time_range_conditions()]));
+            if name == "disabled" {
+                entry.enable = false;
+            } else {
+                entry.policy_action = Some(PluginPolicyAction::Bypass);
+            }
+
+            let resource = dsl_resource(entry);
+            assert!(resource.validate_plugins().is_empty(), "{name}");
+            let compiled = compile_plugins(&resource);
+            assert!(
+                compiled.preparse_errors.is_empty(),
+                "{name}: {:?}",
+                compiled.preparse_errors
+            );
+            assert!(compiled.is_activatable, "{name}");
+            assert!(compiled
+                .plugin_runtime
+                .request_plugins_iter()
+                .all(|filter| filter.name() != "RejectInvalidConfig"));
+        }
     }
 
     #[test]
@@ -1518,6 +1858,30 @@ mod compile_plugins_tests {
             (
                 "disabled_bad_condition",
                 mk(Some(vec![disabled_with_bad_condition()]), None),
+            ),
+            (
+                "bad_entry_time_range_condition",
+                entry_condition_resource(malformed_time_range_conditions()),
+            ),
+            (
+                "bad_entry_regex_condition",
+                entry_condition_resource(bad_regex_conditions()),
+            ),
+            (
+                "bad_body_time_range_condition",
+                body_condition_resource(malformed_time_range_conditions()),
+            ),
+            (
+                "bad_body_regex_condition",
+                body_condition_resource(bad_regex_conditions()),
+            ),
+            (
+                "bad_dye_time_range_condition",
+                dye_condition_resource(malformed_time_range_conditions()),
+            ),
+            (
+                "bad_dye_regex_condition",
+                dye_condition_resource(bad_regex_conditions()),
             ),
             (
                 "mixed_multi_stage",

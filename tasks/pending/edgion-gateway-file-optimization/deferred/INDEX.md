@@ -77,6 +77,8 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0073 — Isolate Wasm host panics at VM boundaries | resolved | [campaign finding](D0073-wasm-host-panic-isolation.md) |
 | D0079 — Correct PluginRuntime architecture documentation | needs-implementation | [campaign finding](D0079-plugin-runtime-architecture-documentation.md) |
 | D0080 — Reduce per-chunk condition extraction cost | needs-investigation | [campaign finding](D0080-response-body-condition-extraction-cost.md) |
+| D0081 — Fail closed on plugin IP matcher limit violations | needs-investigation | [campaign finding](D0081-plugin-ip-matcher-limit-activation.md) |
+| D0082 — Fail closed on invalid AiGuard/AiProxy ordering | needs-investigation | [campaign finding](D0082-ai-guard-proxy-order-activation.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -151,3 +153,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Emit bounded diagnostics for outbound warnIfMissing fields | pending | [task](../../../todo/outbound-warn-if-missing-diagnostics.md) |
 | Correct PluginRuntime architecture documentation | pending | [task](../../../todo/correct-plugin-runtime-architecture-documentation.md) |
 | Reduce per-chunk response-body condition extraction cost | pending | [task](../../../todo/reduce-response-body-condition-extraction-cost.md) |
+| Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
+| Fail closed on invalid AiGuard/AiProxy ordering | pending | [task](../../../todo/fail-closed-ai-guard-proxy-order-violations.md) |

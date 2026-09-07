@@ -8,7 +8,7 @@ use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::conditions::extract::{extract_jwt_claim_values, extract_mtls_values};
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::PluginSession;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::conditions::{
     AllOfGroup, AnyOfClause, Condition, ConditionSet, JwtClaimMatchCondition, KeyExistCondition, KeyMatchCondition,
@@ -48,11 +48,40 @@ pub(crate) struct SetEval<'a> {
     pub(crate) cause: Option<&'a str>,
 }
 
+struct CompiledTimeRangeCondition {
+    after: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+    negate: bool,
+}
+
+impl CompiledTimeRangeCondition {
+    fn new(condition: &TimeRangeCondition) -> Self {
+        Self {
+            after: parse_time_range_bound(condition.after.as_deref()),
+            before: parse_time_range_bound(condition.before.as_deref()),
+            negate: condition.negate,
+        }
+    }
+
+    fn evaluate(&self) -> bool {
+        let now = Utc::now();
+        self.evaluate_at(&now)
+    }
+
+    fn evaluate_at(&self, now: &DateTime<Utc>) -> bool {
+        apply_negate(
+            time_range_matches_at(now, self.after.as_ref(), self.before.as_ref()),
+            self.negate,
+        )
+    }
+}
+
 enum CompiledPredicate {
     Sync {
         condition: Condition,
         hmac: Option<HmacVerifier>,
     },
+    TimeRange(CompiledTimeRangeCondition),
     HmacBody {
         verifier: HmacVerifier,
         negate: bool,
@@ -71,6 +100,7 @@ impl CompiledCondition {
         let unresolved = condition.has_unresolved_refs();
         let descriptor = condition_descriptor(&descriptor, condition);
         let predicate = match condition {
+            Condition::TimeRange(config) => CompiledPredicate::TimeRange(CompiledTimeRangeCondition::new(config)),
             Condition::HmacAuth(config) if config.validate_request_body && !unresolved => CompiledPredicate::HmacBody {
                 verifier: HmacVerifier::new(config, body_requirement),
                 negate: config.negate,
@@ -104,6 +134,13 @@ impl CompiledCondition {
                     _ => condition.evaluate(session, None),
                 };
                 if matched {
+                    MatchState::True
+                } else {
+                    MatchState::False
+                }
+            }
+            CompiledPredicate::TimeRange(condition) => {
+                if condition.evaluate() {
                     MatchState::True
                 } else {
                     MatchState::False
@@ -771,6 +808,16 @@ fn apply_negate(base: bool, negate: bool) -> bool {
     }
 }
 
+fn parse_time_range_bound(bound: Option<&str>) -> Option<DateTime<Utc>> {
+    bound
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn time_range_matches_at(now: &DateTime<Utc>, after: Option<&DateTime<Utc>>, before: Option<&DateTime<Utc>>) -> bool {
+    after.is_none_or(|after| now >= after) && before.is_none_or(|before| now < before)
+}
+
 /// Values (exact / HashSet / case fold) OR compiled regex. Logs when regex was configured but not compiled.
 fn match_core(core: &MatchCore, value: &str, log: Option<&mut PluginLog>) -> bool {
     if core.matches(value) {
@@ -809,29 +856,12 @@ impl TimeRangeConditionExt for TimeRangeCondition {
     /// Evaluate time range condition
     fn evaluate(&self) -> bool {
         let now = Utc::now();
-        let mut base = true;
-
-        // Check 'after' bound
-        if let Some(after_str) = &self.after {
-            if let Ok(after_time) = chrono::DateTime::parse_from_rfc3339(after_str) {
-                if now < after_time {
-                    base = false;
-                }
-            }
-        }
-
-        // Check 'before' bound
-        if base {
-            if let Some(before_str) = &self.before {
-                if let Ok(before_time) = chrono::DateTime::parse_from_rfc3339(before_str) {
-                    if now >= before_time {
-                        base = false;
-                    }
-                }
-            }
-        }
-
-        apply_negate(base, self.negate)
+        let after = parse_time_range_bound(self.after.as_deref());
+        let before = parse_time_range_bound(self.before.as_deref());
+        apply_negate(
+            time_range_matches_at(&now, after.as_ref(), before.as_ref()),
+            self.negate,
+        )
     }
 }
 
@@ -889,6 +919,93 @@ mod tests {
         });
 
         mock
+    }
+
+    fn fixed_utc(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("valid fixed timestamp")
+            .with_timezone(&Utc)
+    }
+
+    fn compile_time_range(condition: &TimeRangeCondition) -> CompiledCondition {
+        CompiledCondition::compile(
+            &Condition::TimeRange(condition.clone()),
+            "conditions.allOf[0]".to_string(),
+            None,
+        )
+    }
+
+    fn compiled_time_range(compiled: &CompiledCondition) -> &CompiledTimeRangeCondition {
+        let CompiledPredicate::TimeRange(condition) = &compiled.predicate else {
+            panic!("timeRange must use the compiled time predicate");
+        };
+        condition
+    }
+
+    #[test]
+    fn compiled_time_range_stores_parsed_utc_bounds() {
+        let condition = TimeRangeCondition {
+            after: Some("2025-01-01T02:00:00+02:00".to_string()),
+            before: Some("2025-01-01T03:00:00+02:00".to_string()),
+            negate: false,
+            descriptor: Box::from(""),
+        };
+        let compiled = compile_time_range(&condition);
+        let time_range = compiled_time_range(&compiled);
+
+        assert_eq!(time_range.after.as_ref(), Some(&fixed_utc("2025-01-01T00:00:00Z")));
+        assert_eq!(time_range.before.as_ref(), Some(&fixed_utc("2025-01-01T01:00:00Z")));
+        assert_eq!(compiled.descriptor(), "conditions.allOf[0]:timeRange");
+    }
+
+    #[test]
+    fn time_range_matches_at_is_after_inclusive_and_before_exclusive() {
+        let condition = TimeRangeCondition {
+            after: Some("2025-01-01T00:00:00Z".to_string()),
+            before: Some("2025-01-01T01:00:00Z".to_string()),
+            negate: false,
+            descriptor: Box::from(""),
+        };
+        let compiled = compile_time_range(&condition);
+        let time_range = compiled_time_range(&compiled);
+
+        assert!(!time_range.evaluate_at(&fixed_utc("2024-12-31T23:59:59Z")));
+        assert!(time_range.evaluate_at(&fixed_utc("2025-01-01T00:00:00Z")));
+        assert!(time_range.evaluate_at(&fixed_utc("2025-01-01T00:30:00Z")));
+        assert!(!time_range.evaluate_at(&fixed_utc("2025-01-01T01:00:00Z")));
+    }
+
+    #[test]
+    fn compiled_time_range_evaluate_at_applies_negation_once() {
+        let condition = TimeRangeCondition {
+            after: Some("2025-01-01T00:00:00Z".to_string()),
+            before: Some("2025-01-01T01:00:00Z".to_string()),
+            negate: true,
+            descriptor: Box::from(""),
+        };
+        let compiled = compile_time_range(&condition);
+        let time_range = compiled_time_range(&compiled);
+
+        assert!(!time_range.evaluate_at(&fixed_utc("2025-01-01T00:30:00Z")));
+        assert!(time_range.evaluate_at(&fixed_utc("2025-01-01T01:00:00Z")));
+    }
+
+    #[test]
+    fn compiled_time_range_treats_invalid_bound_as_absent_defensively() {
+        let condition = TimeRangeCondition {
+            after: Some("not-a-timestamp".to_string()),
+            before: Some("2025-01-01T01:00:00Z".to_string()),
+            negate: false,
+            descriptor: Box::from(""),
+        };
+        assert!(condition.validate().is_err());
+
+        let compiled = compile_time_range(&condition);
+        let time_range = compiled_time_range(&compiled);
+        assert!(time_range.after.is_none());
+        assert_eq!(time_range.before.as_ref(), Some(&fixed_utc("2025-01-01T01:00:00Z")));
+        assert!(time_range.evaluate_at(&fixed_utc("2025-01-01T00:30:00Z")));
+        assert!(!time_range.evaluate_at(&fixed_utc("2025-01-01T01:00:00Z")));
     }
 
     #[test]

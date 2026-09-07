@@ -137,7 +137,7 @@
 | `plugins-http-wasm` | 10 | 0 | 0 | 0 | pending |
 | `plugins-http-webhook-key-get` | 2 | 1 | 1 | 0 | complete |
 | `plugins-root` | 1 | 0 | 1 | 0 | complete |
-| `plugins-runtime` | 34 | 3 | 0 | 0 | pending |
+| `plugins-runtime` | 34 | 4 | 2 | 0 | pending |
 | `plugins-stream` | 18 | 0 | 0 | 0 | pending |
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
@@ -475,7 +475,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | changed | CACHE-001 / `40f7eb74`; support reopened in B0091 and B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | changed | B0090; support reopened in B0091 |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
-| `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | changed | B0062 |
+| `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | changed | B0062; B0121 condition-publication fail-close support |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/mod.rs` | `plugins-http-proxy-rewrite` | source | examined-no-change | B0095 |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs` | `plugins-http-proxy-rewrite` | source | changed | B0095 |
 | `edgion-gateway/src/plugins/http/rate_limit/mod.rs` | `plugins-http-rate-limit` | source | examined-no-change | B0096 |
@@ -518,13 +518,13 @@
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | changed | B0119 |
 | `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | changed | B0120 |
-| `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
-| `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
-| `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | analysis-ready | B0121 |
-| `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | changed | B0121 |
+| `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
+| `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
+| `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | analysis-ready | B0122 |
+| `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | analysis-ready | B0123 |
+| `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | analysis-ready | B0123 |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | analysis-ready | B0124 |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | pending | — |
@@ -534,7 +534,7 @@
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | B0121 condition-publication support; full audit pending |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | REQ-BODY-CORE-001: canonical empty-body digest consumer / `a408d7fd`; full audit pending |
