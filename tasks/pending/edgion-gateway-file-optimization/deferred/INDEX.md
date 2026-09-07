@@ -85,6 +85,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0086 — Decide credentialed native CORS expose-headers wildcard semantics | needs-discussion | [campaign finding](D0086-credentialed-native-cors-expose-headers-wildcard.md) |
 | D0087 — Add debug access-log wire integration coverage | needs-implementation | [campaign finding](D0087-debug-access-log-wire-integration-coverage.md) |
 | D0088 — Define a bounded debug access-log response surface | needs-discussion | [campaign finding](D0088-bounded-debug-access-log-response-surface.md) |
+| D0089 — Fail closed on missing Gateway API ExtensionRef configuration | needs-implementation | [campaign finding](D0089-fail-closed-missing-extensionref-configuration.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -167,3 +168,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Decide credentialed native CORS expose-headers wildcard semantics | pending | [task](../../../todo/decide-credentialed-native-cors-expose-headers-wildcard.md) |
 | Add debug access-log wire integration coverage | pending | [task](../../../todo/add-debug-access-log-wire-integration-coverage.md) |
 | Define a bounded debug access-log response surface | pending | [task](../../../todo/define-bounded-debug-access-log-response-surface.md) |
+| Fail closed on missing Gateway API ExtensionRef configuration | pending | [task](../../../todo/fail-closed-missing-gateway-api-extensionref-configuration.md) |

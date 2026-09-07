@@ -73,7 +73,7 @@ When you write a standard filter in `rules[].filters`, Edgion routes it to the r
 
 `ExtensionRef` is special: the referenced `EdgionPlugins` resource may declare plugins for any stage, so a single `ExtensionRef` entry is attached to the request, response-header, and response-body stages at once. At runtime each stage only runs the plugins from that resource that are valid for it.
 
-> An `ExtensionRef` whose `kind` is a load-balancing policy is not a plugin — it is consumed by backend resolution and does not enter the plugin pipeline.
+> Load-balancing policy `ExtensionRef`s are unsupported. Configure load balancing with an `EdgionBackendTrafficPolicy` instead; load-balancing policy references do not enter the plugin pipeline.
 
 ## ExtensionRef: pointing a route at EdgionPlugins
 

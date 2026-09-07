@@ -42,13 +42,18 @@ async fn write_extension_ref_error_response(session: &mut dyn PluginSession) {
     }
 }
 
+/// Precomputed ExtensionRef target shared by all stage-specific filter clones.
+struct ExtensionRefTarget {
+    name: String,
+    lookup_key: String,
+    supported: bool,
+}
+
 /// Filter that handles ExtensionRef to EdgionPlugins
 #[derive(Clone)]
 pub struct ExtensionRefFilter {
-    /// The namespace to look up the plugin (from the HTTPRoute's namespace)
-    namespace: String,
-    /// The extension reference configuration
-    ext_ref: LocalObjectReference,
+    /// Immutable target data shared by the four stage-specific clones.
+    target: Arc<ExtensionRefTarget>,
     /// Position in the rule's ExtensionRef list, assigned at route build time.
     /// `Some(idx)` -> look up resolved target via `session.resolved_route_ext_ref(idx)`.
     /// `None` -> backend-level filter, resolved through the request-scoped
@@ -59,9 +64,14 @@ pub struct ExtensionRefFilter {
 
 impl ExtensionRefFilter {
     pub fn new(namespace: String, ext_ref: LocalObjectReference) -> Self {
+        let supported = ext_ref.kind == "EdgionPlugins" && (ext_ref.group.is_empty() || ext_ref.group == "edgion.io");
+        let lookup_key = format!("{}/{}", namespace, ext_ref.name);
         Self {
-            namespace,
-            ext_ref,
+            target: Arc::new(ExtensionRefTarget {
+                name: ext_ref.name,
+                lookup_key,
+                supported,
+            }),
             index: None,
         }
     }
@@ -73,14 +83,14 @@ impl ExtensionRefFilter {
         self.index = Some(index);
     }
 
-    /// Build the lookup key: namespace/name
-    fn plugin_key(&self) -> String {
-        format!("{}/{}", self.namespace, self.ext_ref.name)
+    /// Return the precomputed lookup key: namespace/name.
+    fn plugin_key(&self) -> &str {
+        &self.target.lookup_key
     }
 
     /// Check if this extension ref points to EdgionPlugins
     fn is_edgion_plugins(&self) -> bool {
-        self.ext_ref.kind == "EdgionPlugins" && (self.ext_ref.group.is_empty() || self.ext_ref.group == "edgion.io")
+        self.target.supported
     }
 
     /// Resolve the referenced plugin runtime without touching PluginLog or
@@ -98,7 +108,7 @@ impl ExtensionRefFilter {
         }
         let runtime = match self.index {
             Some(idx) => session.resolved_route_ext_ref(idx),
-            None => session.pinned_backend_ext_ref(&self.plugin_key()),
+            None => session.pinned_backend_ext_ref(self.plugin_key()),
         }?;
         if self.index.is_none() && runtime.has_waf() {
             return None;
@@ -107,15 +117,13 @@ impl ExtensionRefFilter {
     }
 
     /// Helper to prepare plugin execution: validation, lookup, logging setup
-    /// Returns:
-    /// - Ok(Some((plugin, token))): Success
-    /// - `Ok(None)`: never returned; the `Option` wrapping is a retained artifact
-    /// - Err(()): Error — unsupported kind, or referenced EdgionPlugins not found; logged
+    /// Returns the resolved runtime and log token, or an error for an
+    /// unsupported kind or missing referenced EdgionPlugins resource.
     fn prepare_execution(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
-    ) -> Result<Option<(Arc<PluginRuntime>, EdgionPluginsLogToken)>, ()> {
+    ) -> Result<(Arc<PluginRuntime>, EdgionPluginsLogToken), ()> {
         if !self.is_edgion_plugins() {
             // An unsupported ExtensionRef kind is a static config error caught
             // at preparse time (`find_invalid_rule_details` /
@@ -125,9 +133,7 @@ impl ExtensionRefFilter {
             return Err(());
         }
 
-        log.set_refer_to(self.ext_ref.name.clone());
-
-        let key = self.plugin_key();
+        log.set_refer_to(self.target.name.clone());
 
         // Resolve target: rule-scope reads the pre-resolved Vec via index;
         // backend-scope resolves through the request-pinned cache.
@@ -139,7 +145,7 @@ impl ExtensionRefFilter {
                     return Err(());
                 }
             },
-            None => match session.pinned_backend_ext_ref(&key) {
+            None => match session.pinned_backend_ext_ref(self.plugin_key()) {
                 Some(rt) => rt,
                 None => {
                     log.push_err("extension ref not found");
@@ -153,8 +159,8 @@ impl ExtensionRefFilter {
             return Err(());
         }
 
-        let token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
-        Ok(Some((plugin_runtime, token)))
+        let token = session.start_edgion_plugins_log(self.target.name.clone());
+        Ok((plugin_runtime, token))
     }
 
     /// Execute the referenced EdgionPlugins's plugin runtime
@@ -165,9 +171,7 @@ impl ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
-            Ok(Some(res)) => res,
-            // Unreachable: prepare_execution never returns Ok(None); see its doc comment.
-            Ok(None) => return PluginRunningResult::GoodNext,
+            Ok(res) => res,
             Err(_) => {
                 // Sync stage: no `await`, so we cannot write a response body
                 // here. Signal the status via `ErrResponse` instead. The
@@ -228,9 +232,7 @@ impl ExtensionRefFilter {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
-            Ok(Some(res)) => res,
-            // Unreachable: prepare_execution never returns Ok(None); see its doc comment.
-            Ok(None) => return PluginRunningResult::GoodNext,
+            Ok(res) => res,
             Err(_) => {
                 // Response stage: a direct write + ErrTerminateRequest would be
                 // forwarded over by the upstream response (the response runner only
@@ -430,11 +432,11 @@ impl UpstreamResponse for ExtensionRefFilter {
             // consistently with the other stages (the runner uses `refer_to` to
             // identify ExtensionRef entries and skip a misleading time_cost).
             Some(_) => {
-                log.set_refer_to(self.ext_ref.name.clone());
+                log.set_refer_to(self.target.name.clone());
                 PluginRunningResult::GoodNext
             }
             None => {
-                log.set_refer_to(self.ext_ref.name.clone());
+                log.set_refer_to(self.target.name.clone());
                 PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
@@ -455,6 +457,25 @@ mod tests {
     use kube::core::ObjectMeta;
     use mockall::predicate::eq;
     use std::collections::HashMap;
+
+    #[test]
+    fn plugin_key_accessor_is_allocation_free() {
+        let filter = ExtensionRefFilter::new(
+            "production".to_string(),
+            LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: "EdgionPlugins".into(),
+                name: "api-guard".into(),
+                resolved_namespace: None,
+            },
+        );
+
+        let (key, allocations) =
+            crate::test_allocation_counter::count_allocation_stats(|| std::hint::black_box(filter.plugin_key()));
+
+        assert_eq!(key, "production/api-guard");
+        assert_eq!(allocations.calls, 0);
+    }
 
     fn make_plugin(key_ns: &str, name: &str) {
         let ep = EdgionPlugins {

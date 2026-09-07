@@ -73,7 +73,7 @@ Edgion 将插件执行划分为四个阶段，与代理生命周期对应：
 
 `ExtensionRef` 比较特殊：被引用的 `EdgionPlugins` 资源可为任意阶段声明插件，因此一个 `ExtensionRef` 条目会同时挂载到请求、响应 Header 和响应体三个阶段。运行时各阶段只执行该资源中适用于本阶段的插件。
 
-> `kind` 为负载均衡策略的 `ExtensionRef` 不是插件——它由后端解析消费，不进入插件流水线。
+> 负载均衡策略类型的 `ExtensionRef` 不受支持。请改用 `EdgionBackendTrafficPolicy` 配置负载均衡；负载均衡策略引用不进入插件流水线。
 
 ## ExtensionRef：将路由指向 EdgionPlugins
 

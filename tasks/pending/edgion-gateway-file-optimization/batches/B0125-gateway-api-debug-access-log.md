@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `8a0f44c3e962f70615e75abde4739e4dae9ed527`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned file:
   - `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs`
@@ -40,4 +40,4 @@
 - Implementation: added the canonical Acquire-load `is_wrap`, suppressed the client-visible header before context access in Wrap mode with the bounded ordinary decision `wrap mode:header suppressed`, preserved Replace/Off emission and header-set behavior, added race-free resources and Gateway policy-seam tests, and synchronized the canonical plus four EN/ZH user/operations contracts.
 - Independent final review: LGTM with no Must Fix or Should Fix. The reviewer independently confirmed mode publication, test isolation, the zero-work Wrap branch, unchanged non-Wrap behavior, terminal diagnostic attachment, sensitive-data containment, all five documentation contracts, exact seven-file scope, and 14 focused tests.
 - Verification: 12 resources sensitivity and 2 Gateway debug-filter tests passed. `cargo fmt --all`, `cargo check --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets`, `cargo build --locked -p edgion-gateway --bin edgion-gateway`, agent-doc, SSA force, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen 3,084-file integration guards passed; Clippy emitted only the existing warning set.
-- Commit: pending.
+- Commit: `da256709`.
