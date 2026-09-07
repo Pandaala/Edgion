@@ -157,6 +157,7 @@
 | File | Batch | Kind | State | Change ID / note |
 |------|-------|------|-------|------------------|
 | `edgion-gateway/Cargo.toml` | `crate-root` | manifest | pending | — |
+| `edgion-gateway/benches/lru_expiration.rs` | `crate-root` | benchmark | pending | Added by external commit `ab8074d0`; full audit pending |
 | `edgion-gateway/build.rs` | `crate-root` | source | pending | — |
 | `edgion-gateway/src/ai/adaptive.rs` | `ai-core` | source | pending | — |
 | `edgion-gateway/src/ai/anthropic/mod.rs` | `ai-anthropic` | source | pending | — |
@@ -183,7 +184,8 @@
 | `edgion-gateway/src/api/mod.rs` | `api` | source | pending | — |
 | `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | changed | `B0033`: concurrent winner permits now prove RAII release to zero without leaking handles |
 | `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | examined-no-change | `B0033`: minimal production RAII wrapper retained |
-| `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | changed | `B0034`: first-occurrence address index makes removed-backend cleanup O(E+R) |
+| `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | removed | `B0034` completed before external commit `8cbbed6c` removed the file |
+| `edgion-gateway/src/backends/discovery/coordinator.rs` | `backends-discovery-shared` | source | pending | Added by external commit `c59a00e1`; full audit pending |
 | `edgion-gateway/src/backends/discovery/dns_cache.rs` | `backends-discovery-shared` | source | deferred | `B0035`: D0001 query identity and Service lifecycle design |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs` | `backends-discovery-endpoints` | source | deferred | `B0037`: D0002 ownership-transition cleanup lifecycle |
 | `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs` | `backends-discovery-endpoints` | source | changed | `B0037`: removed request-path tracing from backend construction |
@@ -216,8 +218,8 @@
 | `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | `backends-policy-traffic` | source | examined-no-change | BACKENDS-POLICY-TRAFFIC-001: atomic window/generation redesign deferred to dedicated TODO |
 | `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | `backends-policy-traffic` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/policy/mod.rs` | `backends-policy-root` | source | examined-no-change | BACKENDS-POLICY-ROOT-001: typed lookup boundary retained; unresolved Service section fail-close redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | examined-no-change | BACKENDS-PORT-RESOLVER-001: precompiled typed fail-close redesign deferred to dedicated TODO |
-| `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | changed | BACKENDS-PRELOAD-001: routable-ref filtering and accurate hydration result; L4 runtime denial deferred to dedicated TODO |
+| `edgion-gateway/src/backends/port_resolver.rs` | `backends-port-resolver` | source | removed | BACKENDS-PORT-RESOLVER-001 completed before external commit `8cbbed6c` removed the file |
+| `edgion-gateway/src/backends/preload.rs` | `backends-core` | source | removed | BACKENDS-PRELOAD-001 completed before external commit `8cbbed6c` removed the file |
 | `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | changed | BACKENDS-RUNTIME-001: TLS-policy-safe selected-backend Debug boundary |
 | `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | examined-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
@@ -257,12 +259,13 @@
 | `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` | `lb-backend-selector` | source | pending | — |
 | `edgion-gateway/src/lb/compiled_selector.rs` | `lb-core` | source | pending | — |
 | `edgion-gateway/src/lb/backend.rs` | `lb-core` | source | pending | — |
-| `edgion-gateway/src/lb/ewma/score.rs` | `lb-ewma` | source | n/a | replaced `metrics.rs`, deleted 2026-09-04 with the global alpha |
+| `edgion-gateway/src/lb/ewma/score.rs` | `lb-ewma` | source | pending | Current tracked implementation after external commit `5c329cfe`; full audit pending |
 | `edgion-gateway/src/lb/ewma/mod.rs` | `lb-ewma` | source | pending | — |
 | `edgion-gateway/src/lb/leastconn/cleaner.rs` | `lb-leastconn` | source | pending | — |
 | `edgion-gateway/src/lb/leastconn/mod.rs` | `lb-leastconn` | source | pending | — |
 | `edgion-gateway/src/lb/mod.rs` | `lb-core` | source | pending | — |
 | `edgion-gateway/src/lb/runtime_state/mod.rs` | `lb-runtime-state` | source | pending | — |
+| `edgion-gateway/src/lb/sample.rs` | `lb-core` | source | pending | Added by external commit `c59a00e1`; full audit pending |
 | `edgion-gateway/src/lb/selection/consistent_hash.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/mod.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/p2c.rs` | `lb-selection` | source | pending | — |
@@ -351,7 +354,7 @@
 | `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | pending | — |
-| `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | changed | B0107: canonical framing helper reused by Wasm callouts |
 | `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/conf_handler_impl.rs` | `plugins-http-framework` | source | changed | B0062 |
 | `edgion-gateway/src/plugins/http/cors/mod.rs` | `plugins-http-cors` | source | examined-no-change | B0068 |
@@ -499,10 +502,10 @@
 | `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | changed | B0106 |
-| `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | in-progress | B0107 |
+| `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | changed | B0107 |
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | analysis-ready | B0108 |
 | `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | analysis-ready | B0109 |
-| `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | analysis-in-progress | B0110 |
+| `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | analysis-ready | B0110 |
 | `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | pending | — |
 | `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | pending | — |
@@ -535,6 +538,7 @@
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | REQ-BODY-CORE-001: canonical empty-body digest consumer / `a408d7fd`; full audit pending |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | pending | — |
+| `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | pending | Added by external commit `b55375ca`; full audit pending |
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/request_filter.rs` | `plugins-runtime` | source | pending | — |
@@ -650,6 +654,7 @@
 | `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/server/listener_builder.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | pending | Added by external commit `8cbbed6c`; full audit pending |
 | `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | pending | — |

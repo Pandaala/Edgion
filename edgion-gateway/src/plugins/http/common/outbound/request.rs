@@ -49,7 +49,7 @@ fn is_hop_owned_expectation_header(name: &str) -> bool {
 /// Incoming framing is never reusable here: the configured method and body can
 /// differ from the downstream request. All current outbound body variants are
 /// replayable byte bodies, so their exact length is known before dispatch.
-pub(super) fn sync_outbound_body_framing(req: &mut reqwest::Request) -> Result<(), String> {
+pub(crate) fn sync_outbound_body_framing(req: &mut reqwest::Request) -> Result<(), String> {
     req.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
     req.headers_mut().remove(reqwest::header::TRANSFER_ENCODING);
 

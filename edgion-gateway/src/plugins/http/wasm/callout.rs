@@ -19,6 +19,7 @@ use crate::plugins::http::common::outbound::call::stream_body_capped;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
 };
+use crate::plugins::http::common::outbound::request::sync_outbound_body_framing;
 use edgion_common::dns::ResolverSpec;
 
 /// Response-body cap for a single callout. A guest-facing verdict payload
@@ -179,7 +180,8 @@ async fn execute_callout_with_client_and_permits(
     }
 }
 
-async fn execute_callout_attempt(callout: PendingCallout, client: &reqwest::Client) -> Result<CalloutResponse, ()> {
+fn build_callout_request(callout: PendingCallout, client: &reqwest::Client) -> Result<(u32, reqwest::Request), ()> {
+    let token = callout.token;
     let url = format!("{}{}", callout.origin, callout.path);
     // Request hot path: the guest-supplied method / URL (query may carry
     // credentials) must not reach tracing.
@@ -201,7 +203,14 @@ async fn execute_callout_attempt(callout: PendingCallout, client: &reqwest::Clie
         req = req.body(callout.body);
     }
 
-    let resp = req.send().await.map_err(|_| ())?;
+    let mut req = req.build().map_err(|_| ())?;
+    sync_outbound_body_framing(&mut req).map_err(|_| ())?;
+    Ok((token, req))
+}
+
+async fn execute_callout_attempt(callout: PendingCallout, client: &reqwest::Client) -> Result<CalloutResponse, ()> {
+    let (token, req) = build_callout_request(callout, client)?;
+    let resp = client.execute(req).await.map_err(|_| ())?;
 
     let status = resp.status().as_u16();
     let mut headers = Vec::with_capacity(resp.headers().len() + 1);
@@ -221,7 +230,7 @@ async fn execute_callout_attempt(callout: PendingCallout, client: &reqwest::Clie
     }
 
     Ok(CalloutResponse {
-        token: callout.token,
+        token,
         headers,
         body: body.into(),
     })
@@ -249,6 +258,80 @@ mod tests {
 
     fn test_client() -> reqwest::Client {
         reqwest::Client::builder().no_proxy().build().expect("test client")
+    }
+
+    #[test]
+    fn request_builder_rebuilds_body_framing_and_preserves_guest_headers() {
+        let client = test_client();
+        let callout = PendingCallout {
+            token: 11,
+            origin: "https://example.test:8443".to_string(),
+            path: "/v1/check?tenant=blue".to_string(),
+            method: "POST".to_string(),
+            authority: Some("service.internal:9443".to_string()),
+            headers: vec![
+                ("content-length".to_string(), "999".to_string()),
+                ("content-length".to_string(), "1".to_string()),
+                ("transfer-encoding".to_string(), "chunked".to_string()),
+                ("x-order".to_string(), "first".to_string()),
+                ("bad header".to_string(), "skipped".to_string()),
+                ("x-invalid".to_string(), "bad\nvalue".to_string()),
+                ("x-order".to_string(), "second".to_string()),
+            ],
+            body: b"payload".to_vec(),
+            timeout_ms: 500,
+        };
+
+        let (token, req) = build_callout_request(callout, &client).expect("callout request should build");
+
+        assert_eq!(token, 11);
+        assert_eq!(req.url().as_str(), "https://example.test:8443/v1/check?tenant=blue");
+        assert_eq!(req.method(), reqwest::Method::POST);
+        assert_eq!(
+            req.body().and_then(reqwest::Body::as_bytes),
+            Some(b"payload".as_slice())
+        );
+        assert_eq!(
+            req.headers()
+                .get(reqwest::header::HOST)
+                .and_then(|value| value.to_str().ok()),
+            Some("service.internal:9443")
+        );
+        assert_eq!(
+            req.headers()
+                .get_all(reqwest::header::CONTENT_LENGTH)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .collect::<Vec<_>>(),
+            vec!["7"]
+        );
+        assert!(req.headers().get(reqwest::header::TRANSFER_ENCODING).is_none());
+        assert_eq!(
+            req.headers()
+                .get_all("x-order")
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert!(req.headers().get("bad header").is_none());
+        assert!(req.headers().get("x-invalid").is_none());
+    }
+
+    #[test]
+    fn bodyless_request_removes_guest_framing_without_adding_zero_length() {
+        let client = test_client();
+        let mut callout = callout("https://example.test".to_string(), 500);
+        callout.headers = vec![
+            ("content-length".to_string(), "99".to_string()),
+            ("transfer-encoding".to_string(), "chunked".to_string()),
+        ];
+
+        let (_, req) = build_callout_request(callout, &client).expect("bodyless callout request should build");
+
+        assert!(req.body().is_none());
+        assert!(req.headers().get(reqwest::header::CONTENT_LENGTH).is_none());
+        assert!(req.headers().get(reqwest::header::TRANSFER_ENCODING).is_none());
     }
 
     #[tokio::test]
