@@ -27,6 +27,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::observed_gen_high_freq::SCENARIO,
         crate::dynamic::scenarios::btlsp_ref_flap::SCENARIO,
         crate::dynamic::scenarios::edgion_config_data_ref_flap::SCENARIO,
+        crate::dynamic::scenarios::region_route_validation::SCENARIO,
         crate::dynamic::scenarios::sp_backend_change::SCENARIO,
         crate::dynamic::scenarios::sp_weighted::SCENARIO,
         crate::dynamic::scenarios::canary_hot_swap::SCENARIO,

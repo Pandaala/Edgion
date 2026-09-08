@@ -82,7 +82,8 @@ Center caller evidence is not a fresh audit of that separate repository.
 
 ## Verification and re-evaluation
 
-Verified on 2026-09-08:
+Original implementation verification on 2026-09-08 (historical; the unit tests
+below were not rerun by the subsequent integration follow-up):
 
 - `cargo test -p edgion-resources --lib region_route`: 16 passed.
 - `cargo test -p edgion-gateway -p edgion-controller --lib region_route`:
@@ -101,11 +102,47 @@ Verified on 2026-09-08:
 - A fresh independent read-only reviewer returned LGTM after corrections to
   the concurrent test-store operation and selected-endpoint parsing description.
 
-Cross-process hot-reload and management-wire coverage is tracked in
-[the integration follow-up](../../../../tasks/todo/region-route-validation-integration.md).
-The frozen `region-route-myregion` integration fixture still has overlapping
-intervals and needs migration before running that suite under this contract.
-No integration suite or full workspace test suite was run for this correction.
+The original correction did not run integration suites. The D0065 integration
+follow-up on 2026-09-08 subsequently migrated `region-route-myregion` to disjoint
+intervals without changing its direct-region or one-hop assertions, and added
+`RegionRouteValidation` in `edgion-tests/src/client/dynamic/scenarios/region_route_validation.rs`.
+The [scenario contract](../../../../edgion-tests/integration/conf/EdgionPlugins/RegionRoute/DynamicTest/README.md)
+documents fixture dependencies, the transition matrix, and synchronization limits.
+
+Fresh follow-up verification:
+
+- `cargo build -p edgion-tests --bin test_client -p edgion-gateway --bin edgion-gateway
+  -p edgion-controller --bin edgion-controller -p edgion-cli --bin edgion-cli`: passed;
+  the revised client was rebuilt with `cargo build -p edgion-tests --bin test_client`.
+- `target/debug/test_client --list-dynamic-scenarios`: passed, including the new
+  scenario's inventory and listener contract.
+- `target/debug/test_client -g -r EdgionPlugins -i RegionRoute`: 19 passed.
+- `target/debug/test_client -g --dynamic-scenario RegionRouteValidation`: passed
+  against a shared local FS Controller/Gateway/test_server topology with conf_sync
+  mTLS. Only `rrv-*` resources mutate within the scenario; cleanup also passed.
+- Latest `cargo check --workspace --all-targets` and
+  `cargo clippy --workspace --all-targets`: passed with existing Clippy warnings.
+- `cargo fmt --all` and the subsequent format check, agent-doc consistency,
+  SSA-force, metrics-inventory, Pingora-source-policy, Gateway no-tracing guards,
+  and `git diff --check`: passed.
+- A fresh independent read-only reviewer returned LGTM for the final tests and
+  knowledge update, including the observed HTTP envelopes and access-log shape.
+
+The new scenario checks Controller status, Gateway raw publication, each consumer's
+effective HTTP view, and fresh traffic independently. A valid replacement selecting
+`b` precedes each invalid/inert/missing transition, which must fall back to the
+local `base`, then recover to `a` without reapplying EdgionPlugins. Modulo 100 and
+1000 consumers sharing one overlay prove that standalone validity is insufficient.
+Management HTTP checks verify 422 and unchanged stored content for invalid
+failover candidates, and successful writes form `a -> b -> c` while requests stop
+at `b`. An invalid base is excluded from the effective view.
+
+Remote selection is proved by the exact RegionRoute access-log target plus
+`BackendLocalhostNotAllowed`; loopback rejection remains active. This does not
+claim successful remote network delivery or DNS-rebinding coverage. Local base
+traffic must reach the shared test backend. Polling establishes eventual agreement
+after serial updates, not a cross-API atomic snapshot. Kubernetes execution and
+the full workspace test suite were not run for this follow-up.
 
 Re-evaluate when hash domains widen, routing rules gain new table dependencies,
 failover becomes recursive, endpoint syntax changes, or overlay publication
@@ -114,6 +151,7 @@ per-consumer bounds when changing store reuse projections.
 
 ## Resolution references
 
-- `D0065` — fixed configuration/runtime validation, 2026-09-08; integration
-  fixture migration and cross-process verification remain in the linked task.
+- `D0065` — fixed configuration/runtime validation, 2026-09-08; the subsequent
+  `region-route-validation-integration` follow-up verified fixture migration,
+  hot reload, per-consumer effective tables, and management HTTP behavior.
 - `B0099` — earlier, separate modulo-zero guard; not evidence of complete table validation.

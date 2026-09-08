@@ -33,7 +33,7 @@ spec:
                 name: X-Direct-Region
         regions:
           - name: virginia
-            hashRange: [0, 599]
+            hashRange: [0, 598]
             backendEndpoint: "127.0.0.1:30001"
             tls: false
           - name: ohio
@@ -42,7 +42,7 @@ spec:
             tls: false
             failoverTo: virginia
           - name: europe
-            hashRange: [0, 0]
+            hashRange: [599, 599]
             backendEndpoint: "127.0.0.1:30003"
             tls: false
             failoverTo: ohio

@@ -43,6 +43,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "ObservedGenHighFreq",
     "BtlspRefFlap",
     "PmdRefFlap",
+    "RegionRouteValidation",
     "SpBackendChange",
     "SpWeighted",
     "CanaryHotSwap",
@@ -1444,6 +1445,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "FormJsonTransformDynamic"
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
+        | "RegionRouteValidation"
         | "RateLimitDynamic"
         | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "WafDynamic" => Some(("EdgionPlugins", PortKind::Http)),
