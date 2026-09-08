@@ -18,4 +18,4 @@
 - Deferred: none; only explicit future re-evaluation triggers were recorded by analysis.
 - Review: `b0160_plan_review` independently verified the full driver, freeze/call paths, every production processor, locked Pingora ordering and focused/integration coverage. It confirmed the async lock owns non-cloneable mutable transaction state rather than a cloneable client, group release is required after cancellation, and no current finalization gap exists. Verdict: LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification: `cargo fmt --all`; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,107-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `68670e9f`; never pushed by the campaign.

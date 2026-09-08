@@ -5,7 +5,7 @@ use edgion_resources::constants::annotations::edgion::{
     TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
 };
 use edgion_resources::resources::common::{ParentReference, RefDenied, TcpKeepaliveConfig};
-use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::http_route::{RouteParentStatus, GATEWAY_API_GROUP};
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -110,11 +110,17 @@ pub(crate) fn to_pingora_tcp_keepalive(config: &TcpKeepaliveConfig) -> pingora_c
 /// until the controller explicitly rejects it, e.g. during the first sync
 /// before status is populated).
 fn is_parent_ref_accepted(pr: &ParentReference, status_parents: &[RouteParentStatus], route_ns: Option<&str>) -> bool {
+    if !is_gateway_parent_ref(pr) {
+        return false;
+    }
+
     let pr_ns = pr.namespace.as_deref().or(route_ns).unwrap_or("default");
 
     for sp in status_parents {
         let sp_ns = sp.parent_ref.namespace.as_deref().or(route_ns).unwrap_or("default");
-        if sp_ns == pr_ns
+        if normalized_parent_group(&sp.parent_ref) == normalized_parent_group(pr)
+            && normalized_parent_kind(&sp.parent_ref) == normalized_parent_kind(pr)
+            && sp_ns == pr_ns
             && sp.parent_ref.name == pr.name
             && sp.parent_ref.section_name == pr.section_name
             && sp.parent_ref.port == pr.port
@@ -128,13 +134,28 @@ fn is_parent_ref_accepted(pr: &ParentReference, status_parents: &[RouteParentSta
     true
 }
 
+#[inline]
+fn normalized_parent_group(pr: &ParentReference) -> &str {
+    pr.group.as_deref().unwrap_or(GATEWAY_API_GROUP)
+}
+
+#[inline]
+fn normalized_parent_kind(pr: &ParentReference) -> &str {
+    pr.kind.as_deref().unwrap_or("Gateway")
+}
+
+#[inline]
+fn is_gateway_parent_ref(pr: &ParentReference) -> bool {
+    normalized_parent_group(pr) == GATEWAY_API_GROUP && normalized_parent_kind(pr) == "Gateway"
+}
+
 /// Filter parentRefs to only those with Accepted=True status.
 ///
 /// Routes whose parentRef is not accepted by any Gateway/Listener are excluded
 /// from compilation, keeping the route table clean and simplifying debugging.
 ///
 /// Returns None if no parentRefs survive (route should be skipped entirely).
-/// When status is not yet available, all parentRefs are included optimistically.
+/// When status is not yet available, Gateway parentRefs are included optimistically.
 pub(crate) fn filter_accepted_parent_refs(
     parent_refs: Option<&[ParentReference]>,
     status_parents: Option<&[RouteParentStatus]>,
@@ -145,14 +166,15 @@ pub(crate) fn filter_accepted_parent_refs(
         return None;
     }
 
-    let status_parents = match status_parents {
-        Some(sp) if !sp.is_empty() => sp,
-        _ => return Some(parent_refs.to_vec()),
-    };
-
     let accepted: Vec<ParentReference> = parent_refs
         .iter()
-        .filter(|pr| is_parent_ref_accepted(pr, status_parents, route_ns))
+        .filter(|pr| {
+            is_gateway_parent_ref(pr)
+                && match status_parents {
+                    Some(sp) if !sp.is_empty() => is_parent_ref_accepted(pr, sp, route_ns),
+                    _ => true,
+                }
+        })
         .cloned()
         .collect();
 
@@ -165,20 +187,13 @@ pub(crate) fn filter_accepted_parent_refs(
 
 /// Extract `(gateway_ns, gateway_name)` pairs from accepted parent_refs.
 /// Filters by both `kind == "Gateway"` and `group == "gateway.networking.k8s.io"`
-/// (or absent group, which defaults to Gateway API per K8s convention). Falls
+/// using Gateway API defaults: an absent group defaults to
+/// `gateway.networking.k8s.io` and an absent kind defaults to `Gateway`. Falls
 /// back to `route_ns` when a parent ref omits its namespace.
 pub(crate) fn gateways_from_parent_refs(parent_refs: &[ParentReference], route_ns: &str) -> Vec<(String, String)> {
     parent_refs
         .iter()
-        .filter(|pr| {
-            let kind_ok = pr.kind.as_deref().map(|k| k == "Gateway").unwrap_or(true);
-            let group_ok = pr
-                .group
-                .as_deref()
-                .map(|g| g == "gateway.networking.k8s.io")
-                .unwrap_or(true);
-            kind_ok && group_ok
-        })
+        .filter(|pr| is_gateway_parent_ref(pr))
         .map(|pr| {
             let ns = pr.namespace.clone().unwrap_or_else(|| route_ns.to_string());
             (ns, pr.name.clone())
@@ -191,10 +206,9 @@ pub(crate) fn gateways_from_parent_refs(parent_refs: &[ParentReference], route_n
 /// Runs on the config-publish path so `check_gateway_listener_match` never has
 /// to build its `GatewayInfoIndex` lookup key per request per route candidate.
 ///
-/// Deliberately does NOT filter by `kind`/`group`: the request path does not
-/// filter either — a non-Gateway ref simply misses the index — and this must
-/// stay behaviour-identical. [`gateways_from_parent_refs`], which drives metric
-/// handles, is a different consumer and keeps its own filter.
+/// Production HTTP and gRPC config-publication callers pass parentRefs already
+/// accepted as Gateway references. This function remains a generic mapper and
+/// deliberately does not inspect `kind` or `group` itself.
 ///
 /// Order is preserved: `check_gateway_listener_match` returns the first match,
 /// so reordering would change which Gateway a route attaches to.
@@ -378,6 +392,7 @@ pub fn resolve_tcp_keepalive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::common::Condition;
     use std::collections::BTreeMap;
 
     fn parent_ref(name: &str, namespace: Option<&str>) -> ParentReference {
@@ -389,6 +404,93 @@ mod tests {
             section_name: None,
             port: None,
         }
+    }
+
+    fn parent_status(parent_ref: ParentReference, accepted: bool) -> RouteParentStatus {
+        RouteParentStatus {
+            parent_ref,
+            controller_name: "edgion.io/gateway-controller".to_string(),
+            conditions: vec![Condition {
+                last_transition_time: "2026-09-08T00:00:00Z".to_string(),
+                message: String::new(),
+                observed_generation: Some(1),
+                reason: "Test".to_string(),
+                status: if accepted { "True" } else { "False" }.to_string(),
+                type_: "Accepted".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn delegation_only_parent_refs_are_excluded_with_or_without_status() {
+        for kind in ["HTTPRoute", "GRPCRoute"] {
+            let mut delegation = parent_ref("parent", None);
+            delegation.group = Some(GATEWAY_API_GROUP.to_string());
+            delegation.kind = Some(kind.to_string());
+            let refs = vec![delegation.clone()];
+
+            assert!(filter_accepted_parent_refs(Some(&refs), None, Some("route-ns")).is_none());
+
+            let statuses = vec![parent_status(delegation, true)];
+            assert!(filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")).is_none());
+        }
+    }
+
+    #[test]
+    fn same_coordinate_delegation_status_cannot_override_gateway_status() {
+        let gateway = parent_ref("shared-name", Some("shared-ns"));
+        let mut delegation = gateway.clone();
+        delegation.group = Some(GATEWAY_API_GROUP.to_string());
+        delegation.kind = Some("HTTPRoute".to_string());
+        let refs = vec![gateway.clone()];
+        let statuses = vec![parent_status(delegation, true), parent_status(gateway, false)];
+
+        assert!(filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")).is_none());
+    }
+
+    #[test]
+    fn omitted_and_explicit_gateway_defaults_match_the_same_status_identity() {
+        let omitted = parent_ref("gw", Some("gw-ns"));
+        let mut explicit = omitted.clone();
+        explicit.group = Some(GATEWAY_API_GROUP.to_string());
+        explicit.kind = Some("Gateway".to_string());
+        let refs = vec![omitted, explicit.clone()];
+        let statuses = vec![parent_status(explicit, true)];
+
+        assert_eq!(
+            filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")),
+            Some(refs)
+        );
+    }
+
+    #[test]
+    fn mixed_parent_refs_retain_only_the_accepted_gateways_in_order() {
+        let first = parent_ref("first", None);
+        let rejected = parent_ref("rejected", None);
+        let mut delegation = parent_ref("child", None);
+        delegation.kind = Some("GRPCRoute".to_string());
+        let mut core_gateway = parent_ref("core-gateway", None);
+        core_gateway.group = Some(String::new());
+        core_gateway.kind = Some("Gateway".to_string());
+        let last = parent_ref("last", Some("other-ns"));
+        let refs = vec![
+            first.clone(),
+            delegation.clone(),
+            rejected.clone(),
+            core_gateway,
+            last.clone(),
+        ];
+        let statuses = vec![
+            parent_status(first.clone(), true),
+            parent_status(delegation, true),
+            parent_status(rejected, false),
+            parent_status(last.clone(), true),
+        ];
+
+        assert_eq!(
+            filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")),
+            Some(vec![first, last])
+        );
     }
 
     #[test]
