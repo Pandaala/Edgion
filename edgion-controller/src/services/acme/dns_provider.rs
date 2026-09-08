@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
 use futures::StreamExt;
@@ -36,10 +36,9 @@ fn build_dns_http_client() -> reqwest::Client {
         total_timeout: Some(DNS_REQUEST_TIMEOUT),
         ..Default::default()
     })
-    .unwrap_or_else(|e| {
+    .unwrap_or_else(|_| {
         tracing::warn!(
             component = "acme_dns_provider",
-            error = %e,
             "Failed to build DNS HTTP client with timeouts; falling back to default client"
         );
         reqwest::Client::new()
@@ -51,7 +50,7 @@ fn build_dns_http_client() -> reqwest::Client {
 /// oversized responses before any body is read, and streaming accumulation
 /// cuts off a chunked/dishonest server the moment the running total would
 /// exceed the cap (peak memory is at most `MAX_DNS_RESPONSE_BYTES` + one chunk).
-async fn read_body_limited(resp: reqwest::Response, ctx: &str) -> Result<Vec<u8>> {
+async fn read_body_limited(resp: reqwest::Response, ctx: &'static str) -> Result<Vec<u8>> {
     if let Some(cl) = resp.content_length() {
         if cl > MAX_DNS_RESPONSE_BYTES as u64 {
             anyhow::bail!(
@@ -66,7 +65,7 @@ async fn read_body_limited(resp: reqwest::Response, ctx: &str) -> Result<Vec<u8>
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::with_capacity(8192.min(MAX_DNS_RESPONSE_BYTES));
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.with_context(|| format!("{} body read error", ctx))?;
+        let chunk = chunk.map_err(|_| anyhow::anyhow!("{} response body read failed", ctx))?;
         if buf.len().saturating_add(chunk.len()) > MAX_DNS_RESPONSE_BYTES {
             anyhow::bail!("{} response body exceeds limit {} bytes", ctx, MAX_DNS_RESPONSE_BYTES);
         }
@@ -78,19 +77,55 @@ async fn read_body_limited(resp: reqwest::Response, ctx: &str) -> Result<Vec<u8>
 
 /// Read and parse a response body as JSON, refusing bodies larger than
 /// `MAX_DNS_RESPONSE_BYTES` (see [`read_body_limited`]).
-async fn read_json_limited(resp: reqwest::Response, ctx: &str) -> Result<serde_json::Value> {
+async fn read_json_limited(resp: reqwest::Response, ctx: &'static str) -> Result<serde_json::Value> {
+    check_http_status(&resp, ctx)?;
     let bytes = read_body_limited(resp, ctx).await?;
-    serde_json::from_slice(&bytes).with_context(|| format!("Failed to parse {} response as JSON", ctx))
+    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("{} invalid JSON response", ctx))
 }
 
-/// Read a response body as (lossy) UTF-8 text capped at `MAX_DNS_RESPONSE_BYTES`.
-/// Used for error bodies so a misbehaving endpoint cannot force unbounded
-/// buffering when we format the resulting diagnostic message.
-async fn read_text_limited(resp: reqwest::Response, ctx: &str) -> String {
-    match read_body_limited(resp, ctx).await {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(e) => format!("<failed to read {} body: {}>", ctx, e),
+/// Drop the original error, including its source chain: URLs may contain signed
+/// AliDNS queries or response-controlled record IDs. Removing only the top-level
+/// message is insufficient for the ACME status writer's alternate Display.
+fn dns_transport_error(error: reqwest::Error, ctx: &'static str) -> anyhow::Error {
+    let category = if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else {
+        "request failed"
+    };
+    anyhow::anyhow!("{} {}", ctx, category)
+}
+
+fn check_http_status(resp: &reqwest::Response, ctx: &'static str) -> Result<()> {
+    if !resp.status().is_success() {
+        anyhow::bail!("{} HTTP request rejected (status={})", ctx, resp.status().as_u16());
     }
+    Ok(())
+}
+
+/// Provider text is never diagnostic data. Keep only the first bounded numeric
+/// Cloudflare code; string codes, messages, IDs and extra fields are discarded.
+fn check_cloudflare_response(body: &serde_json::Value, ctx: &'static str) -> Result<()> {
+    if body["success"].as_bool().unwrap_or(false) {
+        return Ok(());
+    }
+    let code = body["errors"]
+        .as_array()
+        .and_then(|errors| errors.first())
+        .and_then(|error| error["code"].as_u64())
+        .and_then(|code| u16::try_from(code).ok());
+    match code {
+        Some(code) => anyhow::bail!("{} provider rejected request (code={})", ctx, code),
+        None => anyhow::bail!("{} provider rejected request", ctx),
+    }
+}
+
+fn check_alidns_response(body: &serde_json::Value, ctx: &'static str) -> Result<()> {
+    if body.get("Code").is_some() {
+        anyhow::bail!("{} provider rejected request", ctx);
+    }
+    Ok(())
 }
 
 /// DNS-01 challenge provider trait
@@ -159,7 +194,7 @@ pub fn create_dns_provider(
                 .unwrap_or_else(|| "http://localhost:8055".to_string());
             Ok(Box::new(PebbleChalltestDnsProvider::new(api_url)))
         }
-        other => Err(anyhow::anyhow!("Unsupported DNS provider: {}", other)),
+        _ => Err(anyhow::anyhow!("Unsupported DNS provider")),
     }
 }
 
@@ -195,13 +230,12 @@ impl CloudflareDnsProvider {
             .query(&[("name", root_domain.as_str())])
             .bearer_auth(&self.api_token)
             .send()
-            .await?;
+            .await
+            .map_err(|e| dns_transport_error(e, "Cloudflare list-zones"))?;
 
         let body = read_json_limited(resp, "Cloudflare list-zones").await?;
 
-        if !body["success"].as_bool().unwrap_or(false) {
-            return Err(anyhow::anyhow!("Cloudflare API error: {}", body["errors"]));
-        }
+        check_cloudflare_response(&body, "Cloudflare list-zones")?;
 
         body["result"]
             .as_array()
@@ -222,13 +256,12 @@ impl CloudflareDnsProvider {
             .query(&[("type", "TXT"), ("name", record_name)])
             .bearer_auth(&self.api_token)
             .send()
-            .await?;
+            .await
+            .map_err(|e| dns_transport_error(e, "Cloudflare list-records"))?;
 
         let body = read_json_limited(resp, "Cloudflare list-records").await?;
 
-        if !body["success"].as_bool().unwrap_or(false) {
-            return Err(anyhow::anyhow!("Cloudflare API error: {}", body["errors"]));
-        }
+        check_cloudflare_response(&body, "Cloudflare list-records")?;
 
         Ok(body["result"]
             .as_array()
@@ -265,13 +298,12 @@ impl DnsProvider for CloudflareDnsProvider {
                 "ttl": 60
             }))
             .send()
-            .await?;
+            .await
+            .map_err(|e| dns_transport_error(e, "Cloudflare create-record"))?;
 
         let body = read_json_limited(resp, "Cloudflare create-record").await?;
 
-        if !body["success"].as_bool().unwrap_or(false) {
-            return Err(anyhow::anyhow!("Failed to create TXT record: {}", body["errors"]));
-        }
+        check_cloudflare_response(&body, "Cloudflare create-record")?;
 
         tracing::info!(
             provider = "cloudflare",
@@ -287,12 +319,7 @@ impl DnsProvider for CloudflareDnsProvider {
         let record_name = format!("_acme-challenge.{}", domain);
 
         if let Some(record_id) = self.find_txt_record(&zone_id, &record_name).await? {
-            tracing::info!(
-                provider = "cloudflare",
-                domain = domain,
-                record_id = %record_id,
-                "Removing DNS TXT record"
-            );
+            tracing::info!(provider = "cloudflare", domain = domain, "Removing DNS TXT record");
 
             let resp = self
                 .client
@@ -302,16 +329,17 @@ impl DnsProvider for CloudflareDnsProvider {
                 ))
                 .bearer_auth(&self.api_token)
                 .send()
-                .await?;
+                .await
+                .map_err(|e| dns_transport_error(e, "Cloudflare delete-record"))?;
 
             let body = read_json_limited(resp, "Cloudflare delete-record").await?;
 
-            if !body["success"].as_bool().unwrap_or(false) {
+            if let Err(error) = check_cloudflare_response(&body, "Cloudflare delete-record") {
                 tracing::warn!(
                     provider = "cloudflare",
                     domain = domain,
-                    "Failed to remove TXT record: {}",
-                    body["errors"]
+                    error = %error,
+                    "Failed to remove TXT record"
                 );
             }
         }
@@ -420,22 +448,16 @@ impl DnsProvider for AlidnsDnsProvider {
             .get("https://alidns.aliyuncs.com/")
             .query(&params)
             .send()
-            .await?;
+            .await
+            .map_err(|e| dns_transport_error(e, "AliDNS add-record"))?;
 
         let body = read_json_limited(resp, "AliDNS add-record").await?;
 
-        if body.get("Code").is_some() {
-            return Err(anyhow::anyhow!(
-                "AliDNS API error: {} - {}",
-                body["Code"],
-                body["Message"]
-            ));
-        }
+        check_alidns_response(&body, "AliDNS add-record")?;
 
         tracing::info!(
             provider = "alidns",
             domain = domain,
-            record_id = %body["RecordId"],
             "DNS TXT record created successfully"
         );
 
@@ -461,19 +483,15 @@ impl DnsProvider for AlidnsDnsProvider {
             .get("https://alidns.aliyuncs.com/")
             .query(&params)
             .send()
-            .await?;
+            .await
+            .map_err(|e| dns_transport_error(e, "AliDNS describe-records"))?;
 
         let body = read_json_limited(resp, "AliDNS describe-records").await?;
 
         if let Some(records) = body["DomainRecords"]["Record"].as_array() {
             for record in records {
                 if let Some(record_id) = record["RecordId"].as_str() {
-                    tracing::info!(
-                        provider = "alidns",
-                        domain = domain,
-                        record_id = record_id,
-                        "Removing DNS TXT record"
-                    );
+                    tracing::info!(provider = "alidns", domain = domain, "Removing DNS TXT record");
 
                     let mut delete_params = vec![
                         ("Action".to_string(), "DeleteDomainRecord".to_string()),
@@ -486,7 +504,8 @@ impl DnsProvider for AlidnsDnsProvider {
                         .get("https://alidns.aliyuncs.com/")
                         .query(&delete_params)
                         .send()
-                        .await?;
+                        .await
+                        .map_err(|e| dns_transport_error(e, "AliDNS delete-record"))?;
                 }
             }
         }
@@ -574,13 +593,9 @@ impl DnsProvider for PebbleChalltestDnsProvider {
             }))
             .send()
             .await
-            .context("Failed to call challtestsrv /set-txt")?;
+            .map_err(|e| dns_transport_error(e, "challtestsrv /set-txt"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = read_text_limited(resp, "challtestsrv /set-txt").await;
-            return Err(anyhow::anyhow!("challtestsrv /set-txt failed: {} - {}", status, body));
-        }
+        check_http_status(&resp, "challtestsrv /set-txt")?;
 
         tracing::debug!(
             domain = domain,
@@ -601,13 +616,9 @@ impl DnsProvider for PebbleChalltestDnsProvider {
             }))
             .send()
             .await
-            .context("Failed to call challtestsrv /clear-txt")?;
+            .map_err(|e| dns_transport_error(e, "challtestsrv /clear-txt"))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = read_text_limited(resp, "challtestsrv /clear-txt").await;
-            return Err(anyhow::anyhow!("challtestsrv /clear-txt failed: {} - {}", status, body));
-        }
+        check_http_status(&resp, "challtestsrv /clear-txt")?;
 
         tracing::debug!(
             domain = domain,
@@ -621,6 +632,191 @@ impl DnsProvider for PebbleChalltestDnsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SECRET_CANARY: &str = "DNS_SECRET_CANARY";
+    const IDENTITY_CANARY: &str = "DNS_IDENTITY_CANARY";
+
+    fn response(status: u16, body: impl Into<reqwest::Body>) -> reqwest::Response {
+        http::Response::builder()
+            .status(status)
+            .body(body.into())
+            .unwrap()
+            .into()
+    }
+
+    fn assert_safe_error(error: anyhow::Error, expected: &str) {
+        assert_eq!(error.to_string(), expected);
+        // The service logs Display and persists alternate Display. Debug and
+        // source traversal must not recover discarded dependency/body text.
+        for text in [
+            format!("{error}"),
+            format!("{error:#}"),
+            format!("{error:?}"),
+            format!("{error:#?}"),
+        ] {
+            assert!(!text.contains(SECRET_CANARY), "{text}");
+            assert!(!text.contains(IDENTITY_CANARY), "{text}");
+        }
+        assert_eq!(error.chain().count(), 1);
+        let contextual = error.context("Failed to create DNS TXT record for example.com");
+        let status = edgion_resources::EdgionAcmeStatus {
+            last_failure_reason: Some(format!("{contextual:#}")),
+            ..Default::default()
+        };
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(serialized.contains(expected));
+        assert!(!serialized.contains(SECRET_CANARY));
+        assert!(!serialized.contains(IDENTITY_CANARY));
+    }
+
+    #[test]
+    fn provider_rejections_discard_all_external_text() {
+        for ctx in [
+            "Cloudflare list-zones",
+            "Cloudflare list-records",
+            "Cloudflare create-record",
+            "Cloudflare delete-record",
+        ] {
+            let mut body = serde_json::json!({
+                "success": false,
+                "errors": [{"code": 10000, "message": SECRET_CANARY, "identity": IDENTITY_CANARY}],
+                "result": {"id": IDENTITY_CANARY}
+            });
+            assert_safe_error(
+                check_cloudflare_response(&body, ctx).unwrap_err(),
+                &format!("{ctx} provider rejected request (code=10000)"),
+            );
+            for code in [
+                serde_json::json!(SECRET_CANARY),
+                serde_json::json!(65536),
+                serde_json::json!(-1),
+                serde_json::json!(1.5),
+                serde_json::Value::Null,
+            ] {
+                body["errors"][0]["code"] = code;
+                assert_safe_error(
+                    check_cloudflare_response(&body, ctx).unwrap_err(),
+                    &format!("{ctx} provider rejected request"),
+                );
+            }
+        }
+        let body = serde_json::json!({"Code": IDENTITY_CANARY, "Message": SECRET_CANARY});
+        assert_safe_error(
+            check_alidns_response(&body, "AliDNS add-record").unwrap_err(),
+            "AliDNS add-record provider rejected request",
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_success_and_malformed_json() {
+        let cloudflare = read_json_limited(
+            response(200, r#"{"success":true,"result":[{"id":"zone-id"}]}"#),
+            "Cloudflare list-zones",
+        )
+        .await
+        .unwrap();
+        check_cloudflare_response(&cloudflare, "Cloudflare list-zones").unwrap();
+        assert_eq!(cloudflare["result"][0]["id"], "zone-id");
+        let alidns = read_json_limited(response(200, r#"{"RecordId":"record-id"}"#), "AliDNS add-record")
+            .await
+            .unwrap();
+        check_alidns_response(&alidns, "AliDNS add-record").unwrap();
+        assert_eq!(alidns["RecordId"], "record-id");
+        check_http_status(&response(204, ""), "challtestsrv /clear-txt").unwrap();
+        let error = read_json_limited(
+            response(200, format!("{{\"{SECRET_CANARY}\":{IDENTITY_CANARY}")),
+            "Cloudflare create-record",
+        )
+        .await
+        .unwrap_err();
+        assert_safe_error(error, "Cloudflare create-record invalid JSON response");
+    }
+
+    #[tokio::test]
+    async fn http_rejections_never_read_or_format_the_response_body() {
+        for ctx in [
+            "Cloudflare create-record",
+            "Cloudflare delete-record",
+            "AliDNS add-record",
+            "AliDNS describe-records",
+            "challtestsrv /set-txt",
+            "challtestsrv /clear-txt",
+        ] {
+            let body = reqwest::Body::wrap_stream(futures::stream::poll_fn(
+                |_| -> std::task::Poll<Option<std::io::Result<bytes::Bytes>>> {
+                    panic!("HTTP rejection must not poll its body");
+                },
+            ));
+            assert_safe_error(
+                read_json_limited(response(403, body), ctx).await.unwrap_err(),
+                &format!("{ctx} HTTP request rejected (status=403)"),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn response_caps_and_body_errors_remain_safe() {
+        let declared: reqwest::Response = http::Response::builder()
+            .header("content-length", MAX_DNS_RESPONSE_BYTES + 1)
+            .body(reqwest::Body::from(vec![b'x'; MAX_DNS_RESPONSE_BYTES + 1]))
+            .unwrap()
+            .into();
+        let error = read_body_limited(declared, "AliDNS add-record").await.unwrap_err();
+        assert_safe_error(
+            error,
+            &format!(
+                "AliDNS add-record response too large: Content-Length {} > limit {} bytes",
+                MAX_DNS_RESPONSE_BYTES + 1,
+                MAX_DNS_RESPONSE_BYTES
+            ),
+        );
+
+        let chunks = vec![
+            Ok::<_, std::io::Error>(bytes::Bytes::from(vec![b'x'; MAX_DNS_RESPONSE_BYTES])),
+            Ok(bytes::Bytes::from_static(SECRET_CANARY.as_bytes())),
+        ];
+        let oversized = response(200, reqwest::Body::wrap_stream(futures::stream::iter(chunks)));
+        assert_safe_error(
+            read_body_limited(oversized, "AliDNS add-record").await.unwrap_err(),
+            &format!(
+                "AliDNS add-record response body exceeds limit {} bytes",
+                MAX_DNS_RESPONSE_BYTES
+            ),
+        );
+
+        let exact = read_body_limited(response(200, vec![b'x'; MAX_DNS_RESPONSE_BYTES]), "AliDNS add-record")
+            .await
+            .unwrap();
+        assert_eq!(exact.len(), MAX_DNS_RESPONSE_BYTES);
+        let broken = futures::stream::iter([Err::<bytes::Bytes, _>(std::io::Error::other(format!(
+            "{SECRET_CANARY} {IDENTITY_CANARY}"
+        )))]);
+        assert_safe_error(
+            read_body_limited(response(200, reqwest::Body::wrap_stream(broken)), "AliDNS add-record")
+                .await
+                .unwrap_err(),
+            "AliDNS add-record response body read failed",
+        );
+    }
+
+    #[test]
+    fn transport_errors_drop_signed_url_and_source_chain() {
+        let url = reqwest::Url::parse(&format!(
+            "https://alidns.aliyuncs.com/?AccessKeyId={IDENTITY_CANARY}&Signature={SECRET_CANARY}"
+        ))
+        .unwrap();
+        let error = reqwest::Client::new()
+            .get(url.clone())
+            .header("authorization", "invalid\nheader")
+            .build()
+            .unwrap_err()
+            .with_url(url);
+        assert!(format!("{error}").contains(SECRET_CANARY));
+        assert_safe_error(
+            dns_transport_error(error, "AliDNS delete-record"),
+            "AliDNS delete-record request failed",
+        );
+    }
 
     #[test]
     fn test_extract_root_domain() {

@@ -30,9 +30,14 @@ metadata:
   name: hmac-credentials
 type: Opaque
 stringData:
-  username: "service-a"
-  secret: "a-very-long-secret-key-at-least-32-chars!"
+  credentials.yaml: |
+    - username: "service-a"
+      secret: "a-very-long-secret-key-at-least-32-chars!"
 ```
+
+凭证必须以 YAML 列表存放在 `stringData["credentials.yaml"]` 中，即使只有一个用户也要使用列表。
+`usernameField` 和 `secretField` 指定列表条目中的字段名，不会改变 `credentials.yaml` 这个键。
+部署前请将示例密钥替换为你自己的共享密钥。
 
 ### 配置插件
 
@@ -70,8 +75,8 @@ spec:
 | `realm` | String | ❌ | `"edgion"` | 认证域; [字符规则](README.md#authentication-realm) |
 | `authFailureDelayMs` | Integer | ❌ | `0` | 认证失败延迟响应毫秒数 |
 | `minSecretLength` | Integer | ❌ | `32` | 最小密钥长度 |
-| `secretField` | String | ❌ | `"secret"` | Secret 中密钥的字段名 |
-| `usernameField` | String | ❌ | `"username"` | Secret 中用户名的字段名 |
+| `secretField` | String | ❌ | `"secret"` | `credentials.yaml` 每个列表条目中共享密钥的字段名 |
+| `usernameField` | String | ❌ | `"username"` | `credentials.yaml` 每个列表条目中用户名的字段名 |
 | `upstreamHeaderFields` | Array | ❌ | `[]` | 传递给上游的额外 header |
 
 \* 未设置 `anonymous` 时必填。

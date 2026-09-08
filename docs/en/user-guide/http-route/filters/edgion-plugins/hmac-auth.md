@@ -30,9 +30,15 @@ metadata:
   name: hmac-credentials
 type: Opaque
 stringData:
-  username: "service-a"
-  secret: "a-very-long-secret-key-at-least-32-chars!"
+  credentials.yaml: |
+    - username: "service-a"
+      secret: "a-very-long-secret-key-at-least-32-chars!"
 ```
+
+Store credentials as a YAML list under `stringData["credentials.yaml"]`, even
+for one user. `usernameField` and `secretField` select keys within each list
+entry; they do not change the `credentials.yaml` key. Replace the example secret
+with your own shared key before deployment.
 
 ### Configure the Plugin
 
@@ -70,8 +76,8 @@ spec:
 | `realm` | String | `"edgion"` | Authentication realm; [Character rules](README.md#authentication-realm) |
 | `authFailureDelayMs` | Integer | `0` | Auth failure response delay (ms) |
 | `minSecretLength` | Integer | `32` | Minimum secret key length |
-| `secretField` | String | `"secret"` | Secret field name in K8s Secret |
-| `usernameField` | String | `"username"` | Username field name in K8s Secret |
+| `secretField` | String | `"secret"` | Shared-key field name in each `credentials.yaml` list entry |
+| `usernameField` | String | `"username"` | Username field name in each `credentials.yaml` list entry |
 | `upstreamHeaderFields` | Array\<String\> | `[]` | Extra headers to forward upstream |
 
 ### `secretGroups` sub-table (`HmacAuthSecretGroup`)

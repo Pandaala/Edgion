@@ -15,7 +15,11 @@ knowledge_type: intentional-design
 - Status write-back was silently dropped → now `if let Err(status_err) = update_acme_status(...)` logs `tracing::warn!` (service.rs:395-409)
 - Non-UTF-8 DNS credentials silently fell back to base64 → now explicit `String::from_utf8(...).map_err(...)?` returns Err (service.rs:751)
 
-Only newly emerging cases of these two categories (swallowed error / non-UTF-8 silent fallback) are accepted as findings.
+These are the defect categories corrected in that historical audit, not an
+exhaustive list of valid ACME findings. The accepted choices below concern service
+structure and SSA ownership only; they do not exempt newly demonstrated security
+or correctness defects. DNS provider error disclosure is covered separately by
+[the diagnostic redaction guard](../regression-guards/dns-provider-error-redaction.md).
 
 ## Fix Suggestions Not Accepted (after this audit)
 

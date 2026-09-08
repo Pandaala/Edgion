@@ -27,9 +27,9 @@ surfaces; real conf-sync data must never be replaced with admin-redacted data.
 Earlier scoped corrections removed BasicAuth/HMAC identity warning fields and
 borrowed Controller bearer lookup/HMAC YAML decoding. Their semantic guards remain
 linked from the owning auth indices; their earlier verification was scoped, not
-proof of this full inventory. The separate
-[HMAC quick-start documentation task](../../../../tasks/todo/hmac-auth-quick-start-secret-format.md)
-remains pending.
+proof of this full inventory. The separate HMAC quick-start documentation
+correction is maintained in the
+[credential-list format guard](../../hmac-auth/regression-guards/credential-yaml-borrowed-decoding.md#credential-list-format-and-documentation-boundary).
 
 ## Controller and transport spine
 
@@ -105,9 +105,11 @@ Sensitive header provenance is recorded in the
   DNS providers retain credentials through create/propagation/cleanup. Detached
   ACME flows are generation-gated for publication, not aborted at resource removal;
   credential release follows flow completion/cancellation/runtime shutdown.
-- DNS response aggregation is capped, but arbitrary provider error text currently
-  reaches diagnostics. This limits any claim of complete error-output redaction;
-  see the [ACME DNS error task](../../../../tasks/todo/acme-dns-provider-error-redaction.md).
+- At the time of this ownership audit, DNS response aggregation was capped but
+  arbitrary provider error text reached diagnostics. This defect was deferred
+  by the ownership audit and subsequently corrected at the DNS
+  provider diagnostic boundary; see the [ACME DNS error redaction guard](../../acme/regression-guards/dns-provider-error-redaction.md)
+  for the separate correction, verification, and remaining cleanup limits.
 
 ## Zeroization decision
 

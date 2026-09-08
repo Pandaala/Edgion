@@ -1351,6 +1351,77 @@ mod tests {
     use std::convert::Infallible;
     use tower::service_fn;
 
+    #[derive(Clone, Default)]
+    struct DnsLogCapture(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for DnsLogCapture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for DnsLogCapture {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_cleanup_logs_safe_errors_and_continues_after_failure() {
+        use tracing::instrument::WithSubscriber;
+
+        struct FailingDnsProvider(Mutex<Vec<String>>);
+
+        #[async_trait::async_trait]
+        impl DnsProvider for FailingDnsProvider {
+            async fn create_txt_record(&self, _domain: &str, _value: &str) -> Result<()> {
+                unreachable!("cleanup must not create records");
+            }
+
+            async fn remove_txt_record(&self, domain: &str, value: &str) -> Result<()> {
+                self.0.lock().push(domain.to_string());
+                // Exercise the real provider's request-builder failure without
+                // starting a server or attempting a network connection.
+                super::super::dns_provider::PebbleChalltestDnsProvider::new(
+                    "invalid://DNS_SECRET_CANARY:DNS_IDENTITY_CANARY".to_string(),
+                )
+                .remove_txt_record(domain, value)
+                .await
+            }
+        }
+
+        let provider = FailingDnsProvider(Mutex::new(Vec::new()));
+        let logs = DnsLogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .without_time()
+            .with_ansi(false)
+            .finish();
+        cleanup_txt_records(
+            &provider,
+            &[
+                ("first.example.com".to_string(), "DNS_SECRET_CANARY".to_string()),
+                ("second.example.com".to_string(), "DNS_SECRET_CANARY".to_string()),
+            ],
+        )
+        .with_subscriber(subscriber)
+        .await;
+
+        assert_eq!(*provider.0.lock(), ["first.example.com", "second.example.com"]);
+        let output = String::from_utf8(logs.0.lock().clone()).unwrap();
+        assert_eq!(output.matches("Failed to remove DNS TXT record (non-fatal)").count(), 2);
+        assert_eq!(output.matches("challtestsrv /clear-txt request failed").count(), 2);
+        assert!(!output.contains("DNS_SECRET_CANARY"));
+        assert!(!output.contains("DNS_IDENTITY_CANARY"));
+    }
+
     fn empty_acme_list() -> Response<Body> {
         Response::builder()
             .status(StatusCode::OK)
