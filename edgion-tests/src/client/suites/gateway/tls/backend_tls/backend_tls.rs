@@ -306,6 +306,7 @@ impl TestSuite for BackendTlsTestSuite {
             Self::test_backend_tls_headers(),
             Self::test_backend_mtls_echo(),
             Self::test_backend_mtls_without_client_cert_fails(),
+            super::pool_isolation::test_case(),
         ]
     }
 }

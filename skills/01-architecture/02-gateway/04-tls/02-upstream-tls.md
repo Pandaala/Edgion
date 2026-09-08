@@ -102,7 +102,16 @@ current mechanics as supported enforcement.
 
 ### Connection-pool isolation
 
-Under BoringSSL, peers with different `subjectAltNames` configurations use different `group_key`s (based on a hash of the SAN content) to prevent Pingora from reusing connections across different SAN policies. Any future rustls support must provide equivalent policy isolation through the umbrella design task.
+Under BoringSSL, `create_tls_peer` sets `group_key` from the effective TLS profile
+even without `subjectAltNames`. Policy publication fingerprints the trust mode,
+complete custom CA payloads, hostname, typed SANs, and policy client Secret data
+(full certificate chain and private key). Peer construction combines any selected
+Gateway fallback Secret with that profile. Pingora includes `group_key` in the
+connection reuse hash, so changed policy material selects another pool bucket.
+Existing streams are not forcibly terminated. See the
+[pool isolation regression guard](../../../04-review/tls/regression-guards/backend-tls-pool-isolation.md)
+for evidence and limits. Any future rustls support must provide equivalent
+enforcement through the umbrella design task.
 
 ### Match rules
 
