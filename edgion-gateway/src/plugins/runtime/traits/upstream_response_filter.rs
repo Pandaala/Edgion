@@ -7,8 +7,23 @@ use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::PluginLog;
 use edgion_resources::filters::PluginRunningResult;
 
-/// UpstreamResponseFilter trait for upstream response stage plugins
-/// Runs during upstream_response_filter hook (sync - no async allowed)
+/// Synchronous final-response-header processing in Pingora's
+/// `upstream_response_filter` hook.
+///
+/// This stage runs only for the final, non-retried response after retry and
+/// status arbitration. Interim 100, 102, and 103 responses are skipped; the
+/// terminal 101 response runs normally. It precedes async [`super::UpstreamResponse`]
+/// plugins, downstream header commit, and response body forwarding.
+///
+/// Implementations may mutate the current response headers through the session,
+/// but own no response-body bytes. They cannot await and ordinary implementations
+/// must perform no blocking I/O. The bounded DSL bridge is the documented
+/// exception to that ordinary no-blocking rule.
+///
+/// The result either continues the chain or terminates it. `ErrResponse` leaves
+/// bounded local-reply ownership to the framework; `ErrTerminateRequest` is valid
+/// only after the implementation has already written the response, never as a
+/// naked termination signal.
 pub trait UpstreamResponseFilter: Send + Sync {
     /// Get the filter name
     fn name(&self) -> &str;
@@ -33,14 +48,15 @@ pub trait UpstreamResponseFilter: Send + Sync {
         None
     }
 
-    /// Plugins with a dedicated top-level access-log block may suppress the
-    /// generic per-stage entry.
+    /// Suppress the generic stage log only when a canonical dedicated top-level
+    /// access-log block owns the same outcome. Conditional wrappers delegate
+    /// this value to their wrapped implementation; ordinary plugins return
+    /// `false` and aggregate one plugin log entry per stage, never tracing.
     fn suppress_automatic_log(&self) -> bool {
         false
     }
 
-    /// Run the upstream response filter (sync)
-    /// This is called during the upstream_response_filter stage (sync context only)
+    /// Run the synchronous final-response-header filter.
     fn run_upstream_response_filter(&self, session: &mut dyn PluginSession, log: &mut PluginLog)
         -> PluginRunningResult;
 }
