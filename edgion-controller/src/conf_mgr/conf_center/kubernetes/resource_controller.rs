@@ -15,25 +15,26 @@
 //! Key features:
 //! - Each resource type runs completely independently
 //! - One watcher per configured namespace, or one cluster-wide watcher
-//! - Processor handles all lifecycle events directly
-//! - Go operator-style workqueue: ALL events enqueue key, worker decides update/delete
+//! - Each source commits its native snapshot independently
+//! - One complete bootstrap replay, then all runtime changes reconcile through one workqueue
 //! - Graceful shutdown support via ShutdownSignal
 
 use super::controller_metrics;
 use super::leader_election::LeaderHandle;
 use super::namespace::NamespaceWatchMode;
+use super::watch_source::{SourceState, WatchScope};
 use super::InitSyncTimer;
 use super::ShutdownSignal;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    extract_status_value, make_resource_key, KubeRawStore, ResourceProcessor, WorkItemResult,
+    extract_status_value, raw_store::RawStore, KubeRawStore, ResourceProcessor, WorkItemResult,
 };
 use anyhow::Result;
 use edgion_resources::ResourceMeta;
 use futures::{Stream, StreamExt};
 use kube::api::{Patch, PatchParams};
-use kube::runtime::reflector::{ObjectRef, Store};
+use kube::runtime::watcher;
 use kube::runtime::watcher::Event;
-use kube::runtime::{reflector, watcher};
+use kube::runtime::WatchStreamExt;
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -42,28 +43,16 @@ use std::hash::Hash;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-
-/// Signal sender for relink requests
-/// When a ResourceController detects 410 Gone (re-LIST needed),
-/// it sends a signal through this channel
-pub type RelinkSignalSender = mpsc::Sender<RelinkReason>;
-
-/// Reason for relink request
-#[derive(Debug, Clone)]
-pub enum RelinkReason {
-    /// Watcher reconnected (detected by Event::Init after init_done)
-    WatcherReconnected,
-    /// Manual reload requested via Admin API
-    ReloadRequested,
-}
+use tokio_util::{
+    sync::CancellationToken,
+    task::{AbortOnDropHandle, TaskTracker},
+};
 
 /// Generic ResourceController that encapsulates the complete lifecycle for a single resource type
 ///
-/// Uses a merged watcher + reflector stream with Go operator-style workqueue:
-/// - Init phase: InitApply events are processed directly via processor.on_init_apply()
-/// - Runtime phase: ALL events (Apply/Delete) enqueue key, worker decides update/delete
+/// Source-owned native stores publish complete LISTs. The first committed union
+/// is replayed once; later commits and watch changes enqueue keys for one worker.
 pub struct ResourceController<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -85,8 +74,8 @@ where
     // Graceful shutdown signal
     shutdown_signal: Option<ShutdownSignal>,
 
-    /// Optional relink signal sender for notifying when 410 Gone is detected
-    relink_signal: Option<RelinkSignalSender>,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
 
     /// Leader handle for gating status writes (Phase 2 HA support)
     leader_handle: Option<LeaderHandle>,
@@ -103,49 +92,17 @@ pub enum ApiScope {
 
 type NamespacedWatcher<K> = Pin<Box<dyn Stream<Item = watcher::Result<Event<K>>> + Send>>;
 
-/// Merge namespace-scoped watchers into the single initialization sequence
-/// expected by the reflector and processor. Each source performs its own LIST,
-/// but the shared store receives one Init, the union of all InitApply events,
-/// and one InitDone after every namespace has completed initialization.
-fn merge_namespaced_watchers<K>(
-    streams: Vec<NamespacedWatcher<K>>,
-    namespace_count: usize,
-) -> impl Stream<Item = watcher::Result<Event<K>>>
-where
-    K: Resource + Clone + Send + 'static,
-    K::DynamicType: Eq + Hash + Clone,
-{
-    let indexed = streams
-        .into_iter()
-        .enumerate()
-        .map(|(index, stream)| Box::pin(stream.map(move |event| (index, event))));
-    futures::stream::select_all(indexed)
-        .scan(
-            (false, vec![false; namespace_count], false),
-            move |state, (index, event)| {
-                let output = match event {
-                    Ok(Event::Init) if state.2 => Some(Ok(Event::Init)),
-                    Ok(Event::Init) if !state.0 => {
-                        state.0 = true;
-                        Some(Ok(Event::Init))
-                    }
-                    Ok(Event::Init) => None,
-                    Ok(Event::InitDone) if state.2 => Some(Ok(Event::InitDone)),
-                    Ok(Event::InitDone) => {
-                        state.1[index] = true;
-                        if state.1.iter().all(|done| *done) {
-                            state.2 = true;
-                            Some(Ok(Event::InitDone))
-                        } else {
-                            None
-                        }
-                    }
-                    other => Some(other),
-                };
-                futures::future::ready(Some(output))
-            },
-        )
-        .filter_map(futures::future::ready)
+struct ActiveController;
+impl ActiveController {
+    fn start() -> Self {
+        controller_metrics().controller_started();
+        Self
+    }
+}
+impl Drop for ActiveController {
+    fn drop(&mut self) {
+        controller_metrics().controller_stopped();
+    }
 }
 
 impl ApiScope {
@@ -186,7 +143,8 @@ where
             processor,
             namespace_filter,
             shutdown_signal: None,
-            relink_signal: None,
+            cancel: CancellationToken::new(),
+            tracker: TaskTracker::new(),
             leader_handle: None,
         }
     }
@@ -197,9 +155,9 @@ where
         self
     }
 
-    /// Set relink signal sender
-    pub fn with_relink_signal(mut self, sender: RelinkSignalSender) -> Self {
-        self.relink_signal = Some(sender);
+    pub(super) fn with_epoch(mut self, cancel: CancellationToken, tracker: TaskTracker) -> Self {
+        self.cancel = cancel;
+        self.tracker = tracker;
         self
     }
 
@@ -209,381 +167,176 @@ where
         self
     }
 
-    /// Run for namespaced resources
+    /// Construct fixed, nonoverlapping watch sources.
     pub async fn run_namespaced(self) -> Result<()>
     where
         K: Resource<Scope = kube::core::NamespaceResourceScope>,
     {
-        match self.api_scope.clone() {
+        let namespaces = match &self.api_scope {
             ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => {
-                let api = Api::all(self.client.clone());
-                self.run_with_api(api).await
+                let stream = self.watch(Api::all(self.client.clone()));
+                return self.run_sources(vec![(WatchScope::AllNamespaces, stream)]).await;
             }
-            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => {
-                let api = Api::namespaced(self.client.clone(), &ns);
-                self.run_with_api(api).await
-            }
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => vec![ns.clone()],
             ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(namespaces)) => {
-                let streams: Vec<NamespacedWatcher<K>> = namespaces
-                    .iter()
-                    .map(|namespace| {
-                        let api = Api::namespaced(self.client.clone(), namespace);
-                        Box::pin(watcher(api, self.watcher_config.clone())) as NamespacedWatcher<K>
-                    })
-                    .collect();
-                let stream = merge_namespaced_watchers(streams, namespaces.len());
-                self.run_with_stream(stream).await
+                let mut names = namespaces.clone();
+                names.sort();
+                names.dedup();
+                names
             }
-            ApiScope::ClusterScoped => Err(anyhow::anyhow!("Cannot run cluster-scoped resource as namespaced")),
-        }
+            ApiScope::ClusterScoped => anyhow::bail!("Cannot run cluster-scoped resource as namespaced"),
+        };
+        let sources = namespaces
+            .into_iter()
+            .map(|ns| {
+                let stream = self.watch(Api::namespaced(self.client.clone(), &ns));
+                (WatchScope::Namespace(ns), stream)
+            })
+            .collect();
+        self.run_sources(sources).await
     }
 
-    /// Run for cluster-scoped resources
     pub async fn run_cluster_scoped(self) -> Result<()>
     where
         K: Resource<Scope = kube::core::ClusterResourceScope>,
     {
-        let api: Api<K> = Api::all(self.client.clone());
-        self.run_with_api(api).await
+        let stream = self.watch(Api::all(self.client.clone()));
+        self.run_sources(vec![(WatchScope::Cluster, stream)]).await
     }
 
-    /// Internal run with API
-    async fn run_with_api(self, api: Api<K>) -> Result<()> {
-        let watcher_stream = watcher(api, self.watcher_config.clone());
-        self.run_with_stream(watcher_stream).await
+    fn watch(&self, api: Api<K>) -> NamespacedWatcher<K> {
+        // Backoff belongs to each source; a failing source must not stall healthy ones.
+        Box::pin(watcher(api, self.watcher_config.clone()).default_backoff())
     }
 
-    /// Internal run with a watcher stream.
-    async fn run_with_stream<W>(self, watcher_stream: W) -> Result<()>
-    where
-        W: Stream<Item = watcher::Result<Event<K>>>,
-    {
-        let kind = self.kind;
-
-        controller_metrics().controller_started();
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            "Starting ResourceController"
-        );
-
-        // Create store and reflector stream.
-        // Inject raw store immediately so cross-resource lookups work before any
-        // InitApply events arrive (the store will be empty until reflector fills it,
-        // which is fine — lookups return None during that window, same as before).
-        let (store, writer) = reflector::store();
-        let raw_store: std::sync::Arc<dyn crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore<K>> =
-            std::sync::Arc::new(KubeRawStore::new(store.clone()));
-        self.processor.set_raw_store(raw_store.clone());
-        crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store.clone());
-        crate::observe::unknown_fields_registry::register_unknown_fields_source::<K>(kind, raw_store);
-        let mut stream = Box::pin(reflector(writer, watcher_stream));
-
-        let mut init_done = false;
-        let mut init_count: usize = 0;
-        let mut init_timer: Option<InitSyncTimer> = None;
-        let mut worker_handle: Option<JoinHandle<()>> = None;
-        let mut shutdown = self.shutdown_signal.clone();
-
-        // Exponential backoff for consecutive watcher errors (prevents log storms
-        // when CRD is missing or API server is unreachable)
-        let mut consecutive_errors: u32 = 0;
-        const MAX_ERROR_BACKOFF_SECS: u64 = 60;
-
-        // Main event loop
-        loop {
-            let event = if let Some(ref mut signal) = shutdown {
-                tokio::select! {
-                    event = stream.next() => event,
-                    _ = signal.wait() => {
-                        tracing::info!(
-                            component = "resource_controller",
-                            kind = kind,
-                            "Shutdown signal received, stopping controller"
-                        );
-                        break;
-                    }
-                }
-            } else {
-                stream.next().await
-            };
-
-            match event {
-                Some(Ok(event)) => {
-                    consecutive_errors = 0;
-                    match event {
-                        Event::Init => {
-                            // Start of init phase (LIST)
-                            if init_done {
-                                // Watcher reconnecting - exit and let upper layer rebuild
-                                tracing::warn!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Watcher reconnecting (possible 410 Gone), requesting full rebuild"
-                                );
-
-                                if let Some(ref signal) = self.relink_signal {
-                                    let _ = signal.try_send(RelinkReason::WatcherReconnected);
-                                    tracing::info!(
-                                        component = "resource_controller",
-                                        kind = kind,
-                                        "Sent relink signal due to watcher reconnection, exiting"
-                                    );
-                                }
-                                break;
-                            } else {
-                                tracing::debug!(component = "resource_controller", kind = kind, "Init phase started");
-                                init_timer = Some(InitSyncTimer::start(kind));
-                                self.processor.on_init();
-                            }
-                        }
-                        Event::InitApply(obj) => {
-                            if run_init_apply_once(
-                                obj,
-                                &self.processor,
-                                &self.client,
-                                &self.api_scope,
-                                &self.leader_handle,
-                                &self.namespace_filter,
-                                kind,
-                                "init",
-                            )
-                            .await
-                            {
-                                init_count += 1;
-                            }
-                        }
-                        Event::InitDone => {
-                            if init_done {
-                                tracing::warn!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Received duplicate InitDone event, ignoring"
-                                );
-                                continue;
-                            }
-
-                            let init_duration = init_timer.take().map(|t| t.complete(init_count)).unwrap_or(0.0);
-                            tracing::info!(
-                                component = "resource_controller",
-                                kind = kind,
-                                count = init_count,
-                                duration_secs = init_duration,
-                                "Init phase complete"
-                            );
-
-                            // Mark cache ready
-                            self.processor.on_init_done();
-                            init_done = true;
-
-                            // Spawn worker for runtime phase
-                            worker_handle = Some(spawn_worker(
-                                self.processor.clone(),
-                                store.clone(),
-                                self.namespace_filter.clone(),
-                                kind,
-                                self.shutdown_signal.clone(),
-                                self.client.clone(),
-                                self.api_scope.clone(),
-                                self.leader_handle.clone(),
-                            ));
-
-                            tracing::info!(
-                                component = "resource_controller",
-                                kind = kind,
-                                "Worker started, processing runtime events via workqueue"
-                            );
-                        }
-                        Event::Apply(obj) => {
-                            if !init_done {
-                                metrics::counter!(
-                                    crate::conf_mgr::sync_runtime::metrics::names::UNEXPECTED_APPLY_DURING_INIT_TOTAL,
-                                    "kind" => kind
-                                )
-                                .increment(1);
-                                tracing::warn!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Received Apply event during init phase, treating as InitApply"
-                                );
-                                if run_init_apply_once(
-                                    obj,
-                                    &self.processor,
-                                    &self.client,
-                                    &self.api_scope,
-                                    &self.leader_handle,
-                                    &self.namespace_filter,
-                                    kind,
-                                    "apply-as-init",
-                                )
-                                .await
-                                {
-                                    init_count += 1;
-                                }
-                            } else {
-                                // Runtime phase - enqueue key for worker
-                                if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    self.processor.on_event_key(make_resource_key(&obj)).await;
-                                }
-                            }
-                        }
-                        Event::Delete(obj) => {
-                            if !init_done {
-                                tracing::warn!(
-                                    component = "resource_controller",
-                                    kind = kind,
-                                    "Received Delete event during init phase, ignoring"
-                                );
-                            } else {
-                                // Runtime phase - enqueue key for worker
-                                if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    self.processor.on_event_key(make_resource_key(&obj)).await;
-                                }
-                            }
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    consecutive_errors += 1;
-                    let backoff_secs = (1u64 << consecutive_errors.min(6)).min(MAX_ERROR_BACKOFF_SECS);
-                    let err_str = e.to_string();
-
-                    // Detect fatal errors that won't self-heal (e.g. CRD not installed)
-                    let is_404 = err_str.contains("404") || err_str.contains("page not found");
-
-                    if consecutive_errors <= 3 || consecutive_errors % 10 == 0 {
-                        // Log first few errors and then every 10th to avoid flooding
-                        tracing::error!(
-                            component = "resource_controller",
-                            kind = kind,
-                            error = %e,
-                            consecutive_errors = consecutive_errors,
-                            backoff_secs = backoff_secs,
-                            "Watcher error, backing off"
-                        );
-                    }
-
-                    if is_404 && consecutive_errors >= 3 {
-                        tracing::warn!(
-                            component = "resource_controller",
-                            kind = kind,
-                            "Resource type likely not installed (CRD missing). \
-                             Will keep retrying with backoff. \
-                             Install the CRD and restart controller to resolve."
-                        );
-                    }
-
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-                }
-                None => {
-                    tracing::warn!(
-                        component = "resource_controller",
-                        kind = kind,
-                        "Watcher stream ended unexpectedly"
-                    );
-                    break;
-                }
-            }
+    async fn run_sources(self, inputs: Vec<(WatchScope, NamespacedWatcher<K>)>) -> Result<()> {
+        anyhow::ensure!(!inputs.is_empty(), "No required watch sources");
+        let mut sources = Vec::new();
+        let mut streams = Vec::new();
+        for (index, (scope, stream)) in inputs.into_iter().enumerate() {
+            sources.push(SourceState::<K>::new(scope));
+            // select_all silently removes EOF; retain an explicit terminal event.
+            streams.push(Box::pin(
+                stream
+                    .map(move |event| (index, Some(event)))
+                    .chain(futures::stream::once(async move { (index, None) })),
+            ));
         }
-
-        // Wait for worker task to finish gracefully
-        if let Some(handle) = worker_handle {
-            tracing::info!(
-                component = "resource_controller",
-                kind = kind,
-                "Waiting for worker task to finish..."
-            );
-
-            match tokio::time::timeout(Duration::from_secs(5), handle).await {
-                Ok(Ok(())) => {
-                    tracing::info!(
-                        component = "resource_controller",
-                        kind = kind,
-                        "Worker task finished gracefully"
-                    );
-                }
-                Ok(Err(e)) => {
-                    tracing::error!(
-                        component = "resource_controller",
-                        kind = kind,
-                        error = %e,
-                        "Worker task panicked"
-                    );
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        component = "resource_controller",
-                        kind = kind,
-                        "Worker task did not finish within 5 seconds, aborting"
-                    );
-                }
-            }
-        }
-
-        controller_metrics().controller_stopped();
-        tracing::info!(
-            component = "resource_controller",
-            kind = kind,
-            "ResourceController stopped"
-        );
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures::stream;
-    use k8s_openapi::api::core::v1::ConfigMap;
-    use kube::api::ObjectMeta;
-
-    fn config_map(namespace: &str, name: &str) -> ConfigMap {
-        ConfigMap {
-            metadata: ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn namespace_watchers_expose_one_union_initialization_sequence() {
-        let source = |namespace: &'static str| -> NamespacedWatcher<ConfigMap> {
-            Box::pin(stream::iter(vec![
-                Ok(Event::Init),
-                Ok(Event::InitApply(config_map(namespace, "fixture"))),
-                Ok(Event::InitDone),
-            ]))
-        };
-        let events = merge_namespaced_watchers(vec![source("a"), source("b")], 2)
-            .collect::<Vec<_>>()
-            .await;
-
-        assert!(matches!(events.first(), Some(Ok(Event::Init))));
-        assert!(matches!(events.last(), Some(Ok(Event::InitDone))));
-        let mut namespaces = events
-            .iter()
-            .filter_map(|event| match event {
-                Ok(Event::InitApply(object)) => object.namespace(),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        namespaces.sort();
-        assert_eq!(namespaces, ["a", "b"]);
-        assert_eq!(
-            events.iter().filter(|event| matches!(event, Ok(Event::Init))).count(),
-            1
-        );
-        assert_eq!(
-            events
+        let raw: Arc<dyn RawStore<K>> = if sources.len() == 1 {
+            Arc::new(KubeRawStore::new(sources[0].store.clone()))
+        } else {
+            let stores = sources
                 .iter()
-                .filter(|event| matches!(event, Ok(Event::InitDone)))
-                .count(),
-            1
-        );
+                .map(|source| match &source.scope {
+                    WatchScope::Namespace(ns) => Ok((ns.clone(), source.store.clone())),
+                    _ => Err(anyhow::anyhow!("Overlapping watch source scopes")),
+                })
+                .collect::<Result<_>>()?;
+            Arc::new(KubeRawStore::namespaced(stores))
+        };
+        self.processor.set_raw_store(raw.clone());
+        crate::observe::status_metrics::register_status_renderer::<K>(self.kind, raw.clone());
+        crate::observe::unknown_fields_registry::register_unknown_fields_source::<K>(self.kind, raw.clone());
+        let mut stream = futures::stream::select_all(streams);
+        let worker_cancel = self.cancel.child_token();
+        let mut worker: Option<AbortOnDropHandle<()>> = None;
+        let mut shutdown = self.shutdown_signal.clone();
+        let _active = ActiveController::start();
+        let processing = async {
+            let mut timer = None;
+            let mut running = false;
+            loop {
+                let next = tokio::select! {
+                    event = stream.next() => event,
+                    result = async { worker.as_mut().unwrap().await }, if worker.is_some() => {
+                        anyhow::bail!("Required resource worker stopped: {:?}", result);
+                    }
+                };
+                let Some((index, Some(event))) = next else {
+                    anyhow::bail!("Required watch source ended");
+                };
+                let event = match event {
+                    Ok(event) => event,
+                    Err(error) => {
+                        tracing::warn!(component = "resource_controller", kind = self.kind, source = index,
+                            error = %error, "Watch source error; retaining committed snapshot");
+                        continue;
+                    }
+                };
+                if matches!(&event, Event::Init) && timer.is_none() && !running {
+                    timer = Some(InitSyncTimer::start(self.kind));
+                }
+                let keys = sources[index].apply(event)?;
+                if running {
+                    for key in keys {
+                        // The outer cancellation abandons the epoch, including a partial delivery.
+                        tokio::select! {
+                            _ = self.processor.on_event_key(key) => {},
+                            result = async { worker.as_mut().unwrap().await } => {
+                                anyhow::bail!("Required resource worker stopped: {:?}", result);
+                            }
+                        }
+                    }
+                } else if sources.iter().all(|source| source.ever_committed) {
+                    // No source is polled during replay: raw self/cross-key lookups see the complete union.
+                    let snapshot = raw.snapshot();
+                    self.processor.on_init();
+                    let mut count = 0;
+                    for object in snapshot {
+                        if run_init_apply_once(
+                            (*object).clone(),
+                            &self.processor,
+                            &self.client,
+                            &self.api_scope,
+                            &self.leader_handle,
+                            &self.namespace_filter,
+                            self.kind,
+                            "init",
+                        )
+                        .await
+                        {
+                            count += 1;
+                        }
+                    }
+                    if let Some(timer) = timer.take() {
+                        timer.complete(count);
+                    }
+                    self.processor.on_init_done();
+                    worker = Some(AbortOnDropHandle::new(spawn_worker(
+                        self.processor.clone(),
+                        raw.clone(),
+                        self.kind,
+                        self.shutdown_signal.clone(),
+                        self.client.clone(),
+                        self.api_scope.clone(),
+                        self.leader_handle.clone(),
+                        worker_cancel.clone(),
+                        &self.tracker,
+                    )));
+                    running = true;
+                }
+            }
+            #[allow(unreachable_code)]
+            Ok(())
+        };
+        let result = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => Ok(()),
+            _ = async {
+                if let Some(signal) = &mut shutdown { signal.wait().await; }
+                else { futures::future::pending::<()>().await; }
+            } => Ok(()),
+            result = processing => result,
+        };
+        worker_cancel.cancel();
+        if let Some(mut handle) = worker {
+            if !handle.is_finished() && tokio::time::timeout(Duration::from_secs(5), &mut handle).await.is_err() {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+        drop(sources);
+        result
     }
 }
 
@@ -600,13 +353,14 @@ mod tests {
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
-    store: Store<K>,
-    namespace_filter: Option<Vec<String>>,
+    store: Arc<dyn RawStore<K>>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
     client: Client,
     api_scope: ApiScope,
     leader_handle: Option<LeaderHandle>,
+    cancel: CancellationToken,
+    tracker: &TaskTracker,
 ) -> JoinHandle<()>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
@@ -614,104 +368,104 @@ where
 {
     let workqueue = processor.workqueue();
 
-    tokio::spawn(async move {
-        // Move shutdown_signal once outside the loop
-        let mut shutdown = shutdown_signal;
+    tracker.spawn(async move {
+        let processing = async {
+            // Move shutdown_signal once outside the loop
+            let mut shutdown = shutdown_signal;
 
-        loop {
-            let item = match &mut shutdown {
-                Some(signal) => {
-                    tokio::select! {
-                        item = workqueue.dequeue() => item,
-                        _ = signal.wait() => {
-                            tracing::info!(
-                                component = "resource_controller",
-                                kind = kind,
-                                "Worker received shutdown signal"
-                            );
-                            break;
+            loop {
+                let item = match &mut shutdown {
+                    Some(signal) => {
+                        tokio::select! {
+                            item = workqueue.dequeue() => item,
+                            _ = signal.wait() => {
+                                tracing::info!(
+                                    component = "resource_controller",
+                                    kind = kind,
+                                    "Worker received shutdown signal"
+                                );
+                                break;
+                            }
                         }
                     }
-                }
-                None => workqueue.dequeue().await,
-            };
+                    None => workqueue.dequeue().await,
+                };
 
-            match item {
-                Some(work_item) => {
-                    // Parse key to ObjectRef and get from store
-                    let obj_ref = parse_resource_key::<K>(&work_item.key);
-                    let store_obj = store.get(&obj_ref).map(|arc| (*arc).clone());
+                match item {
+                    Some(work_item) => {
+                        // Parse key to ObjectRef and get from store
+                        let store_obj = store.get(&work_item.key).map(|arc| (*arc).clone());
 
-                    // Check namespace filter for store object
-                    let should_process = match &store_obj {
-                        Some(obj) => passes_namespace_filter(obj, &namespace_filter),
-                        None => true, // Always process deletes
-                    };
+                        {
+                            // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
+                            let result = processor
+                                .process_work_item(&work_item.key, store_obj, None, work_item.trigger_chain.clone())
+                                .await;
 
-                    if should_process {
-                        // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
-                        let result = processor
-                            .process_work_item(&work_item.key, store_obj, None, work_item.trigger_chain.clone())
-                            .await;
+                            if let WorkItemResult::Processed { obj, status_changed } = result {
+                                let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
+                                if status_changed && can_write_status {
+                                    let name = obj.meta().name.as_deref().unwrap_or("");
+                                    let namespace = obj.meta().namespace.as_deref();
 
-                        if let WorkItemResult::Processed { obj, status_changed } = result {
-                            let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
-                            if status_changed && can_write_status {
-                                let name = obj.meta().name.as_deref().unwrap_or("");
-                                let namespace = obj.meta().namespace.as_deref();
-
-                                match extract_status_value(&obj) {
-                                    Some(status_value) => {
-                                        if let Err(e) =
-                                            persist_k8s_status::<K>(&client, &api_scope, namespace, name, &status_value)
-                                                .await
-                                        {
-                                            if matches!(&e, kube::Error::Api(status) if status.code == 404) {
-                                                tracing::info!(
-                                                    component = "resource_controller",
-                                                    kind = kind,
-                                                    key = %work_item.key,
-                                                    "Resource already deleted, skipping status persist"
-                                                );
-                                            } else {
-                                                tracing::warn!(
-                                                    component = "resource_controller",
-                                                    kind = kind,
-                                                    key = %work_item.key,
-                                                    error = %e,
-                                                    "Failed to persist status to K8s API"
-                                                );
+                                    match extract_status_value(&obj) {
+                                        Some(status_value) => {
+                                            if let Err(e) = persist_k8s_status::<K>(
+                                                &client,
+                                                &api_scope,
+                                                namespace,
+                                                name,
+                                                &status_value,
+                                            )
+                                            .await
+                                            {
+                                                if matches!(&e, kube::Error::Api(status) if status.code == 404) {
+                                                    tracing::info!(
+                                                        component = "resource_controller",
+                                                        kind = kind,
+                                                        key = %work_item.key,
+                                                        "Resource already deleted, skipping status persist"
+                                                    );
+                                                } else {
+                                                    tracing::warn!(
+                                                        component = "resource_controller",
+                                                        kind = kind,
+                                                        key = %work_item.key,
+                                                        error = %e,
+                                                        "Failed to persist status to K8s API"
+                                                    );
+                                                }
                                             }
                                         }
-                                    }
-                                    None => {
-                                        tracing::warn!(
-                                            component = "resource_controller",
-                                            kind = kind,
-                                            key = %work_item.key,
-                                            "Status changed but failed to extract status value for persistence"
-                                        );
+                                        None => {
+                                            tracing::warn!(
+                                                component = "resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                "Status changed but failed to extract status value for persistence"
+                                            );
+                                        }
                                     }
                                 }
                             }
+                            // Note: For WorkItemResult::Deleted, K8s handles status cleanup
+                            // automatically when the resource is deleted
                         }
-                        // Note: For WorkItemResult::Deleted, K8s handles status cleanup
-                        // automatically when the resource is deleted
-                    }
 
-                    workqueue.done(&work_item.key);
-                }
-                None => {
-                    tracing::warn!(
-                        component = "resource_controller",
-                        kind = kind,
-                        "Workqueue closed, stopping worker"
-                    );
-                    break;
+                        workqueue.done(&work_item.key);
+                    }
+                    None => {
+                        tracing::warn!(
+                            component = "resource_controller",
+                            kind = kind,
+                            "Workqueue closed, stopping worker"
+                        );
+                        break;
+                    }
                 }
             }
-        }
-
+        };
+        tokio::select! { _ = processing => {}, _ = cancel.cancelled() => {} }
         tracing::info!(component = "resource_controller", kind = kind, "Worker task ended");
     })
 }
@@ -859,15 +613,686 @@ where
     true
 }
 
-/// Parse a resource key back to ObjectRef
-fn parse_resource_key<K>(key: &str) -> ObjectRef<K>
-where
-    K: Resource,
-    K::DynamicType: Default,
-{
-    if let Some((ns, name)) = key.split_once('/') {
-        ObjectRef::<K>::new(name).within(ns)
-    } else {
-        ObjectRef::<K>::new(key)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        HandlerContext, ProcessResult, ProcessorHandler, ProcessorObj,
+    };
+    use crate::conf_mgr::ControllerRuntime;
+    use k8s_openapi::api::core::v1::ConfigMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::mpsc;
+
+    struct RecordingHandler {
+        completed: AtomicUsize,
+        applied: AtomicUsize,
+        deleted: AtomicUsize,
+        processor: parking_lot::Mutex<Option<std::sync::Weak<ResourceProcessor<ConfigMap>>>>,
+        bootstrap_keys: parking_lot::Mutex<Vec<String>>,
+        block: tokio::sync::Semaphore,
+        entered: AtomicUsize,
+    }
+
+    impl Default for RecordingHandler {
+        fn default() -> Self {
+            Self {
+                completed: AtomicUsize::new(0),
+                applied: AtomicUsize::new(0),
+                deleted: AtomicUsize::new(0),
+                processor: parking_lot::Mutex::new(None),
+                bootstrap_keys: parking_lot::Mutex::new(Vec::new()),
+                block: tokio::sync::Semaphore::new(0),
+                entered: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<ConfigMap> for RecordingHandler {
+        fn filter(&self, obj: &ConfigMap) -> bool {
+            obj.metadata
+                .labels
+                .as_ref()
+                .is_none_or(|labels| !labels.contains_key("excluded"))
+        }
+        async fn parse(&self, obj: ConfigMap, _ctx: &HandlerContext) -> ProcessResult<ConfigMap> {
+            if obj
+                .metadata
+                .labels
+                .as_ref()
+                .is_some_and(|labels| labels.contains_key("panic"))
+            {
+                panic!("Injected worker failure");
+            }
+            if obj
+                .metadata
+                .labels
+                .as_ref()
+                .is_some_and(|labels| labels.contains_key("block"))
+            {
+                self.entered.fetch_add(1, Ordering::SeqCst);
+                self.block.acquire().await.unwrap().forget();
+            }
+            ProcessResult::Continue(obj)
+        }
+        async fn on_change(&self, obj: &ConfigMap, _ctx: &HandlerContext) {
+            if obj
+                .metadata
+                .labels
+                .as_ref()
+                .is_some_and(|labels| labels.contains_key("saturate"))
+            {
+                let processor = self.processor.lock().as_ref().unwrap().upgrade().unwrap();
+                // Synthetic pressure probe of the existing delayed queue, not a production hook.
+                for index in 0..12000 {
+                    processor
+                        .workqueue()
+                        .enqueue_after(
+                            format!("a/dependency-{index}"),
+                            Duration::ZERO,
+                            crate::conf_mgr::sync_runtime::workqueue::TriggerChain::default(),
+                        )
+                        .await;
+                }
+            }
+            if self.completed.load(Ordering::SeqCst) == 0 {
+                let processor = self.processor.lock().as_ref().unwrap().upgrade().unwrap();
+                let expected = self.bootstrap_keys.lock();
+                for key in expected.iter() {
+                    assert!(
+                        processor.get_raw_any(key).is_some(),
+                        "missing complete bootstrap key {key}"
+                    );
+                }
+            }
+            self.applied.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn on_delete(&self, _obj: &ConfigMap, _ctx: &HandlerContext) {
+            self.deleted.fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_init_done(&self, _ctx: &HandlerContext) {
+            self.completed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn object(ns: &str, name: &str) -> ConfigMap {
+        let mut obj = ConfigMap::default();
+        obj.metadata.name = Some(name.into());
+        obj.metadata.namespace = Some(ns.into());
+        obj
+    }
+
+    fn client() -> Client {
+        Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::from(b"{}".to_vec())))
+            }),
+            "default",
+        )
+    }
+
+    fn channel() -> (
+        mpsc::Sender<watcher::Result<Event<ConfigMap>>>,
+        NamespacedWatcher<ConfigMap>,
+    ) {
+        source_channel()
+    }
+
+    fn source_channel<K: Send + 'static>() -> (mpsc::Sender<watcher::Result<Event<K>>>, NamespacedWatcher<K>) {
+        let (tx, rx) = mpsc::channel(32);
+        (
+            tx,
+            Box::pin(futures::stream::unfold(rx, |mut rx| async {
+                rx.recv().await.map(|event| (event, rx))
+            })),
+        )
+    }
+
+    async fn send(tx: &mpsc::Sender<watcher::Result<Event<ConfigMap>>>, events: Vec<Event<ConfigMap>>) {
+        for event in events {
+            tx.send(Ok(event)).await.unwrap();
+        }
+    }
+
+    async fn eventually(mut predicate: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !predicate() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    fn setup() -> (
+        ResourceController<ConfigMap>,
+        Arc<ResourceProcessor<ConfigMap>>,
+        Arc<RecordingHandler>,
+        CancellationToken,
+        TaskTracker,
+    ) {
+        let runtime = Arc::new(ControllerRuntime::new());
+        let handler = Arc::new(RecordingHandler::default());
+        let processor = Arc::new(ResourceProcessor::new("ConfigMap", 10000, handler.clone(), runtime));
+        *handler.processor.lock() = Some(Arc::downgrade(&processor));
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let controller = ResourceController::new(
+            "ConfigMap",
+            client(),
+            processor.clone(),
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces),
+            watcher::Config::default(),
+        )
+        .with_epoch(cancel.clone(), tracker.clone());
+        (controller, processor, handler, cancel, tracker)
+    }
+
+    #[tokio::test]
+    async fn namespace_watchers_expose_one_union_initialization_sequence() {
+        let (controller, processor, handler, cancel, tracker) = setup();
+        *handler.bootstrap_keys.lock() = vec!["a/old".into(), "a/added".into(), "b/kept".into(), "a/filtered".into()];
+        let (a, stream_a) = channel();
+        let (b, stream_b) = channel();
+        let task = tracker.spawn(controller.run_sources(vec![
+            (WatchScope::Namespace("a".into()), stream_a),
+            (WatchScope::Namespace("b".into()), stream_b),
+        ]));
+        let mut filtered = object("a", "filtered");
+        filtered.metadata.labels = Some(std::collections::BTreeMap::from([("excluded".into(), "true".into())]));
+        send(
+            &a,
+            vec![
+                Event::Init,
+                Event::InitApply(object("a", "abandoned")),
+                Event::Init,
+                Event::InitApply(object("a", "old")),
+                Event::InitApply(object("a", "removed")),
+                Event::InitApply(filtered),
+                Event::InitDone,
+            ],
+        )
+        .await;
+        eventually(|| processor.get_raw_any("a/old").is_some()).await;
+        assert_eq!(handler.applied.load(Ordering::SeqCst), 0);
+        assert!(processor.get_raw_any("a/abandoned").is_none());
+        let mut updated = object("a", "old");
+        updated.metadata.uid = Some("updated-before-bootstrap".into());
+        send(
+            &a,
+            vec![
+                Event::Apply(updated),
+                Event::Apply(object("a", "added")),
+                Event::Delete(object("a", "removed")),
+                Event::Init,
+                Event::InitApply(object("a", "new")),
+            ],
+        )
+        .await;
+        eventually(|| processor.get_raw_any("a/added").is_some() && processor.get_raw_any("a/removed").is_none()).await;
+        assert_eq!(handler.applied.load(Ordering::SeqCst), 0);
+        send(
+            &b,
+            vec![Event::Init, Event::InitApply(object("b", "kept")), Event::InitDone],
+        )
+        .await;
+        eventually(|| handler.completed.load(Ordering::SeqCst) == 1).await;
+        assert_eq!(
+            processor.get("a/old").unwrap().metadata.uid.as_deref(),
+            Some("updated-before-bootstrap")
+        );
+        assert!(processor.get("a/added").is_some());
+        assert!(processor.get("a/removed").is_none());
+        assert!(processor.get("a/new").is_none());
+        assert!(processor.get("a/filtered").is_none());
+        send(&a, vec![Event::InitDone, Event::InitDone]).await;
+        eventually(|| processor.get("a/new").is_some() && processor.get("a/old").is_none()).await;
+        assert!(processor.get("b/kept").is_some());
+        send(&a, vec![Event::Init, Event::InitDone]).await;
+        eventually(|| processor.get("a/new").is_none()).await;
+        assert!(processor.get("b/kept").is_some());
+        assert_eq!(handler.completed.load(Ordering::SeqCst), 1);
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+        tracker.close();
+        tracker.wait().await;
+        assert!(processor.raw_keys().is_empty());
+    }
+
+    #[tokio::test]
+    async fn relist_larger_than_queue_capacity_converges_without_reinitialization() {
+        let (controller, processor, handler, cancel, tracker) = setup();
+        let (tx, stream) = channel();
+        let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+        assert!(super::super::WorkqueueConfig::default().capacity < 5100);
+        tx.send(Ok(Event::Init)).await.unwrap();
+        // Bootstrap ingress must never fill the pre-worker queue.
+        for index in 0..5100 {
+            tx.send(Ok(Event::InitApply(object("a", &format!("item-{index}")))))
+                .await
+                .unwrap();
+        }
+        tx.send(Ok(Event::InitDone)).await.unwrap();
+        eventually(|| handler.completed.load(Ordering::SeqCst) == 1).await;
+        assert_eq!(processor.cache().list_keys().len(), 5100);
+        send(&tx, vec![Event::Init, Event::InitDone]).await;
+        eventually(|| processor.cache().list_keys().is_empty()).await;
+        assert_eq!(handler.deleted.load(Ordering::SeqCst), 5100);
+        assert_eq!(handler.completed.load(Ordering::SeqCst), 1);
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn dirty_requeue_reads_latest_committed_object_and_eligibility_loss_deletes_cached_generation() {
+        let (controller, processor, handler, cancel, tracker) = setup();
+        let (tx, stream) = channel();
+        let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+        send(
+            &tx,
+            vec![Event::Init, Event::InitApply(object("a", "x")), Event::InitDone],
+        )
+        .await;
+        eventually(|| handler.completed.load(Ordering::SeqCst) == 1).await;
+        let mut blocked = object("a", "x");
+        blocked.metadata.labels = Some(std::collections::BTreeMap::from([("block".into(), "true".into())]));
+        send(&tx, vec![Event::Apply(blocked)]).await;
+        eventually(|| handler.entered.load(Ordering::SeqCst) == 1).await;
+        let mut replacement = object("a", "x");
+        replacement.metadata.uid = Some("replacement".into());
+        replacement.metadata.labels = Some(std::collections::BTreeMap::from([("excluded".into(), "true".into())]));
+        send(&tx, vec![Event::Init, Event::InitApply(replacement), Event::InitDone]).await;
+        eventually(|| {
+            processor
+                .get_raw_any("a/x")
+                .unwrap()
+                .downcast::<ConfigMap>()
+                .unwrap()
+                .metadata
+                .uid
+                .as_deref()
+                == Some("replacement")
+        })
+        .await;
+        handler.block.add_permits(1);
+        eventually(|| processor.get("a/x").is_none()).await;
+        assert!(processor.get_raw_any("a/x").is_some());
+        assert_eq!(handler.deleted.load(Ordering::SeqCst), 1);
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn required_source_eof_and_worker_panic_are_terminal_and_drop_clears_raw_state() {
+        for panic_worker in [false, true] {
+            let (controller, processor, handler, _cancel, tracker) = setup();
+            let (tx, stream) = channel();
+            let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+            send(
+                &tx,
+                vec![Event::Init, Event::InitApply(object("a", "x")), Event::InitDone],
+            )
+            .await;
+            eventually(|| handler.completed.load(Ordering::SeqCst) == 1).await;
+            if panic_worker {
+                let mut obj = object("a", "x");
+                obj.metadata.labels = Some(std::collections::BTreeMap::from([("panic".into(), "true".into())]));
+                send(&tx, vec![Event::Apply(obj)]).await;
+            } else {
+                drop(tx);
+            }
+            assert!(tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err());
+            tracker.close();
+            tracker.wait().await;
+            assert!(processor.raw_keys().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_replay_releases_store_and_does_not_start_worker() {
+        let (controller, processor, handler, cancel, tracker) = setup();
+        let (tx, stream) = channel();
+        let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+        let mut obj = object("a", "x");
+        obj.metadata.labels = Some(std::collections::BTreeMap::from([("block".into(), "true".into())]));
+        send(&tx, vec![Event::Init, Event::InitApply(obj), Event::InitDone]).await;
+        eventually(|| handler.entered.load(Ordering::SeqCst) == 1).await;
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+        tracker.close();
+        tracker.wait().await;
+        assert!(processor.raw_keys().is_empty());
+        assert_eq!(handler.completed.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn secret_accumulator_commits_once_and_relist_removes_only_its_source() {
+        use crate::conf_mgr::sync_runtime::resource_processor::SecretHandler;
+        use k8s_openapi::api::core::v1::Secret;
+        let runtime = Arc::new(ControllerRuntime::new());
+        let processor = Arc::new(ResourceProcessor::new(
+            "Secret",
+            100,
+            Arc::new(SecretHandler::new()),
+            runtime.clone(),
+        ));
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let controller = ResourceController::new(
+            "Secret",
+            client(),
+            processor.clone(),
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces),
+            watcher::Config::default(),
+        )
+        .with_epoch(cancel.clone(), tracker.clone());
+        let (a, sa) = source_channel();
+        let (b, sb) = source_channel();
+        let task = tracker.spawn(controller.run_sources(vec![
+            (WatchScope::Namespace("a".into()), sa),
+            (WatchScope::Namespace("b".into()), sb),
+        ]));
+        let secret = |ns: &str, name: &str| Secret {
+            metadata: object(ns, name).metadata,
+            ..Default::default()
+        };
+        for event in [
+            Event::Init,
+            Event::InitApply(secret("a", "abandoned")),
+            Event::Init,
+            Event::InitApply(secret("a", "old")),
+            Event::InitDone,
+        ] {
+            a.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| processor.get_raw_any("a/old").is_some()).await;
+        assert_eq!(runtime.secret_store.count(), 0);
+        for event in [Event::Init, Event::InitApply(secret("b", "kept")), Event::InitDone] {
+            b.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| processor.is_ready()).await;
+        assert_eq!(runtime.secret_store.keys(), vec!["a/old", "b/kept"]);
+        for event in [Event::Init, Event::InitApply(secret("a", "new")), Event::InitDone] {
+            a.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| {
+            runtime.secret_store.get(Some("a"), "new").is_some() && runtime.secret_store.get(Some("a"), "old").is_none()
+        })
+        .await;
+        assert!(runtime.secret_store.get(Some("b"), "kept").is_some());
+        assert!(processor.is_ready());
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn identical_rv_relist_retries_failed_status_through_the_existing_worker() {
+        use k8s_openapi::api::core::v1::{LoadBalancerIngress, LoadBalancerStatus, Service, ServiceStatus};
+        struct StatusHandler;
+        #[async_trait::async_trait]
+        impl ProcessorHandler<Service> for StatusHandler {
+            fn update_status(&self, obj: &mut Service, _: &HandlerContext, _: &[String]) {
+                obj.status = Some(ServiceStatus {
+                    load_balancer: Some(LoadBalancerStatus {
+                        ingress: Some(vec![LoadBalancerIngress {
+                            ip: Some("192.0.2.1".into()),
+                            ..Default::default()
+                        }]),
+                    }),
+                    ..Default::default()
+                });
+            }
+        }
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let captured = attempts.clone();
+        let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+            let attempt = captured.fetch_add(1, Ordering::SeqCst);
+            async move {
+                assert_eq!(request.method(), http::Method::PATCH);
+                assert_eq!(request.uri().path(), "/api/v1/namespaces/a/services/backend/status");
+                let (status, value) = if attempt == 0 {
+                    (
+                        503,
+                        serde_json::json!({"kind":"Status","apiVersion":"v1","status":"Failure","message":"Unavailable","reason":"ServiceUnavailable","code":503}),
+                    )
+                } else {
+                    (
+                        200,
+                        serde_json::json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"backend","namespace":"a"}}),
+                    )
+                };
+                Ok::<_, std::convert::Infallible>(
+                    http::Response::builder()
+                        .status(status)
+                        .body(kube::client::Body::from(serde_json::to_vec(&value).unwrap()))
+                        .unwrap(),
+                )
+            }
+        });
+        let processor = Arc::new(ResourceProcessor::new(
+            "Service",
+            100,
+            Arc::new(StatusHandler),
+            Arc::new(ControllerRuntime::new()),
+        ));
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let controller = ResourceController::new(
+            "Service",
+            Client::new(transport, "default"),
+            processor.clone(),
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces),
+            watcher::Config::default(),
+        )
+        .with_epoch(cancel.clone(), tracker.clone());
+        let (tx, stream) = source_channel();
+        let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+        let mut service = Service {
+            metadata: object("a", "backend").metadata,
+            ..Default::default()
+        };
+        service.metadata.resource_version = Some("same-rv".into());
+        for event in [Event::Init, Event::InitApply(service.clone()), Event::InitDone] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| processor.is_ready()).await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        for event in [Event::Init, Event::InitApply(service), Event::InitDone] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| attempts.load(Ordering::SeqCst) == 2).await;
+        assert!(processor.is_ready());
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn source_backoff_does_not_stall_other_sources_or_cancellation() {
+        let (controller, processor, handler, cancel, tracker) = setup();
+        let (a, sa) = channel();
+        let (b, sb) = channel();
+        let task = tracker.spawn(controller.run_sources(vec![
+            (WatchScope::Namespace("a".into()), Box::pin(sa.default_backoff())),
+            (WatchScope::Namespace("b".into()), sb),
+        ]));
+        send(
+            &a,
+            vec![Event::Init, Event::InitApply(object("a", "old")), Event::InitDone],
+        )
+        .await;
+        eventually(|| processor.get_raw_any("a/old").is_some()).await;
+        a.send(Err(watcher::Error::NoResourceVersion)).await.unwrap();
+        send(&a, vec![Event::Init, Event::InitDone]).await;
+        send(
+            &b,
+            vec![Event::Init, Event::InitApply(object("b", "kept")), Event::InitDone],
+        )
+        .await;
+        eventually(|| handler.completed.load(Ordering::SeqCst) == 1).await;
+        assert!(processor.get("a/old").is_some());
+        assert!(processor.get("b/kept").is_some());
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+        assert!(processor.raw_keys().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancellation_of_blocked_resync_and_forced_abort_drain_the_owned_worker() {
+        for forced_abort in [false, true] {
+            let (controller, processor, handler, cancel, tracker) = setup();
+            let (tx, stream) = channel();
+            let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+            send(&tx, vec![Event::Init, Event::InitDone]).await;
+            eventually(|| handler.completed.load(Ordering::SeqCst) == 1).await;
+            let mut blocked = object("a", "blocked");
+            blocked.metadata.labels = Some(std::collections::BTreeMap::from([("block".into(), "true".into())]));
+            send(&tx, vec![Event::Apply(blocked)]).await;
+            eventually(|| handler.entered.load(Ordering::SeqCst) == 1).await;
+            tx.send(Ok(Event::Init)).await.unwrap();
+            for index in 0..5100 {
+                tx.send(Ok(Event::InitApply(object("a", &format!("item-{index}")))))
+                    .await
+                    .unwrap();
+            }
+            tx.send(Ok(Event::InitDone)).await.unwrap();
+            eventually(|| {
+                processor.workqueue().metrics().get_depth() > super::super::WorkqueueConfig::default().capacity as u64
+            })
+            .await;
+            assert_eq!(processor.raw_keys().len(), 5100);
+            if forced_abort {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                cancel.cancel();
+                task.await.unwrap().unwrap();
+            }
+            tracker.close();
+            tokio::time::timeout(Duration::from_secs(5), tracker.wait())
+                .await
+                .unwrap();
+            assert!(processor.raw_keys().is_empty());
+            assert_eq!(handler.completed.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn route_uid_recreation_relist_replaces_real_handler_parent_dependencies() {
+        use crate::conf_mgr::sync_runtime::resource_processor::HttpRouteHandler;
+        use edgion_resources::prelude_resources::{Gateway, HTTPRoute};
+        struct GatewayFixture;
+        #[async_trait::async_trait]
+        impl ProcessorHandler<Gateway> for GatewayFixture {}
+        let runtime = Arc::new(ControllerRuntime::new());
+        let gateway = Arc::new(ResourceProcessor::new(
+            "Gateway",
+            100,
+            Arc::new(GatewayFixture),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(gateway.clone());
+        let processor = Arc::new(ResourceProcessor::new(
+            "HTTPRoute",
+            100,
+            Arc::new(HttpRouteHandler::new("edgion.io/gateway-controller".into())),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(processor.clone());
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let controller = ResourceController::new(
+            "HTTPRoute",
+            client(),
+            processor.clone(),
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces),
+            watcher::Config::default(),
+        )
+        .with_epoch(cancel.clone(), tracker.clone());
+        let (tx, stream) = source_channel();
+        let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+        let route = |parent: &str, uid: &str| {
+            serde_json::from_value::<HTTPRoute>(serde_json::json!({
+                "metadata":{"name":"route","namespace":"a","uid":uid},"spec":{"parentRefs":[{"name":parent}]}
+            }))
+            .unwrap()
+        };
+        for event in [Event::Init, Event::InitApply(route("old", "uid1")), Event::InitDone] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| processor.is_ready()).await;
+        let first = tokio::time::timeout(Duration::from_secs(5), gateway.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.key, "a/old");
+        for event in [Event::Init, Event::InitApply(route("new", "uid2")), Event::InitDone] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| {
+            processor
+                .get("a/route")
+                .is_some_and(|route| route.metadata.uid.as_deref() == Some("uid2"))
+        })
+        .await;
+        assert!(runtime.gateway_route_index.get_routes_for_gateway("a/old").is_empty());
+        assert_eq!(runtime.gateway_route_index.get_routes_for_gateway("a/new").len(), 1);
+        let mut requeued = std::collections::HashSet::new();
+        while requeued.len() < 2 {
+            requeued.insert(
+                tokio::time::timeout(Duration::from_secs(5), gateway.workqueue().dequeue())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .key,
+            );
+        }
+        assert_eq!(
+            requeued,
+            std::collections::HashSet::from(["a/old".into(), "a/new".into()])
+        );
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn synthetic_pre_worker_delayed_requeue_saturation_remains_cancellable() {
+        let (controller, processor, handler, cancel, tracker) = setup();
+        let capacity = super::super::WorkqueueConfig::default().capacity as u64;
+        // Deliberately seed the pre-existing queue pressure before source ingestion.
+        // This models the scheduler boundary; it is not a real production hook claim.
+        for index in 0..capacity {
+            processor.on_event_key(format!("a/prior-{index}")).await;
+        }
+        processor
+            .workqueue()
+            .enqueue_after(
+                "a/prior-delayed".into(),
+                Duration::ZERO,
+                crate::conf_mgr::sync_runtime::workqueue::TriggerChain::default(),
+            )
+            .await;
+        eventually(|| processor.workqueue().metrics().get_depth() > capacity).await;
+        let (tx, stream) = channel();
+        let task = tracker.spawn(controller.run_sources(vec![(WatchScope::AllNamespaces, stream)]));
+        let mut obj = object("a", "pressure");
+        obj.metadata.labels = Some(std::collections::BTreeMap::from([("saturate".into(), "true".into())]));
+        send(&tx, vec![Event::Init, Event::InitApply(obj), Event::InitDone]).await;
+        eventually(|| {
+            processor.workqueue().metrics().get_depth() > capacity
+                && processor.workqueue().metrics().delayed_total.load(Ordering::SeqCst) >= capacity + 2
+        })
+        .await;
+        assert_eq!(handler.completed.load(Ordering::SeqCst), 0);
+        assert!(!processor.is_ready());
+        cancel.cancel();
+        task.await.unwrap().unwrap();
+        tracker.close();
+        tracker.wait().await;
+        assert!(processor.raw_keys().is_empty());
     }
 }

@@ -37,7 +37,7 @@ edgion-common.workspace = true
 
 # Core async runtime and error handling
 tokio.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tokio-stream.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

@@ -260,6 +260,11 @@ async fn collect(
         let runtime_secret_keys = body.get("data").and_then(parse_secret_store_keys);
         if let Some(data) = body.get("data") {
             walk_json("controller", data, &mut snap);
+            if let Some(kinds) = data.get("raw_cache").and_then(Value::as_object) {
+                for kind in kinds.keys() {
+                    apply_raw_fixture_exclusions(data, kind, &BTreeSet::new(), &mut snap);
+                }
+            }
         }
         if !ignored_controller_conf_sync_secrets.is_empty() && runtime_secret_keys.is_none() {
             snap.residue.insert("controller.secret_store_contract".to_string(), 1);
@@ -278,6 +283,9 @@ async fn collect(
                 let remaining_keys = resource_keys(&items)
                     .filter(|key| !verified.contains(key))
                     .collect::<Vec<_>>();
+                if let Some(data) = body.get("data") {
+                    apply_raw_fixture_exclusions(data, "ConfigMap", &verified, &mut snap);
+                }
                 set_residue_count(
                     &mut snap,
                     "controller.conf_center_storage.ConfigMap",
@@ -331,6 +339,9 @@ async fn collect(
                             remaining_runtime_keys.into_iter().take(3).collect(),
                         );
                     }
+                }
+                if let Some(data) = body.get("data") {
+                    apply_raw_fixture_exclusions(data, "Secret", &verified, &mut snap);
                 }
             }
         }
@@ -571,6 +582,35 @@ fn set_residue_count(snap: &mut Snapshot, path: &str, count: u64) {
 
 /// Walk a JSON object recursively. For every numeric leaf, if its full path
 /// is not in IGNORE_PATHS and value > 0, record it.
+/// Exclude only identities verified against the existing API-side fixture profile.
+/// Never subtract API counts from a different raw cache or ignore the whole bucket.
+fn apply_raw_fixture_exclusions(data: &Value, kind: &str, verified: &BTreeSet<String>, snap: &mut Snapshot) {
+    let Some(count) = data.get("raw_cache").and_then(|v| v.get(kind)).and_then(Value::as_u64) else {
+        return;
+    };
+    let path = format!("controller.raw_cache.{kind}");
+    let keys = data
+        .get("raw_cache_keys")
+        .and_then(|v| v.get(kind))
+        .and_then(Value::as_array)
+        .and_then(|values| {
+            values
+                .iter()
+                .map(|value| value.as_str().map(str::to_owned))
+                .collect::<Option<BTreeSet<_>>>()
+        });
+    let Some(keys) = keys.filter(|keys| keys.len() as u64 == count) else {
+        snap.residue.insert(format!("controller.raw_cache_contract.{kind}"), 1);
+        return;
+    };
+    let remaining = keys.difference(verified).cloned().collect::<Vec<_>>();
+    set_residue_count(snap, &path, remaining.len() as u64);
+    snap.samples.remove(&path);
+    if !remaining.is_empty() {
+        snap.samples.insert(path, remaining.into_iter().take(3).collect());
+    }
+}
+
 fn walk_json(prefix: &str, value: &Value, snap: &mut Snapshot) {
     match value {
         Value::Number(n) => {
@@ -971,6 +1011,29 @@ mod e2e_tests {
 mod walk_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn raw_cache_exclusions_use_exact_verified_keys_and_reject_inconsistent_counts() {
+        let mut snap = Snapshot::default();
+        let data = json!({"raw_cache":{"Secret":2},"raw_cache_keys":{"Secret":["system/fixture","test/stale"]}});
+        apply_raw_fixture_exclusions(&data, "Secret", &BTreeSet::from(["system/fixture".into()]), &mut snap);
+        assert_eq!(snap.residue["controller.raw_cache.Secret"], 1);
+        assert_eq!(snap.samples["controller.raw_cache.Secret"], vec!["test/stale"]);
+        apply_raw_fixture_exclusions(
+            &json!({"raw_cache":{"Secret":0},"raw_cache_keys":{"Secret":[]}}),
+            "Secret",
+            &BTreeSet::new(),
+            &mut snap,
+        );
+        assert!(!snap.residue.contains_key("controller.raw_cache.Secret"));
+        apply_raw_fixture_exclusions(
+            &json!({"raw_cache":{"Secret":2},"raw_cache_keys":{"Secret":["system/fixture"]}}),
+            "Secret",
+            &BTreeSet::new(),
+            &mut snap,
+        );
+        assert_eq!(snap.residue["controller.raw_cache_contract.Secret"], 1);
+    }
 
     #[test]
     fn wipe_all_overrides_the_short_polling_request_timeout() {

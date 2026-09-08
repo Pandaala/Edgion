@@ -14,7 +14,7 @@ The Workqueue follows a Go controller-runtime style design. Each resource type o
 - **Delayed enqueue**: coalesced scheduling for cross-resource requeue
 - **TriggerChain**: cascade causality tracking and cycle detection
 
-There is intentionally **no** exponential-backoff retry; failed status writes self-heal on watcher relist (see the note under WorkqueueConfig below).
+There is intentionally **no** exponential-backoff retry; a successful source relist provides another status reconciliation opportunity (see the note under WorkqueueConfig below).
 
 Source file: `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs`
 
@@ -62,7 +62,7 @@ Only the `key` (a `String`) flows through the ready-queue channel. The `enqueue_
 | `max_trigger_cycles` | `usize` | 5 | Maximum number of times the same (kind, key) may appear in a trigger chain |
 | `max_trigger_depth` | `usize` | 20 | Maximum total depth of a trigger chain (safety net) |
 
-> **Note**: exponential-backoff retry (`requeue_with_backoff`) has been removed. Status-write failures (e.g., transient K8s API unavailability) are self-healing: when the watcher reconnects after a disconnect, a full cache rebuild is triggered, which reprocesses everything and rewrites all statuses. Accurately distinguishing transient and permanent failures at this layer is impractical.
+> **Note**: exponential-backoff retry (`requeue_with_backoff`) has been removed. Kubernetes source relists enqueue old and current keys, including unchanged objects, after committing a complete raw snapshot. The worker can retry a failed status write if the computed status still differs from raw persisted status. This recovery is source-scoped, has no time bound, and does not occur merely because WATCH reconnects without a new LIST. Relevant events and dependency/leadership requeues provide other opportunities. Accurately distinguishing transient and permanent failures at this layer remains outside the accepted retry policy.
 
 ## Dedup Mechanism
 

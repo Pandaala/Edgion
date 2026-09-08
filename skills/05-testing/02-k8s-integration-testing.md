@@ -193,5 +193,9 @@ The following directories still contain `127.0.0.1/localhost/fixed admin port` a
 
 ## 9. Mapping to the base workflow
 
+- The standalone [namespace watch regression](../../edgion-tests/k8s/namespace-watch.md)
+  controls real API LIST/410 timing in owned namespaces and runs its own local
+  Controller. It is an explicit topology exception for source lifecycle tests,
+  separate from the shared Gateway HTTP suites.
 - Base flow and test framework: [`01-integration-testing.md`](01-integration-testing.md)
 - This document only adds K8s-specific differences, the K8s conf checklist, and suite rework items.

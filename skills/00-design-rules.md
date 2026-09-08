@@ -265,7 +265,7 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 
 - 🔴 **`on_change()` self-lookups use `RawStore`/`get_raw_any`, never `ServerCache`** — `on_change` runs *before* `save_to_cache`, so a `ServerCache` lookup of the resource being processed compiles but silently returns the stale prior generation. → add-new-resource guide Step 3.
 - 🔴 **Any handler whose `parse()` calls `lookup_gateway()` registers in `gateway_route_index` via `on_change()`/`on_delete()`** — without it, a later Gateway/listener change never requeues the dependent and `resolved_listeners` freezes forever with no self-heal (EdgionTls shipped with this bug once). → `skills/08-kubernetes/01-gateway-api/SKILL.md`.
-- 🟡 **Don't add per-kind exponential-backoff retry to a `ResourceProcessor`** — the design self-heals via a full cache rebuild on watcher reconnect; a bespoke retry loop duplicates that recovery path (`requeue_with_backoff` is intentionally unimplemented). → config-center overview.
+- 🟡 **Don't add per-kind exponential-backoff retry to a `ResourceProcessor`** — relevant events and successful source relists provide another reconciliation opportunity; relist resync includes unchanged objects. Recovery has no time bound, and a resumed WATCH alone does not force reconciliation (`requeue_with_backoff` is intentionally unimplemented). → config-center overview.
 - 🟡 **Treat the cross-resource requeue graph as cyclic by design** (Secret→resource, Service→route, route→Gateway-status all loop) — rely on the existing `TriggerChain` depth/cycle limits; a new dependency edge is a cycle-safety decision, not a reason to add an ad-hoc guard. → config-center overview.
 
 ## U. Gateway hot-path performance & bounded memory

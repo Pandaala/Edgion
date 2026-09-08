@@ -22,23 +22,24 @@ controller-runtime" are **not accepted**.
 
 ## Core Rationale
 
-**1. Non-404 write failures decompose into two self-healing classes**
+**1. Recovery depends on a later reconciliation opportunity**
 
-A status PATCH that fails with a non-404 error is, in practice, one of:
+A failed status PATCH can require operator action or recover after a transient
+failure. Neither class guarantees a subsequent event:
 
 - **A configuration/setup error** — e.g. an admission webhook rejecting the
   status subresource, a CRD schema mismatch (422), or RBAC denial (403) on the
   status subresource. These require operator action to fix the underlying
-  config. When the operator fixes it, the spec edit produces a `MODIFIED`
-  event → the resource is re-processed → the status is rewritten. The
-  controller does not need to blindly retry; retrying before the operator acts
-  would only spin.
-- **A reference error** — the resource depends on a Secret/Service/Gateway/etc.
-  that is not yet ready. This is already covered by the six cross-resource
+  config. Editing the resource can produce a `MODIFIED` event and another
+  reconcile. Fixing RBAC or a webhook alone need not change the resource, so
+  it does not by itself guarantee a status update.
+- **A dependency change** — the resource depends on a Secret/Service/Gateway/etc.
+  that is not yet ready. The existing cross-resource
   requeue trigger paths (see
   `skills/01-architecture/01-controller/06-requeue-mechanism.md`): when the
   referenced resource arrives, the dependent is re-enqueued and its status
-  rewritten.
+  recomputed. This is a reconciliation trigger, not a classification of PATCH
+  failures; status persistence can still fail independently.
 
 **2. The `requeue_with_backoff` mechanism was deliberately removed**
 
@@ -51,17 +52,20 @@ loop is strictly worse than a recoverable stale status. controller-runtime
 accepts that infinite-with-backoff retry; Edgion deliberately chose the
 opposite tradeoff for these control-plane status writes.
 
-**3. The residual purely-transient case is rare and recoverable**
+**3. Quiet resources can retain stale status without a time bound**
 
-The one case neither class above covers is a purely transient apiserver error
-(429/503/TCP timeout) while the watch stream stays healthy AND no concurrent
-spec change / leader transition / watcher reconnect follows. In that window the
-status is left stale. This is accepted because it is (a) rare (requires the
-conjunction of a transient write failure with a quiescent resource and a healthy
-stream), (b) recoverable — the next relevant event (`MODIFIED`, cross-resource
-requeue, `requeue_all` on leader transition, or watcher reconnect / full LIST)
-rewrites the correct status, and (c) exactly the slice of failures that "cannot
-be distinguished from permanent at this layer" — the reason backoff was removed.
+A transient apiserver error (429/503/TCP timeout) can leave status stale while
+the watch remains healthy and the resource has no further relevant events.
+This is the accepted cost of the no-automatic-retry decision; no frequency
+measurement or bounded recovery guarantee is claimed here.
+
+A later `MODIFIED`, cross-resource requeue, leadership-acquisition `requeue_all`,
+or successful source LIST provides another attempt when computed status differs
+from raw persisted status. Source relists enqueue all current keys, including
+identical resourceVersions, plus removed keys. They preserve ServerCache and
+the existing worker. A source relist does not retry unrelated sources or kinds;
+a reconnect that resumes WATCH without LIST does not cause resync. The former
+global rebuild policy's incidental broader recovery is no longer applicable.
 
 ## Fix Suggestions Not Accepted
 
@@ -97,4 +101,7 @@ Re-open this decision only if:
 - `skills/01-architecture/01-controller/06-requeue-mechanism.md` — the six
   cross-resource requeue trigger paths that self-heal reference errors.
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs`
-  (`persist_k8s_status`, worker at ~537-567, `run_init_apply_once` at ~708).
+  (`persist_k8s_status`, `spawn_worker`, `run_init_apply_once`, `run_sources`).
+- `kubernetes-namespace-initial-relist-generation`: source-scoped snapshot
+  redesign narrows recovery scope while retaining the accepted retry policy.
+  Implementation verification is recorded in the source-snapshot regression guard.

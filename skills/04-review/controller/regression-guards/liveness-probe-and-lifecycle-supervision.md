@@ -25,6 +25,17 @@ unforeseen terminal state. Each leader-job worker (ACME, conf_sync CA rotation, 
 resolver) is wrapped by `spawn_observed`, publishing generation-gated
 `edgion_controller_leader_job_alive{leader_job}`.
 
+The later [source-snapshot correction](source-scoped-watch-snapshots.md) extends
+the resource epoch to required Namespace/resource tasks and workers, with
+individual child supervision and descendant drain before runtime reset. Ordinary
+relists no longer rebuild the epoch. Epoch cancellation must not be mistaken
+for process shutdown when the leader-only cancellation arrives before its
+LeadershipLost event. All-serve leadership transitions still preserve the
+resource epoch. Conversely, real process shutdown takes precedence over a child
+failure after all-serve teardown, and interrupts restart backoff; it must not
+start another resource epoch. Historical verification below covers the original supervision
+fix; the linked page records the broader correction's acceptance status.
+
 Fix suggestions of the form "recheck `is_leader()` before starting leader jobs",
 "`catch_unwind` in the callee", "auto-restart a dead leader-job worker",
 "cancel the all-serve caches task from the leadership watcher", or "write gauge=0

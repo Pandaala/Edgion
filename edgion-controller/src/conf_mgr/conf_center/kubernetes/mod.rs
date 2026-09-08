@@ -41,13 +41,14 @@ mod namespace;
 mod resource_controller;
 mod storage;
 mod version_detection;
+mod watch_source;
 
 pub use center::KubernetesCenter;
 pub use config::{HaMode, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
 pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderFence, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
-pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
+pub use resource_controller::ResourceController;
 pub use storage::KubernetesStorage;
 pub use version_detection::{
     detect_reference_grant_version, detect_tls_route_version, probe_tls_route_version, ReferenceGrantVersion,

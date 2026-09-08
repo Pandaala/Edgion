@@ -36,16 +36,24 @@ pub trait RawStore<K>: Send + Sync {
 // K8s backend: wraps reflector::Store<K>
 // ============================================================================
 
-/// K8s raw store — thin wrapper around kube's reflector `Store<K>`.
+/// K8s raw store — readers over one source or nonoverlapping namespace stores.
 ///
-/// `Store` internally uses `Arc<DashMap<ObjectRef, Arc<K>>>` so cloning the
-/// `Store` is cheap (just clones the outer Arc).
+/// Native Store handles share the committed map. The union owns no object copies
+/// and never reads an in-progress LIST buffer.
 pub struct KubeRawStore<K>
 where
     K: Resource + Clone + 'static,
     K::DynamicType: Default + Eq + Hash + Clone,
 {
-    store: Store<K>,
+    stores: KubeStores<K>,
+}
+
+enum KubeStores<K: Resource + Clone + 'static>
+where
+    K::DynamicType: Eq + Hash,
+{
+    Single(Store<K>),
+    Namespaces(HashMap<String, Store<K>>),
 }
 
 impl<K> KubeRawStore<K>
@@ -54,7 +62,16 @@ where
     K::DynamicType: Default + Eq + Hash + Clone,
 {
     pub fn new(store: Store<K>) -> Self {
-        Self { store }
+        Self {
+            stores: KubeStores::Single(store),
+        }
+    }
+
+    /// Readers for a fixed, nonoverlapping set of namespace sources.
+    pub fn namespaced(stores: HashMap<String, Store<K>>) -> Self {
+        Self {
+            stores: KubeStores::Namespaces(stores),
+        }
     }
 }
 
@@ -65,11 +82,17 @@ where
 {
     fn get(&self, key: &str) -> Option<Arc<K>> {
         let obj_ref = parse_key_to_obj_ref::<K>(key);
-        self.store.get(&obj_ref)
+        match &self.stores {
+            KubeStores::Single(store) => store.get(&obj_ref),
+            KubeStores::Namespaces(stores) => stores.get(obj_ref.namespace.as_deref()?)?.get(&obj_ref),
+        }
     }
 
     fn snapshot(&self) -> Vec<Arc<K>> {
-        self.store.state()
+        match &self.stores {
+            KubeStores::Single(store) => store.state(),
+            KubeStores::Namespaces(stores) => stores.values().flat_map(Store::state).collect(),
+        }
     }
 }
 

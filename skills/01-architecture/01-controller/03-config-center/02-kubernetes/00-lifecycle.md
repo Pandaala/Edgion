@@ -67,6 +67,50 @@ All replicas independently run K8s watchers and can publish a ConfigSyncServer. 
 writes status, runs ACME, rotates the conf-sync CA, runs the DNS resolver, and performs a full requeue on acquisition.
 For a detailed comparison see [01-ha-mode.md](01-ha-mode.md).
 
+## Source snapshots and initial readiness
+
+Each resource kind still has one processor, one workqueue, and one worker.
+`watch_source.rs::SourceState` owns a native kube Writer/Store per fixed API
+scope: all namespaces, one configured namespace, or a cluster-scoped kind.
+Multiple configured namespaces are deduplicated and each gets an independent
+source. `KubeRawStore` dispatches reads to those stores; it does not copy objects
+into another permanent cache. The processor and worker share that raw reader.
+
+`Init` resets only the source's native staging buffer. `InitApply` stages data
+without invoking handlers. A valid `InitDone` atomically replaces that source's
+committed snapshot and makes `ever_committed` permanently true for this run.
+Duplicate completion is ignored before it reaches Writer. Interrupted LISTs
+retain committed data; malformed identities/transitions and source EOF fail the
+resource controller. Watcher backoff belongs to each source, before stream merge.
+
+Once every source has committed once, source polling pauses. The complete
+committed union is replayed serially through the existing initialization hooks,
+completion runs once, and one worker starts. A source already doing another
+LIST contributes its previous committed snapshot to this barrier. Incremental
+events received while other sources initialize update raw state without filling
+the bounded queue before its worker exists.
+
+Runtime relists commit first, then enqueue all old and current source keys via
+`on_event_key`. Missing objects reconcile as deletes; unchanged objects can
+recover a failed status write. The worker handles eligibility loss by deleting
+the previous processed object while retaining the replacement raw object.
+Store locks never span queue awaits. Cancellation during partial key delivery
+abandons the entire epoch; it never resumes that partially delivered queue.
+
+Namespace metadata remains a separate source with no business workqueue. Its
+first complete snapshot gates Gateway initialization. Changes during Gateway
+initialization are retained for one Selector Gateway refresh after Gateway is
+ready; later Apply/Delete/relist changes use the same refresh path. Terminating
+Namespaces are absent from both incremental and replacement views. Publication
+must also wait for phased startup to finish when Gateway/dependent kinds are
+disabled; a ready subset of registered processors is insufficient.
+
+A runtime source relist does not reset ServerCache, repeat initialization, change
+the worker, unpublish config-sync, or mark the whole Controller unready. Raw
+snapshot replacement is atomic per source, while processed state converges
+through the queue. There is no cross-kind or raw-to-processed atomic transaction.
+Inline status IO and its existing UID/resourceVersion race are unchanged.
+
 ## Leader Election (Lease-based)
 
 Distributed leader election is implemented using a Kubernetes Lease object:
@@ -155,7 +199,7 @@ enum LifecycleEvent {
     CachesTimeout,                // not ready before timeout
     LeadershipLost,               // lost leadership
     LeadershipAcquired,           // acquired leadership (all-serve mode only)
-    ControllerExit(reason),       // KubernetesController exited (normal/410 Gone/error)
+    ControllerExit(reason),       // KubernetesController exited (shutdown/terminal failure)
     ReloadRequested,              // Admin API triggered a reload
 }
 ```
@@ -205,9 +249,12 @@ Preflight logic (`version_detection.rs`):
 At startup, the leader watcher checks the current state immediately; if it is already leader it emits a `LeadershipAcquired` immediately rather than waiting for the next 100ms tick.
 This ensures that, after a replica restart (when it was already leader), it can resume leader services right away.
 
-The `WatcherSet` struct (a `JoinSet<&'static str>` plus a task-id→name map and the iteration's
-leadership-epoch `CancellationToken`) holds all four tasks and uses `abort_and_wait()` — cooperative
-cancel, then abort-and-drain — to terminate them uniformly during cleanup. See
+The `WatcherSet` struct holds all four tasks in a `JoinSet`, the iteration's
+resource-epoch `CancellationToken`, and a `TaskTracker` for resource descendants.
+Cleanup first withdraws ConfigSyncServer, then cooperatively cancels and joins
+top-level tasks. A timeout aborts and joins the remaining wrappers. Only after
+these spawners end does the center close and await the tracker, before runtime
+reset or a new epoch. See
 [Supervision & recovery](#supervision--recovery) for how the set is also used to detect a hung or
 panicked watcher while the loop is running, not just to clean up after it exits.
 
@@ -223,7 +270,7 @@ are registered into the runtime-owned processor registry only after Phase 1. If 
 
 ### Correct Rule
 
-1. **Wait for all phased processors to finish registering** (Phase 1 + Phase 2 are all spawned)
+1. **Wait for phased startup to finish**, including the first Namespace snapshot, even when later resource kinds are disabled
 2. **Wait for all kinds that sync to Gateway to be marked ready** (init phase complete)
 3. **Run `runtime.processor_registry.all_watch_objs(no_sync_kinds)` and emit `CachesReady`**
 
@@ -242,7 +289,9 @@ but existing traffic still works, prioritize checking whether only a partial set
 | Max consecutive failures | Give up after 10 lifecycle failures |
 | Stable-run reset | Reset the failure counter after 5 minutes of continuous running |
 
-Each abnormal controller exit or 410 Gone-triggered rebuild increments the consecutive-failure count by 1.
+Each abnormal controller exit increments the consecutive-failure count by 1.
+Recoverable source relists, including recovery after 410 Gone, do not exit the
+Controller or consume the lifecycle failure budget.
 If a single iteration runs stably for more than 5 minutes, the count is reset to zero.
 `run_all_serve_lifecycle` uses the identical backoff formula, failure cap, and stable-run reset — see
 [Give-up triggers graceful shutdown](#give-up-triggers-graceful-shutdown-both-flows) below for how the two
@@ -310,10 +359,36 @@ observed (`deadline_armed = !caches_ready`). Its duration is `cache_ready_deadli
   arms fresh for the tail — so a hang straddling the boundary can consume close to two full budgets before
   the loop gives up.
 
-### Leadership-epoch cancellation token
+### Resource-epoch cancellation and descendant ownership
+
+A larger startup deadline helps finite slow processing; it cannot resolve a
+capacity deadlock caused by handler-generated requeues before a worker exists.
+The source-bootstrap path avoids filling ingress, but does not change the
+existing delayed-queue capacity boundary. See the source-snapshot verification
+record for the synthetic saturation/cancellation test and its limits.
 
 Each watcher-set generation (one per outer-loop iteration) gets its own `CancellationToken`
-(`WatcherSet::new(CancellationToken::new())`); a clone is passed to the caches task.
+(`WatcherSet::new(CancellationToken::new())`); it covers the caches task,
+resource controllers, Namespace watcher, and workers.
+
+Resource controllers and Namespace tasks are tracked before becoming runnable.
+Each controller owns its child JoinSet, and each resource controller owns its
+worker through an abort-on-drop handle. Phase waits supervise individual child
+completion, and source polling/key delivery supervises worker termination.
+Tracked parents wait for their own children, never the whole tracker (which
+would include themselves). The untracked center waits for all tracked descendants.
+Closing a tracker alone does not prohibit late registration: joining all root
+spawners first and keeping parent membership during child registration prevents
+an empty-tracker race.
+
+Native source owners clear staging and committed stores on teardown, including
+an abort Drop fallback, because diagnostic readers can outlive their driver.
+Graceful teardown drains the worker before clearing raw stores; forced teardown
+must finish descendant cleanup before runtime reuse. Aborting a handle is not
+proof that its task has finished. A task that never yields has no bounded join
+guarantee; config-sync stays unpublished and runtime reset must not proceed.
+This tracks resource-state mutators, not every internal Tokio helper such as
+the existing workqueue delay scheduler.
 
 - **Leader-only** (`start_event_watchers`): the leadership watcher cancels the token **first**, then sends
   `LeadershipLost` — so the caches task's tail is stopped even while the event loop is still busy handling
@@ -345,7 +420,7 @@ both HA modes:
 - **`run_all_serve_lifecycle`**: gained the same failure counter + backoff + give-up, replacing the previous
   fixed 1 s / 5 s sleep-and-retry-forever behavior. `ServingFlowExit` distinguishes real failures
   (`CachesTimeout` / `AllControllersStopped` / watcher panic / deadline / channel closed — counted toward
-  give-up) from **benign** exits (manual `/api/v1/reload`, 410 GONE relink — reset the counter and do
+  give-up) from **benign** exits (manual `/api/v1/reload` — reset the counter and do
   **not** count toward give-up), mirroring the leader-only classification.
 
 Without this, all-serve mode's previous behavior was to retry forever on persistent failure (~90 s cycle by

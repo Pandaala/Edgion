@@ -93,7 +93,7 @@ pub use conf_center::kubernetes::{
 };
 
 // Leader election
-pub use conf_center::kubernetes::{LeaderElection, LeaderHandle, RelinkReason};
+pub use conf_center::kubernetes::{LeaderElection, LeaderHandle};
 
 // ==================== Backward compatibility aliases ====================
 

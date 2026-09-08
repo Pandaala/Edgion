@@ -8,11 +8,17 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-The FileSystem, etcd, and Kubernetes resource-controller event loops accept
+The FileSystem and etcd resource-controller event loops accept
 `InitDone` only once per run. Their local `init_done` boolean guards the entire
 completion branch before the timer, `ResourceProcessor::on_init_done`, readiness
 notification where present, and `spawn_worker`. A duplicate completion warns and
 continues without replacing `worker_handle: Option<JoinHandle<()>>`.
+
+Kubernetes now guards completion at each native source Writer and separately
+performs one committed-union bootstrap before starting its worker. Runtime
+source completions resync keys without repeating initialization. See
+[source-scoped snapshots](source-scoped-watch-snapshots.md) for that broader
+correction and its implementation verification status.
 
 The processor owns the resource kind's `Arc<Workqueue>`; each spawned worker
 holds an `Arc<ResourceProcessor<K>>` and consumes that same queue. Preserving
@@ -33,8 +39,10 @@ Source locations, relative to `edgion-controller/src/conf_mgr/conf_center/`:
   `FileSystemEvent::InitDone`, and `spawn_worker`.
 - `etcd/resource_controller.rs`: `EtcdResourceController::run`,
   `EtcdEvent::InitDone`, and `spawn_worker`.
-- `kubernetes/resource_controller.rs`: `ResourceController::run_with_stream`,
-  `Event::InitDone`, `merge_namespaced_watchers`, and `spawn_worker`.
+- Historically, `kubernetes/resource_controller.rs`:
+  `ResourceController::run_with_stream`, `Event::InitDone`,
+  `merge_namespaced_watchers`, and `spawn_worker`. The merger and combined
+  reflector were replaced by `run_sources` and `watch_source.rs::SourceState`.
 
 The original multi-namespace addendum's forwarding argument alone was
 insufficient to establish reachability: ordinary initial namespace completions
@@ -47,11 +55,11 @@ two global completions. This is a source-level state-machine finding, not a
 live-cluster reproduction. The original claim of unconditional dormancy is
 therefore too strong.
 
-That interleaving also permits direct `InitApply` processing after worker
+That old interleaving also permitted direct `InitApply` processing after worker
 startup and a partial reflector-store replacement before the duplicate reaches
-this guard. These separate lifecycle effects remain tracked in
-`tasks/todo/kubernetes-namespace-initial-relist-generation.md`; this correction
-only prevents the second worker and repeated completion callbacks. FS initial
+this guard. The source-snapshot correction linked above addresses those separate
+lifecycle effects; the original small guard only prevented the second worker
+and repeated completion callbacks. FS initial
 dispatch and etcd resync do not demonstrate an ordinary duplicate: etcd
 compaction recovery emits runtime `Apply`/`Delete` events. The missing guard
 was a real invariant violation, not an accepted tradeoff; no production incident
@@ -62,7 +70,7 @@ is claimed here.
 Guard the entire completion branch rather than only assigning a handle: the
 handler initialization callback and ready notifications must not repeat either.
 Do not restart a worker merely because another completion arrives, and do not
-change Kubernetes' existing reconnect/rebuild policy as part of this guard.
+infer that the historical small guard alone established source relist safety.
 
 This correction does not make arbitrary malformed `InitApply` sequences safe,
 supervise worker panics, or change existing shutdown timeout behavior. It does
@@ -79,14 +87,14 @@ exactly one worker, a single handler completion callback, and release of the
 worker reference after shutdown. Events are drained by explicit future polling;
 the test needs no server or timing sleeps.
 
-The existing Kubernetes
+The historical Kubernetes
 `namespace_watchers_expose_one_union_initialization_sequence` test covers
 ordinary initial namespace merging. Kubernetes and etcd completion guards are
 also checked by source review; the FS regression is not an end-to-end test of
 those backends. No dynamic integration scenario can inject this internal FS
 completion event through the normal configuration CRUD API.
 
-Verification for this correction:
+Historical verification for the original small guard (not rerun by editing this page):
 
 - Before the guard, the new FS worker-ownership assertion failed: four processor
   owners instead of three after a duplicate completion.
@@ -106,5 +114,5 @@ semantics, worker ownership, or controller restart behavior changes.
 
 - `initdone-double-spawn-second-worker` (filed 2026-07-17): real defensive
   correctness defect; small fix approved by the user and verified. Closed as
-  fixed on 2026-09-07. The separate namespace relist defect remains open in the
-  linked task.
+  fixed on 2026-09-07. The later source-snapshot correction has separate
+  acceptance evidence in the linked regression guard.

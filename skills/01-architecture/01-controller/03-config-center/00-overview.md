@@ -65,17 +65,24 @@ The differences are only at the two ends:
 | Event source | `notify` crate, inotify/kqueue file watching | K8s API Reflector watch stream | etcd watch stream |
 | Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | None (status is not persisted) |
 | Leader election | None (single instance) | Lease-based distributed election | etcd `v3election` + self-managed lease keepalive (active-passive) |
-| 410 Gone handling | N/A | When detected, watcher reconnect triggers KubernetesController rebuild | N/A |
+| 410 Gone handling | N/A | Watcher obtains a fresh source LIST; commit its complete snapshot and resync source keys through the existing worker | N/A |
 | Concurrent-write constraint | Single process; check-then-write is non-atomic | K8s API Server provides atomicity | **Single active writer, guaranteed by leader election**; check-then-write is non-atomic, but active-passive HA (etcd `v3election` + a pre-write leadership gate) ensures exactly one leader writes at a time. The single-writer assumption is now enforced by leader election, not by operator discipline |
 
 The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
 
 ### Requeue and Self-Healing
 
-There is no exponential-backoff retry (`requeue_with_backoff` is intentionally not implemented). Status-write
-failures (e.g., transient K8s API unavailability) are self-healing: when the watcher reconnects after a
-disconnect, a full cache rebuild is triggered, which reprocesses everything and rewrites all statuses.
-Cross-resource requeue is coalesced via delayed enqueue. See `04-workqueue.md` for details.
+There is no exponential-backoff retry (`requeue_with_backoff` is intentionally not implemented).
+A successful Kubernetes source relist commits its complete raw snapshot, then enqueues the union
+of old and current keys through the existing per-kind workqueue. Current keys include unchanged
+resourceVersions, allowing a previously failed status write to be attempted again when semantic
+status differs. Missing keys reconcile as deletes. Other sources and kinds keep their state.
+
+Relevant watch events, cross-resource requeues, and leadership-acquisition requeues also provide
+reconciliation opportunities. A reconnect that only resumes WATCH does not force a full resync;
+no recovery deadline or unrelated-source status recovery is promised. Inline status IO and the
+decision against automatic write-error retry remain unchanged. Cross-resource requeue is
+coalesced via delayed enqueue. See `04-workqueue.md` for details.
 
 ### Dirty Requeue
 

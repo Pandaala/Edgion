@@ -47,11 +47,12 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::sync::watch;
+use tokio::task::JoinSet;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use super::namespace::NamespaceWatchMode;
-use super::resource_controller::{ApiScope, RelinkReason, RelinkSignalSender, ResourceController};
+use super::resource_controller::{ApiScope, ResourceController};
 use super::ShutdownSignal;
 use crate::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
@@ -72,7 +73,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 struct SpawnContext {
     watcher_config: watcher::Config,
     shutdown: ShutdownSignal,
-    relink_tx: RelinkSignalSender,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
     metadata_filter: Option<MetadataFilterConfig>,
     leader_handle: Option<super::leader_election::LeaderHandle>,
     runtime: Arc<ControllerRuntime>,
@@ -84,7 +86,7 @@ fn spawn<K, H>(
     kind: &'static str,
     handler: H,
     ctx: &SpawnContext,
-) -> JoinHandle<Result<()>>
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static
 where
     K: ResourceMeta
         + Resource<Scope = kube::core::NamespaceResourceScope>
@@ -124,13 +126,13 @@ where
         ctx.watcher_config.clone(),
     )
     .with_shutdown(ctx.shutdown.clone())
-    .with_relink_signal(ctx.relink_tx.clone());
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
 
     if let Some(ref lh) = ctx.leader_handle {
         rc = rc.with_leader_handle(lh.clone());
     }
 
-    tokio::spawn(async move { rc.run_namespaced().await })
+    ctx.tracker.track_future(async move { rc.run_namespaced().await })
 }
 
 /// Spawn a cluster-scoped ResourceController with the given handler
@@ -139,7 +141,7 @@ fn spawn_cluster<K, H>(
     kind: &'static str,
     handler: H,
     ctx: &SpawnContext,
-) -> JoinHandle<Result<()>>
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static
 where
     K: ResourceMeta
         + Resource<Scope = kube::core::ClusterResourceScope>
@@ -179,13 +181,13 @@ where
         ctx.watcher_config.clone(),
     )
     .with_shutdown(ctx.shutdown.clone())
-    .with_relink_signal(ctx.relink_tx.clone());
+    .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
 
     if let Some(ref lh) = ctx.leader_handle {
         rc = rc.with_leader_handle(lh.clone());
     }
 
-    tokio::spawn(async move { rc.run_cluster_scoped().await })
+    ctx.tracker.track_future(async move { rc.run_cluster_scoped().await })
 }
 
 /// Spawn a lightweight Namespace label watcher.
@@ -193,95 +195,113 @@ where
 /// Unlike other resources, Namespace does not go through the ResourceProcessor
 /// pipeline. It only populates the NamespaceStore in ControllerRuntime for Selector
 /// namespace policy evaluation.
+// Keep the independent readiness and epoch ownership signals explicit at this spawn boundary.
+#[allow(clippy::too_many_arguments)]
 fn spawn_namespace_watcher(
     client: Client,
     watcher_config: watcher::Config,
     shutdown: ShutdownSignal,
     runtime: Arc<ControllerRuntime>,
-) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        use kube::runtime::watcher::Event;
+    cancel: CancellationToken,
+    initial_ready: watch::Sender<bool>,
+    gateway_ready: watch::Receiver<bool>,
+    gateway_enabled: bool,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'static {
+    let stream = watcher::watcher(kube::Api::<Namespace>::all(client), watcher_config).default_backoff();
+    run_namespace_stream(
+        stream,
+        shutdown,
+        runtime,
+        cancel,
+        initial_ready,
+        gateway_ready,
+        gateway_enabled,
+    )
+}
 
-        let api: kube::Api<Namespace> = kube::Api::all(client);
-        let store = &runtime.namespace_store;
-
-        tracing::info!(component = "namespace_watcher", "Starting Namespace label watcher");
-
-        let stream = watcher::watcher(api, watcher_config).default_backoff();
-
-        futures::pin_mut!(stream);
-
-        let mut init_batch: Option<Vec<Namespace>> = None;
-        let mut shutdown = shutdown;
+/// One owner serializes Namespace commits and deferred Selector refresh.
+async fn run_namespace_stream<W>(
+    stream: W,
+    mut shutdown: ShutdownSignal,
+    runtime: Arc<ControllerRuntime>,
+    cancel: CancellationToken,
+    initial_ready: watch::Sender<bool>,
+    mut gateway_ready: watch::Receiver<bool>,
+    gateway_enabled: bool,
+) -> Result<()>
+where
+    W: futures::Stream<Item = watcher::Result<kube::runtime::watcher::Event<Namespace>>>,
+{
+    use kube::runtime::watcher::Event;
+    futures::pin_mut!(stream);
+    let mut batch: Option<Vec<Namespace>> = None;
+    let mut committed = false;
+    let mut pending_refresh = false;
+    let processing = async {
         loop {
+            if pending_refresh && *gateway_ready.borrow() {
+                requeue_selector_gateways(runtime.clone()).await;
+                pending_refresh = false;
+            }
             tokio::select! {
-                _ = shutdown.wait() => {
-                    tracing::info!(component = "namespace_watcher", "Shutdown signal received");
-                    break;
+                changed = gateway_ready.changed(), if gateway_enabled && !*gateway_ready.borrow() => {
+                    changed.map_err(|_| anyhow::anyhow!("Gateway readiness sender disappeared"))?;
                 }
                 event = stream.try_next() => {
                     match event {
-                        Ok(Some(ev)) => match ev {
-                            Event::Init => {
-                                init_batch = Some(Vec::new());
-                            }
-                            Event::InitApply(ns) => {
-                                if let Some(ref mut batch) = init_batch {
-                                    batch.push(ns);
-                                }
-                            }
-                            Event::InitDone => {
-                                if let Some(batch) = init_batch.take() {
-                                    let count = batch.len();
-                                    store.replace_all(batch);
-                                    tracing::info!(
-                                        component = "namespace_watcher",
-                                        count = count,
-                                        "NamespaceStore authoritative replace_all on init_done"
-                                    );
-                                }
-                            }
-                            Event::Apply(ns) => {
-                                let name = ns.name_any();
-                                let changed = if ns.metadata.deletion_timestamp.is_some() {
-                                    store.remove(&name)
-                                } else {
-                                    store.upsert(ns)
-                                };
-                                if changed {
-                                    tracing::debug!(
-                                        component = "namespace_watcher",
-                                        namespace = %name,
-                                        "Namespace labels changed, requeuing Selector Gateways"
-                                    );
-                                    requeue_selector_gateways(runtime.clone()).await;
-                                }
-                            }
-                            Event::Delete(ns) => {
-                                let name = ns.name_any();
-                                if store.remove(&name) {
-                                    tracing::debug!(
-                                        component = "namespace_watcher",
-                                        namespace = %name,
-                                        "Namespace deleted, requeuing Selector Gateways"
-                                    );
-                                    requeue_selector_gateways(runtime.clone()).await;
+                        Ok(Some(Event::Init)) => batch = Some(Vec::new()),
+                        Ok(Some(Event::InitApply(ns))) => {
+                            let Some(batch) = &mut batch else { anyhow::bail!("Namespace InitApply outside LIST"); };
+                            validate_namespace_identity(&ns)?;
+                            batch.push(ns);
+                        }
+                        Ok(Some(Event::InitDone)) => {
+                            if let Some(batch) = batch.take() {
+                                runtime.namespace_store.replace_all(batch.into_iter()
+                                    .filter(|ns| ns.metadata.deletion_timestamp.is_none()).collect());
+                                if committed { pending_refresh |= gateway_enabled; }
+                                else {
+                                    committed = true;
+                                    initial_ready.send_replace(true);
                                 }
                             }
                         }
-                        Ok(None) => {
-                            tracing::warn!(component = "namespace_watcher", "Watch stream ended");
-                            break;
+                        Ok(Some(Event::Apply(ns))) => {
+                            validate_namespace_identity(&ns)?;
+                            anyhow::ensure!(committed && batch.is_none(), "Namespace Apply outside WATCH");
+                            let changed = if ns.metadata.deletion_timestamp.is_some() {
+                                runtime.namespace_store.remove(&ns.name_any())
+                            } else { runtime.namespace_store.upsert(ns) };
+                            pending_refresh |= changed && gateway_enabled;
                         }
-                        Err(e) => {
-                            tracing::error!(component = "namespace_watcher", error = %e, "Watch error");
+                        Ok(Some(Event::Delete(ns))) => {
+                            validate_namespace_identity(&ns)?;
+                            anyhow::ensure!(committed && batch.is_none(), "Namespace Delete outside WATCH");
+                            pending_refresh |= runtime.namespace_store.remove(&ns.name_any()) && gateway_enabled;
                         }
+                        Ok(None) => anyhow::bail!("Required Namespace source ended"),
+                        Err(error) => tracing::warn!(component = "namespace_watcher", error = %error,
+                            "Watch error; retaining committed Namespace snapshot"),
                     }
                 }
             }
         }
+        #[allow(unreachable_code)]
         Ok(())
-    })
+    };
+    tokio::select! {
+        result = processing => result,
+        _ = cancel.cancelled() => Ok(()),
+        _ = shutdown.wait() => Ok(()),
+    }
+}
+
+fn validate_namespace_identity(ns: &Namespace) -> Result<()> {
+    anyhow::ensure!(
+        ns.metadata.name.as_deref().is_some_and(|name| !name.is_empty()) && ns.metadata.namespace.is_none(),
+        "Invalid Namespace source identity"
+    );
+    Ok(())
 }
 
 /// Requeue all Gateways that use Selector namespace policy so they
@@ -330,6 +350,9 @@ pub struct KubernetesController {
     leader_handle: Option<super::leader_election::LeaderHandle>,
     /// Resource kinds to skip (not watch, not register, not probe)
     no_watch_kinds: HashSet<String>,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
+    phases_ready: Option<watch::Sender<bool>>,
 }
 
 impl KubernetesController {
@@ -371,7 +394,21 @@ impl KubernetesController {
             metadata_filter: Some(metadata_filter),
             leader_handle: None,
             no_watch_kinds,
+            cancel: CancellationToken::new(),
+            tracker: TaskTracker::new(),
+            phases_ready: None,
         })
+    }
+
+    pub(super) fn with_epoch(mut self, cancel: CancellationToken, tracker: TaskTracker) -> Self {
+        self.cancel = cancel;
+        self.tracker = tracker;
+        self
+    }
+
+    pub(super) fn with_phases_ready(mut self, ready: watch::Sender<bool>) -> Self {
+        self.phases_ready = Some(ready);
+        self
     }
 
     /// Set leader handle for gating status writes in all-serve HA mode
@@ -400,7 +437,7 @@ impl KubernetesController {
     ///
     /// Also handles:
     /// - Graceful shutdown via provided ShutdownSignal
-    /// - 410 Gone detection and relink signaling
+    /// - Source-local relist recovery and supervised epoch teardown
     pub async fn run(
         &self,
         shutdown_signal: ShutdownSignal,
@@ -434,8 +471,8 @@ impl KubernetesController {
     /// All resource kinds that should register processors during controller startup.
     ///
     /// This includes providers, Gateway, and dependent
-    /// resources. The namespace watcher is intentionally excluded because it
-    /// does not participate in PROCESSOR_REGISTRY readiness gating.
+    /// resources. Namespace is not a processor kind; its first-ready gate is
+    /// included in the separate phases-ready publication signal.
     /// Kinds listed in `no_watch_kinds` are excluded.
     pub(crate) fn all_processor_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.provider_kinds();
@@ -481,7 +518,7 @@ impl KubernetesController {
     /// dependent resources find their references already in cache on first
     /// processing — reducing post-init revalidation and duplicate status writes.
     ///
-    /// Returns when shutdown is triggered or a relink signal is received.
+    /// Returns on shutdown, epoch cancellation, or any required child failure.
     #[allow(clippy::vec_init_then_push)]
     async fn run_controllers(
         &self,
@@ -493,22 +530,25 @@ impl KubernetesController {
             "Starting Kubernetes controller - spawning ResourceControllers with phased init"
         );
 
-        // Create relink signal channel
-        let (relink_tx, mut relink_rx) = mpsc::channel::<RelinkReason>(10);
+        let cancel = self.cancel.child_token();
+        let _cancel_on_exit = cancel.clone().drop_guard();
+        let (namespace_ready_tx, mut namespace_ready) = watch::channel(false);
+        let (gateway_ready_tx, gateway_ready) = watch::channel(false);
 
         // Create SpawnContext
         let ctx = SpawnContext {
             watcher_config: self.watcher_config(),
             shutdown: shutdown_signal.clone(),
-            relink_tx: relink_tx.clone(),
+            cancel: cancel.clone(),
+            tracker: self.tracker.clone(),
             metadata_filter: self.metadata_filter.clone(),
             leader_handle: self.leader_handle.clone(),
             runtime: runtime.clone(),
         };
 
         // Resolve every multi-version API before spawning any watcher. Returning
-        // after JoinHandles exist would detach the already-started tasks and a
-        // lifecycle retry could then create duplicate watchers.
+        // before startup ensures an API-resolution failure cannot leave partially
+        // registered resource controllers behind.
         use super::version_detection::{probe_reference_grant_version, probe_tls_route_version};
         let reference_grant_version = if self.should_watch("ReferenceGrant") {
             Some(
@@ -528,7 +568,7 @@ impl KubernetesController {
         } else {
             None
         };
-        let mut h = Vec::new();
+        let mut h = JoinSet::new();
 
         // ==================== Phase 1: Provider Resources ====================
 
@@ -539,7 +579,7 @@ impl KubernetesController {
 
         // Cluster-scoped foundation
         if self.should_watch("GatewayClass") {
-            h.push(spawn_cluster::<GatewayClass, _>(
+            h.spawn(spawn_cluster::<GatewayClass, _>(
                 self,
                 "GatewayClass",
                 GatewayClassHandler::new(self.controller_name.clone()),
@@ -549,12 +589,12 @@ impl KubernetesController {
 
         // Secret (TLS certificates, auth credentials)
         if self.should_watch("Secret") {
-            h.push(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
+            h.spawn(spawn::<Secret, _>(self, "Secret", SecretHandler::new(), &ctx));
         }
 
         // ConfigMap (CA certificates for frontendValidation and BackendTLSPolicy)
         if self.should_watch("ConfigMap") {
-            h.push(spawn::<ConfigMap, _>(self, "ConfigMap", ConfigMapHandler::new(), &ctx));
+            h.spawn(spawn::<ConfigMap, _>(self, "ConfigMap", ConfigMapHandler::new(), &ctx));
         }
 
         // ReferenceGrant (cross-namespace reference validation)
@@ -563,7 +603,7 @@ impl KubernetesController {
             use super::version_detection::ReferenceGrantVersion;
             match reference_grant_version.expect("ReferenceGrant version is preflighted when watched") {
                 ReferenceGrantVersion::V1 => {
-                    h.push(spawn::<ReferenceGrant, _>(
+                    h.spawn(spawn::<ReferenceGrant, _>(
                         self,
                         "ReferenceGrant",
                         ReferenceGrantHandler::new(),
@@ -571,7 +611,7 @@ impl KubernetesController {
                     ));
                 }
                 ReferenceGrantVersion::V1Beta1 => {
-                    h.push(spawn::<ReferenceGrantBeta, _>(
+                    h.spawn(spawn::<ReferenceGrantBeta, _>(
                         self,
                         "ReferenceGrant",
                         ReferenceGrantBetaHandler::new(),
@@ -583,14 +623,14 @@ impl KubernetesController {
 
         // Service (Route backend references)
         if self.should_watch("Service") {
-            h.push(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
+            h.spawn(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
         }
 
         tracing::info!(
             component = "k8s_controller",
             "Registering EndpointSlice controller (Phase 1)"
         );
-        h.push(spawn::<EndpointSlice, _>(
+        h.spawn(spawn::<EndpointSlice, _>(
             self,
             "EndpointSlice",
             EndpointSliceHandler::new(),
@@ -598,17 +638,21 @@ impl KubernetesController {
         ));
 
         // Namespace watcher (Gateway Selector namespace policy)
-        h.push(spawn_namespace_watcher(
+        h.spawn(ctx.tracker.track_future(spawn_namespace_watcher(
             self.client.clone(),
             watcher::Config::default(),
             ctx.shutdown.clone(),
             ctx.runtime.clone(),
-        ));
+            cancel.clone(),
+            namespace_ready_tx,
+            gateway_ready,
+            self.should_watch("Gateway"),
+        )));
 
         // EdgionConfigData supplies referenced inbound PROXY policies and must
         // be complete before any Gateway is resolved.
         if self.should_watch("EdgionConfigData") {
-            h.push(spawn::<EdgionConfigData, _>(
+            h.spawn(spawn::<EdgionConfigData, _>(
                 self,
                 "EdgionConfigData",
                 EdgionConfigDataHandler::new(),
@@ -624,26 +668,34 @@ impl KubernetesController {
         );
 
         const PHASE_TIMEOUT: Duration = Duration::from_secs(15);
-        let providers_ready = runtime
-            .processor_registry
-            .wait_kinds_ready(&self.provider_kinds(), PHASE_TIMEOUT)
-            .await;
-
-        if !providers_ready {
-            for handle in &h {
-                handle.abort();
-            }
-            return Err(anyhow::anyhow!(
-                "provider resource initialization did not complete within {:?}",
-                PHASE_TIMEOUT
-            ));
-        }
+        let providers = self.provider_kinds();
+        wait_phase(
+            &mut h,
+            &cancel,
+            &mut shutdown_signal,
+            async {
+                let ready = runtime
+                    .processor_registry
+                    .wait_kinds_ready(&providers, PHASE_TIMEOUT)
+                    .await;
+                anyhow::ensure!(ready, "Provider initialization timed out");
+                while !*namespace_ready.borrow() {
+                    namespace_ready
+                        .changed()
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Namespace readiness sender disappeared"))?;
+                }
+                Ok(())
+            },
+            PHASE_TIMEOUT,
+        )
+        .await?;
         tracing::info!(component = "k8s_controller", "Phase 1 complete: all providers ready");
 
         // ==================== Phase 2: Gateway ====================
         tracing::info!(component = "k8s_controller", "Phase 2: Spawning Gateway controller");
         if self.should_watch("Gateway") {
-            h.push(spawn::<Gateway, _>(
+            h.spawn(spawn::<Gateway, _>(
                 self,
                 "Gateway",
                 GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
@@ -656,19 +708,24 @@ impl KubernetesController {
         } else {
             Vec::new()
         };
-        if !runtime
-            .processor_registry
-            .wait_kinds_ready(&gateway_kinds, PHASE_TIMEOUT)
-            .await
-        {
-            for handle in &h {
-                handle.abort();
-            }
-            return Err(anyhow::anyhow!(
-                "Gateway initialization did not complete within {:?}",
-                PHASE_TIMEOUT
-            ));
-        }
+        wait_phase(
+            &mut h,
+            &cancel,
+            &mut shutdown_signal,
+            async {
+                anyhow::ensure!(
+                    runtime
+                        .processor_registry
+                        .wait_kinds_ready(&gateway_kinds, PHASE_TIMEOUT)
+                        .await,
+                    "Gateway initialization timed out"
+                );
+                Ok(())
+            },
+            PHASE_TIMEOUT,
+        )
+        .await?;
+        gateway_ready_tx.send_replace(true);
         tracing::info!(component = "k8s_controller", "Phase 2 complete: Gateway ready");
 
         // ==================== Phase 3: Dependent Resources ====================
@@ -680,7 +737,7 @@ impl KubernetesController {
 
         // Route resources
         if self.should_watch("HTTPRoute") {
-            h.push(spawn::<HTTPRoute, _>(
+            h.spawn(spawn::<HTTPRoute, _>(
                 self,
                 "HTTPRoute",
                 HttpRouteHandler::new(self.controller_name.clone()),
@@ -688,7 +745,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("GRPCRoute") {
-            h.push(spawn::<GRPCRoute, _>(
+            h.spawn(spawn::<GRPCRoute, _>(
                 self,
                 "GRPCRoute",
                 GrpcRouteHandler::new(self.controller_name.clone()),
@@ -696,7 +753,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("TCPRoute") {
-            h.push(spawn::<TCPRoute, _>(
+            h.spawn(spawn::<TCPRoute, _>(
                 self,
                 "TCPRoute",
                 TcpRouteHandler::new(self.controller_name.clone()),
@@ -704,7 +761,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("UDPRoute") {
-            h.push(spawn::<UDPRoute, _>(
+            h.spawn(spawn::<UDPRoute, _>(
                 self,
                 "UDPRoute",
                 UdpRouteHandler::new(self.controller_name.clone()),
@@ -715,7 +772,7 @@ impl KubernetesController {
             use super::version_detection::TLSRouteVersion;
             match tls_route_version.expect("TLSRoute version is preflighted when watched") {
                 TLSRouteVersion::V1 => {
-                    h.push(spawn::<TLSRoute, _>(
+                    h.spawn(spawn::<TLSRoute, _>(
                         self,
                         "TLSRoute",
                         TlsRouteHandler::new(self.controller_name.clone()),
@@ -723,7 +780,7 @@ impl KubernetesController {
                     ));
                 }
                 TLSRouteVersion::V1Alpha3 => {
-                    h.push(spawn::<TLSRouteAlpha3, _>(
+                    h.spawn(spawn::<TLSRouteAlpha3, _>(
                         self,
                         "TLSRoute",
                         TlsRouteAlpha3Handler::new(self.controller_name.clone()),
@@ -735,7 +792,7 @@ impl KubernetesController {
 
         // TLS related (depend on Secret being in cache)
         if self.should_watch("EdgionTls") {
-            h.push(spawn::<EdgionTls, _>(
+            h.spawn(spawn::<EdgionTls, _>(
                 self,
                 "EdgionTls",
                 EdgionTlsHandler::new(self.controller_name.clone()),
@@ -743,7 +800,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("BackendTLSPolicy") {
-            h.push(spawn::<BackendTLSPolicy, _>(
+            h.spawn(spawn::<BackendTLSPolicy, _>(
                 self,
                 "BackendTLSPolicy",
                 BackendTlsPolicyHandler::new(self.controller_name.clone()),
@@ -753,7 +810,7 @@ impl KubernetesController {
 
         // Plugin resources
         if self.should_watch("EdgionPlugins") {
-            h.push(spawn::<EdgionPlugins, _>(
+            h.spawn(spawn::<EdgionPlugins, _>(
                 self,
                 "EdgionPlugins",
                 EdgionPluginsHandler::new(),
@@ -761,7 +818,7 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("EdgionStreamPlugins") {
-            h.push(spawn::<EdgionStreamPlugins, _>(
+            h.spawn(spawn::<EdgionStreamPlugins, _>(
                 self,
                 "EdgionStreamPlugins",
                 EdgionStreamPluginsHandler::new(),
@@ -769,10 +826,10 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("LinkSys") {
-            h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
+            h.spawn(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
         }
         if self.should_watch("EdgionBackend") {
-            h.push(spawn::<EdgionBackend, _>(
+            h.spawn(spawn::<EdgionBackend, _>(
                 self,
                 "EdgionBackend",
                 EdgionBackendHandler::new(),
@@ -782,7 +839,7 @@ impl KubernetesController {
 
         // ACME
         if self.should_watch("EdgionAcme") {
-            h.push(spawn::<EdgionAcme, _>(
+            h.spawn(spawn::<EdgionAcme, _>(
                 self,
                 "EdgionAcme",
                 EdgionAcmeHandler::new(),
@@ -792,7 +849,7 @@ impl KubernetesController {
 
         // Backend traffic policy
         if self.should_watch("EdgionBackendTrafficPolicy") {
-            h.push(spawn::<EdgionBackendTrafficPolicy, _>(
+            h.spawn(spawn::<EdgionBackendTrafficPolicy, _>(
                 self,
                 "EdgionBackendTrafficPolicy",
                 EdgionBackendTrafficPolicyHandler::new(self.controller_name.clone()),
@@ -802,16 +859,13 @@ impl KubernetesController {
 
         // Cluster-scoped dependent
         if self.should_watch("EdgionGatewayConfig") {
-            h.push(spawn_cluster::<EdgionGatewayConfig, _>(
+            h.spawn(spawn_cluster::<EdgionGatewayConfig, _>(
                 self,
                 "EdgionGatewayConfig",
                 EdgionGatewayConfigHandler::new(),
                 &ctx,
             ));
         }
-
-        // Drop our copy of the sender so we can detect when all controllers stop
-        drop(relink_tx);
 
         tracing::info!(
             component = "k8s_controller",
@@ -822,45 +876,24 @@ impl KubernetesController {
             "All ResourceControllers spawned (providers + Gateway + dependents)"
         );
 
-        // Wait for either:
-        // 1. Shutdown signal (Ctrl+C / SIGTERM)
-        // 2. A relink signal (410 Gone detected)
-        // 3. All controllers to stop
+        if let Some(ready) = &self.phases_ready {
+            ready.send_replace(true);
+        }
         let exit_reason = tokio::select! {
-            _ = shutdown_signal.wait() => {
-                tracing::info!(
-                    component = "k8s_controller",
-                    "Shutdown signal received in run_controllers"
-                );
-                ControllerExitReason::Shutdown
-            }
-            reason = relink_rx.recv() => {
-                match reason {
-                    Some(r) => {
-                        tracing::warn!(
-                            component = "k8s_controller",
-                            reason = ?r,
-                            "Received relink signal from ResourceController"
-                        );
-                        ControllerExitReason::RelinkRequested(r)
-                    }
-                    None => {
-                        tracing::warn!(
-                            component = "k8s_controller",
-                            "Relink channel closed (all controllers stopped)"
-                        );
-                        ControllerExitReason::AllControllersStopped
-                    }
-                }
-            }
-            _ = futures::future::join_all(&mut h) => {
-                tracing::warn!(
-                    component = "k8s_controller",
-                    "All controllers have stopped"
-                );
+            _ = shutdown_signal.wait() => ControllerExitReason::Shutdown,
+            _ = cancel.cancelled() => ControllerExitReason::Shutdown,
+            result = h.join_next() => {
+                tracing::error!(component = "k8s_controller", result = ?result, "Required resource controller stopped");
                 ControllerExitReason::AllControllersStopped
             }
         };
+        cancel.cancel();
+        if tokio::time::timeout(Duration::from_secs(5), async { while h.join_next().await.is_some() {} })
+            .await
+            .is_err()
+        {
+            h.shutdown().await;
+        }
 
         Ok(exit_reason)
     }
@@ -871,10 +904,185 @@ impl KubernetesController {
 pub enum ControllerExitReason {
     /// Shutdown was requested
     Shutdown,
-    /// A relink was requested (e.g., 410 Gone detected)
-    RelinkRequested(RelinkReason),
-    /// All controllers stopped (unexpected)
+    /// Administrative reload was requested.
+    ReloadRequested,
+    /// A required controller stopped unexpectedly
     AllControllersStopped,
     /// Lost leadership
     LostLeadership,
+}
+
+/// Phase waits observe every required child, including a child that fails before readiness.
+async fn wait_phase<F>(
+    children: &mut JoinSet<Result<()>>,
+    cancel: &CancellationToken,
+    shutdown: &mut ShutdownSignal,
+    ready: F,
+    deadline: Duration,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    tokio::select! {
+        result = tokio::time::timeout(deadline, ready) => result.map_err(|_| anyhow::anyhow!("Resource phase timed out"))?,
+        result = children.join_next() => anyhow::bail!("Required child stopped during initialization: {:?}", result),
+        _ = cancel.cancelled() => anyhow::bail!("Resource epoch cancelled during initialization"),
+        _ = shutdown.wait() => anyhow::bail!("Shutdown during initialization"),
+    }
+}
+
+#[cfg(test)]
+mod source_lifecycle_tests {
+    use super::super::ShutdownController;
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
+    use futures::FutureExt;
+    use kube::runtime::watcher::Event;
+
+    struct GatewayFixtureHandler;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<Gateway> for GatewayFixtureHandler {}
+
+    fn ns(name: &str) -> Namespace {
+        let mut ns = Namespace::default();
+        ns.metadata.name = Some(name.into());
+        ns
+    }
+
+    async fn eventually(mut predicate: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !predicate() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn namespace_relist_and_incremental_changes_defer_refresh_until_gateway_bootstrap() {
+        let runtime = Arc::new(ControllerRuntime::new());
+        let processor = Arc::new(ResourceProcessor::new(
+            "Gateway",
+            10,
+            Arc::new(GatewayFixtureHandler),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(processor.clone());
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "metadata": {"name":"gateway", "namespace":"a"},
+            "spec": {"gatewayClassName":"edgion", "listeners":[{"name":"http", "port":80,"protocol":"HTTP",
+                "allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchLabels":{"team":"a"}}}}}]}
+        }))
+        .unwrap();
+        let raw = Arc::new(LocalRawStore::new());
+        raw.upsert("a/gateway".into(), Arc::new(gateway.clone()));
+        processor.set_raw_store(raw);
+        let (shutdown, signal) = ShutdownController::new();
+        let cancel = CancellationToken::new();
+        let (ready_tx, ready_rx) = watch::channel(false);
+        let (gateway_tx, gateway_rx) = watch::channel(false);
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        let stream = futures::stream::unfold(rx, |mut rx| async { rx.recv().await.map(|event| (event, rx)) });
+        let task = tokio::spawn(run_namespace_stream(
+            stream,
+            signal,
+            runtime.clone(),
+            cancel.clone(),
+            ready_tx,
+            gateway_rx,
+            true,
+        ));
+        for event in [Event::Init, Event::InitApply(ns("a")), Event::InitDone] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| *ready_rx.borrow()).await;
+        assert!(runtime.namespace_store.get("a").is_some());
+        // Relist retains the previous committed map until completion, then removes terminating namespaces.
+        let mut terminating = ns("a");
+        terminating.metadata.deletion_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()));
+        for event in [
+            Event::Init,
+            Event::InitApply(terminating),
+            Event::InitDone,
+            Event::InitDone,
+            Event::Apply(ns("b")),
+        ] {
+            tx.send(Ok(event)).await.unwrap();
+        }
+        eventually(|| runtime.namespace_store.get("a").is_none() && runtime.namespace_store.get("b").is_some()).await;
+        assert!(processor.workqueue().dequeue().now_or_never().is_none());
+        // Publish Gateway only after the Namespace changes: an early enumeration would miss it.
+        processor.save(gateway, None);
+        processor.on_init_done();
+        gateway_tx.send_replace(true);
+        let item = tokio::time::timeout(Duration::from_secs(5), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "a/gateway");
+        tx.send(Ok(Event::Delete(ns("b")))).await.unwrap();
+        let item = tokio::time::timeout(Duration::from_secs(5), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "a/gateway");
+        assert!(runtime.namespace_store.get("b").is_none());
+        shutdown.shutdown();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn namespace_disabled_gateway_needs_no_ready_signal_and_rejects_bad_runtime_identity() {
+        for bad_delete in [false, true] {
+            let runtime = Arc::new(ControllerRuntime::new());
+            let (_shutdown, signal) = ShutdownController::new();
+            let (ready_tx, ready_rx) = watch::channel(false);
+            let (_gateway_tx, gateway_rx) = watch::channel(false);
+            let mut invalid = ns("bad");
+            invalid.metadata.namespace = Some("wrong".into());
+            let events = vec![
+                Ok(Event::Init),
+                Ok(Event::InitApply(ns("a"))),
+                Ok(Event::InitDone),
+                Ok(Event::Apply(ns("b"))),
+                Ok(if bad_delete {
+                    Event::Delete(invalid)
+                } else {
+                    Event::Apply(invalid)
+                }),
+            ];
+            let result = run_namespace_stream(
+                futures::stream::iter(events),
+                signal,
+                runtime.clone(),
+                CancellationToken::new(),
+                ready_tx,
+                gateway_rx,
+                false,
+            )
+            .await;
+            assert!(result.is_err());
+            assert!(*ready_rx.borrow());
+            assert!(runtime.namespace_store.get("b").is_some());
+            assert!(runtime.namespace_store.get("bad").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn phase_wait_observes_required_child_failure_without_waiting_for_timeout() {
+        let mut children = JoinSet::new();
+        children.spawn(async { Err(anyhow::anyhow!("source EOF")) });
+        let (_shutdown, mut signal) = ShutdownController::new();
+        let result = wait_phase(
+            &mut children,
+            &CancellationToken::new(),
+            &mut signal,
+            futures::future::pending(),
+            Duration::from_secs(60),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("Required child"));
+    }
 }

@@ -127,7 +127,7 @@ pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, 
 // Re-export Kubernetes types
 pub use kubernetes::{
     ControllerExitReason, KubernetesCenter, KubernetesConfig, KubernetesController, KubernetesStorage, LeaderElection,
-    LeaderElectionConfig, LeaderHandle, MetadataFilterConfig, NamespaceWatchMode, RelinkReason,
+    LeaderElectionConfig, LeaderHandle, MetadataFilterConfig, NamespaceWatchMode,
 };
 
 // Re-export Etcd types

@@ -34,6 +34,9 @@ impl From<RefManagerStats> for SecretRefManagerStats {
 #[derive(Serialize)]
 pub struct ControllerStoreStats {
     pub conf_center_storage: BTreeMap<String, usize>,
+    pub raw_cache: BTreeMap<String, usize>,
+    /// Stable-sorted raw identities, including resources filtered from ServerCache.
+    pub raw_cache_keys: BTreeMap<String, Vec<String>>,
     pub secret_store: usize,
     /// Stable-sorted Secret identities only; never includes Secret values.
     pub secret_store_keys: Vec<String>,
@@ -62,6 +65,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
     let conf_center_storage = collect_conf_center_counts(&state).await;
 
     let runtime = state.conf_mgr.runtime();
+    let (raw_cache, raw_cache_keys) = collect_raw_counts(&runtime);
     let secret_store_keys = runtime.secret_store.keys();
     let secret_store = secret_store_keys.len();
     let secret_ref_manager = SecretRefManagerStats::from(runtime.secret_ref_manager.stats());
@@ -79,6 +83,8 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
 
     Json(ApiResponse::ok_body(ControllerStoreStats {
         conf_center_storage,
+        raw_cache,
+        raw_cache_keys,
         secret_store,
         secret_store_keys,
         secret_ref_manager,
@@ -88,6 +94,22 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         event_store: EventStoreStats { next_resource_version },
         watch_objects: WatchObjectsStats { count: watch_count },
     }))
+}
+
+fn collect_raw_counts(
+    runtime: &crate::conf_mgr::ControllerRuntime,
+) -> (BTreeMap<String, usize>, BTreeMap<String, Vec<String>>) {
+    let mut counts = BTreeMap::new();
+    let mut identities = BTreeMap::new();
+    for kind in runtime.processor_registry.all_kinds() {
+        if let Some(processor) = runtime.processor_registry.get(kind) {
+            let mut keys = processor.raw_keys();
+            keys.sort();
+            counts.insert(kind.to_string(), keys.len());
+            identities.insert(kind.to_string(), keys);
+        }
+    }
+    (counts, identities)
 }
 
 async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usize> {
@@ -108,6 +130,39 @@ async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn raw_diagnostics_include_filtered_objects_and_observe_native_store_wipe() {
+        use crate::conf_mgr::sync_runtime::resource_processor::{ConfigMapHandler, KubeRawStore, ResourceProcessor};
+        use k8s_openapi::api::core::v1::ConfigMap;
+        use kube::runtime::{reflector, watcher::Event};
+        let runtime = Arc::new(crate::conf_mgr::ControllerRuntime::new());
+        let processor = Arc::new(ResourceProcessor::new(
+            "ConfigMap",
+            10,
+            Arc::new(ConfigMapHandler::new()),
+            runtime.clone(),
+        ));
+        processor.set_namespace_filter(vec!["allowed".into()]);
+        let (reader, mut writer) = reflector::store();
+        processor.set_raw_store(Arc::new(KubeRawStore::new(reader)));
+        runtime.processor_registry.register(processor.clone());
+        assert_eq!(collect_raw_counts(&runtime).0["ConfigMap"], 0);
+        let mut obj = ConfigMap::default();
+        obj.metadata.name = Some("filtered".into());
+        obj.metadata.namespace = Some("other".into());
+        writer.apply_watcher_event(&Event::Init);
+        writer.apply_watcher_event(&Event::InitApply(obj.clone()));
+        writer.apply_watcher_event(&Event::InitDone);
+        processor.on_init_apply(obj, None).await;
+        assert!(processor.get("other/filtered").is_none());
+        let (counts, keys) = collect_raw_counts(&runtime);
+        assert_eq!(counts["ConfigMap"], 1);
+        assert_eq!(keys["ConfigMap"], vec!["other/filtered"]);
+        writer.apply_watcher_event(&Event::Init);
+        writer.apply_watcher_event(&Event::InitDone);
+        assert_eq!(collect_raw_counts(&runtime).0["ConfigMap"], 0);
+    }
 
     async fn make_test_state(tmp_dir: &std::path::Path) -> Arc<AdminState> {
         use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
@@ -151,6 +206,8 @@ mod tests {
     fn response_serializes_with_expected_keys() {
         let resp = ControllerStoreStats {
             conf_center_storage: BTreeMap::from_iter([("HTTPRoute".to_string(), 0)]),
+            raw_cache: BTreeMap::new(),
+            raw_cache_keys: BTreeMap::new(),
             secret_store: 0,
             secret_store_keys: Vec::new(),
             secret_ref_manager: SecretRefManagerStats {
@@ -168,6 +225,8 @@ mod tests {
         };
         let v = serde_json::to_value(&resp).unwrap();
         assert!(v.get("conf_center_storage").is_some());
+        assert!(v.get("raw_cache").is_some());
+        assert!(v.get("raw_cache_keys").is_some());
         assert_eq!(v.get("secret_store").unwrap().as_u64(), Some(0));
         assert_eq!(v.get("secret_store_keys").unwrap().as_array().unwrap().len(), 0);
         assert!(v.get("secret_ref_manager").is_some());

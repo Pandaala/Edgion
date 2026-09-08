@@ -13,9 +13,9 @@
 //! to succeed, ensuring updates are not lost (dirty requeue pattern).
 //!
 //! Note: Exponential backoff retry (`requeue_with_backoff`) is intentionally NOT implemented.
-//! Status write failures (e.g. K8s API transiently unavailable) are self-healing: the watcher
-//! reconnect triggers a full cache rebuild which re-processes and re-writes all statuses.
-//! Accurate identification of transient vs permanent failures is not practical at this layer.
+//! A later relevant event or successful source relist gives failed status writes another
+//! opportunity, including when the relisted object's resourceVersion is unchanged.
+//! This has no recovery deadline; a WATCH reconnect alone need not cause a relist.
 
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};

@@ -236,6 +236,9 @@ pub trait ProcessorObj: Send + Sync {
     /// ```
     fn get_raw_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>>;
 
+    /// Identity-only diagnostic view of committed raw resources, including filtered objects.
+    fn raw_keys(&self) -> Vec<String>;
+
     /// Look up a processed resource from `ServerCache` by key.
     ///
     /// Unlike `get_raw_any`, this returns the handler-filtered object after
@@ -620,17 +623,17 @@ where
     ) -> WorkItemResult<K> {
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
 
-        // 1. Check namespace filter
-        if let Some(allowed_ns) = ctx.namespace_filter() {
-            if !namespace.is_empty() && !allowed_ns.iter().any(|n| n == &namespace) {
-                tracing::trace!("Skipped by namespace filter");
-                return WorkItemResult::Skipped;
+        // Eligibility can change without a delivered Delete (LIST replacement or key coalescing).
+        let namespace_eligible = ctx
+            .namespace_filter()
+            .is_none_or(|allowed_ns| namespace.is_empty() || allowed_ns.iter().any(|n| n == &namespace));
+        if !namespace_eligible || !self.handler.filter(&obj) {
+            if let Some(cached) = self.cache.get_by_key(&make_resource_key(&obj)) {
+                self.process_delete(&cached, ctx).await;
+                return WorkItemResult::Deleted {
+                    key: make_resource_key(&obj),
+                };
             }
-        }
-
-        // 2. Check handler filter
-        if !self.handler.filter(&obj) {
-            tracing::trace!("Skipped by handler filter");
             return WorkItemResult::Skipped;
         }
 
@@ -901,6 +904,19 @@ where
         Some(arc_k as Arc<dyn Any + Send + Sync>)
     }
 
+    fn raw_keys(&self) -> Vec<String> {
+        let store = self.raw_store.read().clone();
+        store
+            .map(|store| {
+                store
+                    .snapshot()
+                    .iter()
+                    .map(|obj| make_resource_key(obj.as_ref()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn get_cached_any(&self, key: &str) -> Option<Arc<dyn Any + Send + Sync>> {
         self.cache
             .get_by_key(key)
@@ -915,6 +931,65 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     struct TestHandler;
+
+    struct EligibilityHandler;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<TestResource> for EligibilityHandler {
+        fn filter(&self, obj: &TestResource) -> bool {
+            obj.spec != "excluded"
+        }
+    }
+
+    #[tokio::test]
+    async fn local_raw_replacement_losing_eligibility_unpublishes_without_removing_raw() {
+        use super::super::raw_store::LocalRawStore;
+        for namespace_filter in [false, true] {
+            let processor = ResourceProcessor::new(
+                "TestResource",
+                10,
+                Arc::new(EligibilityHandler),
+                Arc::new(ControllerRuntime::new()),
+            );
+            let raw = Arc::new(LocalRawStore::new());
+            processor.set_raw_store(raw.clone());
+            let mut obj = TestResource {
+                metadata: ObjectMeta {
+                    name: Some("same-key".into()),
+                    namespace: Some("a".into()),
+                    uid: Some("first".into()),
+                    ..Default::default()
+                },
+                spec: "accepted".into(),
+                status: None,
+            };
+            raw.upsert("a/same-key".into(), Arc::new(obj.clone()));
+            processor.on_init_apply(obj.clone(), None).await;
+            processor.on_init_done();
+            obj.metadata.uid = Some("second".into());
+            if namespace_filter {
+                processor.set_namespace_filter(vec!["b".into()]);
+            } else {
+                obj.spec = "excluded".into();
+            }
+            raw.upsert("a/same-key".into(), Arc::new(obj.clone()));
+            let result = processor
+                .process_work_item("a/same-key", Some(obj), Some("{}".into()), TriggerChain::default())
+                .await;
+            assert!(matches!(result, WorkItemResult::Deleted { .. }));
+            assert!(processor.get("a/same-key").is_none());
+            assert_eq!(
+                processor
+                    .get_raw_any("a/same-key")
+                    .unwrap()
+                    .downcast::<TestResource>()
+                    .unwrap()
+                    .metadata
+                    .uid
+                    .as_deref(),
+                Some("second")
+            );
+        }
+    }
 
     #[async_trait::async_trait]
     impl<K> ProcessorHandler<K> for TestHandler where K: kube::Resource + Clone + Send + Sync + 'static {}

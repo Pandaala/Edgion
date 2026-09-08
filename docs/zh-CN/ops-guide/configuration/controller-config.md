@@ -182,6 +182,18 @@ conf_center:
 | `no_watch_kinds` | `Array<String>` | `[]` | 跳过 CRD 预检和 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute"]` |
 | `cache_ready_deadline_secs` | `Integer` | `90` | 已启动的 watcher 集合到达 `CachesReady` 前的超时上限（秒）——覆盖内部 30 秒的就绪轮询预算，加上就绪后的收尾阶段（WatchObj 注册、revalidation、leader-job 启动）。**必须 `> 30`**，否则启动时校验失败拒绝启动。**随进程重启生效，不支持热重载**——`POST /api/v1/reload` 每次迭代都会重新武装该超时，但始终使用启动时捕获的值；修改此字段需要完整重启进程。经验法则：当单一资源 kind 的数量接近每 kind 工作队列容量（5000）时应调大此值——由于每次超时触发的重启都会 `runtime.reset()` 并从头重放，过小的值会造成**永久性**重启循环而不是一次性失败。最坏情况下，重启触发前的等待时间约为配置值的 **2 倍**（同一超时预算还会通过 `tokio::time::timeout` 包裹最初的 `start_event_watchers` 调用，返回后再为收尾阶段重新武装一次）。完整机制见 [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) |
 
+首次启动时，Controller 会等待所需监听来源完成首次完整加载，再发布配置同步服务。
+运行期间 Kubernetes 重新 LIST 时，会保留该来源上一次完整快照，成功后再替换，并通过
+原有 worker 处理变化。普通 relist 不会重启全部资源 Controller 或撤下配置同步服务。
+Namespace 标签变化也会触发使用 Selector 的 Gateway 重新计算。
+
+管理接口 reload 和不可恢复的 Controller 任务故障仍会在旧任务退出后重建资源状态。
+`leader-only` 模式丢失领导权时也会停止当前资源运行周期；`all-serve` 模式的领导权
+切换会保留资源监听和配置服务，仅调整领导者专属服务。
+
+增大启动超时可以容纳较慢但仍有进展的处理，不能解决真正的队列容量死锁。
+反复初始化超时时，应同时检查阻塞的处理路径和资源数量。
+
 ### [conf_center.leader_election]
 
 | 参数 | 类型 | 默认值 | 说明 |

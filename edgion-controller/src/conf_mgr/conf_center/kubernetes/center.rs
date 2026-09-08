@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// Give up (trigger graceful shutdown) after this many consecutive failures.
 const MAX_CONSECUTIVE_FAILURES: u32 = 10;
@@ -64,7 +65,7 @@ impl FailureBudget {
         }
     }
 
-    /// Benign exit (manual reload, 410 relink): failures were transient noise.
+    /// Benign administrative reload resets the failure budget.
     fn reset(&mut self) {
         self.consecutive_failures = 0;
     }
@@ -114,7 +115,7 @@ enum LifecycleEvent {
 enum ServingFlowExit {
     /// Normal shutdown requested
     Shutdown,
-    /// Benign restart (manual reload or 410 GONE relink) — resets the failure budget
+    /// Benign administrative reload — resets the failure budget
     Benign,
     /// Real failure (caches timeout / watcher panic / deadline / channel closed) — counts toward give-up
     Failure,
@@ -143,6 +144,7 @@ struct WatcherSet {
     set: JoinSet<&'static str>,
     names: HashMap<tokio::task::Id, &'static str>,
     cancel: CancellationToken,
+    tracker: TaskTracker,
 }
 
 impl WatcherSet {
@@ -151,6 +153,7 @@ impl WatcherSet {
             set: JoinSet::new(),
             names: HashMap::new(),
             cancel,
+            tracker: TaskTracker::new(),
         }
     }
 
@@ -176,8 +179,34 @@ impl WatcherSet {
     /// Cooperative cancel first, then abort all tasks and wait for them.
     async fn abort_and_wait(mut self) {
         self.cancel.cancel();
-        self.set.abort_all();
-        while self.set.join_next().await.is_some() {}
+        if tokio::time::timeout(Duration::from_secs(5), async {
+            while self.set.join_next().await.is_some() {}
+        })
+        .await
+        .is_err()
+        {
+            self.set.abort_all();
+            while self.set.join_next().await.is_some() {}
+        }
+        // All top-level spawners are joined. Tracked parents retain membership
+        // until their synchronously registered children have been spawned.
+        self.tracker.close();
+        self.tracker.wait().await;
+    }
+}
+
+fn classify_leader_only_exit(
+    reason: ControllerExitReason,
+    shutdown: bool,
+    leader: bool,
+    epoch_cancelled: bool,
+) -> ControllerExitReason {
+    if shutdown {
+        ControllerExitReason::Shutdown
+    } else if !leader || epoch_cancelled {
+        ControllerExitReason::LostLeadership
+    } else {
+        reason
     }
 }
 
@@ -282,6 +311,12 @@ impl KubernetesCenter {
     // ==================== Helper Methods ====================
 
     /// Set the ConfigSyncServer (Some = ready, None = not ready)
+    async fn stop_resource_epoch(&self, watchers: WatcherSet) {
+        // Withdraw publication before a possibly unbounded descendant drain.
+        self.set_config_sync_server(None);
+        watchers.abort_and_wait().await;
+    }
+
     fn set_config_sync_server(&self, server: Option<Arc<ConfigSyncServer>>) {
         let mut sync_server = self.config_sync_server.write();
         let was_ready = sync_server.is_some();
@@ -366,7 +401,7 @@ impl KubernetesCenter {
     /// Event-driven architecture:
     /// 1. Start all event watcher tasks (controller, caches, leadership)
     /// 2. Process events in a simple match loop
-    /// 3. Handle retry logic for errors and 410 GONE
+    /// 3. Handle retry logic for terminal resource-epoch errors
     async fn run_main_flow(
         &self,
         client: &Client,
@@ -506,9 +541,7 @@ impl KubernetesCenter {
                                 mode = "kubernetes",
                                 "Reload requested via Admin API, restarting controllers"
                             );
-                            break ControllerExitReason::RelinkRequested(
-                                super::resource_controller::RelinkReason::ReloadRequested,
-                            );
+                            break ControllerExitReason::ReloadRequested;
                         }
                     },
                     LoopTurn::ChannelClosed => {
@@ -545,13 +578,15 @@ impl KubernetesCenter {
                 }
             };
 
-            // Cleanup: cancel the epoch token, abort and wait for all watcher tasks
-            watchers.abort_and_wait().await;
-
-            // Clear config_sync_server if it was set
-            if caches_ready {
-                self.set_config_sync_server(None);
-            }
+            // Epoch cancellation can finish the controller before LeadershipLost
+            // reaches this channel. Process shutdown and leadership are authoritative.
+            let exit_reason = classify_leader_only_exit(
+                exit_reason,
+                shutdown_handle.is_shutdown(),
+                leader_handle.is_leader(),
+                watchers.cancel.is_cancelled(),
+            );
+            self.stop_resource_epoch(watchers).await;
 
             // Stop leader-only jobs and reset ControllerRuntime for retry
             Self::stop_leader_jobs();
@@ -566,25 +601,14 @@ impl KubernetesCenter {
                 ControllerExitReason::LostLeadership => {
                     return MainFlowExit::LostLeadership;
                 }
-                ControllerExitReason::RelinkRequested(reason) => {
-                    // Check if this is a manual reload request
-                    let is_reload = matches!(reason, super::resource_controller::RelinkReason::ReloadRequested);
-                    if is_reload {
-                        tracing::info!(
-                            component = "kubernetes_center",
-                            mode = "kubernetes",
-                            "Manual reload requested, restarting with new server_id"
-                        );
-                        reload_metrics().reload_started();
-                        reload_start_time = Some(std::time::Instant::now());
-                    } else {
-                        tracing::info!(
-                            component = "kubernetes_center",
-                            mode = "kubernetes",
-                            reason = ?reason,
-                            "Relink requested (410 GONE), restarting immediately"
-                        );
-                    }
+                ControllerExitReason::ReloadRequested => {
+                    tracing::info!(
+                        component = "kubernetes_center",
+                        mode = "kubernetes",
+                        "Manual reload requested, restarting with new server_id"
+                    );
+                    reload_metrics().reload_started();
+                    reload_start_time = Some(std::time::Instant::now());
                     budget.reset();
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -655,6 +679,10 @@ impl KubernetesCenter {
         let expected_processor_kinds = controller.all_processor_kinds();
 
         let mut watchers = WatcherSet::new(CancellationToken::new());
+        let (phases_ready_tx, phases_ready) = watch::channel(false);
+        let controller = controller
+            .with_epoch(watchers.cancel_token(), watchers.tracker.clone())
+            .with_phases_ready(phases_ready_tx);
 
         // 4. Controller task
         let shutdown_signal = shutdown_handle.signal();
@@ -690,6 +718,7 @@ impl KubernetesCenter {
                 Some(leader_handle.clone()),
                 self.config.watch_namespaces.clone(),
                 watchers.cancel_token(),
+                phases_ready,
             ),
         );
 
@@ -800,7 +829,20 @@ impl KubernetesCenter {
         leader_handle: Option<LeaderHandle>,
         watch_namespaces: Vec<String>,
         cancel: CancellationToken,
+        mut phases_ready: watch::Receiver<bool>,
     ) {
+        // Namespace readiness is not represented by a processor kind. Even when
+        // Gateway/dependents are disabled, publication waits for the phase gate.
+        let phase_wait = async {
+            while !*phases_ready.borrow() {
+                phases_ready.changed().await?;
+            }
+            Ok::<_, watch::error::RecvError>(())
+        };
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            result = phase_wait => if result.is_err() { return; },
+        }
         const CACHE_READY_TIMEOUT_SECS: u64 = 30;
         let timeout = Duration::from_secs(CACHE_READY_TIMEOUT_SECS);
         let start = Instant::now();
@@ -893,14 +935,21 @@ impl KubernetesCenter {
         shutdown_handle: &ShutdownHandle,
     ) -> Result<()> {
         let mut budget = FailureBudget::new();
+        let mut shutdown_signal = shutdown_handle.signal();
         loop {
+            if shutdown_handle.is_shutdown() {
+                return Ok(());
+            }
             let iteration_start = Instant::now();
             let exit = self.run_serving_flow(client, leader_handle, shutdown_handle).await;
             match exit {
                 ServingFlowExit::Shutdown => return Ok(()),
                 ServingFlowExit::Benign => {
                     budget.reset();
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::select! {
+                        _ = shutdown_signal.wait() => return Ok(()),
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    }
                 }
                 ServingFlowExit::Failure => {
                     let ran_stably = Instant::now().saturating_duration_since(iteration_start) >= STABLE_RUN_DURATION;
@@ -912,7 +961,10 @@ impl KubernetesCenter {
                                 backoff_secs = delay.as_secs(),
                                 "Waiting before restart"
                             );
-                            tokio::time::sleep(delay).await;
+                            tokio::select! {
+                                _ = shutdown_signal.wait() => return Ok(()),
+                                _ = tokio::time::sleep(delay) => {}
+                            }
                         }
                         FailureAction::GiveUp => {
                             tracing::error!(
@@ -1022,9 +1074,7 @@ impl KubernetesCenter {
                         break reason;
                     }
                     LifecycleEvent::ReloadRequested => {
-                        break ControllerExitReason::RelinkRequested(
-                            super::resource_controller::RelinkReason::ReloadRequested,
-                        );
+                        break ControllerExitReason::ReloadRequested;
                     }
                 },
                 LoopTurn::ChannelClosed => {
@@ -1061,20 +1111,32 @@ impl KubernetesCenter {
             }
         };
 
-        // Cleanup
-        watchers.abort_and_wait().await;
-        if caches_ready {
-            self.set_config_sync_server(None);
-        }
+        self.finish_serving_flow(watchers, leader_services_running, exit_reason, shutdown_handle)
+            .await
+    }
+
+    async fn finish_serving_flow(
+        &self,
+        watchers: WatcherSet,
+        leader_services_running: bool,
+        exit_reason: ControllerExitReason,
+        shutdown_handle: &ShutdownHandle,
+    ) -> ServingFlowExit {
+        self.stop_resource_epoch(watchers).await;
         if leader_services_running {
             self.stop_leader_services().await;
         }
         tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
         self.runtime.reset();
 
+        // A phase/child may report failure before the shutdown event reaches
+        // the channel, or shutdown may arrive during drain. Never restart that epoch.
+        if shutdown_handle.is_shutdown() {
+            return ServingFlowExit::Shutdown;
+        }
         match exit_reason {
             ControllerExitReason::Shutdown => ServingFlowExit::Shutdown,
-            ControllerExitReason::RelinkRequested(_) => ServingFlowExit::Benign,
+            ControllerExitReason::ReloadRequested => ServingFlowExit::Benign,
             // LostLeadership bubbling up via ControllerExit is a leadership
             // transition, not a fault — the loop normally handles it inline.
             ControllerExitReason::LostLeadership => ServingFlowExit::Benign,
@@ -1109,6 +1171,10 @@ impl KubernetesCenter {
         let expected_processor_kinds = controller.all_processor_kinds();
 
         let mut watchers = WatcherSet::new(CancellationToken::new());
+        let (phases_ready_tx, phases_ready) = watch::channel(false);
+        let controller = controller
+            .with_epoch(watchers.cancel_token(), watchers.tracker.clone())
+            .with_phases_ready(phases_ready_tx);
 
         // 4. Controller task
         let shutdown_signal = shutdown_handle.signal();
@@ -1146,6 +1212,7 @@ impl KubernetesCenter {
                 None,
                 self.config.watch_namespaces.clone(),
                 watchers.cancel_token(),
+                phases_ready,
             ),
         );
 
@@ -1356,7 +1423,7 @@ mod leadership_signal_tests {
 
     /// Build a `KubernetesCenter` without touching a cluster. Only the
     /// leadership signal is exercised, which never talks to the apiserver.
-    fn unconnected_center() -> KubernetesCenter {
+    pub(super) fn unconnected_center() -> KubernetesCenter {
         let config = KubernetesConfig::new("edgion");
         let runtime = Arc::new(ControllerRuntime::new());
         runtime.set_single_publisher(config.ha_mode() != HaMode::AllServe);
@@ -1369,6 +1436,23 @@ mod leadership_signal_tests {
             runtime,
             leader_flag: Arc::new(watch::channel(false).0),
         }
+    }
+
+    #[tokio::test]
+    async fn epoch_stop_withdraws_publication_before_blocked_descendant_drain() {
+        let center = unconnected_center();
+        center.set_config_sync_server(Some(Arc::new(ConfigSyncServer::new())));
+        let watchers = WatcherSet::new(CancellationToken::new());
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+        watchers.tracker.spawn(async move {
+            let _ = finish_rx.await;
+        });
+        let cleanup = center.stop_resource_epoch(watchers);
+        futures::pin_mut!(cleanup);
+        assert!(futures::poll!(&mut cleanup).is_pending());
+        assert!(center.config_sync_server.read().is_none());
+        finish_tx.send(()).unwrap();
+        cleanup.await;
     }
 
     /// The two leadership signals deliberately DISAGREE in Kubernetes mode.
@@ -1415,6 +1499,185 @@ mod caches_ready_tests {
     use super::*;
     use tokio_util::sync::CancellationToken;
 
+    #[tokio::test(start_paused = true)]
+    async fn all_serve_shutdown_during_bootstrap_or_backoff_stops_without_restart() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for (outer_lifecycle, fail_preflight) in [(false, false), (true, false), (true, true)] {
+            let mut center = super::leadership_signal_tests::unconnected_center();
+            center.config.no_watch_kinds = super::super::version_detection::gateway_api_kind_names()
+                .into_iter()
+                .filter(|kind| !fail_preflight || *kind != "GatewayClass")
+                .map(String::from)
+                .collect();
+            let requests = Arc::new(AtomicUsize::new(0));
+            let request_started = Arc::new(tokio::sync::Notify::new());
+            let client = Client::new(
+                tower::service_fn({
+                    let requests = requests.clone();
+                    let request_started = request_started.clone();
+                    move |request: http::Request<kube::client::Body>| {
+                        if fail_preflight || request.uri().path() == "/api/v1/namespaces" {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            request_started.notify_one();
+                        }
+                        async move {
+                            if fail_preflight {
+                                return Err(std::io::Error::other("Injected preflight failure"));
+                            }
+                            futures::future::pending::<Result<http::Response<kube::client::Body>, std::io::Error>>()
+                                .await
+                        }
+                    }
+                }),
+                "default",
+            );
+            let leader = LeaderElection::new(
+                client.clone(),
+                InternalLeaderElectionConfig {
+                    lease_name: "test".into(),
+                    lease_namespace: "default".into(),
+                    pod_namespace: "default".into(),
+                    identity: "test".into(),
+                    lease_duration_secs: 15,
+                    renew_deadline_secs: 10,
+                    retry_period_secs: 2,
+                },
+                center.leader_flag.clone(),
+            )
+            .handle();
+            let shutdown = ShutdownHandle::new();
+            let trigger = tokio::spawn({
+                let shutdown = shutdown.clone();
+                async move {
+                    request_started.notified().await;
+                    if fail_preflight {
+                        // Let the immediate preflight failure enter its two-second retry backoff.
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    shutdown.shutdown();
+                }
+            });
+            // Epoch drain permits the existing five-second forced-abort grace.
+            let timeout = Duration::from_secs(if fail_preflight { 1 } else { 8 });
+            tokio::time::timeout(timeout, async {
+                if outer_lifecycle {
+                    center
+                        .run_all_serve_lifecycle(&client, &leader, &shutdown)
+                        .await
+                        .unwrap();
+                } else {
+                    assert!(matches!(
+                        center.run_serving_flow(&client, &leader, &shutdown).await,
+                        ServingFlowExit::Shutdown
+                    ));
+                }
+            })
+            .await
+            .expect("shutdown must drain the pending epoch without a retry");
+            assert_eq!(requests.load(Ordering::SeqCst), 1, "no replacement epoch may start");
+            tokio::time::timeout(Duration::from_secs(1), trigger)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(center.config_sync_server.read().is_none());
+            assert!(center.runtime.processor_registry.all_watch_objs(&[]).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn all_serve_shutdown_arriving_during_drain_overrides_failure() {
+        let center = super::leadership_signal_tests::unconnected_center();
+        center.set_config_sync_server(Some(Arc::new(ConfigSyncServer::new())));
+        let watchers = WatcherSet::new(CancellationToken::new());
+        let shutdown = ShutdownHandle::new();
+        let cancel = watchers.cancel_token();
+        watchers.tracker.spawn({
+            let shutdown = shutdown.clone();
+            async move {
+                cancel.cancelled().await;
+                shutdown.shutdown();
+            }
+        });
+        assert!(!shutdown.is_shutdown());
+        assert!(matches!(
+            center
+                .finish_serving_flow(watchers, false, ControllerExitReason::AllControllersStopped, &shutdown)
+                .await,
+            ServingFlowExit::Shutdown
+        ));
+        assert!(center.config_sync_server.read().is_none());
+    }
+
+    #[tokio::test]
+    async fn no_processor_kinds_still_wait_for_namespace_and_phase_completion() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let (phase_tx, phase_rx) = watch::channel(false);
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(KubernetesCenter::run_caches_ready(
+            Arc::new(ConfigSyncServer::new()),
+            Arc::new(ControllerRuntime::new()),
+            Vec::new(),
+            Vec::new(),
+            tx,
+            None,
+            None,
+            Vec::new(),
+            cancel.clone(),
+            phase_rx,
+        ));
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        phase_tx.send_replace(true);
+        assert!(matches!(rx.recv().await, Some(LifecycleEvent::CachesReady)));
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tracker_drain_waits_for_descendants_after_spawner_is_aborted() {
+        let cancel = CancellationToken::new();
+        let mut watchers = WatcherSet::new(cancel);
+        let tracker = watchers.tracker.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        watchers.spawn("controller", async move {
+            tracker.spawn(async move {
+                let _ = started_tx.send(());
+                let _ = finish_rx.await;
+            });
+            futures::future::pending::<()>().await;
+        });
+        started_rx.await.unwrap();
+        watchers.set.abort_all();
+        let task = tokio::spawn(watchers.abort_and_wait());
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished(), "descendant still owns the epoch");
+        finish_tx.send(()).unwrap();
+        task.await.unwrap();
+    }
+
+    #[test]
+    fn epoch_cancellation_before_leadership_event_never_becomes_process_shutdown() {
+        for leader in [false, true] {
+            for reason in [
+                ControllerExitReason::Shutdown,
+                ControllerExitReason::AllControllersStopped,
+            ] {
+                assert!(matches!(
+                    classify_leader_only_exit(reason, false, leader, true),
+                    ControllerExitReason::LostLeadership
+                ));
+            }
+        }
+        assert!(matches!(
+            classify_leader_only_exit(ControllerExitReason::AllControllersStopped, true, false, true),
+            ControllerExitReason::Shutdown
+        ));
+        assert!(matches!(
+            classify_leader_only_exit(ControllerExitReason::AllControllersStopped, false, true, false),
+            ControllerExitReason::AllControllersStopped
+        ));
+    }
+
     #[tokio::test]
     async fn pre_cancelled_token_suppresses_caches_ready() {
         let (tx, mut rx) = mpsc::channel::<LifecycleEvent>(4);
@@ -1424,8 +1687,19 @@ mod caches_ready_tests {
         let css = Arc::new(ConfigSyncServer::new());
         // No expected kinds → readiness poll passes immediately; the cancelled
         // token must stop the tail before CachesReady is sent.
-        KubernetesCenter::run_caches_ready(css, runtime, Vec::new(), Vec::new(), tx, None, None, Vec::new(), cancel)
-            .await;
+        KubernetesCenter::run_caches_ready(
+            css,
+            runtime,
+            Vec::new(),
+            Vec::new(),
+            tx,
+            None,
+            None,
+            Vec::new(),
+            cancel,
+            watch::channel(true).1,
+        )
+        .await;
         assert!(
             rx.try_recv().is_err(),
             "cancelled caches task must send neither CachesReady nor CachesTimeout"
