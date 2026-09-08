@@ -17,5 +17,5 @@
 - Integration: no new gap; existing files remain frozen.
 - Review: fresh independent review agreed that ordering, post-mutation bytes, cancellation-safe replay denial, selected-response ownership, mirror isolation, and canonical access-log cleanup remain correct. It returned LGTM with no Must Fix, Should Fix, or deferred finding.
 - Repository verification: `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `29f620b8`; never pushed by the campaign.
 - Previous batch: `ec774be0`; never push.

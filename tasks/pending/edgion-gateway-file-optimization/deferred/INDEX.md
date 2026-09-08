@@ -177,3 +177,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Align upstream response stage documentation | pending | [task](../../../todo/align-upstream-response-stage-documentation.md) |
 | Align response-body filter terminal documentation | pending | [task](../../../todo/align-response-body-filter-terminal-documentation.md) |
 | Avoid Wasm response in-flight cache-key allocation | pending | [task](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md) |
+| Unify terminal local-reply status validation | pending | [task](../../../todo/unify-terminal-local-reply-status-validation.md) |
+| Add native WAF response-stage invalid-status integration coverage | pending | [task](../../../todo/add-native-waf-response-invalid-status-integration.md) |

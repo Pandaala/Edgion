@@ -615,7 +615,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | changed | B0184: retire completed or abandoned mirror body state and restore the null-state fast path |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | examined-no-change | B0185: retained ordered allocation-free body action dispatch after B0184 freshness review |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | changed | B0175/B0176: prior request-path work; B0183: expose canonical protocol detection and test the native-gRPC H2 gate |
-| `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` | `routes-shared` | source | analysis-ready | B0186: fail closed on unclaimable staged replies and skip disabled/SSE compression header scans |
+| `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` | `routes-shared` | source | changed | B0186: fail closed on unclaimable staged replies and skip disabled/SSE compression header scans |
 | `edgion-gateway/src/routes/http/proxy_http/pg_response_head.rs` | `routes-shared` | source | analysis-ready | B0187: current Hold/Release/Replace and final-writer ownership retained; multi-field Content-Encoding classification proposed for defer |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` | `routes-shared` | source | pending | — |

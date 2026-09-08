@@ -19,6 +19,10 @@ use pingora_proxy::Session;
 /// compression module removes an accepted length before forwarding.
 #[inline]
 fn response_compression_level(enabled: bool, stream_kind: ResponseStreamKind, response: &ResponseHeader) -> u32 {
+    if !enabled || stream_kind == ResponseStreamKind::Sse {
+        return 0;
+    }
+
     let mut content_lengths = response.headers.get_all(http::header::CONTENT_LENGTH).iter();
     let has_one_valid_content_length = content_lengths
         .next()
@@ -29,7 +33,7 @@ fn response_compression_level(enabled: bool, stream_kind: ResponseStreamKind, re
 
     let has_transfer_encoding = response.headers.contains_key(http::header::TRANSFER_ENCODING);
 
-    if enabled && stream_kind != ResponseStreamKind::Sse && has_one_valid_content_length && !has_transfer_encoding {
+    if has_one_valid_content_length && !has_transfer_encoding {
         DEFAULT_COMPRESSION_LEVEL
     } else {
         0
@@ -62,6 +66,26 @@ fn complete_local_reply_delivery(
             Err(error)
         }
     }
+}
+
+/// Claim a staged response-phase reply before touching the downstream.
+///
+/// A plugin can surface a status outside the ordinary final-response range
+/// through a lower-level runtime such as native WAF. Falling through after a
+/// rejected claim would silently forward the upstream response, so every
+/// rejected claim becomes non-retryable local control flow instead.
+#[inline]
+fn claim_response_local_reply(ctx: &mut EdgionHttpContext, status: u16) -> pingora_core::Result<()> {
+    if ctx.claim_final_response(status) {
+        return Ok(());
+    }
+
+    let mut error = pingora_core::Error::explain(
+        pingora_core::ErrorType::HTTPStatus(500),
+        "invalid or duplicate edgion response local reply",
+    );
+    error.set_retry(false);
+    Err(error)
 }
 
 #[inline]
@@ -187,19 +211,13 @@ pub async fn response_filter(
     // directly to the downstream and abort the pump so the upstream response is
     // not forwarded. This is the single write+abort point; it handles both
     // body-less and body-present upstreams (Phase 8 is never reached).
-    let pending_local_reply = if ctx.response_write_started() {
-        None
-    } else {
-        ctx.take_pending_response_local_reply()
-    };
+    let pending_local_reply = ctx.take_pending_response_local_reply();
     if let Some((mut header, body)) = pending_local_reply {
         // Stamp the gateway Server identity onto the freshly-built reply header.
         edgion_http.server_header_opts.apply_to_response(&mut header);
         let body_empty = body.is_empty();
         let status = header.status.as_u16();
-        if !ctx.claim_final_response(status) {
-            return Ok(());
-        }
+        claim_response_local_reply(ctx, status)?;
         // Writing this reply and returning the abort `Err` below tears down the
         // downstream connection. Disable keepalive first so Pingora's H1 codec
         // emits `Connection: close` on the wire (no-op semantics for H2): without
@@ -257,16 +275,49 @@ pub async fn response_filter(
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_local_reply_delivery, final_response_eligibility, response_compression_level,
-        DEFAULT_COMPRESSION_LEVEL,
+        claim_response_local_reply, complete_local_reply_delivery, final_response_eligibility,
+        response_compression_level, response_filter, EdgionHttpProxy, DEFAULT_COMPRESSION_LEVEL,
     };
     use crate::ctx::ResponseStreamKind;
+    use crate::observe::AccessLogger;
     use crate::observe::RequestDiagnostic;
+    use crate::routes::grpc::GrpcPortRouteManager;
+    use crate::routes::http::routes_mgr::HttpPortRouteManager;
     use crate::EdgionHttpContext;
-    use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
+    use edgion_resources::{EdgionErrorCode, EdgionGatewayConfig, EdgionInfoCode, ListenerKey};
     use pingora_core::protocols::http::compression::ResponseCompressionCtx;
     use pingora_core::{Error, ErrorType};
     use pingora_http::{RequestHeader, ResponseHeader};
+    use pingora_proxy::Session;
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+
+    fn proxy() -> EdgionHttpProxy {
+        EdgionHttpProxy {
+            listener_port: 80,
+            is_https_listener: false,
+            listener_key: ListenerKey("127.0.0.1:80/HTTP".to_string()),
+            server_header_opts: Default::default(),
+            access_logger: Arc::new(AccessLogger::default()),
+            edgion_gateway_config: Arc::new(EdgionGatewayConfig::new("test", Default::default())),
+            request_body_config_name: None,
+            parsed_timeouts: Default::default(),
+            enable_http2: false,
+            real_ip_extractor: None,
+            preflight_handler: super::super::PreflightHandler::new(None),
+            http_route_manager: Arc::new(HttpPortRouteManager::default()),
+            grpc_route_manager: Arc::new(GrpcPortRouteManager::default()),
+        }
+    }
+
+    async fn h1_session() -> (tokio::io::DuplexStream, Session) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        session.read_request().await.unwrap();
+        (client, session)
+    }
 
     fn response(content_length: Option<&str>) -> ResponseHeader {
         let mut response = ResponseHeader::build(200, None).unwrap();
@@ -308,6 +359,102 @@ mod tests {
             ctx.diagnostics.entries(),
             &[RequestDiagnostic::Info(EdgionInfoCode::PluginResponseReplaced)]
         );
+    }
+
+    #[test]
+    fn valid_response_local_reply_statuses_claim_delivery() {
+        for status in [200, 599] {
+            let mut ctx = EdgionHttpContext::default();
+
+            claim_response_local_reply(&mut ctx, status).unwrap();
+
+            assert!(ctx.response_write_started(), "status {status}");
+            assert_eq!(ctx.final_downstream_status(), Some(status), "status {status}");
+            assert!(!ctx.local_reply_written(), "status {status}");
+            assert!(ctx.diagnostics.entries().is_empty(), "status {status}");
+        }
+    }
+
+    #[test]
+    fn invalid_response_local_reply_statuses_fail_closed_without_delivery_state() {
+        for status in [100, 101, 199, 600] {
+            let mut ctx = EdgionHttpContext::default();
+
+            let error = claim_response_local_reply(&mut ctx, status).unwrap_err();
+
+            assert!(matches!(error.etype(), ErrorType::HTTPStatus(500)), "status {status}");
+            assert!(!error.retry(), "status {status}");
+            assert!(!ctx.response_write_started(), "status {status}");
+            assert_eq!(ctx.final_downstream_status(), None, "status {status}");
+            assert!(!ctx.local_reply_written(), "status {status}");
+            assert!(ctx.diagnostics.entries().is_empty(), "status {status}");
+        }
+    }
+
+    #[test]
+    fn already_claimed_response_rejects_local_reply_and_preserves_first_owner() {
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(204));
+
+        let error = claim_response_local_reply(&mut ctx, 403).unwrap_err();
+
+        assert!(matches!(error.etype(), ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
+        assert!(ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), Some(204));
+        assert!(!ctx.local_reply_written());
+        assert!(ctx.diagnostics.entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn response_filter_rejects_informational_local_reply_before_downstream_write() {
+        let (_client, mut session) = h1_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.stage_response_local_reply(Box::new(ResponseHeader::build(101, None).unwrap()), bytes::Bytes::new());
+        let mut upstream = ResponseHeader::build(200, None).unwrap();
+
+        let error = response_filter(&proxy(), &mut session, &mut upstream, &mut ctx)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error.etype(), ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
+        assert!(session.response_written().is_none());
+        assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
+        assert!(!ctx.local_reply_written());
+        assert!(ctx.diagnostics.entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn response_filter_rejects_pending_reply_after_an_existing_writer() {
+        let (_client, mut session) = h1_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(204));
+        session
+            .write_response_header(Box::new(ResponseHeader::build(204, None).unwrap()), true)
+            .await
+            .unwrap();
+        ctx.stage_response_local_reply(
+            Box::new(ResponseHeader::build(403, None).unwrap()),
+            bytes::Bytes::from_static(b"denied"),
+        );
+        let mut upstream = ResponseHeader::build(200, None).unwrap();
+
+        let error = response_filter(&proxy(), &mut session, &mut upstream, &mut ctx)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error.etype(), ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
+        assert_eq!(
+            session.response_written().map(|header| header.status.as_u16()),
+            Some(204)
+        );
+        assert!(ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), Some(204));
+        assert!(!ctx.local_reply_written());
+        assert!(ctx.diagnostics.entries().is_empty());
     }
 
     #[test]
@@ -378,7 +525,9 @@ mod tests {
 
     #[test]
     fn compression_respects_config_and_sse_exemption() {
-        let response = response(Some("128"));
+        let mut response = response(Some("128"));
+        response.append_header("content-length", "invalid").unwrap();
+        response.insert_header("transfer-encoding", "chunked").unwrap();
         assert_eq!(
             response_compression_level(false, ResponseStreamKind::None, &response),
             0

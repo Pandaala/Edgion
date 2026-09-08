@@ -11,9 +11,9 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-Two independent rules govern every terminal result a response-phase plugin can
+Three independent rules govern every terminal result a response-phase plugin can
 return — `ErrResponse`, `ErrGrpcError`, `ErrTerminateRequest` — and violating
-either one turns a denial into a silent ALLOW:
+any one turns a denial into a silent ALLOW:
 
 1. **Whether the exchange can still carry a replacement response is a fact about
    the RESPONSE, never about the request's stated intent.**
@@ -31,6 +31,14 @@ either one turns a denial into a silent ALLOW:
    response-stage entry points (`pg_upstream_response_filter`,
    `pg_response_filter`) return `Err(HTTPStatus(..))` so `fail_to_proxy`
    delivers the denial and the upstream connection is torn down.
+
+3. **A staged replacement must claim an ordinary final status before any
+   downstream write.** Runtime layers such as native WAF can surface a
+   disruptive `1xx` status even though `claim_final_response` accepts only
+   `200..=599`. A rejected claim returns a non-retryable `HTTPStatus(500)`;
+   returning success would silently forward the upstream final response. The
+   control-flow error is not attributed to backend outlier detection and does
+   not mark `LocalReplyWritten` or `PluginResponseReplaced`.
 
 Fix suggestions of the form "narrowing the refusal predicate is enough" and
 "the runners already call `set_terminate`" are **both not accepted** — each
@@ -91,6 +99,17 @@ response, so a denial there would abort an exchange whose real response has not
 arrived. Both entry points share `is_interim_informational` and return early;
 `101` is excluded because it is terminal, with no later header to defer to.
 
+**6. An invalid staged reply cannot become permission to forward**
+
+The interim-response guard applies to upstream headers, not to a plugin's
+replacement status. If a lower-level runtime stages `100..199`, the downstream
+writer cannot claim it as an ordinary final response. `pg_response_filter`
+therefore returns non-retryable `HTTPStatus(500)` before keepalive or response
+writes instead of falling through to the upstream response. A rejected claim
+after another writer already committed also returns the control-flow error;
+generic failure handling preserves that first response rather than attempting
+a second write.
+
 ## Verified behavior
 
 | Case | Delivered as | Evidence |
@@ -101,6 +120,8 @@ arrived. Both entry points share `is_interim_informational` and return early;
 | CONNECT answered 2xx / interim 1xx | refused (unchanged) | unit: `local_reply_refused_for_established_connect_tunnel`, `..._interim_informational` |
 | naked `terminate()` at the response stage | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
 | `grpc_error(8, ..)` at the response stage | abort, exact code 8 | unit: `response_stage_grpc_error_arms_the_abort_with_the_exact_status`; integration blocked, see `tasks/todo/integration-dslgrpcerror-item-never-runs.md` |
+| staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state` |
+| staged local reply after another final owner | control-flow abort; first written response remains authoritative | unit: `response_filter_rejects_pending_reply_after_an_existing_writer` |
 
 ## Closed follow-up
 
