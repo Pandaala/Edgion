@@ -57,7 +57,26 @@ if [[ "$*" == "--request-timeout=10s version --output=json" ]]; then
 fi
 
 if [[ "$*" == "--request-timeout=10s get nodes -o json" ]]; then
+  if [[ "${FAKE_NODE_WARNING:-false}" == "true" ]]; then
+    echo 'Warning: node listing warning' >&2
+  fi
   case "${FAKE_NODE_MODE:-ready}" in
+    list)
+      echo '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"v1","kind":"Node","status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"architecture":"arm64"}}}]}'
+      ;;
+    non-node)
+      echo '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"v1","kind":"Pod","status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"architecture":"arm64"}}}]}'
+      ;;
+    malformed)
+      echo '{invalid json'
+      ;;
+    invalid-items)
+      echo '{"apiVersion":"v1","kind":"List","items":{}}'
+      ;;
+    failed)
+      echo 'node listing denied' >&2
+      exit 1
+      ;;
     empty)
       echo '{"apiVersion":"v1","kind":"NodeList","items":[]}'
       ;;
@@ -87,7 +106,21 @@ grep -Fq 'context=standard-k8s ready_nodes=1/2 architectures=amd64' "${SUCCESS_O
 grep -Fq 'also has 1 non-Ready Node(s)' "${SUCCESS_OUTPUT}" \
   || fail "non-Ready Node warning was not emitted"
 
-for case_name in missing-context wrong-context unreachable-api empty-nodes no-ready-nodes; do
+for node_mode in list ready; do
+  for warning in false true; do
+    output_file="${TEMP_DIR}/${node_mode}-warning-${warning}.log"
+    run_preflight "${output_file}" FAKE_NODE_MODE="${node_mode}" FAKE_NODE_WARNING="${warning}" \
+      || fail "a valid ${node_mode} collection with warning=${warning} was rejected"
+    grep -Fq 'ready_nodes=1/1' "${output_file}" \
+      || fail "${node_mode} collection omitted readiness"
+    if [[ "${warning}" == "true" ]]; then
+      grep -Fq 'Warning: node listing warning' "${output_file}" \
+        || fail "${node_mode} collection lost the stderr warning"
+    fi
+  done
+done
+
+for case_name in missing-context wrong-context unreachable-api empty-nodes no-ready-nodes non-node malformed invalid-items failed-list; do
   output_file="${TEMP_DIR}/${case_name}.log"
   case "${case_name}" in
     missing-context)
@@ -110,12 +143,24 @@ for case_name in missing-context wrong-context unreachable-api empty-nodes no-re
       args=(FAKE_NODE_MODE=not-ready)
       expected='has no Ready Nodes'
       ;;
+    non-node|malformed|invalid-items)
+      args=(FAKE_NODE_MODE="${case_name}")
+      expected='invalid Node collection'
+      ;;
+    failed-list)
+      args=(FAKE_NODE_MODE=failed)
+      expected='cannot list Nodes'
+      ;;
   esac
   if run_preflight "${output_file}" "${args[@]}"; then
     fail "${case_name} unexpectedly passed"
   fi
   grep -Fq "${expected}" "${output_file}" \
     || fail "${case_name} did not report the expected reason"
+  if [[ "${case_name}" == "failed-list" ]]; then
+    grep -Fq 'node listing denied' "${output_file}" \
+      || fail "failed node listing lost the stderr diagnostic"
+  fi
 done
 
 echo "OK: Kubernetes preflight regression tests passed"

@@ -25,7 +25,7 @@ before applying a decision to current code.
 - [Retry-budget counters retain coherent epochs and monotonic windows](regression-guards/retry-budget-epoch-coherence.md)
 
 - [lb-06 — Active health-check probes run in parallel within a service — FIXED](regression-guards/active-hc-probes-parallel-within-service.md)
-- [BackendTLSPolicyStore::update Rebuild-Strategy Complexity Comment](regression-guards/backend-tls-policy-rebuild-strategy-comment.md)
+- [BackendTLSPolicy partial publication is incremental and atomic](regression-guards/backend-tls-policy-incremental-atomic-publication.md)
 - [backends-F008 — build_client_cert_key duplicate PEM-parse block](regression-guards/build-client-cert-key-dedup.md)
 - [backends-F007 — build_peer_from_lb_selection inlines TLS-metadata write](regression-guards/build-peer-tls-helper-dedup.md)
 - [Circuit-Breaker Integration Ejection State Is Self-Cleaning — FIXED](regression-guards/circuit-breaker-integration-ejection-state-self-cleaning.md)
@@ -46,10 +46,11 @@ before applying a decision to current code.
 - [backends-F010 — set_service_config duplicate ServiceCbState literal](regression-guards/service-cb-state-new-ctor.md)
 - [udp-F017 — UDP upstream socket bind ignores address family](regression-guards/session-bind-address-family.md)
 - [backends-F004 — `set_service_config` config update is now an atomic `entry()` swap](regression-guards/set-service-config-toctou-race.md)
-- [backends-F006 — BackendTLSPolicy sectionName match isolated per targetRef Service](regression-guards/tls-policy-wildcard-cross-service.md)
+- [BackendTLSPolicy target and section isolation (backends-F006)](regression-guards/tls-policy-wildcard-cross-service.md)
 - [backends-F002 — Concurrent `upsert_task` no longer leaks orphaned health-check tasks](regression-guards/upsert-task-concurrent-handle-leak.md)
 
 ## Superseded decisions
 
+- [BackendTLSPolicyStore rebuild-strategy complexity comment](superseded/backend-tls-policy-rebuild-strategy-comment.md)
 - [backends-F009 — preload collect_*_routes five identical bodies](superseded/preload-collect-routes-macro.md)
 - [backends-F005 — `warm_cell` startup hydration is now an atomic `hydrate_if_empty`](superseded/warm-cell-toctou-stale-overwrite.md)

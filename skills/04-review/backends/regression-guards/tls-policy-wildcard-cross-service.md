@@ -1,74 +1,82 @@
 ---
 name: tls-policy-wildcard-cross-service
-description: BackendTLSPolicy sectionName matching now filters targetRefs by tr.name == queried service before testing sectionName, so a multi-Service policy can no longer leak another Service's wildcard/scoped ref. Reject re-reports claiming the wildcard or exact match bleeds across services.
+description: Use when reviewing BackendTLSPolicy target or section isolation; current publication rejects multi-target policies and records invalid occupancy per canonical target.
 knowledge_type: regression-guards
 ---
 
-# backends-F006 — BackendTLSPolicy sectionName match isolated per targetRef Service
+# BackendTLSPolicy target and section isolation
 
-**Status:** ✅ fixed · 2026-05-24
-**Severity:** Low (BadLogic) — wrong TLS scope applied across ports of a Service; requires an exotic multi-Service policy; no crash / data corruption
+## Conclusion and scope
 
-## Conclusion
+One valid Gateway `BackendTLSPolicy` names exactly one target. A policy with
+multiple `targetRefs` cannot contribute a valid exact-section or whole-target
+winner. Instead, the Gateway records invalid occupancy for every canonical
+target and section named by that policy. A section belonging to one Service can
+therefore never become a valid match for another Service.
 
-`query_backend_tls_policy_for_service` (`edgion-gateway/src/backends/policy/mod.rs`) now selects
-through `select_policy_for_service`, whose exact-match and wildcard (no-`sectionName`) closures
-both require `tr.name == name` **before** testing `section_name`. A policy that references several
-Services with mixed `sectionName` values can therefore no longer have a ref aimed at a *different*
-Service satisfy the match for the queried Service.
+Single-target policies are additionally isolated by typed `PolicyTargetKey`, so
+a core `Service` and an `edgion.io/EdgionBackend` with the same namespace and
+name cannot share candidates or winners.
 
-Re-reports of the form "wildcard (no `section_name`) match `.any()` ranges over all `target_refs`
-and bleeds across services", "a `svc-b/None` ref makes the policy the all-ports fallback for
-`svc-a`", or "exact `sectionName` match fires on another Service's ref" are **not accepted** — none
-are true anymore. Verify the current closures carry the `tr.name == name` guard before re-reporting.
+## Current rationale and evidence
 
-## What was wrong (before the fix)
+`BackendTLSPolicyStore::is_valid_candidate` rejects any policy whose
+`target_refs.len() != 1`. It also requires the Controller-resolved target class
+to match the canonical target kind and rejects a section-scoped
+`EdgionBackend` target.
 
-The reverse index (`build_reverse_index`, `backend_tls_policy_store.rs`) stores a policy in **every**
-referenced Service's bucket (one entry per `targetRef`). The query then ran
-`pol.spec.target_refs.iter().any(|tr| tr.section_name.is_none())` (wildcard) and
-`...any(|tr| tr.section_name.as_deref() == Some(pn))` (exact) over **all** of a policy's refs. So a
-policy with `targetRef[svc-a] = Some("https")` + `targetRef[svc-b] = None`, when queried for `svc-a`,
-would let the `svc-b` (no-`sectionName`) ref win the whole-Service slot for `svc-a` — even though its
-only `svc-a` connection is the `"https"`-scoped ref. The exact branch had the same defect symmetrically
-(a `svc-b/grpc` ref matching a `svc-a` port-`grpc` query).
+Publication still retains deserializable resources that are runtime-invalid or
+semantically invalid for diagnostics. For each target bucket,
+`build_target_buckets` calls `valid_target_key`; when a candidate is not valid,
+it visits that policy's targetRefs and marks invalid occupancy only where the
+targetRef's canonical key equals the bucket's typed target. Lookup then uses the
+fixed occupancy order:
 
-The misselection only changes the result when a competing **correct** candidate exists for the queried
-Service (the final `candidates.first()` fallback masks the single-candidate case), which is why the
-regression tests use a two-candidate list.
+1. valid exact-section winner;
+2. invalid exact-section occupancy;
+3. valid whole-target winner;
+4. invalid whole-target occupancy.
 
-## Why the fix is correct
+This makes the boundary fail closed without allowing one targetRef's section to
+select TLS policy for another target.
 
-A policy lands in the `query_ns/name` reverse-index bucket only when one of its refs satisfies
-`policy_ns/ref.name == query_ns/name`, i.e. `policy_ns == query_ns && ref.name == name`. So every
-candidate already shares the queried namespace, and isolating the refs that actually point at the
-queried Service needs **only** a `tr.name == name` check — no `format!`-rebuilt `ns/name` key (which the
-finding's suggested fix proposed). This matters because both callers (`pg_upstream_peer.rs`,
-grpc `integration.rs`) run this per-request on the data-plane hot path; the name-only filter is
-allocation-free.
+Focused source evidence is in
+`edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs`.
+Regression coverage includes
+`multiple_target_refs_are_invalid_on_every_named_service`,
+`typed_targets_and_sections_do_not_leak`, and
+`invalid_exact_section_does_not_fall_back_to_whole_target`.
 
-## Fix Suggestions Not Accepted
+## Historical mechanism
 
-- "Rebuild the full `ns/name` key with `format!` inside the closures and compare" — correct but adds a
-  per-request, per-targetRef heap allocation on the hot path; the `tr.name == name` filter is equivalent
-  (namespace already guaranteed equal by the bucketing) and allocation-free.
-- "Only fix the wildcard branch; the exact branch is just for consistency" — the exact branch is a real
-  bug of the same class (another Service's scoped ref matching this Service's port query), so both are
-  fixed.
-- Broadening the fix to the final `candidates.first()` fallback (a `sectionName`-scoped-only policy
-  returned for a non-matching port) is **out of scope** for this finding — it is a separate matter from
-  the cross-Service `.any()` leak F006 reports.
+`backends-F006` originally fixed an older implementation in which a policy could
+be indexed under several Services and request query-time closures scanned all of
+its targetRefs. Those closures were changed to filter by target name before
+checking `sectionName`, preventing another Service's ref from satisfying the
+query.
 
-## Re-evaluation Triggers
+That query-time mechanism, `select_policy_for_service`, and the former
+`build_reverse_index` are gone. The historical fix remains evidence for the
+cross-target bug class, but it is not the reason current code is safe. Reviews
+must verify the current single-target validity and typed target-bucket rules
+above.
 
-Re-open only if:
+## Limits and re-evaluation
 
-- The reverse-index keying stops guaranteeing `policy_ns == query_ns` for returned candidates (e.g.
-  cross-namespace targetRefs become allowed), which would invalidate the name-only filter.
+- An invalid exact candidate blocks whole-target fallback only when there is no
+  valid exact winner. A valid whole winner similarly precedes invalid whole
+  occupancy. This is occupancy-first behavior, not precedence arbitration
+  between valid and invalid policies.
+- Unsupported group/kind refs cannot form a canonical target bucket. The raw
+  policy remains visible, but it cannot affect a supported target lookup.
 
-## Reference Cases
+Re-evaluate if BackendTLSPolicy begins accepting multiple valid targets, target
+keys stop including `PolicyTargetKind`, cross-namespace refs are introduced, or
+the fixed lookup occupancy order changes.
 
-- backends-F006 (review finding, fixed 2026-05-24)
-- `select_policy_for_service` unit tests in `edgion-gateway/src/backends/policy/mod.rs`
-  (`wildcard_ignores_other_service_ref`, `exact_match_ignores_other_service_ref`, plus two
-  no-regression guards).
+## Resolution references
+
+- `backends-F006` — historical cross-Service targetRef filtering fix,
+  2026-05-24; owning mechanism later replaced.
+- `incremental-publication-02-backend-tls-policy` — current target-local
+  candidate and arbitration publication, 2026-09-08.

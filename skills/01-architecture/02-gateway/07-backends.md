@@ -257,6 +257,14 @@ policy/
 
 - Get the global instance via `get_global_backend_tls_policy_store()` and
   capture its immutable, generation-bearing `BackendTLSPolicySnapshot`.
+- Full publication rebuilds the complete target view. Partial publication uses
+  structurally shared persistent maps for policies and typed target buckets,
+  applies `remove > update > add` for defensive overlapping batches, and
+  recomputes only the union of targets named by each changed policy's old and
+  new generations. Each target bucket retains all valid and invalid candidate
+  keys so removing or moving a winner can promote the next candidate without a
+  global policy scan. The raw map and derived target buckets remain one atomic
+  `ArcSwap` generation; complete resource equality suppresses no-op generations.
 - Lookup returns a tri-state: `Absent`, `Effective`, or `Invalid`. Occupancy
   of the most specific attachment bucket wins: a valid exact-section winner is
   used; any exact-section candidate (including an invalid one) blocks

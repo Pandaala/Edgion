@@ -8,6 +8,7 @@ use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
 };
 use edgion_resources::resources::BackendTLSPolicy;
+use rpds::{HashTrieMapSync as PersistentHashMap, HashTrieSetSync as PersistentHashSet};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -22,6 +23,9 @@ pub fn get_global_backend_tls_policy_store() -> Arc<BackendTLSPolicyStore> {
 pub(crate) const BACKEND_TLS_PROFILE_DOMAIN: &[u8] = b"edgion/backend-tls-profile/v1\0";
 
 type BackendTLSPolicyMap = HashMap<String, Arc<BackendTLSPolicy>>;
+// Partial publications clone only HAMT roots and changed paths. Unaffected
+// policy and target entries remain structurally shared with the prior snapshot.
+type PersistentBackendTLSPolicyMap = PersistentHashMap<String, Arc<BackendTLSPolicy>>;
 
 #[derive(Clone)]
 pub enum BackendTlsPolicyLookup {
@@ -94,24 +98,32 @@ impl BackendTlsProfileIdentity {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct ValidBuckets {
     exact: HashMap<Arc<str>, Arc<EffectiveBackendTlsPolicy>>,
     whole: Option<Arc<EffectiveBackendTlsPolicy>>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct InvalidBuckets {
     exact: HashSet<Arc<str>>,
     whole: bool,
     any_section_scoped: bool,
 }
 
+#[derive(Default)]
+struct TargetBuckets {
+    // All canonicalizable policy attachments for this typed target, including
+    // invalid candidates. Keeping losers makes winner removal locally repairable.
+    candidates: PersistentHashSet<String>,
+    valid: ValidBuckets,
+    invalid: InvalidBuckets,
+}
+
 struct BackendTLSPolicySnapshotData {
     generation: u64,
-    policies: BackendTLSPolicyMap,
-    valid_index: HashMap<PolicyTargetKey, ValidBuckets>,
-    invalid_index: HashMap<PolicyTargetKey, InvalidBuckets>,
+    policies: PersistentBackendTLSPolicyMap,
+    targets: PersistentHashMap<PolicyTargetKey, Arc<TargetBuckets>>,
 }
 
 /// One immutable policy generation. Captured handles remain valid after reload.
@@ -131,40 +143,39 @@ impl BackendTLSPolicySnapshot {
         self.inner.policies.get(key).cloned()
     }
 
+    #[cfg(test)]
+    fn target_buckets(&self, target: &PolicyTargetKey) -> Option<Arc<TargetBuckets>> {
+        self.inner.targets.get(target).cloned()
+    }
+
     #[inline]
     pub fn has_candidate(&self, target: &PolicyTargetKey) -> bool {
-        self.inner.valid_index.contains_key(target) || self.inner.invalid_index.contains_key(target)
+        self.inner.targets.contains_key(target)
     }
 
     #[inline]
     pub fn any_section_scoped(&self, target: &PolicyTargetKey) -> bool {
         self.inner
-            .valid_index
+            .targets
             .get(target)
-            .is_some_and(|buckets| !buckets.exact.is_empty())
-            || self
-                .inner
-                .invalid_index
-                .get(target)
-                .is_some_and(|buckets| buckets.any_section_scoped)
+            .is_some_and(|buckets| !buckets.valid.exact.is_empty() || buckets.invalid.any_section_scoped)
     }
 
     /// Occupancy-first exact-section then whole-target lookup.
     pub fn lookup(&self, target: &PolicyTargetKey, section: Option<&str>) -> BackendTlsPolicyLookup {
-        let valid = self.inner.valid_index.get(target);
-        let invalid = self.inner.invalid_index.get(target);
+        let buckets = self.inner.targets.get(target);
         if let Some(section) = section {
-            if let Some(winner) = valid.and_then(|buckets| buckets.exact.get(section)) {
+            if let Some(winner) = buckets.and_then(|buckets| buckets.valid.exact.get(section)) {
                 return BackendTlsPolicyLookup::Effective(Arc::clone(winner));
             }
-            if invalid.is_some_and(|buckets| buckets.exact.contains(section)) {
+            if buckets.is_some_and(|buckets| buckets.invalid.exact.contains(section)) {
                 return BackendTlsPolicyLookup::Invalid;
             }
         }
-        if let Some(winner) = valid.and_then(|buckets| buckets.whole.as_ref()) {
+        if let Some(winner) = buckets.and_then(|buckets| buckets.valid.whole.as_ref()) {
             return BackendTlsPolicyLookup::Effective(Arc::clone(winner));
         }
-        if invalid.is_some_and(|buckets| buckets.whole) {
+        if buckets.is_some_and(|buckets| buckets.invalid.whole) {
             return BackendTlsPolicyLookup::Invalid;
         }
         BackendTlsPolicyLookup::Absent
@@ -180,9 +191,8 @@ impl BackendTLSPolicyStore {
         Self {
             snapshot: ArcSwap::from_pointee(BackendTLSPolicySnapshotData {
                 generation: 0,
-                policies: HashMap::new(),
-                valid_index: HashMap::new(),
-                invalid_index: HashMap::new(),
+                policies: PersistentHashMap::new_sync(),
+                targets: PersistentHashMap::new_sync(),
             }),
         }
     }
@@ -196,69 +206,16 @@ impl BackendTLSPolicyStore {
 
     #[inline]
     fn policy_resource_equivalent(left: &BackendTLSPolicy, right: &BackendTLSPolicy) -> bool {
-        left.metadata.name == right.metadata.name
-            && left.metadata.namespace == right.metadata.namespace
-            && left.metadata.uid == right.metadata.uid
-            && left.metadata.creation_timestamp == right.metadata.creation_timestamp
+        left.metadata == right.metadata
             && left.spec.target_refs == right.spec.target_refs
             && left.spec.resolved_target_class == right.spec.resolved_target_class
             && left.spec.validation == right.spec.validation
             && left.spec.options == right.spec.options
-            && Self::secret_data_vec_eq(
-                left.spec.resolved_ca_certificates.as_deref(),
-                right.spec.resolved_ca_certificates.as_deref(),
-            )
-            && Self::secret_data_eq(
-                left.spec.resolved_client_certificate.as_ref(),
-                right.spec.resolved_client_certificate.as_ref(),
-            )
+            && left.spec.resolved_ca_certificates == right.spec.resolved_ca_certificates
+            && left.spec.resolved_client_certificate == right.spec.resolved_client_certificate
             && left.spec.use_system_ca == right.spec.use_system_ca
-    }
-
-    fn secret_data_eq(
-        left: Option<&k8s_openapi::api::core::v1::Secret>,
-        right: Option<&k8s_openapi::api::core::v1::Secret>,
-    ) -> bool {
-        match (left, right) {
-            (None, None) => true,
-            (Some(left), Some(right)) => {
-                left.metadata.name == right.metadata.name
-                    && left.metadata.namespace == right.metadata.namespace
-                    && left.type_ == right.type_
-                    && left.data == right.data
-            }
-            _ => false,
-        }
-    }
-
-    fn secret_data_vec_eq(
-        left: Option<&[k8s_openapi::api::core::v1::Secret]>,
-        right: Option<&[k8s_openapi::api::core::v1::Secret]>,
-    ) -> bool {
-        match (left, right) {
-            (None, None) => true,
-            (Some(left), Some(right)) if left.len() == right.len() => left.iter().zip(right).all(|(left, right)| {
-                left.metadata.name == right.metadata.name
-                    && left.metadata.namespace == right.metadata.namespace
-                    && left.type_ == right.type_
-                    && left.data == right.data
-            }),
-            _ => false,
-        }
-    }
-
-    fn retain_equivalent_arcs(current: &BackendTLSPolicyMap, incoming: BackendTLSPolicyMap) -> BackendTLSPolicyMap {
-        incoming
-            .into_iter()
-            .map(|(key, policy)| {
-                let policy = current
-                    .get(&key)
-                    .filter(|old| Self::policy_resource_equivalent(old, &policy))
-                    .cloned()
-                    .unwrap_or(policy);
-                (key, policy)
-            })
-            .collect()
+            && left.status.as_ref().map(|status| &status.ancestors)
+                == right.status.as_ref().map(|status| &status.ancestors)
     }
 
     fn is_valid_candidate(policy: &BackendTLSPolicy) -> bool {
@@ -387,12 +344,7 @@ impl BackendTLSPolicyStore {
         })
     }
 
-    fn mark_invalid(
-        index: &mut HashMap<PolicyTargetKey, InvalidBuckets>,
-        target: PolicyTargetKey,
-        section: Option<&str>,
-    ) {
-        let buckets = index.entry(target).or_default();
+    fn mark_invalid(buckets: &mut InvalidBuckets, section: Option<&str>) {
         match section {
             Some(section) if !section.is_empty() => {
                 buckets.exact.insert(Arc::from(section));
@@ -403,12 +355,11 @@ impl BackendTLSPolicyStore {
     }
 
     fn reuse_or_build_effective(
-        current_valid: &HashMap<PolicyTargetKey, ValidBuckets>,
-        target: &PolicyTargetKey,
+        current_valid: Option<&ValidBuckets>,
         section: Option<&str>,
         policy: &Arc<BackendTLSPolicy>,
     ) -> Arc<EffectiveBackendTlsPolicy> {
-        let existing = current_valid.get(target).and_then(|buckets| match section {
+        let existing = current_valid.and_then(|buckets| match section {
             Some(name) if !name.is_empty() => buckets.exact.get(name),
             _ => buckets.whole.as_ref(),
         });
@@ -421,29 +372,39 @@ impl BackendTLSPolicyStore {
         })
     }
 
-    fn build_indexes(
-        policies: &BackendTLSPolicyMap,
-        current_valid: &HashMap<PolicyTargetKey, ValidBuckets>,
-    ) -> (
-        HashMap<PolicyTargetKey, ValidBuckets>,
-        HashMap<PolicyTargetKey, InvalidBuckets>,
-    ) {
-        let mut ordered: Vec<Arc<BackendTLSPolicy>> = policies.values().cloned().collect();
+    fn canonical_targets(policy: &BackendTLSPolicy) -> HashSet<PolicyTargetKey> {
+        let namespace = policy.namespace().unwrap_or("");
+        policy
+            .spec
+            .target_refs
+            .iter()
+            .filter_map(|target_ref| target_ref.canonical_key(namespace).ok())
+            .collect()
+    }
+
+    fn build_target_buckets(
+        target: &PolicyTargetKey,
+        candidates: PersistentHashSet<String>,
+        policies: &PersistentBackendTLSPolicyMap,
+        current: Option<&TargetBuckets>,
+    ) -> TargetBuckets {
+        let mut ordered: Vec<Arc<BackendTLSPolicy>> =
+            candidates.iter().filter_map(|key| policies.get(key).cloned()).collect();
         Self::sort_policies_by_precedence(&mut ordered);
-        let mut valid_index = HashMap::<PolicyTargetKey, ValidBuckets>::new();
-        let mut invalid_index = HashMap::<PolicyTargetKey, InvalidBuckets>::new();
+        let mut valid = ValidBuckets::default();
+        let mut invalid = InvalidBuckets::default();
         for policy in ordered {
-            if let Some(target) = Self::valid_target_key(&policy) {
+            if Self::valid_target_key(&policy).as_ref() == Some(target) {
                 let section = policy.spec.target_refs[0].section_name.clone();
-                let effective = Self::reuse_or_build_effective(current_valid, &target, section.as_deref(), &policy);
-                let buckets = valid_index.entry(target).or_default();
+                let effective =
+                    Self::reuse_or_build_effective(current.map(|current| &current.valid), section.as_deref(), &policy);
                 match section {
                     Some(section) if !section.is_empty() => {
-                        buckets.exact.entry(Arc::from(section)).or_insert(effective);
+                        valid.exact.entry(Arc::from(section)).or_insert(effective);
                     }
                     _ => {
-                        if buckets.whole.is_none() {
-                            buckets.whole = Some(effective);
+                        if valid.whole.is_none() {
+                            valid.whole = Some(effective);
                         }
                     }
                 }
@@ -451,73 +412,155 @@ impl BackendTLSPolicyStore {
             }
             let namespace = policy.namespace().unwrap_or("");
             for target_ref in &policy.spec.target_refs {
-                if let Ok(target) = target_ref.canonical_key(namespace) {
-                    Self::mark_invalid(&mut invalid_index, target, target_ref.section_name.as_deref());
+                if target_ref.canonical_key(namespace).as_ref() == Ok(target) {
+                    Self::mark_invalid(&mut invalid, target_ref.section_name.as_deref());
                 }
             }
         }
-        (valid_index, invalid_index)
+        TargetBuckets {
+            candidates,
+            valid,
+            invalid,
+        }
     }
 
-    fn indexes_equivalent(
-        left_valid: &HashMap<PolicyTargetKey, ValidBuckets>,
-        right_valid: &HashMap<PolicyTargetKey, ValidBuckets>,
-        left_invalid: &HashMap<PolicyTargetKey, InvalidBuckets>,
-        right_invalid: &HashMap<PolicyTargetKey, InvalidBuckets>,
-    ) -> bool {
-        left_valid.len() == right_valid.len()
-            && right_valid.iter().all(|(target, right)| {
-                left_valid.get(target).is_some_and(|left| {
-                    let whole_eq = match (&left.whole, &right.whole) {
-                        (None, None) => true,
-                        (Some(left_policy), Some(right_policy)) => Arc::ptr_eq(left_policy, right_policy),
-                        _ => false,
-                    };
-                    whole_eq
-                        && left.exact.len() == right.exact.len()
-                        && right.exact.iter().all(|(section, policy)| {
-                            left.exact
-                                .get(section)
-                                .is_some_and(|existing| Arc::ptr_eq(existing, policy))
-                        })
-                })
-            })
-            && left_invalid.len() == right_invalid.len()
-            && right_invalid.iter().all(|(target, right)| {
-                left_invalid.get(target).is_some_and(|left| {
-                    left.whole == right.whole
-                        && left.any_section_scoped == right.any_section_scoped
-                        && left.exact == right.exact
-                })
-            })
-    }
-
-    fn publish(&self, incoming: BackendTLSPolicyMap) {
-        let current = self.snapshot.load_full();
-        let policies = Self::retain_equivalent_arcs(&current.policies, incoming);
-        let (valid_index, invalid_index) = Self::build_indexes(&policies, &current.valid_index);
-        let unchanged = policies.len() == current.policies.len()
-            && policies
+    fn policies_unchanged(current: &PersistentBackendTLSPolicyMap, next: &PersistentBackendTLSPolicyMap) -> bool {
+        current.size() == next.size()
+            && next
                 .iter()
-                .all(|(key, policy)| current.policies.get(key).is_some_and(|old| Arc::ptr_eq(old, policy)))
-            && Self::indexes_equivalent(
-                &current.valid_index,
-                &valid_index,
-                &current.invalid_index,
-                &invalid_index,
-            );
-        if unchanged {
+                .all(|(key, policy)| current.get(key).is_some_and(|old| Arc::ptr_eq(old, policy)))
+    }
+
+    fn build_full_targets(
+        policies: &PersistentBackendTLSPolicyMap,
+        current: &PersistentHashMap<PolicyTargetKey, Arc<TargetBuckets>>,
+    ) -> PersistentHashMap<PolicyTargetKey, Arc<TargetBuckets>> {
+        let mut candidates_by_target = HashMap::<PolicyTargetKey, PersistentHashSet<String>>::new();
+        for (key, policy) in policies {
+            for target in Self::canonical_targets(policy) {
+                candidates_by_target.entry(target).or_default().insert_mut(key.clone());
+            }
+        }
+        candidates_by_target
+            .into_iter()
+            .map(|(target, candidates)| {
+                let buckets =
+                    Self::build_target_buckets(&target, candidates, policies, current.get(&target).map(Arc::as_ref));
+                (target, Arc::new(buckets))
+            })
+            .collect()
+    }
+
+    fn publish_full(&self, incoming: BackendTLSPolicyMap) {
+        let current = self.snapshot.load_full();
+        let policies: PersistentBackendTLSPolicyMap = incoming
+            .into_iter()
+            .map(|(key, policy)| {
+                let policy = current
+                    .policies
+                    .get(&key)
+                    .filter(|old| Self::policy_resource_equivalent(old, &policy))
+                    .cloned()
+                    .unwrap_or(policy);
+                (key, policy)
+            })
+            .collect();
+        if Self::policies_unchanged(&current.policies, &policies) {
             return;
         }
+        let targets = Self::build_full_targets(&policies, &current.targets);
         self.snapshot.store(Arc::new(BackendTLSPolicySnapshotData {
             generation: current
                 .generation
                 .checked_add(1)
                 .expect("BackendTLSPolicy snapshot generation exhausted"),
             policies,
-            valid_index,
-            invalid_index,
+            targets,
         }));
+    }
+
+    fn build_incremental_snapshot(
+        current: &BackendTLSPolicySnapshotData,
+        add: BackendTLSPolicyMap,
+        update: BackendTLSPolicyMap,
+        remove: &HashSet<String>,
+    ) -> Option<Arc<BackendTLSPolicySnapshotData>> {
+        // Preserve the handler's defensive overlap semantics: update replaces
+        // add, and remove replaces both. Production compressed batches are
+        // normally disjoint, but direct callers rely on this deterministic rule.
+        let mut changes = HashMap::<String, Option<Arc<BackendTLSPolicy>>>::new();
+        changes.extend(add.into_iter().map(|(key, policy)| (key, Some(policy))));
+        changes.extend(update.into_iter().map(|(key, policy)| (key, Some(policy))));
+        changes.extend(remove.iter().cloned().map(|key| (key, None)));
+
+        let mut policies = current.policies.clone();
+        let mut candidate_deltas = HashMap::<PolicyTargetKey, (HashSet<String>, HashSet<String>)>::new();
+        let mut changed = false;
+        for (key, incoming) in changes {
+            let previous = current.policies.get(&key);
+            let incoming = incoming.map(|policy| {
+                previous
+                    .filter(|old| Self::policy_resource_equivalent(old, &policy))
+                    .cloned()
+                    .unwrap_or(policy)
+            });
+            if matches!((previous, incoming.as_ref()), (None, None))
+                || matches!((previous, incoming.as_ref()), (Some(old), Some(new)) if Arc::ptr_eq(old, new))
+            {
+                continue;
+            }
+            changed = true;
+            if let Some(previous) = previous {
+                for target in Self::canonical_targets(previous) {
+                    candidate_deltas.entry(target).or_default().0.insert(key.clone());
+                }
+            }
+            if let Some(incoming) = incoming {
+                for target in Self::canonical_targets(&incoming) {
+                    candidate_deltas.entry(target).or_default().1.insert(key.clone());
+                }
+                policies.insert_mut(key, incoming);
+            } else {
+                policies.remove_mut(&key);
+            }
+        }
+        if !changed {
+            return None;
+        }
+
+        let mut targets = current.targets.clone();
+        for (target, (removed, added)) in candidate_deltas {
+            let mut candidates = current
+                .targets
+                .get(&target)
+                .map_or_else(PersistentHashSet::new_sync, |buckets| buckets.candidates.clone());
+            for key in removed {
+                candidates.remove_mut(&key);
+            }
+            for key in added {
+                candidates.insert_mut(key);
+            }
+            if candidates.is_empty() {
+                targets.remove_mut(&target);
+                continue;
+            }
+            let buckets = Self::build_target_buckets(
+                &target,
+                candidates,
+                &policies,
+                current.targets.get(&target).map(Arc::as_ref),
+            );
+            targets.insert_mut(target, Arc::new(buckets));
+        }
+
+        Some(Arc::new(BackendTLSPolicySnapshotData {
+            generation: current
+                .generation
+                .checked_add(1)
+                .expect("BackendTLSPolicy snapshot generation exhausted"),
+            policies,
+            targets,
+        }))
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -533,31 +576,39 @@ impl BackendTLSPolicyStore {
     }
 
     pub fn replace_all(&self, new_policies: BackendTLSPolicyMap) {
-        self.publish(new_policies);
+        self.publish_full(new_policies);
     }
 
-    pub fn update(&self, add_or_update: BackendTLSPolicyMap, remove: &HashSet<String>) {
-        if add_or_update.is_empty() && remove.is_empty() {
+    pub fn update(&self, add: BackendTLSPolicyMap, update: BackendTLSPolicyMap, remove: &HashSet<String>) {
+        if add.is_empty() && update.is_empty() && remove.is_empty() {
             return;
         }
-        let mut policies = self.snapshot.load().policies.clone();
-        policies.extend(add_or_update);
-        for key in remove {
-            policies.remove(key);
+        // Production calls are serialized by the conf-sync CacheData write lock.
+        // A second writer would require RCU/CAS publication to avoid lost updates.
+        let current = self.snapshot.load();
+        if let Some(next) = Self::build_incremental_snapshot(&current, add, update, remove) {
+            self.snapshot.store(next);
         }
-        self.publish(policies);
     }
 
     pub fn count(&self) -> usize {
-        self.snapshot.load().policies.len()
+        self.snapshot.load().policies.size()
     }
 
     pub fn stats(&self) -> BackendTLSPolicyStoreStats {
         let snapshot = self.snapshot.load();
         BackendTLSPolicyStoreStats {
-            policies: snapshot.policies.len(),
-            reverse_index_targets: snapshot.valid_index.len(),
-            invalid_index_targets: snapshot.invalid_index.len(),
+            policies: snapshot.policies.size(),
+            reverse_index_targets: snapshot
+                .targets
+                .values()
+                .filter(|buckets| !buckets.valid.exact.is_empty() || buckets.valid.whole.is_some())
+                .count(),
+            invalid_index_targets: snapshot
+                .targets
+                .values()
+                .filter(|buckets| !buckets.invalid.exact.is_empty() || buckets.invalid.whole)
+                .count(),
         }
     }
 }
@@ -631,12 +682,16 @@ mod tests {
         })
     }
 
-    fn target(kind: PolicyTargetKind) -> PolicyTargetKey {
+    fn target_named(kind: PolicyTargetKind, name: &str) -> PolicyTargetKey {
         PolicyTargetKey {
             target_kind: kind,
             namespace: "tenant".to_string(),
-            name: "shared".to_string(),
+            name: name.to_string(),
         }
+    }
+
+    fn target(kind: PolicyTargetKind) -> PolicyTargetKey {
+        target_named(kind, "shared")
     }
 
     fn effective_name(lookup: BackendTlsPolicyLookup) -> Option<String> {
@@ -1053,8 +1108,16 @@ mod tests {
             ("tenant/https-a".to_string(), Arc::clone(&https)),
             ("tenant/whole-a".to_string(), Arc::clone(&whole)),
         ]));
-        partial.update(HashMap::from([("tenant/https-a".to_string(), https)]), &HashSet::new());
-        partial.update(HashMap::from([("tenant/whole-a".to_string(), whole)]), &HashSet::new());
+        partial.update(
+            HashMap::from([("tenant/https-a".to_string(), https)]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        partial.update(
+            HashMap::from([("tenant/whole-a".to_string(), whole)]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
 
         let full_snap = full.snapshot();
         let partial_snap = partial.snapshot();
@@ -1081,6 +1144,365 @@ mod tests {
                 .profile
                 .fingerprint
         );
+
+        let moved = policy(
+            "https-a",
+            PolicyTargetKind::Service,
+            "shared",
+            Some("grpc"),
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        partial.update(
+            HashMap::new(),
+            HashMap::from([("tenant/https-a".to_string(), Arc::clone(&moved))]),
+            &HashSet::from(["tenant/whole-a".to_string()]),
+        );
+        full.replace_all(HashMap::from([("tenant/https-a".to_string(), moved)]));
+        let full_snap = full.snapshot();
+        let partial_snap = partial.snapshot();
+        assert!(full_snap.lookup(&target, Some("https")).is_absent());
+        assert!(partial_snap.lookup(&target, Some("https")).is_absent());
+        assert_eq!(
+            effective_name(full_snap.lookup(&target, Some("grpc"))).as_deref(),
+            effective_name(partial_snap.lookup(&target, Some("grpc"))).as_deref()
+        );
+        assert!(full_snap.lookup(&target, None).is_absent());
+        assert!(partial_snap.lookup(&target, None).is_absent());
+    }
+
+    #[test]
+    fn partial_move_rebuilds_old_and_new_targets_only() {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([
+            (
+                "tenant/moving".to_string(),
+                policy(
+                    "moving",
+                    PolicyTargetKind::Service,
+                    "old",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            ),
+            (
+                "tenant/unrelated".to_string(),
+                policy(
+                    "unrelated",
+                    PolicyTargetKind::Service,
+                    "unrelated",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            ),
+        ]));
+        let before = store.snapshot();
+        let unrelated_target = target_named(PolicyTargetKind::Service, "unrelated");
+        let unrelated_before = before.target_buckets(&unrelated_target).unwrap();
+
+        store.update(
+            HashMap::new(),
+            HashMap::from([(
+                "tenant/moving".to_string(),
+                policy(
+                    "moving",
+                    PolicyTargetKind::Service,
+                    "new",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            &HashSet::new(),
+        );
+
+        let after = store.snapshot();
+        assert!(after
+            .lookup(&target_named(PolicyTargetKind::Service, "old"), None)
+            .is_absent());
+        assert_eq!(
+            effective_name(after.lookup(&target_named(PolicyTargetKind::Service, "new"), None)).as_deref(),
+            Some("moving")
+        );
+        assert!(Arc::ptr_eq(
+            &unrelated_before,
+            &after.target_buckets(&unrelated_target).unwrap()
+        ));
+        assert_eq!(after.generation(), before.generation() + 1);
+    }
+
+    #[test]
+    fn removing_winner_promotes_next_candidate_locally() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+
+        let store = BackendTLSPolicyStore::new();
+        let mut older = policy(
+            "older",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut older).metadata.creation_timestamp = Some(Time("2026-01-01T00:00:00Z".parse().unwrap()));
+        let mut newer = policy(
+            "newer",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut newer).metadata.creation_timestamp = Some(Time("2026-02-01T00:00:00Z".parse().unwrap()));
+        store.replace_all(HashMap::from([
+            ("tenant/older".to_string(), older),
+            ("tenant/newer".to_string(), newer),
+        ]));
+        assert_eq!(
+            effective_name(store.snapshot().lookup(&target(PolicyTargetKind::Service), None)).as_deref(),
+            Some("older")
+        );
+
+        store.update(
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::from(["tenant/older".to_string()]),
+        );
+
+        assert_eq!(
+            effective_name(store.snapshot().lookup(&target(PolicyTargetKind::Service), None)).as_deref(),
+            Some("newer")
+        );
+    }
+
+    #[test]
+    fn equivalent_partial_update_is_suppressed_but_metadata_change_is_published() {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([(
+            "tenant/policy".to_string(),
+            policy(
+                "policy",
+                PolicyTargetKind::Service,
+                "shared",
+                None,
+                Some(ResolvedPolicyTargetClass::Service),
+            ),
+        )]));
+        let first = store.snapshot();
+        let first_policy = first.get("tenant/policy").unwrap();
+        let first_effective = first
+            .lookup(&target(PolicyTargetKind::Service), None)
+            .effective()
+            .cloned()
+            .unwrap();
+
+        store.update(
+            HashMap::new(),
+            HashMap::from([(
+                "tenant/policy".to_string(),
+                policy(
+                    "policy",
+                    PolicyTargetKind::Service,
+                    "shared",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            &HashSet::new(),
+        );
+        let equivalent = store.snapshot();
+        assert_eq!(equivalent.generation(), first.generation());
+        assert!(Arc::ptr_eq(&first_policy, &equivalent.get("tenant/policy").unwrap()));
+        assert!(Arc::ptr_eq(
+            &first_effective,
+            equivalent
+                .lookup(&target(PolicyTargetKind::Service), None)
+                .effective()
+                .unwrap()
+        ));
+
+        let mut metadata_changed = (*first_policy).clone();
+        metadata_changed.metadata.labels = Some(std::collections::BTreeMap::from([(
+            "revision".to_string(),
+            "two".to_string(),
+        )]));
+        store.update(
+            HashMap::new(),
+            HashMap::from([("tenant/policy".to_string(), Arc::new(metadata_changed))]),
+            &HashSet::new(),
+        );
+        let changed = store.snapshot();
+        assert_eq!(changed.generation(), first.generation() + 1);
+        assert_eq!(
+            changed
+                .get("tenant/policy")
+                .unwrap()
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get("revision"))
+                .map(String::as_str),
+            Some("two")
+        );
+    }
+
+    #[test]
+    fn one_batch_updates_multiple_targets_in_one_generation() {
+        let store = BackendTLSPolicyStore::new();
+        let before = store.snapshot().generation();
+        store.update(
+            HashMap::from([
+                (
+                    "tenant/first".to_string(),
+                    policy(
+                        "first",
+                        PolicyTargetKind::Service,
+                        "first",
+                        None,
+                        Some(ResolvedPolicyTargetClass::Service),
+                    ),
+                ),
+                (
+                    "tenant/second".to_string(),
+                    policy(
+                        "second",
+                        PolicyTargetKind::Service,
+                        "second",
+                        None,
+                        Some(ResolvedPolicyTargetClass::Service),
+                    ),
+                ),
+            ]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        let after = store.snapshot();
+        assert_eq!(after.generation(), before + 1);
+        assert!(after
+            .lookup(&target_named(PolicyTargetKind::Service, "first"), None)
+            .effective()
+            .is_some());
+        assert!(after
+            .lookup(&target_named(PolicyTargetKind::Service, "second"), None)
+            .effective()
+            .is_some());
+    }
+
+    #[test]
+    fn defensive_overlapping_batch_keeps_remove_over_update_over_add() {
+        let store = BackendTLSPolicyStore::new();
+        store.update(
+            HashMap::from([(
+                "tenant/policy".to_string(),
+                policy(
+                    "policy",
+                    PolicyTargetKind::Service,
+                    "add",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            HashMap::from([(
+                "tenant/policy".to_string(),
+                policy(
+                    "policy",
+                    PolicyTargetKind::Service,
+                    "update",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            &HashSet::new(),
+        );
+        assert!(store
+            .snapshot()
+            .lookup(&target_named(PolicyTargetKind::Service, "add"), None)
+            .is_absent());
+        assert!(store
+            .snapshot()
+            .lookup(&target_named(PolicyTargetKind::Service, "update"), None)
+            .effective()
+            .is_some());
+
+        store.update(
+            HashMap::from([(
+                "tenant/policy".to_string(),
+                policy(
+                    "policy",
+                    PolicyTargetKind::Service,
+                    "ignored-add",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            HashMap::from([(
+                "tenant/policy".to_string(),
+                policy(
+                    "policy",
+                    PolicyTargetKind::Service,
+                    "ignored-update",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            &HashSet::from(["tenant/policy".to_string()]),
+        );
+        assert!(!store.contains("tenant/policy"));
+        assert_eq!(store.stats().reverse_index_targets, 0);
+        assert_eq!(store.stats().invalid_index_targets, 0);
+    }
+
+    #[test]
+    fn partial_validity_and_target_support_transitions_clear_stale_occupancy() {
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([(
+            "tenant/policy".to_string(),
+            policy("policy", PolicyTargetKind::Service, "shared", None, None),
+        )]));
+        assert!(store
+            .snapshot()
+            .lookup(&target(PolicyTargetKind::Service), None)
+            .is_invalid());
+
+        store.update(
+            HashMap::new(),
+            HashMap::from([(
+                "tenant/policy".to_string(),
+                policy(
+                    "policy",
+                    PolicyTargetKind::Service,
+                    "shared",
+                    None,
+                    Some(ResolvedPolicyTargetClass::Service),
+                ),
+            )]),
+            &HashSet::new(),
+        );
+        assert!(store
+            .snapshot()
+            .lookup(&target(PolicyTargetKind::Service), None)
+            .effective()
+            .is_some());
+
+        let mut unsupported = policy(
+            "policy",
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut unsupported).spec.target_refs[0].group = "unsupported.example".to_string();
+        store.update(
+            HashMap::new(),
+            HashMap::from([("tenant/policy".to_string(), unsupported)]),
+            &HashSet::new(),
+        );
+        assert!(store
+            .snapshot()
+            .lookup(&target(PolicyTargetKind::Service), None)
+            .is_absent());
+        assert!(
+            store.contains("tenant/policy"),
+            "raw diagnostics retain unsupported resources"
+        );
+        assert_eq!(store.stats().reverse_index_targets, 0);
+        assert_eq!(store.stats().invalid_index_targets, 0);
     }
 
     #[test]

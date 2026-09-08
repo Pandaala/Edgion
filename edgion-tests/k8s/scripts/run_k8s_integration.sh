@@ -601,13 +601,22 @@ preflight_kubernetes_cluster() {
     return 1
   fi
 
-  if ! nodes_json="$(kubectl --request-timeout=10s get nodes -o json 2>&1)"; then
+  # Keep successful kubectl warnings on stderr, outside the JSON payload.
+  if ! nodes_json="$(kubectl --request-timeout=10s get nodes -o json)"; then
     echo "Kubernetes preflight failed: cannot list Nodes through context ${context}" >&2
-    echo "${nodes_json}" >&2
     return 1
   fi
-  if ! echo "${nodes_json}" | jq -e '.kind == "NodeList" and (.items | type == "array")' >/dev/null; then
-    echo "Kubernetes preflight failed: kubectl returned an invalid NodeList" >&2
+  # kubectl can wrap typed Node objects in a generic v1 List.
+  if ! echo "${nodes_json}" | jq -e '
+    .apiVersion == "v1"
+    and (.items | type == "array")
+    and all(.items[]; type == "object")
+    and (
+      .kind == "NodeList"
+      or (.kind == "List" and all(.items[]; .apiVersion == "v1" and .kind == "Node"))
+    )
+  ' >/dev/null; then
+    echo "Kubernetes preflight failed: kubectl returned an invalid Node collection" >&2
     return 1
   fi
 

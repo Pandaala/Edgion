@@ -28,11 +28,7 @@ impl ConfHandler<BackendTLSPolicy> for BackendTLSPolicyStore {
             "partial update"
         );
 
-        let mut combined: HashMap<String, Arc<BackendTLSPolicy>> = add;
-
-        combined.extend(update);
-
-        self.update(combined, &remove);
+        self.update(add, update, &remove);
     }
 }
 
