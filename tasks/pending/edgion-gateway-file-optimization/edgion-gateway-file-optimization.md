@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0142 committed locally as `658f89f0` |
-| Coverage | 540 current Gateway files: 163 changed, 154 examined-no-change, 11 deferred, 212 non-terminal; 3 historical rows are removed |
-| Active batch | none; B0143 passed its commit gate |
-| Analysis queue | B0144 response-body filter queued next; D0074–D0096 retain their separate scopes |
-| Integration freeze | Refreshed at external HEAD `69ac468b`: 3,090 `edgion-tests` files after committed external updates `6ab45e17`/`8cbf7773`/`13e0890f` changed six existing fingerprints and added six LDAP/OIDC paths; no campaign integration-test edit occurred |
+| Campaign status | in-progress; B0143 committed locally as `87fa0f7b` |
+| Coverage | 540 current Gateway files: 164 changed, 154 examined-no-change, 11 deferred, 211 non-terminal; 3 historical rows are removed |
+| Active batch | none; B0144 passed its commit gate |
+| Analysis queue | later response traits pending fresh analysis; D0074–D0098 retain their separate scopes |
+| Integration freeze | Refreshed at external HEAD `b29369c1`: 3,093 `edgion-tests` files after committed external RegionRoute validation coverage changed four existing fingerprints and added three paths; no campaign integration-test edit occurred |
 
 ## AI guide summary
 

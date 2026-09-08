@@ -550,7 +550,7 @@
 | `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | changed | B0141: removed unused name API and repaired streaming design reference; support files retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/test_helpers.rs` | `plugins-runtime` | source | examined-no-change | B0142: coherent strict test helpers retained |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response.rs` | `plugins-runtime` | source | changed | B0143: correct final-response-header lifecycle contract |
-| `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs` | `plugins-runtime` | source | changed | B0144: corrected data/terminal/trailer callback contract |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response_trailer.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/connection_filter_bridge.rs` | `plugins-stream` | source | pending | — |

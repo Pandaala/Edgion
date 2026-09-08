@@ -1,8 +1,7 @@
 //! UpstreamResponseBodyFilter trait - for upstream response body filtering (sync)
 //!
-//! This trait is called for each body chunk received from upstream.
-//! Plugins can inspect the chunk and return an optional Duration to throttle
-//! the downstream transmission rate (bandwidth limiting).
+//! This read-only, synchronous trait inspects the current upstream response
+//! chunk and may return a delay for bandwidth limiting.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,26 +9,28 @@ use std::time::Duration;
 use super::session::PluginSession;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 
-/// UpstreamResponseBodyFilter trait for upstream response body stage plugins
-/// Runs during upstream_response_body_filter hook (sync - no async allowed)
+/// Read-only plugins for Pingora's upstream response-body callback.
 ///
-/// Unlike other filter traits that return PluginRunningResult, this trait returns
-/// Option<Duration> to control bandwidth throttling:
-/// - None: no throttling, continue normally
-/// - Some(duration): delay the next chunk by this duration
+/// Callbacks cover ordinary data tasks and the `body = None`, end-of-stream
+/// terminal-without-trailers task used by header-only responses. They do not
+/// run for `TerminalBeforeTrailers`. Here, end of stream means that the response
+/// closes without trailers.
 ///
-/// When multiple plugins return Some(duration), the largest duration wins
-/// (most restrictive rate limit applies).
+/// The body is an immutable view of only the current chunk or window. This
+/// stage cannot aggregate or mutate the response body and cannot deny the
+/// response. Its `Option<Duration>` result controls bandwidth throttling:
+/// `None` forwards normally, while `Some(duration)` delays forwarding or
+/// completion of the current response task. When multiple plugins return a
+/// duration, the largest one wins.
 ///
-/// # No per-chunk logging
+/// The mutable session exists for request-scoped metadata and framework state;
+/// it does not grant response-body mutation or complete-response access.
 ///
-/// This trait deliberately omits the `&mut PluginLog` argument that other filter
-/// traits carry. Body filters are invoked once per upstream chunk; for a long
-/// stream that is hundreds or thousands of calls per request. Surfacing those
-/// to access log would explode log volume, and dropping them silently would
-/// just be wasted allocation. Body filters therefore do not produce per-chunk
-/// PluginLog entries. If a stage-level summary is needed in the future, it
-/// should be aggregated once per request, not emitted per chunk.
+/// # Synchronous hot-path contract
+///
+/// Implementations must not sleep, block, allocate per callback, log, or trace.
+/// Any retained aggregation must be bounded request-scoped state and emitted
+/// once through the canonical access log outside this callback.
 pub trait UpstreamResponseBodyFilter: Send + Sync {
     /// Get the filter name
     fn name(&self) -> &str;
@@ -54,18 +55,10 @@ pub trait UpstreamResponseBodyFilter: Send + Sync {
         None
     }
 
-    /// Run the upstream response body filter (sync)
+    /// Run the synchronous upstream response-body filter.
     ///
-    /// Called for each body chunk received from upstream.
-    ///
-    /// # Arguments
-    /// * `body` - The body chunk data (read-only reference)
-    /// * `end_of_stream` - Whether this is the last chunk
-    /// * `session` - Read-only session context for accessing request metadata
-    ///
-    /// # Returns
-    /// * `None` - No throttling
-    /// * `Some(duration)` - Delay next chunk delivery by this duration
+    /// A returned duration delays forwarding or completion of this response
+    /// task; it does not authorize the implementation to wait synchronously.
     fn run_upstream_response_body_filter(
         &self,
         body: &Option<bytes::Bytes>,

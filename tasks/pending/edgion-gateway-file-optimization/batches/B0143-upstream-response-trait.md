@@ -18,4 +18,4 @@
 - Implementation: corrected only the module/trait/method Rustdoc to define the final non-interim response-header phase, its ordering, allowed asynchronous/header/processor/result actions, and lack of complete-response-body access. API and runtime bytes are unchanged.
 - Review: `b0135_final_review` independently approved with no Must Fix or Should Fix. It traced interim skipping, retry/normalization/sync filter ordering, awaited async dispatch, downstream commit/body/terminal ordering, ExtProc/Guardrail/WAF behavior, framing/failure/log ownership, and independently confirmed D0096's two guide-drift claims and links.
 - Verification: exact one-file documentation diff; `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `87fa0f7b`; local only, never pushed by the campaign.

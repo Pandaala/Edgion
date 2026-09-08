@@ -176,3 +176,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reject DSL builtin calls beyond bytecode argument capacity | pending | [task](../../../todo/reject-dsl-builtin-calls-beyond-argument-capacity.md) |
 | Investigate plugin policy and invalid-generation retention | pending | [task](../../../todo/investigate-plugin-policy-invalid-generation-retention.md) |
 | Align upstream response stage documentation | pending | [task](../../../todo/align-upstream-response-stage-documentation.md) |
+| Align response-body filter terminal documentation | pending | [task](../../../todo/align-response-body-filter-terminal-documentation.md) |
+| Avoid Wasm response in-flight cache-key allocation | pending | [task](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md) |
