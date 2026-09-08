@@ -612,7 +612,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | changed | B0183: keep the gRPC-Web bridge independent of frontend HTTP/2 enablement |
 | `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | changed | `B0055`: borrowed live method and canonical normalized path without per-request String allocation; response-processor finalization retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a`; B0176 support: consume derived listener port |
-| `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | changed | B0184: retire completed or abandoned mirror body state and restore the null-state fast path |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | changed | B0175/B0176: prior request-path work; B0183: expose canonical protocol detection and test the native-gRPC H2 gate |
 | `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` | `routes-shared` | source | pending | — |

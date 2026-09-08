@@ -23,8 +23,8 @@ pub async fn request_body_filter(
         return Ok(());
     }
 
-    // All mirror logic is isolated — failures result in MirrorState::Abandoned,
-    // never propagated back to the caller.
+    // All mirror logic is isolated: failures retire the mirror without ever
+    // propagating to the caller.
     mirror_body_tee(body, event, ctx).await;
 
     Ok(()) // ALWAYS Ok — mirror errors never bubble up.
@@ -32,8 +32,8 @@ pub async fn request_body_filter(
 
 /// Copy body chunks to the mirror channel.
 ///
-/// This function never returns an error — all failures result in mirror abandonment
-/// via state transition to MirrorState::Abandoned.
+/// This function never returns an error. Every terminal outcome retires mirror
+/// ownership from the request context.
 ///
 /// When `channel_full_timeout_ms > 0` and the channel is full, this function will
 /// await channel drain for at most that many milliseconds before abandoning. This
@@ -65,8 +65,9 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
                         // Signal cancellation before closing the channel: the delivered
                         // prefix must never become a successful partial upload.
                         cancellation.cancel(reason);
+                        drop(body_tx);
                         drop(writer_handle);
-                        ctx.set_mirror_state(MirrorState::Abandoned);
+                        ctx.retire_request_mirror();
                         return;
                     }
                     Err(MirrorSendError::Closed) => {
@@ -74,8 +75,9 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
                         // Disarm the guard so it cannot overwrite that task's
                         // already-determined outcome with `body_abandoned`.
                         cancellation.complete();
+                        drop(body_tx);
                         drop(writer_handle);
-                        ctx.set_mirror_state(MirrorState::Abandoned);
+                        ctx.retire_request_mirror();
                         return;
                     }
                 }
@@ -90,7 +92,7 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
                 drop(body_tx);
                 cancellation.complete();
                 drop(writer_handle);
-                ctx.set_mirror_state(MirrorState::Abandoned);
+                ctx.retire_request_mirror();
             } else {
                 ctx.set_mirror_state(MirrorState::Streaming {
                     body_tx,
@@ -102,7 +104,7 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
             }
         }
         MirrorState::Abandoned => {
-            ctx.set_mirror_state(MirrorState::Abandoned);
+            ctx.retire_request_mirror();
         }
     }
 }
@@ -156,7 +158,7 @@ pub(super) fn abandon_request_mirror(ctx: &mut EdgionHttpContext, reason: Mirror
         drop(body_tx);
         drop(writer_handle);
     }
-    ctx.set_mirror_state(MirrorState::Abandoned);
+    ctx.retire_request_mirror();
 }
 
 #[cfg(test)]
@@ -202,7 +204,8 @@ mod tests {
 
         mirror_body_tee(&mut body, RequestBodyEvent::Abandoned, &mut ctx).await;
 
-        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
         assert!(cancel_rx.await.is_ok(), "abandonment must cancel the HTTP send future");
     }
 
@@ -215,7 +218,8 @@ mod tests {
 
         mirror_body_tee(&mut body, RequestBodyEvent::Complete, &mut ctx).await;
 
-        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
         assert!(
             cancel_rx.await.is_err(),
             "a complete body must close the stream normally, not cancel it"
@@ -248,7 +252,8 @@ mod tests {
 
         mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
 
-        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
         assert!(
             cancel_rx.await.is_err(),
             "a closed body channel must disarm the guard (sender dropped, no signal), not cancel it: \
@@ -271,6 +276,47 @@ mod tests {
         assert!(
             !ctx.has_mirror_state(),
             "a request with no mirror must not acquire an abandoned mirror sentinel"
+        );
+    }
+
+    #[tokio::test]
+    async fn defensive_abandoned_state_is_retired() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.set_mirror_state(MirrorState::Abandoned);
+        let mut body = Some(Bytes::from_static(b"main"));
+
+        mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
+
+        assert_eq!(body.as_deref(), Some(&b"main"[..]));
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
+    }
+
+    #[tokio::test]
+    async fn channel_full_retires_mirror_and_preserves_main_chunk() {
+        let (body_tx, _body_rx) = mpsc::channel(1);
+        body_tx.try_send(Ok(Bytes::from_static(b"queued"))).unwrap();
+        let (cancellation, cancel_rx) = MirrorCancellation::new();
+        let reason = cancellation.reason_handle();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.set_mirror_state(MirrorState::Streaming {
+            body_tx,
+            body_budget: crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(1024),
+            cancellation,
+            writer_handle: tokio::spawn(async {}),
+            channel_full_timeout_ms: 0,
+        });
+        let mut body = Some(Bytes::from_static(b"main"));
+
+        mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
+
+        assert_eq!(body.as_deref(), Some(&b"main"[..]));
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
+        assert!(cancel_rx.await.is_ok());
+        assert_eq!(
+            MirrorCancellation::load_reason(&reason),
+            Some(MirrorAbandonReason::ChannelFull)
         );
     }
 
@@ -301,8 +347,18 @@ mod tests {
             MirrorCancellation::load_reason(&reason),
             Some(MirrorAbandonReason::BufferLimit)
         );
-        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
         assert!(budget.try_copy(b"x").is_none());
+
+        body = Some(Bytes::from_static(b"later"));
+        mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
+        assert_eq!(body.as_deref(), Some(&b"later"[..]));
+        assert_eq!(
+            MirrorCancellation::load_reason(&reason),
+            Some(MirrorAbandonReason::BufferLimit)
+        );
+
         drop(in_transport);
         assert!(budget.try_copy(b"1234").is_some());
     }

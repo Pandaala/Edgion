@@ -48,6 +48,14 @@ to bound aggregate retained bytes.
 - `pg_request_body_filter.rs`: reserve a channel slot before copying; byte
   admission never waits. Failure cancels the mirror before closing its stream,
   preserving the original request bytes and the callback's unconditional Ok.
+- `ctx.rs` / `pg_request_body_filter.rs`: every terminal tee outcome retires
+  mirror ownership instead of retaining an `Abandoned` sentinel. Cancellation
+  outcomes signal their reason before closing the channel; a closed writer is
+  disarmed before its handles are dropped; normal completion closes the sender
+  before disarming and detaching the writer. The mirror source bit is cleared,
+  and the optional body-plugin state is released only when no handler, WAF, or
+  observer source remains. Handler/WAF replay-denial latches and co-resident
+  observer state are preserved.
 - `request_mirror/plugin.rs`: a snapshot reader is admitted and isolated
   synchronously before spawning. Its memory permit outlives the reader, and
   each emitted send chunk has an independent charge.
@@ -110,6 +118,30 @@ Fresh verification on 2026-09-08:
 These are targeted tests, not a full-suite or end-to-end integration run.
 Existing integration scenarios and the vendored Gateway API CRDs are unchanged.
 Historical campaign and BODY-014 test results are separate evidence.
+
+Fresh verification for terminal retirement on 2026-09-09:
+
+- `cargo test --locked -q -p edgion-gateway --lib request_body_plugin_state_tests -- --test-threads=1`:
+  6 passed.
+- `cargo test --locked -q -p edgion-gateway --lib routes::http::proxy_http::pg_request_body_filter -- --test-threads=1`:
+  14 passed.
+- `cargo test --locked -q -p edgion-gateway --lib routes::http::proxy_http::pg_request_body_filter_action -- --test-threads=1`:
+  5 passed.
+- `cargo test --locked -q -p edgion-gateway --lib mirror -- --test-threads=1`:
+  38 passed.
+- `cargo test --locked -q -p edgion-gateway --lib routes::http::proxy_http -- --test-threads=1`:
+  244 passed.
+- `cargo check --locked -q -p edgion-gateway --all-targets`, workspace format
+  check, diff whitespace check, agent-doc validation, and the Gateway
+  no-tracing guard passed.
+
+These targeted tests pin terminal mirror absence for complete,
+downstream-abandoned, channel-full, byte-limit, closed-writer, and defensive
+pre-abandoned inputs. They verify that later chunks preserve the main request
+bytes and recorded abandon reason, mirror-only retirement restores the outer
+null-state fast path, and co-resident handler/WAF/observer sources remain active.
+This is unit evidence only; no end-to-end suite was rerun for the terminal-state
+retirement change.
 
 Re-evaluate if snapshot ownership, Bytes transport conversion, semaphore
 capacity, mirror configuration lifecycle, or response handling changes. A new

@@ -2017,7 +2017,8 @@ pub enum MirrorState {
         /// > 0 = brief back-pressure window (adds at most this many ms to body processing).
         channel_full_timeout_ms: u64,
     },
-    /// Mirror has been disabled for this request (timeout/error/full buffer/closed channel).
+    /// Defensive terminal input retained for adapter and cleanup compatibility.
+    /// Runtime terminal paths retire mirror ownership from the request context.
     Abandoned,
 }
 
@@ -2147,10 +2148,11 @@ pub(crate) type RequestBodyStreamHandlers =
 
 /// Optional drivers attached to Pingora's per-chunk request-body callback.
 ///
-/// The source bits are monotonic for the request lifetime. In particular,
-/// handler and WAF bits remain set while handlers are temporarily moved across
-/// an await point, so cancellation can never make a partially streamed request
-/// replayable again.
+/// Handler and WAF source bits are monotonic for the request lifetime and remain
+/// set while handlers are temporarily moved across an await point, so
+/// cancellation can never make a partially streamed request replayable again.
+/// The mirror bit is retired after any terminal mirror outcome; observer state
+/// remains installed for the rest of the body lifecycle.
 #[derive(Default)]
 struct RequestBodyPluginState {
     handlers: RequestBodyStreamHandlers,
@@ -2900,6 +2902,26 @@ impl EdgionHttpContext {
             self.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
         }
         self.ensure_plugin_aux().mirror_state = Some(state);
+    }
+
+    /// Remove terminal mirror ownership without disturbing co-resident request
+    /// body consumers. The outer optional state is released only when mirror
+    /// was its sole source, restoring the no-body-plugin fast path.
+    #[inline]
+    pub(crate) fn retire_request_mirror(&mut self) {
+        if let Some(aux) = self.plugin_aux_mut() {
+            aux.mirror_state = None;
+        }
+
+        let remove_request_body_state = self.request_body_plugins_mut().is_some_and(|state| {
+            state.active_sources &= !REQUEST_BODY_SOURCE_MIRROR;
+            state.active_sources
+                & (REQUEST_BODY_SOURCE_HANDLER | REQUEST_BODY_SOURCE_WAF | REQUEST_BODY_SOURCE_OBSERVER)
+                == 0
+        });
+        if remove_request_body_state {
+            self.request_body_plugins = None;
+        }
     }
 
     #[inline]
@@ -5019,6 +5041,28 @@ mod plugin_request_state_tests {
 #[cfg(test)]
 mod request_body_plugin_state_tests {
     use super::*;
+    use pingora_proxy::RequestBodyEvent;
+
+    struct NoopStreamHandler;
+
+    #[async_trait::async_trait]
+    impl crate::plugins::runtime::traits::RequestBodyStreamHandler for NoopStreamHandler {
+        async fn on_chunk(
+            &mut self,
+            _chunk: &mut Option<Bytes>,
+            _event: RequestBodyEvent,
+        ) -> crate::plugins::runtime::traits::ChunkVerdict {
+            crate::plugins::runtime::traits::ChunkVerdict::Continue
+        }
+
+        fn take_log(&mut self) -> Option<crate::plugins::runtime::log::PluginLog> {
+            None
+        }
+
+        fn dye_plan(&self) -> Option<Arc<crate::plugins::runtime::dye_plan::CompiledDyePlan>> {
+            None
+        }
+    }
 
     #[test]
     #[cfg(target_pointer_width = "64")]
@@ -5061,6 +5105,59 @@ mod request_body_plugin_state_tests {
             allocation.requested_bytes,
             std::mem::size_of::<RequestBodyPluginState>()
         );
+    }
+
+    #[test]
+    fn retiring_mirror_only_state_restores_outer_fast_path() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
+        ctx.ensure_plugin_aux().mirror_state = Some(MirrorState::Abandoned);
+
+        ctx.retire_request_mirror();
+
+        assert!(!ctx.has_mirror_state());
+        assert!(!ctx.has_request_body_plugins());
+    }
+
+    #[test]
+    fn retiring_mirror_preserves_handler_and_waf_replay_latches() {
+        let mut handler_ctx = EdgionHttpContext::new();
+        handler_ctx.push_request_body_stream_handler(Box::new(NoopStreamHandler));
+        handler_ctx.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
+        handler_ctx.ensure_plugin_aux().mirror_state = Some(MirrorState::Abandoned);
+
+        handler_ctx.retire_request_mirror();
+
+        assert!(!handler_ctx.has_mirror_state());
+        assert!(handler_ctx.has_request_body_plugins());
+        assert_eq!(handler_ctx.request_body_stream_handler_count(), 1);
+        assert!(handler_ctx.request_body_stream_active());
+
+        let mut waf_ctx = EdgionHttpContext::new();
+        waf_ctx.activate_waf_request_body_streaming();
+        waf_ctx.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
+        waf_ctx.ensure_plugin_aux().mirror_state = Some(MirrorState::Abandoned);
+
+        waf_ctx.retire_request_mirror();
+
+        assert!(!waf_ctx.has_mirror_state());
+        assert!(waf_ctx.has_request_body_plugins());
+        assert!(waf_ctx.request_body_stream_active());
+    }
+
+    #[test]
+    fn retiring_mirror_preserves_observer_state_without_disabling_replay() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.install_request_body_observers(Box::new(crate::request_body::observer::RequestBodyObservers::default()));
+        ctx.activate_request_body_source(REQUEST_BODY_SOURCE_MIRROR);
+        ctx.ensure_plugin_aux().mirror_state = Some(MirrorState::Abandoned);
+
+        ctx.retire_request_mirror();
+
+        assert!(!ctx.has_mirror_state());
+        assert!(ctx.has_request_body_plugins());
+        assert!(ctx.has_request_body_observers());
+        assert!(!ctx.request_body_stream_active());
     }
 }
 
