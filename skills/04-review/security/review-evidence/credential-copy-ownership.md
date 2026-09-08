@@ -137,6 +137,25 @@ tracks a body-boundedness defect; it is not accepted or claimed fixed by this au
 Re-evaluate on new auth consumers, changed stores/serialization/retry tasks, new
 Debug implementations, typed header conversions, or dependency behavior changes.
 
+The recovery task `credential-audit-missing-followups` is superseded by the four
+tracked original task files. Current checkout inspection confirms their presence;
+the claim that they are absent from both the checkout and available Git history
+no longer applies. The HMAC quick-start and ACME DNS diagnostic corrections have
+the semantic guards linked above, although their original task metadata still
+says pending. Credential ownership investigation and OIDC response caps remain
+open in their linked tasks. In particular, token exchange and refresh in
+`openid_connect/token_exchange.rs` still call `Response::json` directly.
+Closing the recovery record does not close those follow-ups, reconcile their
+individual lifecycle metadata, or claim new execution of their historical tests.
+Re-evaluate this recovery conclusion if those task files or semantic links disappear.
+
+Recovery-record closure checks: `cargo fmt --all`, workspace/all-targets check
+and clippy, agent-doc validation, SSA-force, metrics-inventory, Pingora-source-policy,
+and `git diff --check` passed. Clippy reported existing Rust warnings; this
+documentation-only closure changes no runtime code and reruns no runtime tests.
+Agent-doc validation initially found a separate missing AliDNS selection task;
+its pending record was reconstructed from current source before validation passed.
+
 ## Verification
 
 Fresh verification for the completed D0036 investigation and scoped corrections:
