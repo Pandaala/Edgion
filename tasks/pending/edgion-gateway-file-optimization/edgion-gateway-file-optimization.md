@@ -10,9 +10,9 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0152 committed locally as `1ceed397` |
-| Coverage | 540 current Gateway files: 171 changed, 156 examined-no-change, 11 deferred, 202 non-terminal; 3 historical rows are removed |
-| Active batch | none; B0153 passed its commit gate |
+| Campaign status | in-progress; B0153 committed locally as `eedf452d` |
+| Coverage | 540 current Gateway files: 171 changed, 157 examined-no-change, 11 deferred, 201 non-terminal; 3 historical rows are removed |
+| Active batch | none; B0154 passed its commit gate |
 | Analysis queue | next pending Gateway file requires fresh analysis; D0074–D0102 retain their separate scopes |
 | Integration freeze | Refreshed at external HEAD `94e3185e`: 3,093 `edgion-tests` files after committed external EdgionTls coverage changed two existing fingerprints; no campaign integration-test edit occurred |
 

@@ -561,7 +561,7 @@
 | `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs` | `plugins-stream` | source | changed | B0152: invalid generations fail closed; cached lookup need and exact deny causes |
 | `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/mod.rs` | `plugins-stream` | source | changed | B0153: corrected profile, Selector, lifecycle and DirectPeerIp facade docs |
 | `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs` | `plugins-stream` | source | changed | B0123: Selector and profile references share one snapshot generation |
-| `edgion-gateway/src/plugins/stream/ip_restriction/mod.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/ip_restriction/mod.rs` | `plugins-stream` | source | examined-no-change | B0154: coherent crate-private implementation/public-type facade retained |
 | `edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
 | `edgion-gateway/src/plugins/stream/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs` | `plugins-stream` | source | pending | — |

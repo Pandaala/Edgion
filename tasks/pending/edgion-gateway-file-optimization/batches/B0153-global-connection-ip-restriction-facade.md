@@ -18,4 +18,4 @@
 - Deferred: none. The adjacent implementation was already terminalized by B0123 and is not re-claimed here.
 - Review: `b0135_final_review` independently verified profile construction, Selector resolution, snapshot ownership, every lifecycle caller and physical-peer identity. No Must Fix or Should Fix.
 - Verification: no facade-specific unit test adds signal beyond compilation. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,093-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `eedf452d`; local only, never pushed by the campaign.
