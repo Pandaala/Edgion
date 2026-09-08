@@ -8,9 +8,15 @@ use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, 
 use pingora_proxy::{FailToProxy, Session};
 
 #[inline]
+fn is_downstream_read_timeout(e: &Error) -> bool {
+    matches!(e.etype(), ErrorType::ReadTimedout) && matches!(e.esource(), ErrorSource::Downstream)
+}
+
+#[inline]
 fn classify_proxy_status(e: &Error) -> u16 {
     match e.etype() {
         HTTPStatus(code) => *code,
+        ErrorType::ReadTimedout if is_downstream_read_timeout(e) => 408,
         ErrorType::ReadTimedout | ErrorType::WriteTimedout => match e.esource() {
             ErrorSource::Downstream => 499,
             ErrorSource::Upstream => 504,
@@ -26,6 +32,27 @@ fn classify_proxy_status(e: &Error) -> u16 {
             ErrorSource::Internal | ErrorSource::Unset => 500,
         },
     }
+}
+
+#[inline]
+fn proxy_error_diagnostic(e: &Error, code: u16) -> Option<EdgionErrorCode> {
+    if is_downstream_read_timeout(e) {
+        Some(EdgionErrorCode::BodyReadTimeout)
+    } else if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
+        Some(EdgionErrorCode::ClientClosed)
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn should_append_proxy_error_to_upstream(e: &Error, code: u16) -> bool {
+    code != 504 && code != 499 && !is_downstream_read_timeout(e)
+}
+
+#[inline]
+fn can_reuse_downstream_after_proxy_error(code: u16) -> bool {
+    matches!(code, 400 | 403 | 404 | 429)
 }
 
 #[inline]
@@ -109,13 +136,10 @@ pub async fn fail_to_proxy(
 
     let code = classify_proxy_status(e);
 
-    // The proxy-ending error was a downstream failure — the client is gone.
-    // Recorded in the request-level diagnostics so access-log analysis can
-    // join it with the upstreams array to quantify retry work spent on
-    // callers that had already disconnected. HTTPStatus(499) is excluded:
-    // that is an upstream's literal 499 response, not a client disconnect.
-    if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
-        ctx.record_error(EdgionErrorCode::ClientClosed);
+    // A stalled request-body upload is a client timeout, not a disconnect.
+    // Other downstream transport failures keep the ClientClosed diagnostic.
+    if let Some(diagnostic) = proxy_error_diagnostic(e, code) {
+        ctx.record_error(diagnostic);
     }
 
     // A gateway-internal error that surfaced while the captured request body
@@ -139,7 +163,7 @@ pub async fn fail_to_proxy(
             // Preserve a real response status stamped by upstream_response_filter;
             // this code is only the gateway's final outcome for the request.
             upstream.status.get_or_insert(code);
-            if code != 504 && code != 499 {
+            if should_append_proxy_error_to_upstream(e, code) {
                 upstream.err.push(e.etype().as_str().to_string());
             }
         }
@@ -156,17 +180,22 @@ pub async fn fail_to_proxy(
 
     FailToProxy {
         error_code: code,
-        can_reuse_downstream: matches!(code, 400 | 403 | 404 | 429),
+        can_reuse_downstream: can_reuse_downstream_after_proxy_error(code),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_proxy_status, select_proxy_outcome_status, write_proxy_error_reply};
+    use super::{
+        can_reuse_downstream_after_proxy_error, classify_proxy_status, proxy_error_diagnostic,
+        select_proxy_outcome_status, should_append_proxy_error_to_upstream, write_proxy_error_reply,
+    };
+    use crate::observe::RequestDiagnostic;
     use crate::routes::http::proxy_http::pg_upstream_response_filter::select_normalized_upstream_candidate;
     use crate::runtime::server::ServerHeaderOpts;
     use crate::EdgionHttpContext;
-    use pingora_core::{ConnectionClosed, Error};
+    use edgion_resources::EdgionErrorCode;
+    use pingora_core::{ConnectionClosed, Error, ErrorType};
     use pingora_proxy::Session;
     use tokio::io::AsyncWriteExt;
 
@@ -197,6 +226,76 @@ mod tests {
         assert_eq!(written.headers.get("grpc-status").unwrap(), "7");
         assert!(written.headers.get("content-length").is_none());
         assert_eq!(ctx.request_info.grpc_status(), Some(7));
+    }
+
+    #[tokio::test]
+    async fn downstream_read_timeout_writes_terminal_http_408() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+
+        assert!(!write_proxy_error_reply(&mut session, &mut ctx, &ServerHeaderOpts::default(), 408).await);
+
+        assert_eq!(
+            session.response_written().expect("timeout response").status.as_u16(),
+            408
+        );
+        assert_eq!(ctx.final_downstream_status(), Some(408));
+        assert!(!can_reuse_downstream_after_proxy_error(408));
+    }
+
+    #[tokio::test]
+    async fn grpc_route_downstream_read_timeout_uses_canonical_mapping() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.is_grpc_route_matched = true;
+
+        assert!(!write_proxy_error_reply(&mut session, &mut ctx, &ServerHeaderOpts::default(), 408).await);
+
+        let written = session.response_written().expect("mapped gRPC response");
+        assert_eq!(written.status.as_u16(), 200);
+        assert_eq!(written.headers.get("content-type").unwrap(), "application/grpc");
+        assert_eq!(written.headers.get("grpc-status").unwrap(), "2");
+        assert_eq!(ctx.request_info.grpc_status(), Some(2));
+    }
+
+    #[test]
+    fn proxy_error_status_classification_preserves_transport_boundaries() {
+        assert_eq!(classify_proxy_status(&Error::new_down(ErrorType::ReadTimedout)), 408);
+        assert_eq!(classify_proxy_status(&Error::new_down(ErrorType::WriteTimedout)), 499);
+        assert_eq!(classify_proxy_status(&Error::new_down(ErrorType::ReadError)), 499);
+        assert_eq!(classify_proxy_status(&Error::new_down(ErrorType::WriteError)), 499);
+        assert_eq!(classify_proxy_status(&Error::new_down(ConnectionClosed)), 499);
+        assert_eq!(classify_proxy_status(&Error::new_up(ErrorType::ReadTimedout)), 504);
+        assert_eq!(classify_proxy_status(&Error::new_up(ErrorType::WriteTimedout)), 504);
+        assert_eq!(classify_proxy_status(&Error::new(ErrorType::HTTPStatus(418))), 418);
+    }
+
+    #[test]
+    fn downstream_read_timeout_has_client_timeout_diagnostic_without_attempt_error() {
+        let timeout = Error::new_down(ErrorType::ReadTimedout);
+        assert_eq!(
+            proxy_error_diagnostic(&timeout, 408),
+            Some(EdgionErrorCode::BodyReadTimeout)
+        );
+        assert!(!should_append_proxy_error_to_upstream(&timeout, 408));
+
+        let disconnect = Error::new_down(ConnectionClosed);
+        assert_eq!(
+            proxy_error_diagnostic(&disconnect, 499),
+            Some(EdgionErrorCode::ClientClosed)
+        );
+        assert!(!should_append_proxy_error_to_upstream(&disconnect, 499));
+
+        let ordinary = Error::new_up(ErrorType::ConnectError);
+        assert_eq!(proxy_error_diagnostic(&ordinary, 502), None);
+        assert!(should_append_proxy_error_to_upstream(&ordinary, 502));
+
+        let mut ctx = EdgionHttpContext::new();
+        ctx.record_error(proxy_error_diagnostic(&timeout, 408).expect("timeout diagnostic"));
+        assert_eq!(
+            ctx.diagnostics.entries(),
+            &[RequestDiagnostic::Error(EdgionErrorCode::BodyReadTimeout)]
+        );
     }
 
     #[test]

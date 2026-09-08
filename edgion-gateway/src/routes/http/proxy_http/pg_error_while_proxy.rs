@@ -7,8 +7,14 @@ use pingora_core::{Error, ErrorSource, ErrorType};
 use pingora_proxy::Session;
 
 #[inline]
-fn should_record_local_origin_failure(retry_on_status: bool, error_type: &ErrorType) -> bool {
-    !retry_on_status && !matches!(error_type, ErrorType::HTTPStatus(_))
+fn should_record_local_origin_failure(
+    retry_on_status: bool,
+    error_type: &ErrorType,
+    error_source: &ErrorSource,
+) -> bool {
+    !retry_on_status
+        && !matches!(error_type, ErrorType::HTTPStatus(_))
+        && !matches!(error_source, ErrorSource::Downstream)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,11 +93,13 @@ pub fn error_while_proxy(
     }
     let mut e = e.more_context(format!("Peer: {}", peer));
 
-    // Record only transport/proxy failures as local-origin. HTTPStatus errors
+    // Record only backend-side transport/proxy failures as local-origin.
+    // Downstream failures belong to the client connection and must not affect
+    // backend health. HTTPStatus errors
     // are control flow for an already-observed upstream response (status retry
     // or retry-budget denial), or a locally generated response status; the
     // response filter has already classified any real upstream status.
-    if should_record_local_origin_failure(ctx.retry_on_status, e.etype()) {
+    if should_record_local_origin_failure(ctx.retry_on_status, e.etype(), e.esource()) {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(backend), Some(token)) =
                 (upstream.lb_backend.as_deref(), upstream.lb_outlier_completion.as_ref())
@@ -320,9 +328,28 @@ mod tests {
 
     #[test]
     fn local_origin_recording_excludes_status_control_flow() {
-        assert!(!should_record_local_origin_failure(false, &ErrorType::HTTPStatus(503)));
-        assert!(!should_record_local_origin_failure(true, &ErrorType::ReadError));
-        assert!(should_record_local_origin_failure(false, &ErrorType::ReadError));
+        assert!(!should_record_local_origin_failure(
+            false,
+            &ErrorType::HTTPStatus(503),
+            &ErrorSource::Upstream,
+        ));
+        assert!(!should_record_local_origin_failure(
+            true,
+            &ErrorType::ReadError,
+            &ErrorSource::Upstream,
+        ));
+        assert!(!should_record_local_origin_failure(
+            false,
+            &ErrorType::ReadTimedout,
+            &ErrorSource::Downstream,
+        ));
+        for source in [ErrorSource::Upstream, ErrorSource::Internal, ErrorSource::Unset] {
+            assert!(should_record_local_origin_failure(
+                false,
+                &ErrorType::ReadError,
+                &source
+            ));
+        }
     }
 
     #[test]

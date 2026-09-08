@@ -21,4 +21,4 @@
 - Implementation: a typed selector makes request expiry win over gRPC expiry. The production deadline outcome records the selected canonical diagnostic, keeps the existing attempt/outlier facts while setting its status to 504, and wraps the original upstream error as the cause of an explicitly non-retryable `HTTPStatus(504)`. Selector and outcome tests cover neither/request/gRPC/both, diagnostic ownership, adversarial inherited retry state, and retained cause type/source.
 - Review: the plan was independently approved with discriminating retry/cause test requirements. A fresh final reviewer confirmed terminal HTTP 504 and gRPC status 4 mapping, cause-chain logging, branch ordering, exact scope, and no remaining Must Fix or Should Fix finding.
 - Verification: target tests passed 5/5 and the complete proxy-http suite passed 233/233. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `efeb18f6`; never pushed by the campaign.

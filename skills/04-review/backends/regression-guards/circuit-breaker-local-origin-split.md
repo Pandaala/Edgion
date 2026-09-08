@@ -13,7 +13,7 @@ knowledge_type: regression-guards
 
 The passive-outlier-detection failure model now splits **local-origin** failures
 (connect failure/timeout, TLS-handshake timeout, transport reset, mid-proxy
-read/write error — the data plane never got a usable HTTP response) into their own
+upstream read/write error — the data plane never got a usable HTTP response) into their own
 `FailureClass::LocalOrigin` dimension with an independent counter
 (`EndpointState::local_origin_failures`), an independent threshold
 (`consecutiveLocalOriginFailures`), and an independent metric label
@@ -42,6 +42,9 @@ operators could not tell network/data-plane ejections from backend-5xx ejections
 - `FailureClass::LocalOrigin` variant added; `from_http_status` unchanged (502/504
   still map to `Gateway` — local-origin failures never carry an HTTP status).
 - The five connect/proxy call sites now record `FailureClass::LocalOrigin`.
+  `pg_error_while_proxy` excludes `ErrorSource::Downstream`: a stalled request
+  upload or other downstream transport failure belongs to the client connection
+  and must not affect backend health.
 - `consecutiveLocalOriginFailures` config field; when unset it inherits the resolved
   `consecutiveGatewayErrors` in `normalize`, so a config that predates the field
   keeps counting connect/proxy errors at exactly the threshold they used when they
@@ -74,6 +77,8 @@ passing `class.metric_label()` to `record_cb_ejection` is exact, not a heuristic
 Re-open only if:
 
 - A new connect/transport failure call site is added that still records `Gateway`.
+- A proxy-error call site starts attributing `ErrorSource::Downstream` to a
+  backend local-origin counter.
 - Envoy-style `interval` / `successRate` outlier detection is genuinely needed
   (promote to `tasks/todo/` via brainstorming, not a narrow review fix).
 

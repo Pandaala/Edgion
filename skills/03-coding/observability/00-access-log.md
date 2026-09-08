@@ -93,11 +93,18 @@ A selected terminal 502 whose error-page write later fails remains 502 plus
 `ClientClosed`; it becomes 499 only when client closure itself was the request-ending
 outcome before another final status was selected.
 
-Mechanically, 499 may be selected only when a downstream read/write/close error ends the
-request before final-header commit and neither a terminal error nor a final downstream
-response already owns the outcome. A selected 200 whose header write fails remains 200 +
-`ClientClosed`; a selected terminal 502 whose error-page write fails remains 502 +
-`ClientClosed`.
+Mechanically, 499 may be selected only when a downstream transport error other than
+`ReadTimedout` ends the request before final-header commit and neither a terminal error nor
+a final downstream response already owns the outcome. A selected 200 whose header write
+fails remains 200 + `ClientClosed`; a selected terminal 502 whose error-page write fails
+remains 502 + `ClientClosed`.
+
+A downstream `ReadTimedout` is the distinct stalled-request-body-upload case: select 408,
+record `BodyReadTimeout`, do not record `ClientClosed`, and do not attach the timeout to the
+selected backend attempt's `err` or local-origin outlier counter. Downstream `WriteTimedout`,
+`ReadError`, `WriteError`, and `ConnectionClosed` remain client-closure outcomes at 499.
+The 408 path is non-reusable and passes through the canonical HTTP/gRPC terminal response
+dispatcher.
 
 Each upstream attempt keeps its own observed/mapped status under
 `backend_context.upstreams[].status`. Any response-stage safety check that needs the

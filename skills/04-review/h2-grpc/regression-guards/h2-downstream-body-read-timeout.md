@@ -86,8 +86,14 @@ H1 upgrades are NOT exempt — they have carried H1's 60s default since long
 before this work, and removing an existing bound is a different (and
 DoS-relevant) decision from not adding a new one.
 
-Downstream `ReadTimedout` now maps to 408, not 400 (`proxy_trait.rs`
-`fail_to_proxy`): the client stopped sending, the request was never malformed.
+Downstream `ReadTimedout` maps to 408, not 499 or 400
+(`pg_fail_to_proxy.rs`): the client stalled its request-body upload but did not
+necessarily close the connection, and the request was never malformed. Edgion
+records `BodyReadTimeout`, does not record `ClientClosed`, and does not attach
+the client-side timeout to the selected backend's attempt error or local-origin
+outlier counter. The downstream session is non-reusable. HTTP receives the
+terminal 408 response; gRPC and GRPCRoute requests use the canonical error
+dispatch and HTTP-to-gRPC status mapping.
 
 **3. Uniform application to gRPC (deliberate product decision, 2026-08-04)**
 
@@ -139,6 +145,10 @@ Re-open this decision only if:
   `pingora-core/src/protocols/http/v2/server.rs` +
   `pingora-core/src/protocols/http/server.rs`.
 - Edgion consumer: `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs`.
+- Edgion terminal classification:
+  `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs`; backend
+  local-origin exclusion:
+  `edgion-gateway/src/routes/http/proxy_http/pg_error_while_proxy.rs`.
 
 ## Resolution references
 
