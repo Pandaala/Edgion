@@ -280,8 +280,10 @@ pub async fn upstream_peer(
     // there is no shed-induced retry storm to another endpoint. Because the shed
     // returns before any connect, it reaches none of the outlier-detection
     // `record_failure` sites — a busy-but-healthy endpoint is never ejected by
-    // its own shed. Bypass paths (DirectEndpoint / ExternalJump) carry no service
-    // key and no `lb_backend`, so this is a no-op for them.
+    // its own shed. DirectEndpoint retains its pinned Service identity and
+    // effective policy, but has no selected `lb_backend`; ExternalJump has
+    // neither Service identity nor `lb_backend`. This is therefore a no-op for
+    // both bypass paths.
     if let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.clone()) {
         if let Some(max) = selected_effective_policy(ctx).and_then(|policy| policy.circuit_breaker_limit) {
             if let Some(chosen_backend) = ctx.get_current_upstream().and_then(|u| u.lb_backend.clone()) {
@@ -414,13 +416,14 @@ fn apply_upstream_authority_decision(
 /// `Host` header (written later by `upstream_request_filter` from
 /// `ctx.upstream_authority` — `upstream_peer` cannot touch request headers).
 ///
-/// A no-op when the chosen backend has no Service key (bypass paths —
-/// DirectEndpoint / ExternalJump — leave `backend_context.service_key` unset)
-/// or when the Service carries no `upstreamAuthority` policy, so an
-/// unconfigured Service behaves byte-for-byte as today. Both early-return
-/// paths clear `ctx.upstream_authority` so a conf_sync policy removal between
-/// retry attempts of the same request cannot leave a stale composed authority
-/// (and therefore a stale upstream `Host`) from a previous attempt.
+/// A no-op when the chosen backend has no Service key (ExternalJump) or when
+/// the Service carries no `upstreamAuthority` policy, so an unconfigured
+/// Service behaves byte-for-byte as today. DirectEndpoint retains its pinned
+/// Service slot and therefore receives the same captured authority policy as
+/// the ordinary Service path. Both early-return paths clear
+/// `ctx.upstream_authority` so a conf_sync policy removal between retry
+/// attempts of the same request cannot leave a stale composed authority (and
+/// therefore a stale upstream `Host`) from a previous attempt.
 ///
 /// Fail-closed on a bad render: silently keeping the static SNI would present
 /// the right TLS identity to the wrong virtual host.
@@ -1237,8 +1240,9 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     // is read from `backend_context` (set by `init_backend_context_if_needed`,
     // which always runs before this) rather than the just-pushed upstream entry,
     // whose `service_key` is not populated until LB peer construction happens
-    // later. Bypass paths (DirectEndpoint / ExternalJump) have no service key and
-    // therefore no budget, so this is a no-op for them.
+    // later. DirectEndpoint retains its pinned Service key and captured policy,
+    // so it participates in the Service retry budget; ExternalJump has no
+    // Service identity and therefore no budget.
     if let Some(budget) = retry_budget_for(ctx) {
         budget.on_attempt();
     }
@@ -1248,10 +1252,11 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 /// Service. Reads the service key from `backend_context` — the canonical source
 /// (`apply_upstream_authority` uses the same) — because the per-attempt upstream
 /// entry's `service_key` is not populated until LB peer construction, which runs
-/// after `begin_upstream_attempt`. Bypass paths (DirectEndpoint / ExternalJump)
-/// carry no service key and therefore no budget. Shared by the denominator hook
-/// here and the three retry gates (`pg_fail_to_connect`, `pg_error_while_proxy`
-/// Case 1.5, `pg_upstream_response_filter`).
+/// after `begin_upstream_attempt`. DirectEndpoint retains its pinned Service key
+/// and captured policy; ExternalJump carries no Service key and therefore no
+/// budget. Shared by the denominator hook here and the three retry gates
+/// (`pg_fail_to_connect`, `pg_error_while_proxy` Case 1.5,
+/// `pg_upstream_response_filter`).
 #[inline]
 pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc<RetryBudget>> {
     selected_effective_policy(ctx)
@@ -1671,11 +1676,10 @@ fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> p
     } else {
         None
     };
-    ctx.uri_finalized = true;
-
     if let Some(parsed) = parsed.filter(|parsed| *parsed != session.req_header().uri) {
         session.req_header_mut().set_uri(parsed);
     }
+    ctx.uri_finalized = true;
     Ok(())
 }
 
@@ -1756,7 +1760,7 @@ mod tests {
     use super::{
         ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
         apply_upstream_read_timeout_override, backend_select_status, backoff_action, choose_typed_retry_budget,
-        decide_upstream_authority, decide_want_raw, direct_backend_metadata, fold_peer_timeouts,
+        decide_upstream_authority, decide_want_raw, direct_backend_metadata, finalize_request_uri, fold_peer_timeouts,
         init_backend_context_if_needed, pick_backend_ref, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
         sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
     };
@@ -1778,8 +1782,10 @@ mod tests {
     use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use pingora_core::ErrorType;
     use pingora_load_balancing::Backend;
+    use pingora_proxy::Session;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn ai_unavailable_maps_to_fixed_openai_backend_unavailable() {
@@ -1969,6 +1975,69 @@ mod tests {
         assert_eq!(replay_write_floor(false, global), None);
         // Global default disabled: the operator asked for no bounds anywhere.
         assert_eq!(replay_write_floor(true, Duration::ZERO), None);
+    }
+
+    async fn live_h1_session(uri: &str) -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client
+            .write_all(format!("GET {uri} HTTP/1.1\r\nHost: test\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    #[tokio::test]
+    async fn finalize_request_uri_writes_normalized_path_with_original_query_then_latches() {
+        let (mut session, _client) = live_h1_session("/%61dmin?scope=read").await;
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.normalized_current_path = "/admin".to_string();
+
+        finalize_request_uri(&mut session, &mut ctx).unwrap();
+
+        assert_eq!(session.req_header().uri, "/admin?scope=read");
+        assert!(ctx.uri_finalized);
+    }
+
+    #[tokio::test]
+    async fn finalize_request_uri_leaves_an_already_finalized_uri_untouched() {
+        let (mut session, _client) = live_h1_session("/plugin-owned?scope=read").await;
+        let original = session.req_header().uri.clone();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.normalized_current_path = "/different".to_string();
+        ctx.uri_finalized = true;
+
+        finalize_request_uri(&mut session, &mut ctx).unwrap();
+
+        assert_eq!(session.req_header().uri, original);
+        assert!(ctx.uri_finalized);
+    }
+
+    #[tokio::test]
+    async fn finalize_request_uri_latches_when_the_computed_uri_is_already_equal() {
+        let (mut session, _client) = live_h1_session("/admin?scope=read").await;
+        let original = session.req_header().uri.clone();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.normalized_current_path = "/admin".to_string();
+
+        finalize_request_uri(&mut session, &mut ctx).unwrap();
+
+        assert_eq!(session.req_header().uri, original);
+        assert!(ctx.uri_finalized);
+    }
+
+    #[tokio::test]
+    async fn finalize_request_uri_parse_failure_preserves_uri_and_latch() {
+        let (mut session, _client) = live_h1_session("/raw?scope=read").await;
+        let original = session.req_header().uri.clone();
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.normalized_current_path = "/invalid path".to_string();
+
+        assert!(finalize_request_uri(&mut session, &mut ctx).is_err());
+        assert_eq!(session.req_header().uri, original);
+        assert!(!ctx.uri_finalized);
     }
 
     #[test]

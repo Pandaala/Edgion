@@ -20,4 +20,4 @@
 - Deferred record: `D0105` owns canonical multi-field/multi-token Content-Encoding classification; no partial target-local fix is authorized.
 - Review: a fresh independent reviewer confirmed that B0186 exits error/local-reply paths before response-head planning and that cache exclusion, bounded Hold ownership, 101 handling, final-writer timing, RawWindow composition, framing, and streaming remain correct. It agreed with `D0105` and returned LGTM with no Must Fix or Should Fix item.
 - Verification: target tests passed 5/5. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `22d0e0ff`; never pushed by the campaign.
