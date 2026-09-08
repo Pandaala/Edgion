@@ -15,9 +15,11 @@ The per-try-timeout deep review (test-adequacy reviewer) listed three coverage
 gaps. Two were filled with passing HTTP e2e tests; the third is an accepted
 skip:
 
-- **Item 1 — mid-body timeout NOT retried (`response_written` guard)** — FILLED.
-  The only correctness-critical gap. Plus the "free" per-I/O precision variant
-  (steady trickle is not killed).
+- **Item 1 — mid-body timeout NOT retried (final-response guard)** — FILLED.
+  The HTTP e2e case covers an ordinary final response followed by a body stall.
+  Live H1 unit coverage separately proves that relayed 100/102/103 responses do
+  not count as final, while terminal 101 and 200 do. Plus the "free" per-I/O
+  precision variant (steady trickle is not killed).
 - **Item 2 — deadline-transition** — FILLED. End-to-end pins that a
   RequestDeadline-sourced timeout is never retried even with retry budget left.
 - **Item 3 — gRPC route variant (e2e)** — **ACCEPTED SKIP**. Findings of the
@@ -32,9 +34,18 @@ skip:
 Case 1.5 retry in `error_while_proxy` (`pg_error_while_proxy.rs`) are
 protocol-agnostic — the same code serves HTTP and gRPC. The HTTP e2e suite now
 exercises that code end-to-end: cancel-and-retry (`slow_attempt_is_retried`),
-no-retry-without-policy, exhaustion, the `response_written` mid-body guard
+no-retry-without-policy, exhaustion, the final-response mid-body guard
 (`midbody_timeout_not_retried`), per-I/O precision (`trickle_progress_not_killed`),
 and deadline-transition (`deadline_transition_not_retried`).
+
+The informational-response distinction is pinned by live H1 `Session` unit
+tests in `pg_error_while_proxy.rs`: Pingora's raw `response_written()` is
+`Some` for 100/102/103, but the production Case 1.5 candidate remains eligible
+for upstream read and write timeouts sourced from `BackendRequest`. The tests
+also prove that 101 and 200 close that candidate and that every other narrow
+Case 1.5 input gate is required. This is not an end-to-end claim; the full
+informational-response-plus-timeout integration scenario remains a separately
+tracked deferred gap.
 
 **2. The gRPC-only delta is parse/fallback wiring, verified by inspection**
 

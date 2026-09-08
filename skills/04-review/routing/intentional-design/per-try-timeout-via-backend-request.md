@@ -42,7 +42,10 @@ unless the CRD were forked.
 with a source label (`fold_peer_timeouts` → `PeerTimeoutSource`);
 `error_while_proxy` Case 1.5 retries upstream Read/Write timeouts whose source
 is `BackendRequest` when `retry_configured()`, guarded by attempts / request
-deadline / grpc deadline / retry buffer / nothing-written-downstream.
+deadline / grpc deadline / retry buffer / no final response written
+downstream. The final-response gate uses `has_final_response_written`: relayed
+100/102/103 informational headers do not consume the retry opportunity, while
+terminal 101 and ordinary final headers do.
 Deadline-sourced timeouts are never retried (Envoy parity). The retry records
 `EdgionErrorCode::BackendRequestTimeoutRetry` in the ordered diagnostics.
 

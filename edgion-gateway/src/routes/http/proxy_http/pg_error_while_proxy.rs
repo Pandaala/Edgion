@@ -53,6 +53,20 @@ fn classify_ai_proxy_failure(
 }
 
 #[inline]
+fn is_backend_request_timeout_retry_candidate(
+    error: &Error,
+    timeout_source: Option<PeerTimeoutSource>,
+    retry_configured: bool,
+    session: &Session,
+) -> bool {
+    matches!(error.etype(), ErrorType::ReadTimedout | ErrorType::WriteTimedout)
+        && matches!(error.esource(), ErrorSource::Upstream)
+        && timeout_source == Some(PeerTimeoutSource::BackendRequest)
+        && retry_configured
+        && !has_final_response_written(session)
+}
+
+#[inline]
 pub fn error_while_proxy(
     edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
@@ -190,14 +204,10 @@ pub fn error_while_proxy(
     // deadline or the client `grpc-timeout` deadline are never retried — the
     // caller is out of budget. Downstream-sourced timeouts (slow client) are
     // excluded: retrying the upstream cannot help them.
-    // Also requires that nothing has been written downstream yet: once response
-    // headers are committed, a retry would corrupt the already-started response.
-    if matches!(e.etype(), ErrorType::ReadTimedout | ErrorType::WriteTimedout)
-        && matches!(e.esource(), ErrorSource::Upstream)
-        && ctx.peer_timeout_source == Some(PeerTimeoutSource::BackendRequest)
-        && ctx.retry_configured()
-        && session.as_ref().response_written().is_none()
-    {
+    // Also requires that no final response has been written downstream yet:
+    // relayed 100/102/103 headers still permit a later final response, while a
+    // 101 upgrade or ordinary final header closes retry.
+    if is_backend_request_timeout_retry_candidate(&e, ctx.peer_timeout_source, ctx.retry_configured(), session) {
         let max_retries = ctx
             .retry_attempts()
             .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
@@ -280,10 +290,33 @@ pub fn error_while_proxy(
 #[cfg(test)]
 mod tests {
     use super::{
-        ai_failure_wants_retry, classify_ai_proxy_failure, should_record_local_origin_failure, AiProxyFailureClass,
+        ai_failure_wants_retry, classify_ai_proxy_failure, is_backend_request_timeout_retry_candidate,
+        should_record_local_origin_failure, AiProxyFailureClass,
     };
     use crate::PeerTimeoutSource;
     use pingora_core::{ErrorSource, ErrorType};
+    use pingora_http::ResponseHeader;
+    use pingora_proxy::Session;
+    use tokio::io::AsyncWriteExt;
+
+    async fn live_h1_session() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        session.read_request().await.unwrap();
+        (session, client)
+    }
+
+    async fn write_response_status(session: &mut Session, status: u16) {
+        let response = ResponseHeader::build(status, None).unwrap();
+        session.write_response_header(Box::new(response), false).await.unwrap();
+    }
+
+    fn timeout_retry_candidate(session: &Session, error_type: ErrorType) -> bool {
+        let error = pingora_core::Error::new_up(error_type);
+        is_backend_request_timeout_retry_candidate(&error, Some(PeerTimeoutSource::BackendRequest), true, session)
+    }
 
     #[test]
     fn local_origin_recording_excludes_status_control_flow() {
@@ -345,6 +378,65 @@ mod tests {
             AiProxyFailureClass::BackendRequestTimeout,
             false,
             true
+        ));
+    }
+
+    #[tokio::test]
+    async fn interim_h1_responses_do_not_count_as_final() {
+        for status in [100, 102, 103] {
+            let (mut session, _client) = live_h1_session().await;
+            write_response_status(&mut session, status).await;
+
+            assert_eq!(session.response_written().unwrap().status.as_u16(), status);
+            assert!(timeout_retry_candidate(&session, ErrorType::ReadTimedout), "{status}");
+            assert!(timeout_retry_candidate(&session, ErrorType::WriteTimedout), "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn switching_protocols_and_regular_h1_responses_count_as_final() {
+        for status in [101, 200] {
+            let (mut session, _client) = live_h1_session().await;
+            write_response_status(&mut session, status).await;
+
+            assert_eq!(session.response_written().unwrap().status.as_u16(), status);
+            assert!(!timeout_retry_candidate(&session, ErrorType::ReadTimedout), "{status}");
+            assert!(!timeout_retry_candidate(&session, ErrorType::WriteTimedout), "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_retry_candidate_requires_every_case_1_5_input() {
+        let (session, _client) = live_h1_session().await;
+
+        let downstream_timeout = pingora_core::Error::new_down(ErrorType::ReadTimedout);
+        assert!(!is_backend_request_timeout_retry_candidate(
+            &downstream_timeout,
+            Some(PeerTimeoutSource::BackendRequest),
+            true,
+            &session,
+        ));
+
+        let upstream_timeout = pingora_core::Error::new_up(ErrorType::ReadTimedout);
+        assert!(!is_backend_request_timeout_retry_candidate(
+            &upstream_timeout,
+            Some(PeerTimeoutSource::RequestDeadline),
+            true,
+            &session,
+        ));
+        assert!(!is_backend_request_timeout_retry_candidate(
+            &upstream_timeout,
+            Some(PeerTimeoutSource::BackendRequest),
+            false,
+            &session,
+        ));
+
+        let upstream_read_error = pingora_core::Error::new_up(ErrorType::ReadError);
+        assert!(!is_backend_request_timeout_retry_candidate(
+            &upstream_read_error,
+            Some(PeerTimeoutSource::BackendRequest),
+            true,
+            &session,
         ));
     }
 }

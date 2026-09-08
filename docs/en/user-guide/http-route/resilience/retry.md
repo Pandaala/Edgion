@@ -103,9 +103,11 @@ Notes:
 - There is no "retry on status codes but not on timeouts" mode: configuring
   any retry policy (even `codes` only) opts the rule into timeout-retry, per
   GEP-1731, which classes per-try timeouts with connection errors.
-- A per-try timeout is only retried while nothing has been sent to the client
-  yet. Once response headers have been forwarded downstream, a mid-body
-  timeout terminates the request instead of retrying.
+- A per-try timeout is only retried while no final response has been sent to
+  the client. Informational 100, 102, and 103 responses still allow a later
+  retry; 101 Switching Protocols is terminal. Once an ordinary final response
+  header has been forwarded downstream, a mid-body timeout terminates the
+  request instead of retrying.
 - The retry re-runs normal load balancing with no memory of the timed-out
   backend. RoundRobin usually rotates to another endpoint, but ConsistentHash
   deterministically re-picks the **same** backend (same hash key); pair tight

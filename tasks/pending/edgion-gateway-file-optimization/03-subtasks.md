@@ -606,7 +606,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs` | `routes-shared` | source | changed | B0177: preserve finite nonzero subsecond keepalive bounds |
 | `edgion-gateway/src/routes/http/proxy_http/pg_connected_to_upstream.rs` | `routes-shared` | source | examined-no-change | B0178: SAN, attempt accounting, and immediate stream logging are already minimal and correct |
 | `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs` | `routes-shared` | source | examined-no-change | B0179: early timeout, shutdown, framing, and gRPC-Web setup are already minimal and ordered correctly |
-| `edgion-gateway/src/routes/http/proxy_http/pg_error_while_proxy.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/proxy_http/pg_error_while_proxy.rs` | `routes-shared` | source | changed | B0180: preserve per-try timeout retry after non-terminal informational responses |
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | pending | — |

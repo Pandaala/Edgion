@@ -17,4 +17,4 @@
 - Testing: the four local early-request-filter tests passed. Existing integrations remain frozen and already cover the real gRPC-Web bridge; no additional issue is warranted.
 - Review: a fresh independent reviewer approved examined-no-change with no Must Fix, Should Fix, or deferred code finding. The reviewer confirmed the pinned Pingora callback order, H1 codec ownership, cold timeout publication, and bridge integration coverage; its documentation-only lifecycle note was folded into the existing B0178 lifecycle task.
 - Verification: early-request-filter tests passed 4/4, content-type tests 6/6, and timeout parsing/publication tests 4/4. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `a7cb2350`; never pushed by the campaign.

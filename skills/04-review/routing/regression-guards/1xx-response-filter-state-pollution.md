@@ -19,6 +19,13 @@ top, deferring *all* response-phase bookkeeping to the final header task. Separa
 the retry-codes preparse (`http_route_preparse.rs::parse_retry`) now clamps accepted
 codes to `400..=599` to match the upstream Gateway API HTTPRouteRetry CRD.
 
+The same interim/final distinction also applies after a `backendRequest`
+timeout. Pingora records a relayed informational header in
+`response_written()`, so `error_while_proxy` Case 1.5 uses the canonical
+`has_final_response_written` helper rather than treating every `Some` value as
+terminal. A preceding 100/102/103 therefore leaves timeout retry open; 101 and
+ordinary final responses close it.
+
 **101 Switching Protocols is deliberately excluded from the early-return** — it is
 terminal, not interim. After a 101 the h1 client stops reading response headers
 (`should_read_resp_header()` is false for 101), so there is no final header to defer
@@ -47,6 +54,12 @@ unmodified and lets the final header task do status/ht/CB/retry/SP-injection/
 pending-header-ops/response-plugins exactly once. h2 upstreams never surface 1xx
 here, so they are unaffected.
 
+That shared classification also owns the downstream-commit retry guard. A raw
+`response_written().is_none()` check is incorrect because Pingora exposes a
+relayed interim H1 header as `Some`; only `has_final_response_written()` keeps
+100/102/103 retryable while treating terminal 101 and normal final responses as
+committed. Live H1 unit tests pin both sides of this boundary.
+
 **2. The SP-injection `!is_informational()` guard is retained for the 101 case**
 
 The SP-injection block carries its own `if !is_informational()` guard (added by
@@ -72,6 +85,8 @@ from "100–599" to "400–599" accordingly.
 - "Delete the SP-injection `!is_informational()` guard as dead code" — it is live; it is the only thing keeping a terminal 101 out of SP injection.
 - "Only skip CB recording, keep status/ht for observability" — the access log must show the final status, not 100; partial skipping reintroduces the pollution.
 - "Leave retry-codes at 100..=599 and just filter 1xx at runtime" — the preparse is the right rejection point and the runtime already only fires retry on the parsed set; widening the accepted range diverges from the CRD for no benefit.
+- "Use raw `response_written().is_some()` to close timeout retry" — an interim
+  H1 response is recorded there too; use the canonical final-response helper.
 
 ## Re-evaluation Triggers
 
@@ -83,6 +98,6 @@ Re-open only if:
 ## Reference Cases
 
 - Origin: sp-sticky-refresh design review (correctness subagent), 2026-06-11; closed 2026-06-13.
-- Source: `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` (early-return), `edgion-resources/src/resources/http_route_preparse.rs::parse_retry` (`400..=599` clamp).
+- Source: `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` (early-return and canonical final-response helper), `edgion-gateway/src/routes/http/proxy_http/pg_error_while_proxy.rs` (per-try timeout retry guard and live H1 tests), `edgion-resources/src/resources/http_route_preparse.rs::parse_retry` (`400..=599` clamp).
 - Docs: `docs/en/user-guide/http-route/resilience/retry.md`, `docs/zh-CN/user-guide/http-route/resilience/retry.md`.
 - Related: the SP-injection 1xx guard from `route-04-sp-sticky-refresh-on-retry` (now subsumed by the early-return).
