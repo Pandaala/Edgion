@@ -171,30 +171,28 @@ impl RadixRouteMatchEngine {
         let mut path_to_value: HashMap<String, usize> = HashMap::new();
 
         for (route_idx, runtime) in route_runtimes.iter().enumerate() {
-            let paths = runtime.extract_paths();
-
-            for (path, is_prefix) in paths {
+            for (path, is_prefix) in runtime.extract_paths() {
                 if path.is_empty() {
                     continue;
                 }
 
-                let radix_path = RadixPath::new(&path, route_idx, is_prefix);
-                let tree_key = radix_path.tree_key().to_string();
+                let radix_path = RadixPath::new(path, route_idx, is_prefix);
+                let tree_key = radix_path.tree_key();
 
-                let tree_value = if let Some(&existing_value) = path_to_value.get(&tree_key) {
+                let tree_value = if let Some(&existing_value) = path_to_value.get(tree_key) {
                     existing_value
                 } else {
                     let new_value = next_tree_value;
-                    builder.insert(&tree_key, new_value).map_err(|e: RouterError| {
+                    builder.insert(tree_key, new_value).map_err(|e: RouterError| {
                         EdError::InternalError(format!("Failed to insert path '{}' into radix tree: {}", tree_key, e))
                     })?;
-                    path_to_value.insert(tree_key.clone(), new_value);
+                    path_to_value.insert(tree_key.to_string(), new_value);
                     next_tree_value += 1;
                     new_value
                 };
 
                 let path_idx = self.radix_paths.len() as u32;
-                self.radix_paths.push(radix_path.clone());
+                self.radix_paths.push(radix_path);
                 let bucket_idx = tree_value - 1;
                 if self.tree_value_paths.len() <= bucket_idx {
                     self.tree_value_paths.resize(bucket_idx + 1, Vec::new());

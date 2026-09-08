@@ -508,19 +508,17 @@ impl HttpRouteRuleUnit {
         Ok(Some(matched_gi))
     }
 
-    /// Extract all path patterns from this route with their match types.
-    pub fn extract_paths(&self) -> Vec<(String, bool)> {
-        let mut paths = Vec::new();
-
-        // Extract path from the single match_item
-        if let Some(path) = &self.matched_info.m.path {
-            if let Some(value) = &path.value {
-                let is_prefix = path.match_type.as_deref().map(|t| t == "PathPrefix").unwrap_or(false);
-                paths.push((value.clone(), is_prefix));
-            }
-        }
-
-        paths
+    /// Extract the optional path pattern from this route with its match type.
+    pub fn extract_paths(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.matched_info
+            .m
+            .path
+            .as_ref()
+            .and_then(|path| {
+                let is_prefix = path.match_type.as_deref().is_some_and(|t| t == "PathPrefix");
+                path.value.as_deref().map(|value| (value, is_prefix))
+            })
+            .into_iter()
     }
 }
 

@@ -1,5 +1,5 @@
 /// Compiled route path pattern for radix tree matching.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RadixPath {
     /// Normalized path (consecutive slashes merged)
     pub normalized: String,
