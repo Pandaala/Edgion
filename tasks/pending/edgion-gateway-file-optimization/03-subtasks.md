@@ -546,8 +546,8 @@
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | examined-no-change | B0137: live layered facade and named lower-level paths retained |
 | `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | changed | B0138: removed unused handler name API; supporting implementations retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/request_filter.rs` | `plugins-runtime` | source | examined-no-change | B0139: object-safe conservative request-stage contract retained |
-| `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | analysis-ready | B0140: correct stale body-operation contracts |
-| `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | analyzing | B0141 |
+| `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | changed | B0140: request-only capture and streaming-response contracts corrected |
+| `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | analysis-ready | B0141: remove unused name API and repair streaming design reference |
 | `edgion-gateway/src/plugins/runtime/traits/test_helpers.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs` | `plugins-runtime` | source | pending | — |

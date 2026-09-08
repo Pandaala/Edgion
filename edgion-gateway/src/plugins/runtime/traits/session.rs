@@ -29,7 +29,9 @@ const fn safe_default_downstream_response_trailers_representable() -> bool {
 /// always fail-close because the original body is unavailable for forwarding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyReadError {
-    /// Full-body buffering is not implemented on this binary (current default).
+    /// The operation is unavailable for the selected adapter or configuration.
+    /// Production request-body capture is implemented; aggregation of the main
+    /// upstream response is intentionally unsupported because it stays streaming.
     Unimplemented,
     /// The gateway **declined to buffer** this body (protocol or stage
     /// refusal — see the body-gate admission model). This is NOT evidence that
@@ -59,9 +61,9 @@ pub enum BodyReadError {
     /// and always fail-close — the consumed bytes were not stored, so no
     /// forwarding copy of the body exists.
     StorageFailure,
-    /// The buffering read exceeded its time bound. Distinct from `Incomplete`
-    /// (an aborted stream): a deadline expiry is a client error and maps to
-    /// HTTP 408, not 500. Only produced once the P0 buffering runtime exists.
+    /// Downstream request-body capture exceeded its time bound. Distinct from
+    /// `Incomplete` (an aborted stream) and `StorageFailure` (storage I/O): a
+    /// capture deadline expiry is a client error and maps to HTTP 408, not 500.
     Timeout,
 }
 
@@ -699,19 +701,18 @@ pub trait PluginSession: Send + Sync {
     /// Returns `false` after the request-scoped body policy has frozen.
     fn set_mirror_state(&mut self, state: MirrorState) -> bool;
 
-    // ========== Full-body buffering (OpenResty-style, lazy) ==========
+    // ========== Shared request-body capture ==========
     //
-    // Single lazy accessor per direction (mirrors `ngx.req.read_body` +
-    // `ngx.req.get_body_data` folded into one call): the first call force-buffers
-    // the body (capped by `max_bytes`) and every call returns the buffered bytes.
-    // Async + `&mut self` because buffering drains the downstream stream and
-    // populates ctx. The returned `Bytes` is an immutable `Arc`-backed handle, so
-    // returning it by value is a refcount bump, not a copy — no borrow of the
-    // session is held, which keeps the method mockable and easy to compose.
+    // Eligible request-stage plugins share one bounded, versioned capture of the
+    // proxied request body. The first read may drain the downstream stream into
+    // that request-scoped storage; later reads observe its current logical version.
+    // Async + `&mut self` permits capture and mutation. Returned `Bytes` values are
+    // immutable handles, so no borrow of the session is retained.
     //
-    // Defaults remain `Err(BodyReadError::Unimplemented)` for mocks.
-    // `PingoraSessionAdapter` overrides the request methods; response
-    // buffering still requires a separate Pingora seam.
+    // The main upstream response is permanently streaming and has no full-body
+    // cache. Response-body processing operates only on the current bounded chunk.
+    // Defaults remain `Err(BodyReadError::Unimplemented)` for adapters that do not
+    // provide the selected operation.
 
     /// Read the full request body, buffering it on first call so it is available
     /// during the request phase, before the request is proxied upstream.
@@ -732,8 +733,13 @@ pub trait PluginSession: Send + Sync {
         u64::try_from(body.len()).map_err(|_| BodyReadError::Incomplete)
     }
 
-    /// Read the full upstream response body, buffering it on first call.
-    /// `max_bytes` caps the buffer on the first (buffering) call.
+    /// Defensive compatibility seam for attempting to read a complete upstream
+    /// response body.
+    ///
+    /// This method must never aggregate the main upstream response. The production
+    /// adapter returns an empty body only when the live and pre-plugin transport
+    /// facts unanimously prove that the response is bodyless; every other case
+    /// fails loudly. New response processing must use the streaming chunk path.
     async fn read_response_body(&mut self, _max_bytes: Option<u64>) -> BodyReadResult {
         Err(BodyReadError::Unimplemented)
     }

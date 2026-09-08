@@ -16,4 +16,4 @@
 - Rejected churn: metadata supertraits, static enum dispatch and target-only minor wording changes have no local measurable benefit and would expand API/architecture scope.
 - Review: `b0135_final_review` independently approved with no Must Fix or Should Fix. It confirmed all 56 implementations, object safety, borrowed metadata, five storage-aware materialization opt-outs, conditional/body-gate order, suppression forwarding, native WAF log ownership and centralized terminal-result handling.
 - Verification: complete static trait/implementation/dispatcher/test review; `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local record commit; never push.
+- Commit: `99a94a73`; local only, never pushed by the campaign.
