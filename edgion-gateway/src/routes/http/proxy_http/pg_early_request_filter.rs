@@ -13,10 +13,20 @@ fn apply_client_keepalive_timeout(session: &mut Session, keepalive_timeout: u64,
 }
 
 #[inline]
+fn classify_and_initialize_grpc_web(session: &mut Session, ctx: &mut EdgionHttpContext) {
+    super::pg_request_filter::detect_request_protocol(session.req_header(), ctx);
+    if ctx.request_info.discover_protocol.as_deref() == Some("grpc-web") {
+        if let Some(bridge) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
+            bridge.init();
+        }
+    }
+}
+
+#[inline]
 pub async fn early_request_filter(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
-    _ctx: &mut EdgionHttpContext,
+    ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
     // Set client timeouts from pre-parsed config (no runtime overhead)
     let client_timeout = &edgion_http.parsed_timeouts.client;
@@ -29,23 +39,11 @@ pub async fn early_request_filter(
     let process_shutting_down = session.is_process_shutting_down();
     apply_client_keepalive_timeout(session, client_timeout.keepalive_timeout, process_shutting_down);
 
-    // gRPC-web bridge must be initialized here (step 1) — before Pingora's built-in
-    // request_header_filter (step 2) — so it can transition Init -> Upgrade and convert
-    // grpc-web -> grpc. Gate strictly on the grpc-web content-type prefix: native grpc
-    // (application/grpc / application/grpc+proto) never matches, so its bridge stays
-    // Disabled and fully inert. The module is only present when enable_http2 (get_mut None
-    // otherwise), so this is a no-op on non-h2 listeners.
-    let is_grpc_web = session
-        .req_header()
-        .headers
-        .get(http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(super::is_grpc_web_content_type);
-    if is_grpc_web {
-        if let Some(bridge) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
-            bridge.init();
-        }
-    }
+    // Freeze protocol classification from the raw downstream headers before
+    // Pingora's built-in request_header_filter rewrites gRPC-Web to gRPC. Only
+    // the canonical gRPC-Web classification activates the bridge, preserving
+    // WebSocket precedence and leaving native gRPC and ordinary HTTP inert.
+    classify_and_initialize_grpc_web(session, ctx);
 
     Ok(())
 }
@@ -54,6 +52,9 @@ pub async fn early_request_filter(
 mod tests {
     use super::*;
     use http::header::CONTENT_LENGTH;
+    use pingora_core::modules::http::grpc_web::GrpcWeb;
+    use pingora_core::modules::http::HttpModules;
+    use pingora_core::protocols::http::bridge::grpc_web::GrpcWebCtx;
     use tokio::io::AsyncWriteExt;
 
     async fn session_from_request(raw_request: &[u8]) -> Session {
@@ -70,6 +71,123 @@ mod tests {
             "client should send a request before closing"
         );
         session
+    }
+
+    async fn session_from_request_with_grpc_web(raw_request: &[u8]) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut modules = HttpModules::new();
+        modules.add_module(Box::new(GrpcWeb));
+        let mut session = Session::new_h1_with_modules(stream, &modules);
+        client
+            .write_all(raw_request)
+            .await
+            .expect("write request into duplex pair");
+        drop(client);
+        assert!(session.read_request().await.expect("request headers should parse"));
+        session
+    }
+
+    async fn run_module_request_header_filter(session: &mut Session) {
+        let req = session.downstream_session.req_header_mut();
+        session
+            .downstream_modules_ctx
+            .request_header_filter(req)
+            .await
+            .expect("module request header filter");
+    }
+
+    #[tokio::test]
+    async fn raw_grpc_web_classification_survives_module_rewrite() {
+        let mut session = session_from_request_with_grpc_web(
+            b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Type: application/grpc-web+proto\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+
+        classify_and_initialize_grpc_web(&mut session, &mut ctx);
+        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc-web"));
+        assert_eq!(
+            **session
+                .downstream_modules_ctx
+                .get::<GrpcWebBridge>()
+                .expect("gRPC-Web bridge module"),
+            GrpcWebCtx::Init
+        );
+
+        run_module_request_header_filter(&mut session).await;
+        assert_eq!(
+            session.req_header().headers.get(http::header::CONTENT_TYPE).unwrap(),
+            "application/grpc+proto"
+        );
+        assert_eq!(
+            **session
+                .downstream_modules_ctx
+                .get::<GrpcWebBridge>()
+                .expect("gRPC-Web bridge module"),
+            GrpcWebCtx::Upgrade
+        );
+        super::super::pg_request_filter::detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc-web"));
+        assert!(ctx.request_info.is_grpc_request);
+        assert!(!super::super::pg_request_filter::native_grpc_requires_frontend_http2(
+            ctx.request_info.discover_protocol.as_deref(),
+            false,
+        ));
+    }
+
+    #[tokio::test]
+    async fn websocket_precedence_keeps_grpc_web_bridge_disabled() {
+        let mut session = session_from_request_with_grpc_web(
+            b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nContent-Type: application/grpc-web+proto\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+
+        classify_and_initialize_grpc_web(&mut session, &mut ctx);
+        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+        assert_eq!(
+            **session
+                .downstream_modules_ctx
+                .get::<GrpcWebBridge>()
+                .expect("gRPC-Web bridge module"),
+            GrpcWebCtx::Disabled
+        );
+
+        run_module_request_header_filter(&mut session).await;
+        assert_eq!(
+            session.req_header().headers.get(http::header::CONTENT_TYPE).unwrap(),
+            "application/grpc-web+proto"
+        );
+        assert!(!super::super::pg_request_filter::native_grpc_requires_frontend_http2(
+            ctx.request_info.discover_protocol.as_deref(),
+            false,
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_grpc_stays_inert_and_requires_frontend_http2() {
+        let mut session = session_from_request_with_grpc_web(
+            b"POST /svc/Method HTTP/1.1\r\nHost: test\r\nContent-Type: application/grpc\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+
+        classify_and_initialize_grpc_web(&mut session, &mut ctx);
+
+        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc"));
+        assert_eq!(
+            **session
+                .downstream_modules_ctx
+                .get::<GrpcWebBridge>()
+                .expect("gRPC-Web bridge module"),
+            GrpcWebCtx::Disabled
+        );
+        assert!(super::super::pg_request_filter::native_grpc_requires_frontend_http2(
+            ctx.request_info.discover_protocol.as_deref(),
+            false,
+        ));
     }
 
     #[tokio::test]

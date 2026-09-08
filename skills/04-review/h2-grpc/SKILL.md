@@ -25,6 +25,7 @@ before applying a decision to current code.
 - [Custom terminal 101 normalized before dispatch](regression-guards/custom-terminal-101-normalized-before-dispatch.md)
 - [h2-grpc-07 — `fed_client` connect timeout added](regression-guards/fed-client-connect-timeout.md)
 - [h2-grpc-02 — `grpc-message` percent-encoding in `send_grpc_error_three_frame`](regression-guards/grpc-message-encoding.md)
+- [gRPC-Web is independent of frontend HTTP/2 enablement](regression-guards/grpc-web-independent-of-frontend-http2.md)
 - [H2 ci contract enforcement out of scope](regression-guards/h2-ci-contract-enforcement-out-of-scope.md)
 - [H2 dependency baseline tests version robust](regression-guards/h2-dependency-baseline-tests-version-robust.md)
 - [H2 downstream request-body reads are bounded by `read_timeout` — FIXED](regression-guards/h2-downstream-body-read-timeout.md)

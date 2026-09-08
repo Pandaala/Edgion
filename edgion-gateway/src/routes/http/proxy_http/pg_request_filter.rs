@@ -81,7 +81,8 @@ pub async fn request_filter(
     }
 
     if ctx.request_info.is_grpc_request {
-        if ctx.request_info.discover_protocol.as_deref() == Some("grpc") && !edgion_http.enable_http2 {
+        if native_grpc_requires_frontend_http2(ctx.request_info.discover_protocol.as_deref(), edgion_http.enable_http2)
+        {
             ctx.record_error(EdgionErrorCode::Http2Required);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Ok(true);
@@ -510,7 +511,7 @@ fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
 /// unit-testable against a bare `RequestHeader` -- see
 /// `protocol_detection_tests` -- following the same extraction precedent as
 /// `snapshot_body_declared`.
-fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut EdgionHttpContext) {
+pub(super) fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut EdgionHttpContext) {
     if ctx.request_info.discover_protocol.is_some() {
         return;
     }
@@ -538,6 +539,14 @@ fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut EdgionHttpConte
             }
         }
     }
+}
+
+#[inline]
+pub(super) fn native_grpc_requires_frontend_http2(
+    discover_protocol: Option<&str>,
+    frontend_http2_enabled: bool,
+) -> bool {
+    discover_protocol == Some("grpc") && !frontend_http2_enabled
 }
 
 /// Serve ACME HTTP-01 challenge response if there is an active challenge matching the request.
