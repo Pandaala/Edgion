@@ -56,9 +56,6 @@ pub enum ChunkVerdict {
 /// and their resources are simply dropped with the request.
 #[async_trait]
 pub trait RequestBodyStreamHandler: Send {
-    /// Plugin name for logs and diagnostics.
-    fn name(&self) -> &str;
-
     /// Inspect/mutate the current chunk in place. `chunk` may be `None` for a
     /// terminal event. `Complete` means the real downstream EOF was observed;
     /// `Abandoned` means earlier chunks are only a prefix. Called serially;

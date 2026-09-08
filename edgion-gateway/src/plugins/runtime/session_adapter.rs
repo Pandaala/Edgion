@@ -2987,9 +2987,6 @@ mod record_outcome_tests {
 
     #[async_trait::async_trait]
     impl crate::plugins::runtime::traits::RequestBodyStreamHandler for NoopStreamHandler {
-        fn name(&self) -> &str {
-            "noop"
-        }
         async fn on_chunk(
             &mut self,
             _chunk: &mut Option<Bytes>,

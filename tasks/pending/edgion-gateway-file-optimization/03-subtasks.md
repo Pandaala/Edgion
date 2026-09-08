@@ -544,7 +544,7 @@
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |
 | `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | changed | B0136: exact per-name versus cross-name HeaderMap ordering contract |
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | examined-no-change | B0137: live layered facade and named lower-level paths retained |
-| `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | analysis-ready | B0138: remove unused handler name API with two supporting implementations |
+| `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | changed | B0138: removed unused handler name API; supporting implementations retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/request_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | pending | — |

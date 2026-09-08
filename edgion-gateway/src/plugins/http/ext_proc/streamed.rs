@@ -130,10 +130,6 @@ impl ExtProcStreamedBodyHandler {
 
 #[async_trait]
 impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
-    fn name(&self) -> &str {
-        "ExtProc"
-    }
-
     async fn on_chunk(&mut self, chunk: &mut Option<Bytes>, event: RequestBodyEvent) -> ChunkVerdict {
         if self.done {
             return ChunkVerdict::Continue;
