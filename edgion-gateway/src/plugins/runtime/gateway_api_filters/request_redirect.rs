@@ -12,6 +12,8 @@ use crate::util::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPRequestRedirectFilter;
 
+use super::path_modifier::replace_prefix_match;
+
 fn default_port_for_scheme(scheme: &str) -> u16 {
     match scheme {
         "https" => 443,
@@ -45,7 +47,7 @@ impl RequestRedirectFilter {
         original_host: Option<&str>,
         original_path: &str,
         original_query: Option<&str>,
-        matched_path_len: Option<usize>,
+        matched_path: Option<&str>,
         listener_port: u16,
     ) -> String {
         let scheme = self.config.scheme.as_deref().unwrap_or(original_scheme);
@@ -77,16 +79,7 @@ impl RequestRedirectFilter {
             if let Some(replace_full) = &path_modifier.replace_full_path {
                 replace_full.clone()
             } else if let Some(replace_prefix) = &path_modifier.replace_prefix_match {
-                if let Some(len) = matched_path_len {
-                    if len <= original_path.len() {
-                        let suffix = &original_path[len..];
-                        format!("{}{}", replace_prefix, suffix)
-                    } else {
-                        replace_prefix.clone()
-                    }
-                } else {
-                    replace_prefix.clone()
-                }
+                replace_prefix_match(original_path, matched_path.unwrap_or(original_path), replace_prefix)
             } else {
                 original_path.to_string()
             }
@@ -110,42 +103,37 @@ impl RequestFilter for RequestRedirectFilter {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Determine the original request scheme from TLS context
-        let original_scheme = if session.ctx().request_info.sni().is_some() {
-            "https"
-        } else {
-            "http"
+        // Unknown transport state defaults to HTTPS so redirects never downgrade.
+        let original_scheme = match session.downstream_is_tls() {
+            Some(false) => "http",
+            Some(true) | None => "https",
         };
 
-        // Get original request info for building Location
-        let original_host = session.header_str("host");
-        let original_path = session.get_path().to_string();
-        let original_query = session.get_query();
-        let listener_port = session.ctx().request_info.listener_port;
+        let location = {
+            let original_host = session.header_str("host");
+            let original_path = session.get_path();
+            let original_query = session.get_query();
+            let ctx = session.ctx();
+            let listener_port = ctx.request_info.listener_port;
+            let matched_path = ctx
+                .route_unit
+                .as_ref()
+                .and_then(|unit| unit.matched_info.m.path.as_ref())
+                .and_then(|path_match| {
+                    (path_match.match_type.as_deref() == Some("PathPrefix"))
+                        .then(|| path_match.value.as_deref())
+                        .flatten()
+                });
 
-        // Extract matched path length from route info
-        let matched_path_len = session
-            .ctx()
-            .route_unit
-            .as_ref()
-            .and_then(|unit| unit.matched_info.m.path.as_ref())
-            .and_then(|path_match| {
-                if path_match.match_type.as_deref() == Some("PathPrefix") {
-                    path_match.value.as_ref().map(|v| v.len())
-                } else {
-                    None
-                }
-            });
-
-        // Build Location header
-        let location = self.build_location(
-            original_scheme,
-            original_host,
-            &original_path,
-            original_query.as_deref(),
-            matched_path_len,
-            listener_port,
-        );
+            self.build_location(
+                original_scheme,
+                original_host,
+                original_path,
+                original_query.as_deref(),
+                matched_path,
+                listener_port,
+            )
+        };
 
         // Determine status code (default: 302 Found)
         let status_code = self.config.status_code.unwrap_or(302) as u16;
@@ -177,6 +165,10 @@ impl RequestFilter for RequestRedirectFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ctx::EdgionHttpContext;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+    use edgion_resources::resources::{HTTPPathModifier, HTTPPathModifierType};
 
     fn filter(scheme: Option<&str>, port: Option<i32>) -> RequestRedirectFilter {
         RequestRedirectFilter::new(HTTPRequestRedirectFilter {
@@ -226,5 +218,145 @@ mod tests {
             f.build_location("https", Some("example.com"), "/search", Some("q=hello"), None, 443),
             "https://example.com:8443/search?q=hello"
         );
+    }
+
+    #[test]
+    fn build_location_replaces_parameterized_prefix_by_path_elements() {
+        let f = RequestRedirectFilter::new(HTTPRequestRedirectFilter {
+            scheme: Some("https".to_string()),
+            hostname: None,
+            path: Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplacePrefixMatch,
+                replace_full_path: None,
+                replace_prefix_match: Some("/v2".to_string()),
+            }),
+            port: None,
+            status_code: None,
+        });
+
+        assert_eq!(
+            f.build_location(
+                "http",
+                Some("example.com"),
+                "/users/alice/orders",
+                Some("view=full"),
+                Some("/users/:id"),
+                80,
+            ),
+            "https://example.com/v2/orders?view=full"
+        );
+    }
+
+    async fn assert_emitted_redirect(
+        downstream_is_tls: Option<bool>,
+        configured_scheme: Option<&str>,
+        listener_port: u16,
+        status_code: Option<i32>,
+        expected_status: u16,
+        expected_location: &str,
+    ) {
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("host", "example.com")]);
+        session.expect_downstream_is_tls().return_const(downstream_is_tls);
+        session.expect_get_path().return_const("/search".to_string());
+        session
+            .expect_get_query()
+            .return_const(Some("q=hello%20world&next=%2Fhome".to_string()));
+
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.listener_port = listener_port;
+        session.expect_ctx().return_const(ctx);
+
+        let expected_location = expected_location.to_string();
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |response, end_stream| {
+                assert_eq!(response.status.as_u16(), expected_status);
+                assert!(end_stream);
+                assert_eq!(
+                    response.headers.get("Location").and_then(|value| value.to_str().ok()),
+                    Some(expected_location.as_str())
+                );
+                assert_eq!(
+                    response
+                        .headers
+                        .get("Content-Length")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("0")
+                );
+                Ok(())
+            });
+
+        let f = RequestRedirectFilter::new(HTTPRequestRedirectFilter {
+            scheme: configured_scheme.map(str::to_string),
+            hostname: None,
+            path: None,
+            port: None,
+            status_code,
+        });
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            f.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+    }
+
+    #[tokio::test]
+    async fn run_request_emits_exact_location_status_and_end_stream() {
+        assert_emitted_redirect(
+            Some(true),
+            None,
+            443,
+            Some(308),
+            308,
+            "https://example.com/search?q=hello%20world&next=%2Fhome",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn omitted_scheme_uses_transport_tls_state_and_https_safe_unknown() {
+        assert_emitted_redirect(
+            Some(false),
+            None,
+            80,
+            None,
+            302,
+            "http://example.com/search?q=hello%20world&next=%2Fhome",
+        )
+        .await;
+        // The default context has no SNI, proving TLS does not depend on SNI presence.
+        assert_emitted_redirect(
+            Some(true),
+            None,
+            443,
+            None,
+            302,
+            "https://example.com/search?q=hello%20world&next=%2Fhome",
+        )
+        .await;
+        assert_emitted_redirect(
+            None,
+            None,
+            443,
+            None,
+            302,
+            "https://example.com/search?q=hello%20world&next=%2Fhome",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn explicit_scheme_takes_precedence_over_transport_tls_state() {
+        assert_emitted_redirect(
+            Some(true),
+            Some("http"),
+            443,
+            None,
+            302,
+            "http://example.com/search?q=hello%20world&next=%2Fhome",
+        )
+        .await;
     }
 }

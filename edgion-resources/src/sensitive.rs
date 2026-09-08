@@ -127,12 +127,46 @@ thread_local! {
 /// `String` (one heap alloc per call, no thread-local needed).
 #[inline]
 pub fn apply_sensitive<T>(v: &str, f: impl FnOnce(&str) -> T) -> T {
+    apply_sensitive_inner(v, None, f).expect("unbounded masking always invokes the callback")
+}
+
+/// Apply masking only when the complete rendered value fits `max_bytes`.
+/// Rejection does not invoke `f` or grow the Wrap-mode thread-local buffer.
+/// The same non-reentrancy constraint as [`apply_sensitive`] applies in Wrap mode.
+#[inline]
+pub fn apply_sensitive_bounded<T>(v: &str, max_bytes: usize, f: impl FnOnce(&str) -> T) -> Option<T> {
+    apply_sensitive_inner(v, Some(max_bytes), f)
+}
+
+#[inline]
+fn apply_sensitive_inner<T>(v: &str, max_bytes: Option<usize>, f: impl FnOnce(&str) -> T) -> Option<T> {
     match SENSITIVE_MODE.load(Ordering::Acquire) {
-        0 => f(v),
-        1 => f(&get_strings().replace_with),
+        0 => {
+            if max_bytes.is_some_and(|max| v.len() > max) {
+                return None;
+            }
+            Some(f(v))
+        }
+        1 => {
+            let replacement = &get_strings().replace_with;
+            if max_bytes.is_some_and(|max| replacement.len() > max) {
+                return None;
+            }
+            Some(f(replacement))
+        }
         _ => {
             let s = get_strings();
-            MASK_BUF.with(|buf| {
+            if let Some(max) = max_bytes {
+                let len = s
+                    .wrap_prefix
+                    .len()
+                    .checked_add(v.len())?
+                    .checked_add(s.wrap_suffix.len())?;
+                if len > max {
+                    return None;
+                }
+            }
+            Some(MASK_BUF.with(|buf| {
                 let mut buf = buf
                     .try_borrow_mut()
                     .expect("apply_sensitive is not re-entrant in Wrap mode");
@@ -143,7 +177,7 @@ pub fn apply_sensitive<T>(v: &str, f: impl FnOnce(&str) -> T) -> T {
                 let result = f(&buf);
                 buf.clear();
                 result
-            })
+            }))
         }
     }
 }
@@ -212,6 +246,32 @@ mod tests {
         let guard = MODE_LOCK.lock().unwrap();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
         ModeGuard { prev, _lock: guard }
+    }
+
+    #[test]
+    fn bounded_masking_checks_rendered_bytes_before_wrap_allocation() {
+        let huge = "x".repeat(1024 * 1024);
+        for mode in [0, 1, 2, 255] {
+            let _g = set_mode(mode);
+            let expected = match mode {
+                0 => "é".to_string(),
+                1 => "***".to_string(),
+                _ => "<E>é</E>".to_string(),
+            };
+            assert_eq!(
+                apply_sensitive_bounded("é", expected.len(), str::to_owned),
+                Some(expected.clone())
+            );
+            assert_eq!(
+                apply_sensitive_bounded("é", expected.len() - 1, |_| panic!("oversized callback")),
+                None::<()>
+            );
+            let capacity = MASK_BUF.with(|buf| buf.borrow().capacity());
+            let result = apply_sensitive_bounded(&huge, 512, str::to_owned);
+            assert_eq!(result, (mode == 1).then(|| "***".to_string()));
+            assert_eq!(MASK_BUF.with(|buf| buf.borrow().capacity()), capacity);
+            assert_eq!(mask_buf_len_after_call(), 0);
+        }
     }
 
     #[test]

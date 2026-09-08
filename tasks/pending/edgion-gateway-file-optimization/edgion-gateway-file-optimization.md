@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0127 passed corrected plan review, final review, and all required gates |
-| Coverage | 539 current Gateway files: 150 changed, 149 examined-no-change, 11 deferred, 229 non-terminal; 3 historical rows are removed |
-| Active batch | B0127 Gateway API header modifiers; commit-ready at `2cae2cfc` |
-| Analysis queue | B0128 redirect/rewrite, B0129 bounded plugin-runtime formatting, and B0130 runtime façade are analysis-ready; two externally added Gateway files remain pending; D0074–D0094 retain their separate scopes |
+| Campaign status | in-progress; B0128–B0130 reviewed and verified, awaiting local commit |
+| Coverage | 540 current Gateway files: 154 changed, 150 examined-no-change, 11 deferred, 225 non-terminal; 3 historical rows are removed |
+| Active batch | None; B0131 timing cleanup is next for current-worktree revalidation and planning |
+| Analysis queue | B0131 full PluginRuntime and B0132 policy filter are analysis-ready; B0133 invalid-config reject filter is analysis-ready; D0074–D0095 retain their separate scopes |
 | Integration freeze | Refreshed at external HEAD `6ab45e17`: 3,084 tracked `edgion-tests` files, including six externally changed BasicAuth/integration-runner fingerprints from `f3b346fd` and `6ab45e17`; no campaign integration-test edit occurred |
 
 ## AI guide summary
@@ -21,6 +21,8 @@
 Audit `edgion-gateway` file by file in cohesive, dependency-aware batches. Make only evidence-backed, behavior-preserving improvements to local structure, duplication, type and error modeling, and bounded hot-path efficiency. Every implementation batch is independently reviewed, verified, recorded in one changelog, and committed locally without pushing.
 
 ## Requirements
+
+The user clarified that every completed batch must be committed locally, never pushed. B0128–B0130 were delayed by the assistant's mistaken interpretation and are being committed in their original batch order; subsequent batches retain the normal serial review, verification and commit gate.
 
 - Cover every tracked file under `edgion-gateway/`; a reviewed file may legitimately need no change.
 - Preserve the Controller/Gateway split, conf-sync semantics, `EdgionHttpContext`, access-log architecture, Pingora lifecycle, and existing public behavior.

@@ -370,7 +370,7 @@
 | `edgion-gateway/src/plugins/http/direct_endpoint/mod.rs` | `plugins-http-direct-endpoint` | source | examined-no-change | B0072 |
 | `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs` | `plugins-http-direct-endpoint` | source | changed | B0072 |
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | pending | — |
-| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | pending | B0129 LogFmt-only supporting change; full file audit pending |
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | REQ-BODY-BLOCKING-001 targeted owned-input JSON scan / `1eb48138`; full DSL audit pending |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
@@ -387,7 +387,7 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/grpc_error_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/mod.rs` | `plugins-http-dsl` | test | pending | — |
-| `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs` | `plugins-http-dsl` | test | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs` | `plugins-http-dsl` | test | pending | B0129 bounded LogFmt regressions only; full file audit pending |
 | `edgion-gateway/src/plugins/http/dsl/tests/property_bytecode.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/range_and_string_ops.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/redis_builtins.rs` | `plugins-http-dsl` | test | pending | — |
@@ -529,15 +529,16 @@
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | changed | B0126: shared precomputed ExtensionRef target and non-optional prepare success |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/header_modifier.rs` | `plugins-runtime` | source | changed | B0127: shared construction-time first-equivalent header plan |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | examined-no-change | B0126: minimal Gateway API filter façade retained |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/path_modifier.rs` | `plugins-runtime` | source | changed | B0128: shared path-element replacement, root/trailing-slash and UTF-8 parameter regressions; verified |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_header_modifier.rs` | `plugins-runtime` | source | changed | B0127: borrowed prepared request-header operations with append/error regressions |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_redirect.rs` | `plugins-runtime` | source | analysis-ready | B0128 |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_redirect.rs` | `plugins-runtime` | source | changed | B0128: element-aware replacement and connection-derived redirect scheme; verified |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/response_header_modifier.rs` | `plugins-runtime` | source | changed | B0127: borrowed prepared response-header operations with append/error regressions |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | analysis-ready | B0128 |
-| `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | analysis-ready | B0129 |
-| `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | analysis-ready | B0130 |
-| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | B0121 condition-publication support; full audit pending |
-| `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | changed | B0128: shared element-aware replacement preserving raw query and URI finalization; verified |
+| `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | changed | B0129: bounded formatting/redaction and shared DSL strings; verified |
+| `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | examined-no-change | B0130: compile-time facade retained; independent review and gates passed |
+| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | analysis-ready | B0131; B0121 condition-publication support retained |
+| `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | analysis-ready | B0132 |
+| `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | analysis-ready | B0133 |
 | `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | REQ-BODY-CORE-001: canonical empty-body digest consumer / `a408d7fd`; full audit pending |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | pending | — |
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |

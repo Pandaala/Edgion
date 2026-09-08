@@ -1065,6 +1065,25 @@ impl Vm {
                 Ok(Value::Nil)
             }
             BuiltinId::LogFmt => {
+                enum PreparedValue {
+                    Shared(Arc<str>),
+                    Coerced(String),
+                }
+                impl PreparedValue {
+                    fn new(value: Value) -> Result<Self, RuntimeError> {
+                        match value {
+                            Value::Str(value) => Ok(Self::Shared(value)),
+                            other => Ok(Self::Coerced(other.runtime_string()?)),
+                        }
+                    }
+
+                    fn as_str(&self) -> &str {
+                        match self {
+                            Self::Shared(value) => value,
+                            Self::Coerced(value) => value,
+                        }
+                    }
+                }
                 // Stack (top → bottom): valueN, valueN-1, ..., value1, template
                 // argc = 1 (template) + N (values).
                 let total = argc as usize;
@@ -1075,17 +1094,19 @@ impl Vm {
                     });
                 }
                 let value_count = total - 1;
-                let mut values: Vec<String> = Vec::with_capacity(value_count);
+                let mut values = Vec::with_capacity(value_count);
                 for _ in 0..value_count {
-                    values.push(state.pop()?.runtime_string()?);
+                    // Complete every coercion before rendering, including Body
+                    // errors after an argument that would overflow the log.
+                    values.push(PreparedValue::new(state.pop()?)?);
                 }
                 values.reverse();
-                let template = state.pop()?.runtime_string()?;
+                let template = PreparedValue::new(state.pop()?)?;
                 let log_args: Vec<crate::plugins::runtime::log::LogArg<'_>> = values
                     .iter()
                     .map(|s| crate::plugins::runtime::log::LogArg::Sensitive(s.as_str()))
                     .collect();
-                log.push_fmt(&template, &log_args);
+                log.push_fmt(template.as_str(), &log_args);
                 Ok(Value::Nil)
             }
 

@@ -1,3 +1,4 @@
+use crate::observe::logs::buffer::ULOG_MAX_BUFFER;
 use crate::observe::logs::{LogBuffer, ULogBuffer};
 use serde::Serialize;
 use smallvec::SmallVec;
@@ -57,22 +58,38 @@ pub use la;
 /// Render `fmt` with `{}` placeholders substituted by `args` directly into `buf`.
 /// Sensitive args run through the active masking mode.
 #[inline]
-fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, args: &[LogArg<'_>]) {
+fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, args: &[LogArg<'_>]) -> bool {
+    fn append<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, value: &str) -> bool {
+        if value.len() > ULOG_MAX_BUFFER - buf.len() {
+            return false;
+        }
+        buf.extend_from_slice(value.as_bytes());
+        true
+    }
+
     let mut arg_iter = args.iter();
     let mut rest = fmt;
     while let Some(pos) = rest.find("{}") {
-        buf.extend_from_slice(rest[..pos].as_bytes());
+        if !append(buf, &rest[..pos]) {
+            return false;
+        }
         rest = &rest[pos + 2..];
         if let Some(arg) = arg_iter.next() {
-            match arg {
-                LogArg::Plain(s) => buf.extend_from_slice(s.as_bytes()),
+            let accepted = match arg {
+                LogArg::Plain(s) => append(buf, s),
                 LogArg::Sensitive(s) => {
-                    edgion_resources::sensitive::apply_sensitive(s, |w| buf.extend_from_slice(w.as_bytes()));
+                    edgion_resources::sensitive::apply_sensitive_bounded(s, ULOG_MAX_BUFFER - buf.len(), |w| {
+                        buf.extend_from_slice(w.as_bytes());
+                    })
+                    .is_some()
                 }
+            };
+            if !accepted {
+                return false;
             }
         }
     }
-    buf.extend_from_slice(rest.as_bytes());
+    append(buf, rest)
 }
 
 /// Plugin log entry — fixed structure for plugin execution logging.
@@ -354,7 +371,11 @@ impl PluginLog {
         // 128-byte inline scratch matches the tier-1 LogBuffer budget, so a
         // tier-1-sized entry never heap-allocates here.
         let mut buf: SmallVec<[u8; 128]> = SmallVec::new();
-        format_into(&mut buf, fmt, args);
+        if !format_into(&mut buf, fmt, args) {
+            // Preserve the same tier transition as an oversized plain entry,
+            // without retaining any partially rendered content.
+            return self.push_via(|_| false, |_| false);
+        }
         let s = std::str::from_utf8(&buf).unwrap_or("");
         self.push_via(|b| b.push(s), |u| u.push(s))
     }
@@ -498,6 +519,73 @@ mod tests {
         let guard = MODE_LOCK.lock().unwrap();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
         ModeGuard { prev, _lock: guard }
+    }
+
+    #[test]
+    fn formatted_entries_respect_exact_rendered_limit_and_atomic_rejection() {
+        for mode in [0, 1, 2] {
+            let _g = set_mode(mode);
+            let value = if mode == 1 {
+                "x".repeat(1024 * 1024)
+            } else {
+                "é".to_string()
+            };
+            let rendered = match mode {
+                0 => "é",
+                1 => "***",
+                _ => "<E>é</E>",
+            };
+            for size in [512, 513] {
+                let template = format!("{}{{}}", "a".repeat(size - rendered.len()));
+                let mut log = PluginLog::new("bounded");
+                assert_eq!(log.push_fmt(&template, &[sensitive(&value)]), size == 512);
+                let json = serde_json::to_value(&log).unwrap();
+                if size == 512 {
+                    assert_eq!(
+                        json["log"],
+                        serde_json::json!([format!("{}{rendered}", "a".repeat(size - rendered.len()))])
+                    );
+                    assert!(json.get("log_full").is_none());
+                } else {
+                    assert_eq!(json["log"], serde_json::json!([]));
+                    assert_eq!(json["log_full"], true);
+                    assert!(log.log.is_some() && log.ulog.is_some());
+                    assert!(log.push_fmt("later {}", &[LogArg::Plain("entry")]));
+                    assert_eq!(log.log.as_ref().unwrap().entries().count(), 0);
+                    assert_eq!(
+                        log.ulog.as_ref().unwrap().entries().collect::<Vec<_>>(),
+                        ["later entry"]
+                    );
+                }
+                assert!(json.get("ulog").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn formatted_scratch_stops_before_large_appends_and_preserves_template_semantics() {
+        let huge = "x".repeat(1024 * 1024);
+        for mode in [0, 1, 2] {
+            let _g = set_mode(mode);
+            for (template, args) in [
+                (huge.as_str(), vec![]),
+                ("prefix{}", vec![LogArg::Plain(&huge)]),
+                ("prefix{}", vec![sensitive(&huge)]),
+            ] {
+                let mut scratch: SmallVec<[u8; 128]> = SmallVec::new();
+                let accepted = format_into(&mut scratch, template, &args);
+                assert_eq!(
+                    accepted,
+                    mode == 1 && matches!(args.first(), Some(LogArg::Sensitive(_)))
+                );
+                assert!(scratch.len() <= ULOG_MAX_BUFFER);
+                assert!(!scratch.spilled(), "oversized slices must be rejected before copying");
+            }
+            let mut log = PluginLog::new("syntax");
+            assert!(log.push_fmt("a{}b{}c", &[LogArg::Plain("é")]));
+            assert!(log.push_fmt("{}", &[LogArg::Plain("first"), sensitive(&huge)]));
+            assert_eq!(log.log.unwrap().entries().collect::<Vec<_>>(), ["aébc", "first"]);
+        }
     }
 
     #[test]

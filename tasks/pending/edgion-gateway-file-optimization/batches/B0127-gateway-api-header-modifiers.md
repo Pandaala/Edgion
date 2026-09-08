@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `da2567094703a53ad928698be10388b450e39e43`
-- Pipeline state: commit-ready
+- Pipeline state: committed
 - Active anchor crate: `edgion-gateway`
 - Candidate owned files:
   - `edgion-gateway/src/plugins/runtime/gateway_api_filters/request_header_modifier.rs`
@@ -40,4 +40,4 @@
 - Implementation: added one private shared immutable plan that consumes HTTP/GRPC configuration and retains the first ASCII-case-insensitive equivalent entry independently in each operation list. Both request and response adapters now borrow prepared slices with unchanged static errors and `set → add → remove` fallback ordering. Focused tests cover construction parity, ignored duplicates, invalid cross-action fallback, append-only multi-field preservation, ordered operations, errors, and zero hot-path preparation. Four EN/ZH guides now distinguish supported one-action configuration from defensive invalid-input behavior.
 - Independent final review: LGTM with no Must Fix or Should Fix. The reviewer verified all HTTP/GRPC rule/backend and EdgionPlugins construction paths, real Pingora set/append/remove semantics, pending response operations, 1xx/101 and local-response boundaries, streaming, error cardinality, hot-path cost, four-guide parity, exact scope, and D0090/D0091/D0068 ownership.
 - Verification: 39 Gateway API filter and 43 PluginRuntime tests passed. `cargo fmt --all`, `cargo check --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets`, `cargo build --locked -p edgion-gateway --bin edgion-gateway`, agent-doc, SSA force, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path guards passed; Clippy emitted only the existing warning set.
-- Commit: pending.
+- Commit: `b71f37f2`.

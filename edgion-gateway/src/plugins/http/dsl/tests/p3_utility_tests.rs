@@ -450,6 +450,62 @@ fn test_log_error_wrap_mode() {
 }
 
 #[test]
+fn test_log_fmt_repeated_large_shared_value_remains_bounded() {
+    let source = format!(
+        "let value = req.header(\"X-Large\")\nlet result = log_fmt(\"{}\", {})\nif result != nil {{ return deny(403, \"unexpected result\") }}\nlog_fmt(\"later entry\")\nreturn next()",
+        "{}".repeat(254),
+        vec!["value"; 254].join(", "),
+    );
+    let vm = make_vm_with_limits(
+        &source,
+        VmLimits {
+            max_stack_depth: 256,
+            max_string_len: 1024 * 1024,
+            ..VmLimits::default()
+        },
+    );
+    for mode in [0, 1, 2] {
+        let _g = set_mode(mode);
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "X-Large")
+            .times(1)
+            .returning(|_| Some("x".repeat(1024 * 1024)));
+        let (result, log) = run_vm_policy_log(&vm, session, &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        let json = serde_json::to_value(log).unwrap();
+        assert_eq!(json["log"], serde_json::json!(["later entry", "OK; "]));
+        assert_eq!(json["log_full"], true);
+    }
+}
+
+#[test]
+fn test_log_fmt_preserves_scalar_coercion_and_body_error_after_oversized_prefix() {
+    let _g = set_mode(0);
+    let vm = make_vm(r#"log_fmt("{} {} {} {}", 42, true, false, nil)"#);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+    assert_eq!(result, good_next());
+    assert!(log.contains("42 true false nil"));
+    for mode in [0, 1, 2] {
+        SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+        let source = format!("log_fmt(\"{}{{}}\", req.body)", "x".repeat(513));
+        let mut session = MockPluginSession::new();
+        session.expect_declares_body().return_const(Some(true));
+        session.expect_request_body_available_len().return_const(Ok(0));
+        let error = run_expect_runtime_err(&source, session);
+        assert!(matches!(
+            error,
+            RuntimeError::TypeError {
+                expected: "a value implicitly convertible to Str",
+                got: "Body",
+                operation: "implicit string conversion",
+            }
+        ));
+    }
+}
+
+#[test]
 fn test_log_fmt_off_mode() {
     let _g = set_mode(0);
     let source = r#"

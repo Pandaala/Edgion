@@ -88,7 +88,10 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0089 — Fail closed on missing Gateway API ExtensionRef configuration | needs-implementation | [campaign finding](D0089-fail-closed-missing-extensionref-configuration.md) |
 | D0090 — Complete Gateway API header-modifier validation and preparation parity | needs-implementation | [campaign finding](D0090-gateway-api-header-modifier-validation-preparation-parity.md) |
 | D0091 — Unify proxied request-header mutation and framing policy | needs-discussion | [campaign finding](D0091-proxied-request-header-mutation-framing-policy.md) |
+| D0092 — Complete Gateway API request-transform validation and preparation parity | needs-implementation | [campaign finding](D0092-gateway-api-request-transform-validation-preparation-parity.md) |
+| D0093 — Correct Gateway API RequestRedirect documentation | needs-implementation | [campaign finding](D0093-correct-gateway-api-request-redirect-documentation.md) |
 | D0094 — Reject DSL builtin calls beyond bytecode argument capacity | needs-implementation | [campaign finding](D0094-dsl-builtin-argument-count-encoding.md) |
+| D0095 — Investigate plugin policy and invalid-generation retention | needs-investigation | [campaign finding](D0095-plugin-policy-invalid-generation-retention.md) |
 | Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
@@ -174,4 +177,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Fail closed on missing Gateway API ExtensionRef configuration | pending | [task](../../../todo/fail-closed-missing-gateway-api-extensionref-configuration.md) |
 | Complete Gateway API header-modifier validation and preparation parity | pending | [task](../../../todo/complete-gateway-api-header-modifier-validation-and-preparation-parity.md) |
 | Unify proxied request-header mutation and framing policy | pending | [task](../../../todo/unify-proxied-request-header-mutation-and-framing-policy.md) |
+| Complete Gateway API request-transform validation and preparation parity | pending | [task](../../../todo/complete-gateway-api-request-transform-validation-and-preparation-parity.md) |
+| Correct Gateway API RequestRedirect documentation | pending | [task](../../../todo/correct-gateway-api-request-redirect-documentation.md) |
 | Reject DSL builtin calls beyond bytecode argument capacity | pending | [task](../../../todo/reject-dsl-builtin-calls-beyond-argument-capacity.md) |
+| Investigate plugin policy and invalid-generation retention | pending | [task](../../../todo/investigate-plugin-policy-invalid-generation-retention.md) |

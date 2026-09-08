@@ -1385,11 +1385,6 @@ impl RequestInfo {
     }
 
     #[inline]
-    pub(crate) fn sni(&self) -> Option<&str> {
-        self.tls.as_deref().and_then(|info| info.sni.as_deref())
-    }
-
-    #[inline]
     pub(crate) fn client_cert_info(&self) -> Option<&ClientCertInfo> {
         self.tls.as_deref().and_then(|info| info.client_cert_info.as_ref())
     }
@@ -1517,7 +1512,6 @@ mod request_scenario_state_tests {
         let (info, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             let mut info = RequestInfo::default();
             info.install_tls_info(Some(tls_id), Some(sni), Some(cert), Some(listener), Some(gateway));
-            assert_eq!(info.sni(), Some("api.example.com"));
             assert!(info.client_cert_info().is_some());
             assert_eq!(info.gateway_tls_match(), Some(("https", "default/gateway")));
             info
