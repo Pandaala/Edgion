@@ -18,4 +18,4 @@
 - Deferred: none.
 - Review: `b0135_final_review` independently traced both runtime families and required correcting an overbroad post-handshake claim for TLS passthrough. The corrected diff received LGTM with no remaining Must Fix or Should Fix.
 - Verification: no behavior test is required for a Rustdoc-only facade correction. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,093-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `d9efd857`; local only, never pushed by the campaign.

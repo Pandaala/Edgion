@@ -4,6 +4,7 @@ use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult
 use crate::plugins::stream::{
     ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction,
 };
+use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use std::sync::Arc;
 
@@ -44,6 +45,19 @@ impl StreamPluginRuntime {
     /// gives `ConnectionRateLimit` the identity it needs to namespace its Redis
     /// buckets and its local gate (see `plugins::common::entry_scope`).
     pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str, resource_key: &str) -> Self {
+        let record_invalid_config =
+            |invalid_config_reason: &mut Option<String>, plugin: &'static str, reason: &'static str| {
+                tracing::error!(
+                    component = "stream_plugin_runtime",
+                    plugin,
+                    resource_key,
+                    error_class = "invalid configuration",
+                    "Invalid stream plugin configuration; all connections will be denied",
+                );
+                if invalid_config_reason.is_none() {
+                    *invalid_config_reason = Some(reason.to_string());
+                }
+            };
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
         // First Block-stamped reason encountered, if any. Inserted at the
         // front of `plugins` after the loop so it dominates the chain
@@ -58,8 +72,9 @@ impl StreamPluginRuntime {
             }
 
             // Plugin policy: stamped entries are never instantiated. Block
-            // denies the connection (no HTTP status exists pre-TLS; the
-            // stamped status is ignored per spec §5). Bypass skips silently
+            // denies the connection; no HTTP status exists in stream plugin
+            // lifecycles, so the stamped status is ignored per spec §5.
+            // Bypass skips silently
             // at the chain level; visibility comes from the controller's
             // PluginPolicyRestricted condition and a compile-time log line.
             match &entry.policy_action {
@@ -77,38 +92,53 @@ impl StreamPluginRuntime {
             }
 
             let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(rules) => Arc::new(StreamIpRestriction::new(rules, parent_namespace)),
+                EdgionStreamPlugin::IpRestriction(rules) => {
+                    if !rules.legacy_http_fields().is_empty() || rules.validation_error().is_some() {
+                        record_invalid_config(
+                            &mut invalid_config_reason,
+                            "IpRestriction",
+                            "invalid stream/IpRestriction configuration",
+                        );
+                        continue;
+                    }
+                    Arc::new(StreamIpRestriction::new(rules, parent_namespace))
+                }
                 EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
                     match GlobalConnectionIpRestrictionPlugin::new(gcir, parent_namespace) {
                         Ok(p) => Arc::new(p),
-                        Err(e) => {
-                            // Base validation failed — should not happen if controller validated
-                            // before syncing, but log and skip the plugin rather than panicking.
-                            tracing::error!(
-                                error = %e,
-                                "GlobalConnectionIpRestriction plugin skipped: base config failed validation"
+                        Err(_) => {
+                            record_invalid_config(
+                                &mut invalid_config_reason,
+                                "GlobalConnectionIpRestriction",
+                                "invalid stream/GlobalConnectionIpRestriction configuration",
                             );
                             continue;
                         }
                     }
                 }
-                EdgionStreamPlugin::ConnectionRateLimit(cfg) => Arc::new(ConnectionRateLimitPlugin::new(
-                    cfg,
-                    // Stream entries carry no alias, so the scope always uses the index form.
-                    &crate::plugins::common::entry_scope(resource_key, None, index),
-                )),
+                EdgionStreamPlugin::ConnectionRateLimit(cfg) => {
+                    if cfg.validation_error().is_some() {
+                        record_invalid_config(
+                            &mut invalid_config_reason,
+                            "ConnectionRateLimit",
+                            "invalid stream/ConnectionRateLimit configuration",
+                        );
+                        continue;
+                    }
+                    Arc::new(ConnectionRateLimitPlugin::new(
+                        cfg,
+                        // Stream entries carry no alias, so the scope always uses the index form.
+                        &crate::plugins::common::entry_scope(resource_key, None, index),
+                    ))
+                }
                 EdgionStreamPlugin::GeoIpLocation(cfg) => match GeoIpLocationStreamPlugin::new(cfg) {
                     Ok(p) => Arc::new(p),
-                    Err(_error) => {
-                        tracing::error!(
-                            component = "stream_plugin_runtime",
-                            plugin = "GeoIpLocation",
-                            resource_key,
-                            "Invalid stream plugin configuration; all connections will be denied",
+                    Err(_) => {
+                        record_invalid_config(
+                            &mut invalid_config_reason,
+                            "GeoIpLocation",
+                            "invalid stream/GeoIpLocation configuration",
                         );
-                        if invalid_config_reason.is_none() {
-                            invalid_config_reason = Some("invalid stream/GeoIpLocation configuration".to_string());
-                        }
                         continue;
                     }
                 },
@@ -118,7 +148,7 @@ impl StreamPluginRuntime {
         }
 
         if let Some(reason) = policy_block_reason.or(invalid_config_reason) {
-            plugins.insert(0, Arc::new(PolicyBlockStreamPlugin { reason }));
+            plugins.insert(0, Arc::new(FailClosedStreamPlugin { reason }));
         }
 
         Self { plugins }
@@ -145,15 +175,15 @@ impl StreamPluginRuntime {
     }
 }
 
-/// Always-deny placeholder for a Block-stamped stream plugin entry.
-struct PolicyBlockStreamPlugin {
+/// Always-deny gate for policy blocks and invalid published configurations.
+struct FailClosedStreamPlugin {
     reason: String,
 }
 
 #[async_trait::async_trait]
-impl StreamPlugin for PolicyBlockStreamPlugin {
+impl StreamPlugin for FailClosedStreamPlugin {
     fn name(&self) -> &str {
-        "PolicyBlock"
+        "FailClosed"
     }
 
     async fn on_connection(&self, _ctx: &StreamContext) -> StreamPluginResult {
@@ -169,8 +199,11 @@ mod tests {
         DefaultAction, GeoIpLocationConfig, GeoRule, GeoRuleGroup, GeoRuleKey, GeoRuleSource,
     };
     use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm};
-    use edgion_resources::resources::edgion_stream_plugins::{ConnectionRateLimitConfig, PerListenerLimit};
+    use edgion_resources::resources::edgion_stream_plugins::{
+        ConnectionIpRestrictionRules, ConnectionRateLimitConfig, GlobalConnectionIpRestrictionConfig, PerListenerLimit,
+    };
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+    use std::collections::HashMap;
     use std::net::IpAddr;
 
     fn cfg_local_only(rate: u64) -> ConnectionRateLimitConfig {
@@ -205,6 +238,47 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    fn entry(plugin: EdgionStreamPlugin) -> StreamPluginEntry {
+        StreamPluginEntry {
+            enable: true,
+            policy_action: None,
+            plugin,
+        }
+    }
+
+    async fn assert_invalid_gate_precedes_rate_limit(
+        invalid_plugin: EdgionStreamPlugin,
+        expected_reason: &str,
+        resource_key: &str,
+    ) {
+        let mut one_token = cfg_local_only(1);
+        one_token
+            .per_listener
+            .as_mut()
+            .expect("test config must contain a per-listener limit")
+            .interval = "1h".to_string();
+        let entries = [
+            entry(EdgionStreamPlugin::ConnectionRateLimit(one_token.clone())),
+            entry(invalid_plugin),
+        ];
+        let runtime = StreamPluginRuntime::from_stream_plugins(&entries, "default", resource_key);
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18080, StreamLayer::Stage1);
+        assert!(matches!(
+            runtime.run(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == expected_reason
+        ));
+
+        // Reuse the same resource/index identity. If the earlier valid plugin had
+        // run before the invalid-config gate, its only token would already be gone.
+        let valid_only = StreamPluginRuntime::from_stream_plugins(
+            &[entry(EdgionStreamPlugin::ConnectionRateLimit(one_token))],
+            "default",
+            resource_key,
+        );
+        assert!(matches!(valid_only.run(&ctx).await, StreamPluginResult::Allow));
+        assert!(matches!(valid_only.run(&ctx).await, StreamPluginResult::Deny(_)));
     }
 
     #[tokio::test]
@@ -252,6 +326,82 @@ mod tests {
             }
             other => panic!("expected Deny, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_ip_restriction_is_a_front_gate_without_state_consumption() {
+        assert_invalid_gate_precedes_rate_limit(
+            EdgionStreamPlugin::IpRestriction(ConnectionIpRestrictionRules::default()),
+            "invalid stream/IpRestriction configuration",
+            "default/invalid-ip-restriction-front-gate",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn legacy_http_ip_field_is_a_front_gate_without_state_consumption() {
+        let rules: ConnectionIpRestrictionRules = serde_json::from_str(
+            r#"{
+                "allow": [{"name": "office", "cidrs": ["127.0.0.0/8"]}],
+                "message": "legacy response text"
+            }"#,
+        )
+        .expect("legacy flattened field and valid stream rules must deserialize");
+        assert_invalid_gate_precedes_rate_limit(
+            EdgionStreamPlugin::IpRestriction(rules),
+            "invalid stream/IpRestriction configuration",
+            "default/legacy-http-ip-field-front-gate",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn invalid_connection_rate_limit_is_a_front_gate_without_state_consumption() {
+        let mut invalid = cfg_local_only(1);
+        invalid.per_listener = None;
+        assert_invalid_gate_precedes_rate_limit(
+            EdgionStreamPlugin::ConnectionRateLimit(invalid),
+            "invalid stream/ConnectionRateLimit configuration",
+            "default/invalid-connection-rate-limit-front-gate",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn invalid_disabled_inner_gcir_is_a_front_gate_without_state_consumption() {
+        let invalid = GlobalConnectionIpRestrictionConfig {
+            enable: false,
+            active_profile: "missing".to_string(),
+            profiles: HashMap::new(),
+            description: None,
+            active_profile_ref: None,
+        };
+        assert_invalid_gate_precedes_rate_limit(
+            EdgionStreamPlugin::GlobalConnectionIpRestriction(invalid),
+            "invalid stream/GlobalConnectionIpRestriction configuration",
+            "default/invalid-gcir-front-gate",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn disabled_and_policy_bypassed_invalid_entries_remain_inert() {
+        let disabled = StreamPluginEntry {
+            enable: false,
+            policy_action: None,
+            plugin: EdgionStreamPlugin::IpRestriction(ConnectionIpRestrictionRules::default()),
+        };
+        let mut invalid_rate = cfg_local_only(1);
+        invalid_rate.per_listener = None;
+        let bypassed = StreamPluginEntry {
+            enable: true,
+            policy_action: Some(PluginPolicyAction::Bypass),
+            plugin: EdgionStreamPlugin::ConnectionRateLimit(invalid_rate),
+        };
+
+        let runtime =
+            StreamPluginRuntime::from_stream_plugins(&[disabled, bypassed], "default", "default/inert-invalid-entries");
+        assert!(runtime.is_empty());
     }
 
     #[tokio::test]

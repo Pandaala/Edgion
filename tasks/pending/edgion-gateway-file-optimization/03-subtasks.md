@@ -564,7 +564,7 @@
 | `edgion-gateway/src/plugins/stream/ip_restriction/mod.rs` | `plugins-stream` | source | examined-no-change | B0154: coherent crate-private implementation/public-type facade retained |
 | `edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
 | `edgion-gateway/src/plugins/stream/mod.rs` | `plugins-stream` | source | changed | B0155: corrected connection-context and TLS-route runtime-family docs |
-| `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs` | `plugins-stream` | source | changed | B0156: unified enabled-invalid configuration into a gate-first fail-close runtime |
 | `edgion-gateway/src/plugins/stream/stream_plugin_store.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
