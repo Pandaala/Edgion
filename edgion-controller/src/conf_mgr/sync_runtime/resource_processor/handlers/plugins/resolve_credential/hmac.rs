@@ -209,7 +209,6 @@ fn resolve_group(
                     tracing::warn!(
                         edgion_plugins = %resource_ref.key(),
                         secret_key = %secret_key,
-                        username = %username,
                         group = %group_name,
                         secret_len = secret_value.len(),
                         min_len = config.min_secret_length,
@@ -228,7 +227,6 @@ fn resolve_group(
                     tracing::warn!(
                         edgion_plugins = %resource_ref.key(),
                         secret_key = %secret_key,
-                        username = %username,
                         existing_group = %prev_group,
                         incoming_group = %group_name,
                         "HmacAuth: duplicate username across groups; first-wins kept"
@@ -237,7 +235,6 @@ fn resolve_group(
                     tracing::warn!(
                         edgion_plugins = %resource_ref.key(),
                         secret_key = %secret_key,
-                        username = %username,
                         group = %group_name,
                         "HmacAuth: Duplicate username within group, skipping"
                     );

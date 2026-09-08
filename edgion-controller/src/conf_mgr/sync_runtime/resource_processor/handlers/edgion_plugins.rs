@@ -1807,6 +1807,132 @@ profiles:
     }
 
     #[tokio::test]
+    async fn hmac_warnings_omit_credentials_and_preserve_first_wins() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{Condition, HmacMatchConfig};
+        use std::io::{Read, Seek};
+        use tracing::instrument::WithSubscriber;
+
+        for as_condition in [false, true] {
+            let username = "private-hmac-user@example.invalid";
+            let credentials = [
+                ("hmac-first", "first-secret"),
+                ("hmac-same", "same-secret"),
+                ("hmac-other", "other-secret"),
+            ];
+            let secrets = credentials
+                .iter()
+                .map(|(name, secret)| {
+                    let yaml = format!(
+                        "- username: {username}\n  secret: {secret}\n  headers:\n    X-Consumer-Username: {username}\n"
+                    );
+                    (
+                        format!("default/{name}"),
+                        build_secret("default", name, "credentials.yaml", &yaml),
+                    )
+                })
+                .collect();
+            let (ctx, _runtime) = make_ctx_with_secrets(secrets);
+            let groups = [
+                ("group-a", vec!["hmac-first", "hmac-same"]),
+                ("group-b", vec!["hmac-other"]),
+            ]
+            .into_iter()
+            .map(|(name, refs)| HmacAuthSecretGroup {
+                name: name.to_string(),
+                description: None,
+                secret_refs: refs
+                    .into_iter()
+                    .map(|name| SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: name.to_string(),
+                        namespace: None,
+                    })
+                    .collect(),
+            })
+            .collect();
+            let match_config = HmacMatchConfig {
+                secret_groups: Some(groups),
+                min_secret_length: 32,
+                ..Default::default()
+            };
+            let plugin = if as_condition {
+                EdgionPlugin::RequestAccessPolicy(request_access_policy_config(
+                    None,
+                    Some(Condition::HmacAuth(match_config)),
+                ))
+            } else {
+                EdgionPlugin::HmacAuth(HmacAuthConfig {
+                    match_config,
+                    upstream_header_fields: vec!["X-Consumer-Username".to_string()],
+                    ..Default::default()
+                })
+            };
+            let mut ep = EdgionPlugins::new("hmac-warning-plugins", EdgionPluginsSpec::default());
+            ep.metadata.namespace = Some("default".to_string());
+            ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(plugin)]);
+
+            let mut log_file = tempfile::tempfile().unwrap();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(log_file.try_clone().unwrap())
+                .with_max_level(tracing::Level::WARN)
+                .without_time()
+                .with_ansi(false)
+                .finish();
+            let parsed = match EdgionPluginsHandler.parse(ep, &ctx).with_subscriber(subscriber).await {
+                ProcessResult::Continue(value) => value,
+                ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+            };
+            log_file.rewind().unwrap();
+            let mut logs = String::new();
+            log_file.read_to_string(&mut logs).unwrap();
+            let warnings: Vec<_> = logs.lines().filter(|line| line.contains("HmacAuth:")).collect();
+            assert_eq!(warnings.len(), 3);
+            assert!(warnings[0].contains("secret length is below configured minimum"));
+            assert!(warnings[0].contains("secret_key=default/hmac-first"));
+            assert!(warnings[0].contains("group=group-a"));
+            assert!(warnings[0].contains("secret_len=12"));
+            assert!(warnings[0].contains("min_len=32"));
+            assert!(warnings[1].contains("Duplicate username within group, skipping"));
+            assert!(warnings[1].contains("secret_key=default/hmac-same"));
+            assert!(warnings[1].contains("group=group-a"));
+            assert!(warnings[2].contains("duplicate username across groups; first-wins kept"));
+            assert!(warnings[2].contains("secret_key=default/hmac-other"));
+            assert!(warnings[2].contains("existing_group=group-a"));
+            assert!(warnings[2].contains("incoming_group=group-b"));
+            for warning in warnings {
+                assert!(warning.contains("edgion_plugins=EdgionPlugins/default/hmac-warning-plugins"));
+            }
+            assert!(!logs.contains(username));
+            assert!(!logs.contains("username="));
+            for (name, secret) in credentials {
+                assert!(!logs.contains(secret));
+                assert_eq!(ctx.secret_ref_manager().get_refs(&format!("default/{name}")).len(), 1);
+            }
+
+            let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+                EdgionPlugin::HmacAuth(config) => &config.match_config,
+                EdgionPlugin::RequestAccessPolicy(config) => {
+                    let Condition::HmacAuth(config) = first_request_access_policy_condition(config) else {
+                        panic!("expected HMAC condition");
+                    };
+                    config
+                }
+                _ => panic!("unexpected plugin"),
+            };
+            let resolved = config.resolved_credentials.as_ref().unwrap();
+            assert_eq!(resolved.len(), 1);
+            assert_eq!(resolved[username].secret, b"first-secret");
+            assert_eq!(resolved[username].group, "group-a");
+            if as_condition {
+                assert!(resolved[username].headers.is_empty());
+            } else {
+                assert_eq!(resolved[username].headers["X-Consumer-Username"], username);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_parse_resolves_header_cert_auth_ca_secrets_and_registers_refs() {
         let ca_secret = build_secret(
             "default",

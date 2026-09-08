@@ -257,6 +257,12 @@ one group, the **first-wins** rule applies — the credential from the
 earliest-listed group is kept, and a `warn` log is emitted for the rejected
 duplicate. The plugin continues serving requests normally.
 
+Controller duplicate warnings identify the rejected Secret (`secret_key`) and
+the relevant groups (`existing_group` / `incoming_group`, or `group` within one
+group). Short-secret warnings include `secret_len` and `min_len` alongside the
+Secret and group. These warnings omit raw usernames and shared secret values;
+use the resource pointers to inspect credentials through authorized Secret access.
+
 ```yaml
 requestPlugins:
   - type: HmacAuth

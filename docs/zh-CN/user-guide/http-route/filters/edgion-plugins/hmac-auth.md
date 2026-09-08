@@ -251,6 +251,8 @@ Edgion 采用常见的网关分层：边缘做时间戳窗口，业务层做 ide
 
 **跨组用户名冲突处理**：同一用户名在多个组中出现时，遵循**先到先得（first-wins）**规则——第一个组的凭证被保留，后续重复条目产生 `warn` 日志但不影响插件整体可用性。
 
+Controller 的重复凭证告警记录被丢弃条目所在的 Secret（`secret_key`）及相关分组（跨组使用 `existing_group` / `incoming_group`，组内使用 `group`）。密钥过短告警还记录 `secret_len` 和 `min_len`。这些告警不输出原始用户名或共享密钥值；请根据资源定位信息，通过授权的 Secret 访问检查凭证。
+
 ```yaml
 requestPlugins:
   - type: HmacAuth
