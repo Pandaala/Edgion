@@ -189,22 +189,6 @@ fn collect_dye_condition_errors(dye: &super::dye::DyeSuite, label: &str, index: 
     }
 }
 
-fn count_ip_matches_in_conditions(conds: Option<&PluginConditions>) -> usize {
-    conds.map(PluginConditions::ip_match_count).unwrap_or(0)
-}
-
-fn count_ip_matches_in_dye(dye: Option<&super::dye::DyeSuite>) -> usize {
-    dye.map(|suite| {
-        suite
-            .request
-            .iter()
-            .chain(suite.response.iter())
-            .map(|rule| count_ip_matches_in_conditions(rule.conditions.as_ref()))
-            .sum()
-    })
-    .unwrap_or(0)
-}
-
 fn collect_body_condition_errors(conds: &PluginConditions, label: &str, index: usize, errors: &mut Vec<String>) {
     let mut conds = conds.clone();
     if let Err(errs) = conds.compile() {
@@ -614,68 +598,7 @@ impl EdgionPlugins {
             }
         }
 
-        let ip_matches = self.ip_match_count();
-        if ip_matches > super::plugin_configs::MAX_REFERENCED_IP_RULES {
-            errors.push(format!(
-                "IP match conditions cannot exceed {}",
-                super::plugin_configs::MAX_REFERENCED_IP_RULES
-            ));
-        }
-
         errors
-    }
-
-    /// Count IP-match conditions across entry, body, dye, RAP, and RR sets.
-    pub fn ip_match_count(&self) -> usize {
-        let mut ip_matches = 0usize;
-        if let Some(entries) = &self.spec.request_plugins {
-            for entry in entries {
-                if !entry.is_enabled() || entry.policy_action.is_some() {
-                    continue;
-                }
-                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
-                ip_matches += count_ip_matches_in_conditions(entry.body.as_ref().and_then(|b| b.conditions.as_ref()));
-                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
-                match &entry.plugin {
-                    EdgionPlugin::RequestAccessPolicy(cfg) => {
-                        ip_matches += cfg.ip_match_count();
-                    }
-                    EdgionPlugin::RequestRestriction(cfg) => {
-                        ip_matches += cfg.conditions.ip_match_count();
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if let Some(entries) = &self.spec.upstream_response_filter_plugins {
-            for entry in entries {
-                if !entry.is_enabled() || entry.policy_action.is_some() {
-                    continue;
-                }
-                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
-                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
-            }
-        }
-        if let Some(entries) = &self.spec.upstream_response_body_filter_plugins {
-            for entry in entries {
-                if !entry.is_enabled() || entry.policy_action.is_some() {
-                    continue;
-                }
-                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
-                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
-            }
-        }
-        if let Some(entries) = &self.spec.upstream_response_plugins {
-            for entry in entries {
-                if !entry.is_enabled() || entry.policy_action.is_some() {
-                    continue;
-                }
-                ip_matches += count_ip_matches_in_conditions(entry.conditions.as_ref());
-                ip_matches += count_ip_matches_in_conditions(entry.body.as_ref().and_then(|b| b.conditions.as_ref()));
-                ip_matches += count_ip_matches_in_dye(entry.dye.as_ref());
-            }
-        }
-        ip_matches
     }
 }
 
@@ -1258,45 +1181,6 @@ mod tests {
             )
             .to_string()]
         );
-    }
-
-    #[test]
-    fn ip_match_count_includes_rr_groups() {
-        use crate::resources::edgion_plugins::conditions::{
-            AllOfGroup, AnyOfClause, Condition, ConditionSet, IpAccessMatch,
-        };
-        use crate::resources::edgion_plugins::plugin_configs::{RequestRestrictionConfig, RestrictionMode};
-
-        let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestRestriction(RequestRestrictionConfig {
-            mode: Some(RestrictionMode::Deny),
-            conditions: ConditionSet::AnyOf {
-                any_of: vec![AnyOfClause::AllOf(AllOfGroup {
-                    name: None,
-                    all_of: vec![
-                        Condition::DirectPeerIpMatch(IpAccessMatch {
-                            ips: vec!["10.0.0.0/8".to_string()],
-                            ..Default::default()
-                        }),
-                        Condition::RemoteIpMatch(IpAccessMatch {
-                            ips: vec!["192.0.2.0/24".to_string()],
-                            ..Default::default()
-                        }),
-                    ],
-                })],
-            },
-            ..Default::default()
-        }));
-        entry.conditions = Some(crate::resources::edgion_plugins::conditions::PluginConditions {
-            run: Some(ConditionSet::all_of(vec![Condition::DirectPeerIpMatch(
-                IpAccessMatch {
-                    ips: vec!["127.0.0.1".to_string()],
-                    ..Default::default()
-                },
-            )])),
-            ..Default::default()
-        });
-        let ep = with_request_plugins(vec![entry]);
-        assert_eq!(ep.ip_match_count(), 3);
     }
 }
 

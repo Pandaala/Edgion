@@ -332,6 +332,7 @@ mod capability_tests {
             "cache_residue",
             "credential_reservation_redis",
             "token_bucket_partial_refill_redis",
+            "oidc_egress_resolver",
         ]
         .into_iter()
         .collect();
@@ -359,6 +360,11 @@ mod capability_tests {
             let names = rest.split_once(';').map(|(names, _)| names).unwrap_or_default();
             prepared_artifacts.extend(names.split_whitespace());
         }
+        assert!(
+            prepare.contains("test_oidc_egress.sh") && prepare.contains("--build-resolver-only"),
+            "prepare must build the OIDC egress resolver before runtime"
+        );
+        prepared_artifacts.insert("oidc_egress_resolver");
         assert_eq!(documented_artifacts, prepared_artifacts);
     }
 

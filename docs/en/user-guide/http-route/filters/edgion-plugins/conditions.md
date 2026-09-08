@@ -23,6 +23,11 @@ conditions:
 
 ## ConditionSet grammar
 
+`EdgionPlugins` has no resource-wide limit on the number of IP-match conditions,
+including conditions imported through ConfigData. Each condition still undergoes
+normal validation. `RequestAccessUrlAllowList` data limits and reference-level
+`maxIpRules` validation remain independent constraints.
+
 A set has exactly one top-level operator:
 
 - `allOf` contains only direct Conditions and matches when every item matches.

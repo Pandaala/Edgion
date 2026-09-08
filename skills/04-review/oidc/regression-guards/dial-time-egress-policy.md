@@ -2,8 +2,9 @@
 name: oidc-dial-time-egress-policy
 description: Use when reviewing OpenID Connect SSRF or DNS findings that discovery, JWKS, token, or other IdP endpoints resolve without EgressResolver, or when a fix proposes a plugin-local blockPrivate field, URL rewriting, or leaving the SAN-pinning client on the system resolver.
 status: fixed
-finding_id: D0056
+finding_id: D0056, D0057
 closed: 2026-09-04
+coverage_closed: 2026-09-07
 knowledge_type: regression-guards
 ---
 
@@ -57,13 +58,44 @@ The SAN branch still attaches a custom `ServerCertVerifier` through
 timeout, and resolver knobs go through `apply_outbound_policy` so the two
 branches cannot drift.
 
+## Cross-process Regression Evidence
+
+`edgion-tests/integration/scripts/integration/test_oidc_egress.sh` is the
+standalone D0057 regression. A process-local resolver supplies one denied
+unspecified address before one allowed loopback address for the mixed hostname,
+and only denied addresses for the blocked hostnames. Calibrated denied-address
+and proxy listeners must receive no Gateway connections.
+
+The scenario runs the default TLS client and the SAN-pinning preconfigured-TLS
+client through the same matrix:
+
+- allowed HTTPS discovery, authorization callback, token exchange, JWKS fetch,
+  session creation, and authenticated backend request
+- all-denied configured discovery
+- an allowed discovery document whose `jwks_uri` resolves only to denied addresses
+- an allowed discovery document whose `token_endpoint` resolves only to denied addresses
+
+The HTTPS fixture records ClientHello SNI, so success also proves that filtering
+did not replace the original hostname used for certificate and SAN verification.
+The Gateway starts with upper- and lower-case HTTP(S)/ALL proxy variables aimed
+at the calibrated trap; zero contacts prove both client branches apply
+`no_proxy()`. Negative cases require the exact public `502 Bad Gateway` response
+and reject endpoint, address, proxy, token, cookie, claim, and client-secret
+detail. All readiness and configuration synchronization uses bounded polling.
+
+Fresh verification on 2026-09-07 ran the standalone scenario twice; all eight
+phases passed on both runs. This is local macOS evidence, not proof of the Linux
+loader path or the enclosing full integration sweep; CI remains responsible for
+that platform and orchestration coverage.
+
 ## Fix Suggestions Not Accepted
 
 - Plugin-level `blockPrivate` — duplicates the gateway egress default
 - Rewriting IdP URLs to IPs — breaks TLS/SAN hostname verification
 - Controller or construction-time DNS with a later hostname connect — TOCTOU / DNS rebinding
 - Resolver on the default branch only — the SAN client would remain an escape hatch
-- Changing existing OpenID Connect integration tests — tracked separately as D0057
+- Rewriting existing OpenID Connect integration tests — D0057 uses a standalone
+  process-level scenario because resolver and proxy state must exist at Gateway startup
 
 ## Re-evaluation Triggers
 
@@ -79,9 +111,12 @@ Re-open this decision only if:
 ## Reference Cases
 
 - D0056 — `tasks/pending/edgion-gateway-file-optimization/deferred/D0056-openid-connect-dial-time-egress-policy.md`
+- D0057 — standalone cross-process integration coverage in
+  `edgion-tests/integration/scripts/integration/test_oidc_egress.sh`
 - Source: `edgion-gateway/src/plugins/http/openid_connect/plugin.rs`
 - Sibling: `skills/04-review/ldap-auth/regression-guards/dial-time-egress-policy.md`
 
 ## Resolution references
 
 - `D0056` — 2026-09-04.
+- `D0057` — 2026-09-07.

@@ -89,6 +89,42 @@ Runs code quality checks such as formatting, linting, and unit tests.
 
 ## Integration Test Scripts
 
+### OpenID Connect dial-time egress and TLS identity
+
+`integration/test_oidc_egress.sh` runs D0057 against one dedicated
+Controller/Gateway and a local HTTPS identity-provider fixture. It is included
+in the default `run_integration.sh` isolated-scenario phase. A targeted run is:
+
+```bash
+# Build the product binaries first, or use utils/prepare.sh.
+cargo build -p edgion-controller -p edgion-gateway -p edgion-cli --bins
+bash edgion-tests/integration/scripts/integration/test_oidc_egress.sh --build-resolver-only
+bash edgion-tests/integration/scripts/integration/test_oidc_egress.sh
+```
+
+The build-only command requires `cc` and creates
+`oidc_egress_resolver.dylib` (macOS) or `oidc_egress_resolver.so` (Linux)
+beside the selected Gateway binary. `prepare.sh` builds the same artifact before
+runtime begins. Execution is build-free and requires Python 3, OpenSSL, and
+working IPv6 loopback; it uses no Docker or public network dependency.
+
+The isolated topology is required because proxy variables and deterministic
+system resolver results must be installed before the Gateway constructs either
+OIDC HTTP client. A calibrated proxy listener and denied-address listener prove
+that neither the default nor SAN-pinning branch contacts them. The local HTTPS
+fixture records SNI and serves discovery, token, and JWKS endpoints. Its runtime-
+generated certificate contains only the reserved fixture hostname as a DNS SAN.
+
+Both branches cover mixed allowed/denied resolution, all-denied discovery, and
+discovery-derived denied JWKS and token endpoints. The allowed path completes an
+authorization callback, token exchange, JWKS verification, session creation,
+and an authenticated backend request. Negative responses must be the fixed
+`502 Bad Gateway` wire result without endpoint, address, proxy, credential,
+token, cookie, or claim detail. All readiness and configuration waits poll state
+with deadlines. Logs and `results.json` remain in the printed
+`tmp/integration_testing/oidc_egress.*` directory; only processes owned by that
+run are stopped.
+
 ### LDAP dial-time egress and TLS
 
 `integration/test_ldap_auth_egress.sh` runs D0054 against one dedicated
@@ -240,6 +276,7 @@ Built artifacts under `target/debug/`:
 - `cache_residue`: final cache-residue validator
 - `credential_reservation_redis`: stable copy of the precompiled ignored Redis integration test
 - `token_bucket_partial_refill_redis`: stable copy of the precompiled ignored Redis token-bucket partial-refill test
+- `oidc_egress_resolver`: platform library (`.dylib` on macOS, `.so` on Linux) for the OIDC egress scenario
 
 Output location:
 
@@ -255,7 +292,8 @@ target/debug/
 ├── config_load_validator
 ├── cache_residue
 ├── credential_reservation_redis
-└── token_bucket_partial_refill_redis
+├── token_bucket_partial_refill_redis
+└── oidc_egress_resolver.{dylib,so}
 ```
 
 ### `start_all.sh`

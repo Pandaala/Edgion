@@ -18,6 +18,10 @@ before applying a decision to current code.
 - [MatchCore Payload Validation Belongs to Condition](mandatory-design/matchcore-payload-validation-belongs-to-condition.md)
 - [SecretMatch Selects One Secret Data Key](mandatory-design/secretmatch-selects-one-secret-data-key.md)
 
+## Intentional design
+
+- [EdgionPlugins aggregate IP-condition policy](intentional-design/resource-ip-condition-count-policy.md)
+
 ## Regression guards
 
 - [Condition descriptor type matches the schema discriminator — FIXED (cl-07)](regression-guards/condition-descriptor-type-matches-schema.md)

@@ -93,13 +93,6 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // condition evaluators. add_from_* clones the (now-compiled) conditions into
     // the runtime's ConditionalFilters.
     compile_plugin_conditions(&mut spec, &mut errors, &mut runtime);
-    if spec.ip_match_count() > edgion_resources::resources::edgion_plugins::plugin_configs::MAX_REFERENCED_IP_RULES {
-        errors.push(format!(
-            "IP match conditions cannot exceed {}",
-            edgion_resources::resources::edgion_plugins::plugin_configs::MAX_REFERENCED_IP_RULES
-        ));
-    }
-
     // Mirror the controller's cross-entry ordering rule into the data plane,
     // from the same shared helper and with the same message, so
     // `validate_plugins_matches_compile_plugins_error_set` stays exact. This is
@@ -779,6 +772,84 @@ mod compile_plugins_tests {
 
     fn conditions(value: serde_json::Value) -> PluginConditions {
         serde_json::from_value(value).expect("condition fixture must deserialize")
+    }
+
+    fn resource_with_ip_conditions(count: usize) -> EdgionPlugins {
+        use edgion_resources::resources::edgion_plugins::conditions::{Condition, ConditionSet, IpAccessMatch};
+
+        let mut entry = RequestFilterEntry::new(header_modifier());
+        entry.conditions = Some(PluginConditions {
+            run: Some(ConditionSet::all_of(vec![
+                Condition::DirectPeerIpMatch(IpAccessMatch {
+                    ips: vec!["192.0.2.0/24".to_string()],
+                    ..Default::default()
+                });
+                count
+            ])),
+            ..Default::default()
+        });
+        EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![entry]),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn ip_condition_count_does_not_limit_validation_or_publication() {
+        let key = "default/ip-conditions".to_string();
+        let store = PluginStore::new();
+        let initial = compile_plugins(&resource_with_ip_conditions(1));
+        store.replace_all(HashMap::from([(key.clone(), initial)]));
+
+        // Keep literal historical boundaries independent of consumer-side limits.
+        for count in [10_000, 10_001] {
+            let resource = resource_with_ip_conditions(count);
+            let errors = resource.validate_plugins();
+            assert!(errors.is_empty(), "{count}: {errors:?}");
+            let compiled = compile_plugins(&resource);
+            assert!(compiled.preparse_errors.is_empty(), "{:?}", compiled.preparse_errors);
+            assert!(compiled.is_activatable);
+            assert!(!compiled.retain_previous_on_invalid_update);
+            assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1);
+            assert!(compiled
+                .plugin_runtime
+                .request_plugins_iter()
+                .all(|filter| filter.name() != "RejectInvalidConfig"));
+
+            store.apply_delta(
+                HashMap::new(),
+                HashMap::from([(key.clone(), Arc::clone(&compiled))]),
+                &HashSet::new(),
+            );
+            assert!(store
+                .with_plugin(&key, |published| std::ptr::eq(published, compiled.as_ref()))
+                .unwrap());
+            store.replace_all(HashMap::from([(key.clone(), Arc::clone(&compiled))]));
+            assert!(store
+                .with_plugin(&key, |published| std::ptr::eq(published, compiled.as_ref()))
+                .unwrap());
+        }
+    }
+
+    #[test]
+    fn large_ip_condition_resource_still_rejects_invalid_conditions() {
+        let mut resource = resource_with_ip_conditions(10_001);
+        resource.spec.request_plugins.as_mut().unwrap()[0]
+            .conditions
+            .as_mut()
+            .unwrap()
+            .skip = malformed_time_range_conditions().run;
+        let errors = resource.validate_plugins();
+        assert!(!errors.is_empty());
+        let compiled = compile_plugins(&resource);
+        assert_eq!(compiled.preparse_errors, errors);
+        assert!(!compiled.is_activatable);
+        assert!(!compiled.retain_previous_on_invalid_update);
+        assert_leading_reject(&compiled);
     }
 
     fn malformed_time_range_conditions() -> PluginConditions {

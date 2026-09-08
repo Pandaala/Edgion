@@ -19,7 +19,6 @@ use edgion_resources::resources::edgion_plugins::conditions::{ConditionSet, Plug
 use edgion_resources::resources::edgion_plugins::dye::DyeSuite;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     Condition, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessRuleType, SecretMatchCondition,
-    MAX_REFERENCED_IP_RULES,
 };
 use edgion_resources::resources::edgion_plugins::{
     EdgionPlugin, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
@@ -80,7 +79,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand_co
         ctx,
     };
     walk_all_ip_refs(ep, &resolve_ctx);
-    enforce_ip_match_cap(ep);
 }
 
 /// Pass 2: `secretRef` / HMAC credentials. Must run after [`expand_config_data`].
@@ -91,23 +89,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_c
 ) {
     let owner_namespace = ep.metadata.namespace.clone();
     walk_all_credentials(ep, owner_namespace.as_ref(), resource_ref, ctx);
-}
-
-fn enforce_ip_match_cap(ep: &mut EdgionPlugins) {
-    if ep.ip_match_count() <= MAX_REFERENCED_IP_RULES {
-        return;
-    }
-    let warning = format!("IP match conditions cannot exceed {MAX_REFERENCED_IP_RULES} after ConfigData expansion");
-    if let Some(entries) = ep.spec.request_plugins.as_mut() {
-        for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
-                continue;
-            }
-            if let EdgionPlugin::RequestAccessPolicy(config) = &mut entry.plugin {
-                request_access_policy_data::push_warning(&mut config.resolution_warnings, warning.clone());
-            }
-        }
-    }
 }
 
 fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {

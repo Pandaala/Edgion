@@ -21,6 +21,10 @@ conditions:
 
 ## ConditionSet 语法
 
+`EdgionPlugins` 不限制整个资源中的 IP 匹配条件总数，包括通过 ConfigData 导入的条件。
+每个条件仍须通过正常校验。`RequestAccessUrlAllowList` 数据限制与引用侧的
+`maxIpRules` 校验仍是独立约束。
+
 一个集合必须且只能包含一个顶层运算符：
 
 - `allOf` 只能直接包含 Condition，全部匹配时集合才匹配。

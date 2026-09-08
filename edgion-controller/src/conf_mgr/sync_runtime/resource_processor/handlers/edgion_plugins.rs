@@ -5787,10 +5787,9 @@ profiles:
     }
 
     #[tokio::test]
-    async fn condition_tree_ip_refs_cap_still_applies_after_expansion() {
-        use edgion_resources::resources::edgion_plugins::plugin_configs::{
-            Condition, IpAccessMatch, MAX_REFERENCED_IP_RULES,
-        };
+    async fn condition_tree_expansion_has_no_resource_ip_match_cap() {
+        use edgion_resources::resources::edgion_plugins::conditions::PluginConditions;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{Condition, ConditionSet, IpAccessMatch};
 
         let imported = request_access_url_candidate(
             "vendor",
@@ -5811,18 +5810,32 @@ profiles:
             request_access_url_data("default", "vendor-list", vec![imported]),
         )]));
 
-        let authored = request_access_url_policy("                - name: vendor-list");
-        let before = authored.ip_match_count();
+        let mut authored = request_access_url_policy("                - name: vendor-list");
+        // Two imported matches take the resource beyond the former 10,000-node cap.
+        authored.spec.request_plugins.as_mut().unwrap()[0].conditions = Some(PluginConditions {
+            run: Some(ConditionSet::all_of(vec![
+                Condition::DirectPeerIpMatch(IpAccessMatch {
+                    ips: vec!["192.0.2.0/24".to_string()],
+                    ..Default::default()
+                });
+                10_000
+            ])),
+            ..Default::default()
+        });
         let parsed = match EdgionPluginsHandler.parse(authored, &ctx).await {
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
+        let errors = parsed.validate_plugins();
+        assert!(errors.is_empty(), "expanded resource must validate: {errors:?}");
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected RequestAccessPolicy");
+        };
         assert!(
-            parsed.ip_match_count() > before,
-            "imported URL candidate IP matches must count after expansion: before={before} after={}",
-            parsed.ip_match_count()
+            config.resolution_warnings.is_empty(),
+            "{:?}",
+            config.resolution_warnings
         );
-        assert!(parsed.ip_match_count() <= MAX_REFERENCED_IP_RULES);
         assert_eq!(first_resolved_url_candidates(&parsed)[0].ip_rule_count(), 2);
     }
 

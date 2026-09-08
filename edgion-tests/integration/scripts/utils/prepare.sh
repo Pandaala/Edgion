@@ -158,6 +158,10 @@ print(executables[-1])
         log_success "Ignored integration test executable prepared: ${stable_ignored_test_bin}"
     done
 
+    log_section "Build OIDC system resolver fixture"
+    bash "${PROJECT_ROOT}/edgion-tests/integration/scripts/integration/test_oidc_egress.sh" \
+        --build-resolver-only "${target_root}/debug"
+
     if $FULL_TEST; then
         log_section "Build LDAP system resolver fixture"
         bash "${PROJECT_ROOT}/edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh" \

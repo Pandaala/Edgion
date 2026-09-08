@@ -4,9 +4,9 @@
 //! - Only materials that carry a **raw private key** use `Zeroizing`:
 //!   - [`AcmeAccountMaterial::credentials`] — the ACME account PEM JSON.
 //!   - [`TlsMaterial::client_key_pem`] — the TLS client private key PEM.
-//! - Other application-layer credentials (username / password / token /
-//!   api_key / hmac key) are plain `String`, aligning with cert-manager
-//!   practice.
+//! - Application-layer credentials remain owned strings. Their `Debug`
+//!   implementations redact material independently of any enclosing state.
+//!   Debug redaction does not erase the underlying allocation.
 //!
 //! # Zeroize scope — read before trusting the guarantee
 //!
@@ -33,14 +33,14 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 /// Shared by Redis / Etcd / ES basic / Webhook basic auth.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BasicAuthMaterial {
     pub username: Option<String>,
     pub password: String,
 }
 
 /// Elasticsearch api_key auth.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EsApiKeyMaterial {
     pub api_key_id: String,
     pub api_key_secret: String,
@@ -62,19 +62,19 @@ impl fmt::Debug for BearerMaterial {
 }
 
 /// Webhook HMAC auth.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HmacMaterial {
     pub key: String,
 }
 
 /// Webhook API Key auth.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WebhookApiKeyMaterial {
     pub api_key: String,
 }
 
 /// API key used to authenticate an AI provider request.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AiApiKeyMaterial {
     pub api_key: String,
 }
@@ -106,7 +106,6 @@ pub struct AiApiKeyMaterial {
 /// In other words: `Zeroize` here reduces but does NOT eliminate the window
 /// during which the private key is resident in memory. Treat this as
 /// defense-in-depth, not a strict guarantee.
-#[derive(Debug)]
 pub struct AcmeAccountMaterial {
     pub credentials: Zeroizing<String>,
 }
@@ -132,16 +131,74 @@ pub struct AcmeAccountMaterial {
 /// / `resolved_client_secret`, and the
 /// conf_sync transport buffers apply here — see [`AcmeAccountMaterial`] for
 /// the full list. `Zeroize` is defense-in-depth, not an end-to-end guarantee.
-#[derive(Debug)]
 pub struct TlsMaterial {
     pub ca_pem: Option<Vec<u8>>,
     pub client_cert_pem: Option<Vec<u8>>,
     pub client_key_pem: Option<Zeroizing<Vec<u8>>>,
 }
 
+// Do not delegate to field Debug implementations: Zeroizing wipes on drop,
+// but does not redact Debug, and public certificate fields may contain PII.
+macro_rules! redacted_material_debug {
+    ($($material:ty),+ $(,)?) => {
+        $(impl fmt::Debug for $material {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(concat!(stringify!($material), "([redacted])"))
+            }
+        })+
+    };
+}
+
+redacted_material_debug!(
+    BasicAuthMaterial,
+    EsApiKeyMaterial,
+    HmacMaterial,
+    WebhookApiKeyMaterial,
+    AiApiKeyMaterial,
+    AcmeAccountMaterial,
+    TlsMaterial,
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_material_debug_never_formats_fields() {
+        let materials: Vec<Box<dyn fmt::Debug>> = vec![
+            Box::new(BasicAuthMaterial {
+                username: Some("private-user".into()),
+                password: "private-password".into(),
+            }),
+            Box::new(EsApiKeyMaterial {
+                api_key_id: "private-id".into(),
+                api_key_secret: "private-key".into(),
+            }),
+            Box::new(HmacMaterial {
+                key: "private-key".into(),
+            }),
+            Box::new(WebhookApiKeyMaterial {
+                api_key: "private-key".into(),
+            }),
+            Box::new(AiApiKeyMaterial {
+                api_key: "private-key".into(),
+            }),
+            Box::new(AcmeAccountMaterial {
+                credentials: Zeroizing::new("private-account".into()),
+            }),
+            Box::new(TlsMaterial {
+                ca_pem: Some(b"private-ca".to_vec()),
+                client_cert_pem: Some(b"private-cert".to_vec()),
+                client_key_pem: Some(Zeroizing::new(b"private-key".to_vec())),
+            }),
+        ];
+        for material in materials {
+            for debug in [format!("{material:?}"), format!("{material:#?}")] {
+                let (_, fields) = debug.split_once('(').expect("material type prefix");
+                assert_eq!(fields, "[redacted])");
+            }
+        }
+    }
 
     #[test]
     fn basic_auth_without_username() {

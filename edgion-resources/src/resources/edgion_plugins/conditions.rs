@@ -889,12 +889,6 @@ impl PluginConditions {
         }
     }
 
-    /// Count IP-match conditions across skip and run.
-    pub fn ip_match_count(&self) -> usize {
-        self.skip.as_ref().map_or(0, ConditionSet::ip_match_count)
-            + self.run.as_ref().map_or(0, ConditionSet::ip_match_count)
-    }
-
     pub fn atomic_count(&self) -> usize {
         self.skip.as_ref().map_or(0, ConditionSet::atomic_count)
             + self.run.as_ref().map_or(0, ConditionSet::atomic_count)

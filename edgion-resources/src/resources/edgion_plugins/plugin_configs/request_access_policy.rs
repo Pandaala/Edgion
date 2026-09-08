@@ -212,28 +212,6 @@ impl RequestAccessPolicyConfig {
         self.resolved_profiles.as_ref().unwrap_or(&self.profiles)
     }
 
-    /// Count IP-match conditions across every supplemental expression.
-    pub fn ip_match_count(&self) -> usize {
-        self.runtime_profiles()
-            .values()
-            .flat_map(|profile| profile.required_rule_groups.iter())
-            .flat_map(|group| group.any_of_rules.iter())
-            .map(|rule| match &rule.rule {
-                RequestAccessRuleType::DirectPeerIp(config) | RequestAccessRuleType::RemoteIp(config) => {
-                    config.conditions.as_ref().map_or(0, ConditionSet::ip_match_count)
-                }
-                RequestAccessRuleType::Url(config) => {
-                    config.conditions.as_ref().map_or(0, ConditionSet::ip_match_count)
-                        + config
-                            .resolved_candidates
-                            .as_ref()
-                            .map(|items| items.iter().map(UrlAccessCandidate::ip_rule_count).sum::<usize>())
-                            .unwrap_or(0)
-                }
-            })
-            .sum()
-    }
-
     pub fn validates_request_body(&self) -> bool {
         self.runtime_profiles().values().any(|profile| {
             profile.required_rule_groups.iter().any(|group| {

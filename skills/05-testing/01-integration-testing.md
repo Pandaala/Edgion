@@ -457,6 +457,7 @@ Only when a **completely different process-level configuration** is needed shoul
 | `test_resource_abnormal_metrics.sh` | Slow-test-only Controller `tick_secs=30` |
 | `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
 | `run_acme_test.sh` | Standalone ACME topology |
+| `test_oidc_egress.sh` | Gateway-startup proxy environment and process-local multi-address DNS injection for both OIDC client branches |
 
 A new standalone script must include a header comment explaining "why the main environment cannot be reused"; otherwise the PR cannot be merged.
 

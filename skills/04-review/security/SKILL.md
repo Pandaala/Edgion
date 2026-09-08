@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Credential material Debug redaction](regression-guards/credential-material-debug-redaction.md)
 - [Authentication challenge realm quoted strings](regression-guards/auth-challenge-realm-quoted-strings.md)
 - [AI backend ReferenceGrant decisions are enforced through dispatch](regression-guards/ai-backend-referencegrant-enforced-through-dispatch.md)
 - [Anthropic translated responses rebuild their headers](regression-guards/anthropic-translated-responses-rebuild-headers.md)

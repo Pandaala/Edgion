@@ -34,10 +34,10 @@ pub struct CliTokenIdentity {
 ///
 /// Matches `Bearer ` case-insensitively. Returns `None` when the header is
 /// absent, is not a valid UTF-8 string, or does not start with `bearer `.
-fn extract_bearer(req: &Request<Body>) -> Option<String> {
+fn extract_bearer(req: &Request<Body>) -> Option<&str> {
     let val = req.headers().get(http::header::AUTHORIZATION)?.to_str().ok()?;
     if val.len() > 7 && val[..7].eq_ignore_ascii_case("bearer ") {
-        Some(val[7..].to_string())
+        Some(&val[7..])
     } else {
         None
     }
@@ -58,7 +58,7 @@ pub async fn cli_token_pre_authn(
     next: Next,
 ) -> Response {
     if let Some(tok) = extract_bearer(&req) {
-        if let Some((role, name)) = authorizer.cli_lookup(&tok) {
+        if let Some((role, name)) = authorizer.cli_lookup(tok) {
             req.extensions_mut().insert(role);
             req.extensions_mut().insert(CliTokenIdentity { name });
         }
@@ -78,6 +78,28 @@ mod tests {
 
     use crate::authz::{sha256_hex, Authorizer, CenterPolicy, CliTokenEntry};
     use crate::config::{FedAllowRule, FedRbacConfig};
+
+    #[test]
+    fn bearer_extraction_borrows_header_and_preserves_exact_token() {
+        for value in ["Bearer private-token", "bEaReR private-token", "Bearer  spaced-token "] {
+            let req = Request::builder()
+                .header(http::header::AUTHORIZATION, value)
+                .body(Body::empty())
+                .unwrap();
+            let token = extract_bearer(&req).unwrap();
+            let header = req.headers()[http::header::AUTHORIZATION].to_str().unwrap();
+            assert_eq!(token, &value[7..]);
+            assert!(std::ptr::eq(token.as_ptr(), header[7..].as_ptr()));
+        }
+        for value in ["", "Bearer", "Bearer ", "Basic private-token", " Bearer private-token"] {
+            let req = Request::builder()
+                .header(http::header::AUTHORIZATION, value)
+                .body(Body::empty())
+                .unwrap();
+            assert!(extract_bearer(&req).is_none());
+        }
+        assert!(extract_bearer(&Request::new(Body::empty())).is_none());
+    }
 
     /// Build an `Authorizer` with a single cli token registered under `tok`.
     fn az_with_token(tok: &str) -> Arc<Authorizer> {

@@ -627,6 +627,7 @@ run_isolated_scenarios() {
         "plugin_policy"
         "unknown_config_fields"
         "proxy_protocol_policy_lifecycle"
+        "oidc_egress"
     )
     local commands=(
         "${SCRIPT_DIR}/test_controller_no_auth.sh"
@@ -636,6 +637,7 @@ run_isolated_scenarios() {
         "${SCRIPT_DIR}/test_plugin_policy.sh"
         "${SCRIPT_DIR}/test_unknown_config_fields.sh"
         "${SCRIPT_DIR}/test_proxy_protocol_policy_lifecycle.sh"
+        "${SCRIPT_DIR}/test_oidc_egress.sh"
     )
 
     local proxy_scenarios_skipped=false

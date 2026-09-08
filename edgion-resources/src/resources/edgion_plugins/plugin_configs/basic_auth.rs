@@ -37,7 +37,7 @@ pub struct BasicAuthSecretGroup {
 /// holds either plaintext or htpasswd-format hash as stored in the Secret;
 /// gateway's `load_users()` pre-hashes plaintext to `{SHA}<base64>` at
 /// plugin construction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedBasicAuthUser {
     /// Password value as stored in Secret (plaintext or pre-hashed).
@@ -49,6 +49,12 @@ pub struct ResolvedBasicAuthUser {
     /// deserialization.
     #[serde(default = "default_group_name")]
     pub group: String,
+}
+
+impl std::fmt::Debug for ResolvedBasicAuthUser {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ResolvedBasicAuthUser([redacted])")
+    }
 }
 
 /// Basic Auth plugin configuration
@@ -157,6 +163,33 @@ impl PluginValidation for BasicAuthConfig {
 mod tests {
     use super::BasicAuthConfig;
     use std::collections::HashMap;
+
+    #[test]
+    fn resolved_password_debug_redaction_preserves_transport() {
+        for password in ["private-password", "{SHA}private-hash"] {
+            let config = BasicAuthConfig {
+                resolved_users: Some(HashMap::from([(
+                    "alice".into(),
+                    super::ResolvedBasicAuthUser {
+                        password: password.into(),
+                        group: "private-group".into(),
+                    },
+                )])),
+                ..Default::default()
+            };
+            for debug in [format!("{config:?}"), format!("{config:#?}")] {
+                assert!(debug.contains("[redacted]"));
+                assert!(!debug.contains(password));
+                assert!(!debug.contains("private-group"));
+            }
+            let wire = serde_json::to_string(&config).unwrap();
+            let decoded: BasicAuthConfig = serde_json::from_str(&wire).unwrap();
+            assert_eq!(decoded.resolved_users.unwrap()["alice"].password, password);
+            let _guard = crate::redact::AdminRedactGuard::new();
+            let admin = serde_json::to_value(&config).unwrap();
+            assert_eq!(admin["resolvedUsers"], "[redacted]");
+        }
+    }
 
     #[test]
     fn test_detect_validation_error_requires_creds_or_anonymous() {
