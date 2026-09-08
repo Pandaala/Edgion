@@ -89,13 +89,16 @@ impl StreamContext {
     }
 }
 
-/// Stream plugin trait for TCP/UDP connection filtering
+/// Connection-context plugin contract used at listener admission, during
+/// TCP/UDP route-owned lifecycles, and by the explicit legacy TLSRoute
+/// compatibility fallback. New TLS-route configurations use the separate
+/// [`crate::plugins::stream::TlsRoutePlugin`] contract.
 #[async_trait]
 pub trait StreamPlugin: Send + Sync {
     /// Get the plugin name
     fn name(&self) -> &str;
 
-    /// Execute plugin logic for a new TCP/UDP connection.
+    /// Evaluate the supplied [`StreamContext`] for this lifecycle invocation.
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult;
 }
 

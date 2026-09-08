@@ -566,10 +566,10 @@
 | `edgion-gateway/src/plugins/stream/mod.rs` | `plugins-stream` | source | changed | B0155: corrected connection-context and TLS-route runtime-family docs |
 | `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs` | `plugins-stream` | source | changed | B0156: unified enabled-invalid configuration into a gate-first fail-close runtime |
 | `edgion-gateway/src/plugins/stream/stream_plugin_store.rs` | `plugins-stream` | source | changed | B0157: documented serialized snapshot publication and strengthened replacement/delta tests |
-| `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs` | `plugins-stream` | source | changed | B0158: corrected listener, TCP/UDP and legacy TLS lifecycle contract |
 | `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
-| `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | pending | — |
-| `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | analysis-ready | B0159: TLS-route lifecycle facade correction ready for promotion |
+| `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | analysis-ready | B0160: borrowed Stage-2 context plan ready after earlier batches |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | changed | REQ-BODY-OPS-001 / `f36d7576`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/config.rs` | `request-body` | source | examined-no-change | REQ-BODY-CORE-001 / `a408d7fd` |

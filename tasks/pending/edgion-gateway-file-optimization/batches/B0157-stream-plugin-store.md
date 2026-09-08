@@ -19,4 +19,4 @@
 - Verification: `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc validation, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards passed; Clippy retained only existing warnings.
 - External gate repair: a read-only diagnostic verified that external commit `393267a1` introduced four links to omitted task records. After explicit user authorization, a separate analyst confirmed that each link represented real residual work and froze an exact four-file allow-list. A separate implementer created the HMAC quick-start, ACME DNS error-redaction, credential-ownership follow-up, and OIDC response-cap tasks; independent review returned LGTM. The validator was not weakened and the source knowledge page was not changed.
 - Integration coverage: no existing integration test was edited and no new integration-test gap was identified.
-- Commit: pending local batch commit; never push.
+- Commit: `9e51b72f`; never pushed by the campaign.
