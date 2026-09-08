@@ -22,8 +22,10 @@ pub mod auth;
 pub mod cache;
 pub mod manifest;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use sha2::{Digest, Sha256};
 use url::{Host, Origin, Url};
@@ -31,7 +33,7 @@ use url::{Host, Origin, Url};
 use edgion_resources::plugin_configs::{OciImageRef, WasmOciSpec};
 
 use self::auth::{parse_bearer_challenge, select_registry_auth, BearerChallenge, RegistryAuth};
-use self::cache::CacheKind;
+use self::cache::{ArtifactBytes, CacheAccess, CacheKind};
 use self::manifest::{
     extract_wasm_from_tar_gz, parse_manifest, select_wasm_layer, OciManifest, ParsedManifest, WasmLayer,
     MANIFEST_ACCEPT,
@@ -90,7 +92,10 @@ const OCI_BLOB_MAX_REDIRECTS: usize = 3;
 #[derive(Debug)]
 pub struct OciFetched {
     /// Final wasm bytecode (post-extraction for the compat variant).
-    pub bytes: Vec<u8>,
+    pub bytes: ArtifactBytes,
+    /// Held through the caller's byte-consuming compile stage, including
+    /// abandoned blocking work after async cancellation.
+    pub(super) pipeline: Arc<OwnedSemaphorePermit>,
     /// The digest (`sha256:<hex>`) that the image reference resolves to at
     /// the TOP level — an image manifest digest, or an index digest when the
     /// reference points at a multi-platform index. This is the value the
@@ -101,15 +106,51 @@ pub struct OciFetched {
     pub manifest_digest: String,
 }
 
-/// Fetch the wasm bytes for `spec`, disk-cache-first. The caller
+/// Fetch the wasm bytes for `spec`, memory-cache-first. The caller
 /// (`vm_manager`) already serializes same-key loads via the `LoadSlot`.
 pub async fn fetch_oci_bytes(spec: &WasmOciSpec) -> Result<OciFetched, String> {
+    let pipeline = acquire_pipeline().await?;
     let image = OciImageRef::parse(&spec.image).map_err(|e| format!("source.oci.image: {e}"))?;
-    let mut session = RegistrySession::new(&image, spec)?;
+    let session = RegistrySession::new(&image, spec)?;
+    fetch_oci_inner(session, image, pipeline).await
+}
 
-    // Manifest: disk-first for digest refs (zero network on a hit); tag refs
+async fn acquire_pipeline() -> Result<Arc<OwnedSemaphorePermit>, String> {
+    static PIPELINES: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    PIPELINES
+        .get_or_init(|| Arc::new(Semaphore::new(4)))
+        .clone()
+        .acquire_owned()
+        .await
+        .map(Arc::new)
+        .map_err(|_| "Wasm OCI acquisition capacity is closed".to_string())
+}
+
+/// Every CPU stage captures a lease clone so aborting its async waiter cannot
+/// admit another pipeline while this stage still owns full artifact buffers.
+pub(super) async fn blocking_stage<T: Send + 'static>(
+    pipeline: &Arc<OwnedSemaphorePermit>,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let pipeline = pipeline.clone();
+    let (result, _pipeline) = tokio::task::spawn_blocking(move || {
+        // Keep the permit beside the output too: when the JoinHandle is
+        // abandoned, its result bytes must drop before their pipeline lease.
+        (work(), pipeline)
+    })
+    .await
+    .map_err(|_| "Wasm OCI artifact processing task failed".to_string())?;
+    result
+}
+
+async fn fetch_oci_inner(
+    mut session: RegistrySession,
+    image: OciImageRef,
+    pipeline: Arc<OwnedSemaphorePermit>,
+) -> Result<OciFetched, String> {
+    // Manifest: memory-first for digest refs (zero network on a hit); tag refs
     // resolve over the network.
-    let (manifest_bytes, manifest_digest) = fetch_manifest(&mut session, &image).await?;
+    let (manifest_bytes, manifest_digest) = fetch_manifest(&mut session, &image, &pipeline).await?;
 
     // An index costs one more manifest hop; wasm images carry no platform
     // semantics, so take the first entry (Istio behavior). `manifest_digest`
@@ -117,12 +158,13 @@ pub async fn fetch_oci_bytes(spec: &WasmOciSpec) -> Result<OciFetched, String> {
     // identity the `Always` re-check (`resolve_manifest_digest`, which never
     // descends an index) compares against, so it must not be overwritten
     // with the child image-manifest digest here.
-    let image_manifest: OciManifest = match parse_manifest(&manifest_bytes)? {
+    let parsed = blocking_stage(&pipeline, move || parse_manifest(&manifest_bytes)).await?;
+    let image_manifest: OciManifest = match parsed {
         ParsedManifest::Image(m) => m,
         ParsedManifest::Index(entries) => {
             let digest = entries[0].digest.clone();
-            let bytes = fetch_manifest_by_digest(&mut session, &digest).await?;
-            match parse_manifest(&bytes)? {
+            let bytes = fetch_manifest_by_digest(&mut session, &digest, &pipeline).await?;
+            match blocking_stage(&pipeline, move || parse_manifest(&bytes)).await? {
                 ParsedManifest::Image(m) => m,
                 ParsedManifest::Index(_) => return Err("nested image index is not supported".to_string()),
             }
@@ -133,9 +175,20 @@ pub async fn fetch_oci_bytes(spec: &WasmOciSpec) -> Result<OciFetched, String> {
         WasmLayer::Raw(d) => (d.clone(), false),
         WasmLayer::TarGz(d) => (d.clone(), true),
     };
-    let blob = fetch_blob(&mut session, &descriptor.digest).await?;
-    let bytes = if compat { extract_wasm_from_tar_gz(&blob)? } else { blob };
-    Ok(OciFetched { bytes, manifest_digest })
+    let blob = fetch_blob(&mut session, &descriptor.digest, &pipeline).await?;
+    let bytes = if compat {
+        blocking_stage(&pipeline, move || {
+            extract_wasm_from_tar_gz(&blob).map(ArtifactBytes::from)
+        })
+        .await?
+    } else {
+        blob
+    };
+    Ok(OciFetched {
+        bytes,
+        manifest_digest,
+        pipeline,
+    })
 }
 
 /// Resolve the current manifest digest for `spec` (the `Always` pullPolicy
@@ -145,8 +198,9 @@ pub async fn resolve_manifest_digest(spec: &WasmOciSpec) -> Result<String, Strin
     if let Some(d) = &image.digest {
         return Ok(d.clone());
     }
+    let pipeline = acquire_pipeline().await?;
     let mut session = RegistrySession::new(&image, spec)?;
-    let (_, digest) = fetch_manifest(&mut session, &image).await?;
+    let (_, digest) = fetch_manifest(&mut session, &image, &pipeline).await?;
     Ok(digest)
 }
 
@@ -163,6 +217,7 @@ enum GetError {
 }
 
 struct RegistrySession {
+    cache: CacheAccess,
     /// `https://host[:port]` (`http://` for loopback registries).
     base: String,
     repo: String,
@@ -196,6 +251,7 @@ impl RegistrySession {
             block_private: default_block_private(),
         };
         Ok(RegistrySession {
+            cache: CacheAccess::active(),
             base,
             repo: image.repository.clone(),
             auth,
@@ -297,7 +353,7 @@ impl RegistrySession {
                 "GET {url}: body exceeds {max_bytes} bytes"
             )));
         }
-        Ok(body.to_vec())
+        Ok(body.into())
     }
 
     async fn send(&self, blob: bool, url: &str, accept: &str) -> Result<reqwest::Response, GetError> {
@@ -519,46 +575,87 @@ fn verify_digest(bytes: &[u8], digest: &str) -> Result<(), String> {
     }
 }
 
-async fn fetch_manifest(session: &mut RegistrySession, image: &OciImageRef) -> Result<(Vec<u8>, String), String> {
+async fn fetch_manifest(
+    session: &mut RegistrySession,
+    image: &OciImageRef,
+    pipeline: &Arc<OwnedSemaphorePermit>,
+) -> Result<(ArtifactBytes, String), String> {
     if let Some(digest) = &image.digest {
-        let bytes = fetch_manifest_by_digest(session, digest).await?;
+        let bytes = fetch_manifest_by_digest(session, digest, pipeline).await?;
         return Ok((bytes, digest.clone()));
     }
     let tag = image.tag.as_deref().unwrap_or("latest");
     let url = format!("{}/v2/{}/manifests/{}", session.base, session.repo, tag);
     let bytes = session.get(false, &url, MANIFEST_ACCEPT, MAX_MANIFEST_BYTES).await?;
-    let hex_part = hex::encode(Sha256::digest(&bytes));
-    cache::store(CacheKind::Manifest, &hex_part, &bytes);
+    let (bytes, hex_part) = blocking_stage(pipeline, move || {
+        let hex_part = hex::encode(Sha256::digest(&bytes));
+        Ok((bytes, hex_part))
+    })
+    .await?;
+    let bytes = session.cache.store_verified(CacheKind::Manifest, &hex_part, bytes);
     Ok((bytes, format!("sha256:{hex_part}")))
 }
 
-async fn fetch_manifest_by_digest(session: &mut RegistrySession, digest: &str) -> Result<Vec<u8>, String> {
-    let hex_part = digest.strip_prefix("sha256:").unwrap_or(digest);
-    if let Some(bytes) = cache::load(CacheKind::Manifest, hex_part) {
-        return Ok(bytes);
-    }
+async fn fetch_manifest_by_digest(
+    session: &mut RegistrySession,
+    digest: &str,
+    pipeline: &Arc<OwnedSemaphorePermit>,
+) -> Result<ArtifactBytes, String> {
     let url = format!("{}/v2/{}/manifests/{}", session.base, session.repo, digest);
-    let bytes = session.get(false, &url, MANIFEST_ACCEPT, MAX_MANIFEST_BYTES).await?;
-    verify_digest(&bytes, digest)?;
-    cache::store(CacheKind::Manifest, hex_part, &bytes);
-    Ok(bytes)
+    cached_verified_fetch(session.cache.clone(), CacheKind::Manifest, digest, pipeline, || {
+        session.get(false, &url, MANIFEST_ACCEPT, MAX_MANIFEST_BYTES)
+    })
+    .await
 }
 
-async fn fetch_blob(session: &mut RegistrySession, digest: &str) -> Result<Vec<u8>, String> {
+async fn fetch_blob(
+    session: &mut RegistrySession,
+    digest: &str,
+    pipeline: &Arc<OwnedSemaphorePermit>,
+) -> Result<ArtifactBytes, String> {
+    let url = format!("{}/v2/{}/blobs/{}", session.base, session.repo, digest);
+    cached_verified_fetch(session.cache.clone(), CacheKind::Blob, digest, pipeline, || {
+        session.get(true, &url, "application/octet-stream", MAX_BLOB_BYTES)
+    })
+    .await
+}
+
+/// Both immutable OCI kinds share the same claim, validation and admission
+/// boundary. The loader owns transport policy; tests inject bounded memory data.
+async fn cached_verified_fetch<F, Fut>(
+    cache: CacheAccess,
+    kind: CacheKind,
+    digest: &str,
+    pipeline: &Arc<OwnedSemaphorePermit>,
+    load: F,
+) -> Result<ArtifactBytes, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, String>>,
+{
     let hex_part = digest
         .strip_prefix("sha256:")
-        .ok_or_else(|| format!("unsupported layer digest algorithm '{digest}' (only sha256)"))?;
-    if let Some(bytes) = cache::load(CacheKind::Blob, hex_part) {
+        .ok_or_else(|| format!("unsupported digest algorithm '{digest}' (only sha256)"))?;
+    if let Some(bytes) = cache.load(kind, hex_part) {
         return Ok(bytes);
     }
-    let url = format!("{}/v2/{}/blobs/{}", session.base, session.repo, digest);
-    let bytes = session
-        .get(true, &url, "application/octet-stream", MAX_BLOB_BYTES)
-        .await?;
-    verify_digest(&bytes, digest)?;
-    cache::store(CacheKind::Blob, hex_part, &bytes);
-    Ok(bytes)
+    let _claim = cache.claim(kind, hex_part).await;
+    if let Some(bytes) = cache.load(kind, hex_part) {
+        return Ok(bytes);
+    }
+    let bytes = load().await?;
+    let expected = digest.to_string();
+    let bytes = blocking_stage(pipeline, move || {
+        verify_digest(&bytes, &expected)?;
+        Ok(bytes)
+    })
+    .await?;
+    Ok(cache.store_verified(kind, hex_part, bytes))
 }
+
+#[cfg(test)]
+#[path = "memory_pipeline_tests.rs"]
+mod memory_pipeline_tests;
 
 #[cfg(test)]
 mod tests {
@@ -606,7 +703,7 @@ mod tests {
         let manifest = image_manifest(WASM, manifest::MEDIA_TYPE_WASM_LAYER);
         mount_image(&server, "1.0.0", &manifest, WASM).await;
         let fetched = fetch_oci_bytes(&spec_for(&server, "test/wasm:1.0.0")).await.unwrap();
-        assert_eq!(fetched.bytes, WASM);
+        assert_eq!(fetched.bytes.as_ref(), WASM);
         assert_eq!(fetched.manifest_digest, digest_of(&manifest));
     }
 
@@ -628,7 +725,7 @@ mod tests {
         let manifest = image_manifest(&layer, "application/vnd.docker.image.rootfs.diff.tar.gzip");
         mount_image(&server, "compat", &manifest, &layer).await;
         let fetched = fetch_oci_bytes(&spec_for(&server, "test/wasm:compat")).await.unwrap();
-        assert_eq!(fetched.bytes, WASM);
+        assert_eq!(fetched.bytes.as_ref(), WASM);
     }
 
     #[tokio::test]
@@ -675,7 +772,7 @@ mod tests {
         let mut spec = spec_for(&server, "test/wasm:1.0.0");
         spec.resolved_pull_secret = Some(format!(r#"{{"auths":{{"{host}":{{"auth":"{auth_b64}"}}}}}}"#));
         let fetched = fetch_oci_bytes(&spec).await.unwrap();
-        assert_eq!(fetched.bytes, WASM);
+        assert_eq!(fetched.bytes.as_ref(), WASM);
     }
 
     #[test]
@@ -1101,7 +1198,7 @@ mod tests {
         let mut spec = spec_for(&server, "test/wasm:1.0.0");
         spec.resolved_pull_secret = Some(format!(r#"{{"auths":{{"{host}":{{"auth":"{auth_b64}"}}}}}}"#));
         let fetched = fetch_oci_bytes(&spec).await.unwrap();
-        assert_eq!(fetched.bytes, WASM);
+        assert_eq!(fetched.bytes.as_ref(), WASM);
     }
 
     #[tokio::test]
@@ -1288,7 +1385,7 @@ mod tests {
             .mount(&server)
             .await;
         let fetched = fetch_oci_bytes(&spec_for(&server, "test/wasm:multi")).await.unwrap();
-        assert_eq!(fetched.bytes, WASM);
+        assert_eq!(fetched.bytes.as_ref(), WASM);
         assert_eq!(fetched.manifest_digest, digest_of(&index));
 
         // The Always re-check must agree with the stored identity, or an

@@ -58,9 +58,14 @@ lengths.
 still runs over the bounded accumulated bytes, so the security check is
 unchanged.
 
-**3. The concurrency bound was never the issue.** `url_fetch_permits()` already
-caps concurrent acquisitions to four process-wide; the finding was about bytes
-**per body**, not the number of bodies. The fix addresses exactly that.
+**3. Scope of the concurrency evidence.** The historical fix addressed bytes
+per HTTP body. `url_fetch_permits()` bounds active request attempts and releases
+its permit before post-download processing; it does not by itself bound all
+retained downloads, digest work, extraction, or compilation. D0074 adds a
+separate OCI pipeline lease; see the
+[bounded artifact-cache decision](../../wasm/intentional-design/bounded-oci-artifact-memory-cache.md).
+Do not use the historical four-request limit as evidence of a whole-pipeline
+memory bound.
 
 **4. Test coverage & its limit.** The regression tests serve honestly-oversized
 bodies, so they exercise the Content-Length fast-reject. The **false / absent /

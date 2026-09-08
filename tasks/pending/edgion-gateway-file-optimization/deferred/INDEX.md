@@ -152,7 +152,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
 | Isolate Wasm host panics at VM boundaries | completed | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
-| Offload Wasm OCI disk cache I/O | pending | [task](../../../todo/offload-wasm-oci-disk-cache-io.md) |
 | Offload Wasm OCI manifest parsing and archive extraction | pending | [task](../../../todo/offload-wasm-oci-manifest-parsing-and-extraction.md) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |

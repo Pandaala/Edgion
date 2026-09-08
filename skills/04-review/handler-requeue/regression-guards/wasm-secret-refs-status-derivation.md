@@ -100,7 +100,7 @@ plane was never at risk. No gateway change was made.
   `handlers/plugins/resolve_credential/wasm.rs` (the resolver being mirrored)
 - Tests: `edgion_plugins.rs` `tests::test_wasm_*` (11 cases)
 - Sibling Wasm findings: [architecture/wasm-module-cache-key-runtime-config.md](../../wasm/regression-guards/wasm-module-cache-key-runtime-config.md) (contract-01),
-  [cpu-memory/wasm-oci-purge-interval-zero-clamp.md](../../cpu-memory/regression-guards/wasm-oci-purge-interval-zero-clamp.md) (contract-03)
+  [historical disk-purge interval clamp](../../cpu-memory/superseded/wasm-oci-purge-interval-zero-clamp.md) (contract-03, superseded)
 
 ## Resolution references
 

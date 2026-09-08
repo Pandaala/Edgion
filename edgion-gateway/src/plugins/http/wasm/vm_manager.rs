@@ -21,7 +21,7 @@
 //! - Bytecode fetch supports `file` (read relative to the gateway work dir),
 //!   `inline` (base64), `url` (plain `reqwest::get` with a fixed timeout,
 //!   200-only), and `oci` (pulled via `super::oci::fetch_oci_bytes`, which is
-//!   disk-cache-first; see `oci::cache` for the on-disk layer). An `oci`
+//!   memory-cache-first; see `oci::cache` for bounded artifact retention). An `oci`
 //!   source with `pullPolicy: Always` is re-checked against the registry at
 //!   most every `OCI_ALWAYS_RECHECK_SECS`: request and response paths can
 //!   claim one background refresh with lock-free checks. An unchanged digest
@@ -724,6 +724,7 @@ impl WasmVmManager {
     /// `unregister_plugin` in the plugin's `Drop`; the count keeps the cache
     /// entry alive across reloads that still reference the same source.
     pub fn register_plugin(&self, cache_key: &str, grant: CalloutGrant) {
+        super::oci::cache::register_owner();
         *self.cache.refs.entry(cache_key.to_string()).or_insert(0) += 1;
         self.cache.tick_callout_state(cache_key).add(grant);
     }
@@ -735,6 +736,7 @@ impl WasmVmManager {
     /// refs, so removal from the map only unpins the entry — memory is freed
     /// once the last lease returns.
     pub fn unregister_plugin(&self, cache_key: &str, metrics_label: &str, grant: &CalloutGrant) {
+        super::oci::cache::unregister_owner();
         self.cache.tick_callout_state(cache_key).remove(grant);
         let now_zero = match self.cache.refs.get_mut(cache_key) {
             Some(mut count) => {
@@ -932,7 +934,7 @@ impl WasmVmManager {
     {
         let vm_config = decode_guest_config("vmConfig", config.vm_config.as_ref())?;
         let plugin_config = decode_guest_config("pluginConfig", config.plugin_config.as_ref())?;
-        let (bytes, oci_meta) = match &config.source.oci {
+        let (bytes, oci_meta, oci_pipeline) = match &config.source.oci {
             Some(spec) => {
                 let fetched = super::oci::fetch_oci_bytes(spec).await?;
                 (
@@ -940,9 +942,14 @@ impl WasmVmManager {
                     Some(OciLoadedMeta {
                         manifest_digest: fetched.manifest_digest,
                     }),
+                    Some(fetched.pipeline),
                 )
             }
-            None => (fetch_bytes(&config.source).await?, None),
+            None => (
+                super::oci::cache::ArtifactBytes::from(fetch_bytes(&config.source).await?),
+                None,
+                None,
+            ),
         };
         let label = config.source.metrics_label();
         let expected_sha256 = config.sha256.clone();
@@ -952,29 +959,32 @@ impl WasmVmManager {
         // Keep the entire ordered pipeline off Tokio worker threads. Measure
         // only Module::new inside the closure so the compile metric retains its
         // historical meaning.
-        let (module, compatibility, compile_duration) = tokio::task::spawn_blocking(
-            move || -> Result<(Module, edgion_wasm::CompatibilityReport, Duration), String> {
-                if let Some(expected) = expected_sha256 {
-                    let actual = hex::encode(Sha256::digest(&bytes));
-                    if !actual.eq_ignore_ascii_case(&expected) {
-                        return Err(format!("sha256 mismatch: expected {expected}, got {actual}"));
-                    }
+        let compile = move || -> Result<(Module, edgion_wasm::CompatibilityReport, Duration), String> {
+            if let Some(expected) = expected_sha256 {
+                let actual = hex::encode(Sha256::digest(&bytes));
+                if !actual.eq_ignore_ascii_case(&expected) {
+                    return Err(format!("sha256 mismatch: expected {expected}, got {actual}"));
                 }
-                let compatibility = edgion_wasm::analyze(&bytes);
-                if !compatibility.compatible {
-                    return Err("wasm compatibility check failed".to_string());
-                }
-                let compile_start = Instant::now();
-                let module = Module::new(&compile_engine, &bytes).map_err(|_| "wasm compile failed".to_string())?;
-                Ok((
-                    module,
-                    compatibility,
-                    Instant::now().saturating_duration_since(compile_start),
-                ))
-            },
-        )
-        .await
-        .map_err(|_| "wasm validation/compile task failed".to_string())??;
+            }
+            let compatibility = edgion_wasm::analyze(&bytes);
+            if !compatibility.compatible {
+                return Err("wasm compatibility check failed".to_string());
+            }
+            let compile_start = Instant::now();
+            let module = Module::new(&compile_engine, &bytes).map_err(|_| "wasm compile failed".to_string())?;
+            Ok((
+                module,
+                compatibility,
+                Instant::now().saturating_duration_since(compile_start),
+            ))
+        };
+        let (module, compatibility, compile_duration) = if let Some(pipeline) = oci_pipeline {
+            super::oci::blocking_stage(&pipeline, compile).await?
+        } else {
+            tokio::task::spawn_blocking(compile)
+                .await
+                .map_err(|_| "wasm validation/compile task failed".to_string())??
+        };
         record_wasm_compile_duration(&label, compile_duration.as_secs_f64() * 1000.0);
         if compatibility
             .warnings

@@ -29,18 +29,16 @@ gateway's OCI puller understands:
   `IfNotPresent` for any other tag. A digest-pinned ref (`@sha256:...`) is
   **always** treated as pinned regardless of `pullPolicy`
   (`WasmOciSpec::effective_pull_policy`).
-- A digest-pinned ref never re-pulls: the manifest is loaded disk-cache-first
-  by content digest, and so is the blob. On a cold gateway process (e.g.
-  after a restart) with a warm disk cache, a pinned plugin loads with **zero**
-  registry traffic.
+- A digest-pinned ref uses verified in-memory manifest and blob entries when
+  available. Cache eviction or a Gateway restart requires downloading them
+  again. A loaded compiled module does not periodically re-pull a pinned ref.
 - `pullPolicy: Always` re-checks the tag's manifest digest against the
   registry at most once every 60 seconds (`OCI_ALWAYS_RECHECK_SECS` in
   `edgion-gateway/src/plugins/http/wasm/vm_manager.rs`); an unchanged digest
   keeps the already-loaded module, a changed digest reloads it in place.
-- The disk cache directory defaults to `wasm-oci-cache/` under the gateway
-  work directory (`gateway.wasm_oci_cache_dir` in `edgion-gateway.yaml`,
-  unset = `wasm-oci-cache`). Entries are content-addressed
-  (`<sha256-hex>.manifest.json` / `<sha256-hex>.blob`).
+- The process-memory artifact cache defaults to 256 MiB and 256 entries,
+  with a 24-hour idle TTL and 60-second sweep. Zero byte or entry capacity
+  disables retention. It does not persist files or reuse old disk caches.
 - The gateway treats a loopback registry host (`localhost`, `127.0.0.0/8`,
   `::1`) as plain HTTP — no TLS setup is needed to test against a local
   `registry:2`. Non-loopback registries require `https://` with a verifiable
@@ -222,39 +220,28 @@ This is the same assertion the automated integration suite makes for
 `edgion-tests/src/client/suites/edgion_plugins/wasm/wasm.rs` — only the
 bytecode's origin changed.
 
-## Step 5: Restart-then-disk-hit check
+## Step 5: Process-memory cache lifecycle check
 
-This proves the disk cache is actually load-bearing, not just present.
-
-1. Confirm the gateway's work directory now has a populated
-   `wasm-oci-cache/` (or your configured `wasm_oci_cache_dir`):
-
-   ```bash
-   ls <gateway-work-dir>/wasm-oci-cache/
-   # <hex>.manifest.json  <hex>.blob  ...
-   ```
-
-2. **Stop the registry** so any live network pull would visibly fail:
+1. Load a digest-pinned plugin successfully, then stop the registry:
 
    ```bash
    docker stop edgion-oci-e2e
    ```
 
-3. Restart the gateway process (a fresh process has an empty in-memory
-   module cache, so this forces a real `get_or_load` on the next request).
+2. Re-run the Step 4 `curl` without restarting the Gateway. The already
+   loaded module continues serving; this checks module lifetime, not a new
+   artifact-cache lookup.
 
-4. Re-run the Step 4 `curl`.
+3. Restart the Gateway while the registry remains stopped. Both pinned and
+   tagged sources now fail to load: a new process has neither artifacts nor
+   compiled modules, and no disk-cache fallback exists.
 
-   - **Digest-pinned plugin**: succeeds unchanged — both the manifest and
-     the blob are loaded straight from disk by content digest, with zero
-     registry traffic (the registry is stopped and it still works).
-   - **Tag-form plugin**: fails to load (tag manifests are always
-     re-resolved over the network to catch a moved tag) — this is expected;
-     restart the registry (`docker start edgion-oci-e2e`) to bring it back,
-     then confirm the plugin loads again and that only a manifest `GET`
-     hits the registry, never a blob `GET`, by tailing the registry's
-     container logs (`docker logs -f edgion-oci-e2e`) while restarting the
-     gateway once more.
+4. Restart the registry (`docker start edgion-oci-e2e`) and allow the existing
+   module-load retry window to elapse. Confirm loading recovers. The registry
+   receives manifest and blob requests as needed for a fresh process.
+
+Deterministic crate-local tests separately cover artifact-cache hits, LRU and
+idle expiry, byte/count limits, cancellation, and final-owner cleanup.
 
 ## Step 6: Private registry (htpasswd + pull secret)
 

@@ -167,15 +167,33 @@ scratch). `sha256` stays optional for OCI sources — the digest chain already
 covers transport integrity — and, when set, is verified against the final
 wasm bytes as for every other source.
 
-Pulled manifests and blobs are cached on local disk (default
-`wasm-oci-cache/` under the gateway work directory; recommend an emptyDir
-mount in Kubernetes) so a gateway restart does not re-download pinned
-content. The cache is bounded: entries unused for 24h are purged, and a
-total-size budget (default 512MiB) is enforced on every write with LRU
-eviction. Pull timeout and retry attempts are tunable too. See the gateway
-config fields `wasm_oci_cache_dir`, `wasm_oci_cache_ttl_secs`,
-`wasm_oci_cache_purge_interval_secs`, `wasm_oci_cache_max_bytes`,
-`wasm_oci_pull_timeout_secs`, `wasm_oci_pull_attempts`.
+Verified manifests and blobs are cached in process memory, keyed by content
+digest. Defaults are 256 MiB of retained payload allocations and 256 entries.
+LRU eviction makes room for new entries; entries idle for 24 hours expire,
+with a background sweep every 60 seconds. Set `wasm_oci_cache_max_bytes` or
+`wasm_oci_cache_max_entries` to `0` to disable retention. Capacity pressure
+may bypass caching without failing an otherwise valid module load.
+
+There is no OCI disk cache or cache-directory setting. A Gateway restart
+requires downloading the artifacts again, including digest-pinned images.
+Existing cache files from older builds are not read or automatically deleted.
+Removing the last Wasm plugin clears the artifact cache. This does not evict
+live compiled modules or interrupt requests holding a module reference.
+
+The byte budget counts payload allocation capacity, including evicted bytes
+still borrowed by loaders. It is not a limit on total Wasm or process memory:
+up to four OCI acquisition pipelines can additionally hold bounded download
+and extraction buffers, while compilation, VM instances, and guest memory
+have separate lifetimes. Shared cache hits do not clone the full payload.
+The manifest, blob, extracted-module, and token-response limits remain
+4 MiB, 64 MiB, 64 MiB, and 64 KiB respectively.
+
+Gateway configuration fields: `wasm_oci_cache_max_bytes`,
+`wasm_oci_cache_max_entries`, `wasm_oci_cache_ttl_secs`,
+`wasm_oci_cache_purge_interval_secs`, `wasm_oci_pull_timeout_secs`, and
+`wasm_oci_pull_attempts`. Entry capacity above 65,536 is rejected; zero TTL
+or sweep intervals are clamped to one second. Pull timeout and retries are
+independent of the cache limits.
 
 Limitations (v1): registries must present a publicly-verifiable TLS
 certificate (loopback registries use plain HTTP for local testing); no

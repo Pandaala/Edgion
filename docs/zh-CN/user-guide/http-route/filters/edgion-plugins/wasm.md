@@ -162,13 +162,26 @@ source:
 OCI 来源的 `sha256` 仍是可选项——digest 链路本身已覆盖传输完整性——若设置，
 会像其他来源一样对最终 wasm 字节做校验。
 
-拉取到的 manifest 与 blob 会缓存在本地磁盘（默认网关工作目录下的
-`wasm-oci-cache/`；Kubernetes 中建议挂载 emptyDir），因此网关重启不会重新
-下载已固定的内容。缓存有边界：超过 24h 未使用的条目会被清理，写入时按
-总量预算（默认 512MiB）做 LRU 淘汰。拉取超时与重试次数同样可调。参见网关
-配置字段 `wasm_oci_cache_dir`、`wasm_oci_cache_ttl_secs`、
-`wasm_oci_cache_purge_interval_secs`、`wasm_oci_cache_max_bytes`、
-`wasm_oci_pull_timeout_secs`、`wasm_oci_pull_attempts`。
+通过摘要校验的 manifest 与 blob 按内容摘要缓存在进程内存中。默认保留预算为
+256 MiB、最多 256 个条目；容量不足时按 LRU 淘汰，闲置 24 小时过期，后台每
+60 秒清理一次。将 `wasm_oci_cache_max_bytes` 或 `wasm_oci_cache_max_entries`
+设为 `0` 可禁用缓存保留。预算不足时可以跳过缓存，不影响有效模块的本次加载。
+
+OCI 不再使用磁盘缓存或缓存目录配置。网关重启后需要重新下载制品，包括按
+摘要固定的镜像。旧版本留下的缓存文件不会被读取或自动删除。最后一个 Wasm
+插件移除时会清空制品缓存；正在使用的编译模块及在途请求持有的模块引用不受影响。
+
+字节预算统计载荷的实际分配容量，包括已从缓存淘汰、但仍被加载任务引用的字节。
+它不是全部 Wasm 或进程内存的上限：最多四条 OCI 加载流水线还可持有受大小限制的
+下载及解压缓冲区，编译结果、VM 实例和 guest 内存另有生命周期。缓存命中共享
+原始字节，不复制整个载荷。manifest、blob、解压模块和令牌响应的大小上限分别
+保持为 4 MiB、64 MiB、64 MiB 和 64 KiB。
+
+相关网关配置字段为 `wasm_oci_cache_max_bytes`、`wasm_oci_cache_max_entries`、
+`wasm_oci_cache_ttl_secs`、`wasm_oci_cache_purge_interval_secs`、
+`wasm_oci_pull_timeout_secs` 和 `wasm_oci_pull_attempts`。条目上限超过 65,536
+会被拒绝；TTL 或清理周期为零时在启动阶段调整为一秒。拉取超时及重试次数
+独立于缓存容量限制。
 
 限制（v1）：镜像仓库必须提供可公开验证的 TLS 证书（本地测试用的 loopback
 仓库可使用明文 HTTP）；不支持镜像仓库镜像（registry mirror）。对于静态部署，

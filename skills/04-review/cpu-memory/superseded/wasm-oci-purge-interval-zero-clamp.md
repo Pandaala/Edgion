@@ -1,13 +1,20 @@
 ---
 name: wasm-oci-purge-interval-zero-clamp
-description: Use when reviewing findings that a zero/sub-second wasm_oci_cache_purge_interval_secs busy-loops the OCI disk-cache purge task; covers the startup-clamp fix.
-status: fixed
+description: Historical disk-cache purge interval correction, superseded by the bounded OCI memory cache.
+status: superseded
 finding_id: contract-03
 closed: 2026-07-18
-knowledge_type: regression-guards
+knowledge_type: superseded
 ---
 
-# Zero Wasm OCI purge interval busy loop — FIXED (clamped to a 1s floor)
+# Historical disk-cache purge interval clamp — superseded
+
+This page is inactive historical evidence. D0074 replaces the disk cache with
+a [bounded OCI memory cache](../../wasm/intentional-design/bounded-oci-artifact-memory-cache.md).
+The sections below describe the removed implementation and its historical
+verification, not current configuration or a reason to dismiss a new defect.
+The replacement keeps a minimum maintenance interval but has no disk files,
+cache directory, or unlimited byte-budget mode.
 
 ## Conclusion
 

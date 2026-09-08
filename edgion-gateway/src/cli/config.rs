@@ -265,30 +265,31 @@ pub struct GatewayConfig {
     #[serde(default = "default_outbound_egress_dns_cache_ttl_ms")]
     pub outbound_egress_dns_cache_ttl_ms: u64,
 
-    /// Directory for the Wasm OCI image disk cache (manifests + layer blobs,
-    /// content-addressed). Relative paths resolve against the work directory.
-    /// Unset uses `wasm-oci-cache`; an empty string disables disk caching.
-    #[arg(skip)]
-    #[serde(default)]
-    pub wasm_oci_cache_dir: Option<String>,
-
-    /// Seconds since last use before a cached OCI file is purged (default 24h).
+    /// Seconds since last use before an OCI memory-cache entry expires (default 24h).
+    /// Zero is clamped to one second at startup.
     #[arg(skip)]
     #[serde(default = "default_wasm_oci_cache_ttl_secs")]
     pub wasm_oci_cache_ttl_secs: u64,
 
-    /// Seconds between purge sweeps of the OCI disk cache (default 1h).
+    /// Seconds between sweeps of the OCI memory cache (default 60s).
     /// Values below 1 second (including `0`) are clamped up to 1 second at
     /// startup to avoid a busy purge loop; `0` carries no "disable" meaning.
     #[arg(skip)]
     #[serde(default = "default_wasm_oci_cache_purge_interval_secs")]
     pub wasm_oci_cache_purge_interval_secs: u64,
 
-    /// Total-size budget in bytes for the OCI disk cache (default 512MiB).
-    /// Enforced on every write with LRU eviction; `0` removes the cap.
+    /// Retained OCI payload allocation budget (default 256MiB), including
+    /// evicted payloads still borrowed by loaders. Zero disables retention.
+    /// In-flight acquisition and compiled VM memory have separate bounds.
     #[arg(skip)]
     #[serde(default = "default_wasm_oci_cache_max_bytes")]
     pub wasm_oci_cache_max_bytes: u64,
+
+    /// Maximum retained OCI manifest/blob entries (default 256, at most 65536).
+    /// Zero disables retention; this is not a limit on compiled modules.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_max_entries")]
+    pub wasm_oci_cache_max_entries: usize,
 
     /// Per-request timeout in seconds for OCI pull requests (manifest, token,
     /// and blob alike; istio-agent WASM_HTTP_REQUEST_TIMEOUT parity). Default 60.
@@ -312,10 +313,13 @@ fn default_wasm_oci_cache_ttl_secs() -> u64 {
     86_400
 }
 fn default_wasm_oci_cache_purge_interval_secs() -> u64 {
-    3_600
+    60
 }
 fn default_wasm_oci_cache_max_bytes() -> u64 {
-    512 * 1024 * 1024
+    256 * 1024 * 1024
+}
+fn default_wasm_oci_cache_max_entries() -> usize {
+    256
 }
 fn default_wasm_oci_pull_timeout_secs() -> u64 {
     60
@@ -336,10 +340,10 @@ impl Default for GatewayConfig {
             fips_policy: None,
             outbound_egress_block_private: false,
             outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
-            wasm_oci_cache_dir: None,
             wasm_oci_cache_ttl_secs: default_wasm_oci_cache_ttl_secs(),
             wasm_oci_cache_purge_interval_secs: default_wasm_oci_cache_purge_interval_secs(),
             wasm_oci_cache_max_bytes: default_wasm_oci_cache_max_bytes(),
+            wasm_oci_cache_max_entries: default_wasm_oci_cache_max_entries(),
             wasm_oci_pull_timeout_secs: default_wasm_oci_pull_timeout_secs(),
             wasm_oci_pull_attempts: default_wasm_oci_pull_attempts(),
         }
@@ -1529,21 +1533,21 @@ genai_tokens:
     #[test]
     fn wasm_oci_cache_fields_parse_and_default() {
         let cfg = GatewayConfig::default();
-        assert_eq!(cfg.wasm_oci_cache_dir, None);
         assert_eq!(cfg.wasm_oci_cache_ttl_secs, 86_400);
-        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 3_600);
-        assert_eq!(cfg.wasm_oci_cache_max_bytes, 512 * 1024 * 1024);
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 60);
+        assert_eq!(cfg.wasm_oci_cache_max_bytes, 256 * 1024 * 1024);
+        assert_eq!(cfg.wasm_oci_cache_max_entries, 256);
         let cfg: GatewayConfig = serde_yaml::from_str(
-            "wasm_oci_cache_dir: \"\"\nwasm_oci_cache_ttl_secs: 60\n\
+            "wasm_oci_cache_max_entries: 0\nwasm_oci_cache_ttl_secs: 60\n\
              wasm_oci_cache_purge_interval_secs: 30\nwasm_oci_cache_max_bytes: 0\n",
         )
         .unwrap();
-        assert_eq!(cfg.wasm_oci_cache_dir.as_deref(), Some(""));
+        assert_eq!(cfg.wasm_oci_cache_max_entries, 0);
         assert_eq!(cfg.wasm_oci_cache_ttl_secs, 60);
         assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 30);
         assert_eq!(cfg.wasm_oci_cache_max_bytes, 0);
         // A zero purge interval parses as-is (no "disable" semantics); the
-        // busy-loop guard is a startup clamp in `configure_oci_disk_cache`,
+        // busy-loop guard is a startup clamp in `configure_oci_memory_cache`,
         // not a parse-time rejection.
         let cfg: GatewayConfig = serde_yaml::from_str("wasm_oci_cache_purge_interval_secs: 0\n").unwrap();
         assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 0);

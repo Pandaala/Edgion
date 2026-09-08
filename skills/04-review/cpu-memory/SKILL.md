@@ -50,7 +50,6 @@ before applying a decision to current code.
 - [UDP `handle_client_packet` Per-Packet Route Pipeline for Established Sessions — FIXED (F-016)](regression-guards/udp-established-session-route-pipeline-per-packet.md)
 - [Wasm guest amplifying host memory via unbounded retained ABI state — FIXED](regression-guards/wasm-abi-retention-budget.md)
 - [Wasm artifact response bodies buffered before the size check — FIXED (streaming cap)](regression-guards/wasm-artifact-response-streaming-cap.md)
-- [Zero Wasm OCI purge interval busy loop — FIXED (clamped to a 1s floor)](regression-guards/wasm-oci-purge-interval-zero-clamp.md)
 
 ## Review evidence
 
@@ -73,4 +72,5 @@ before applying a decision to current code.
 
 ## Superseded decisions
 
+- [Historical Wasm OCI disk-purge interval clamp](superseded/wasm-oci-purge-interval-zero-clamp.md)
 - [`IncludeCondition` / `ExcludeCondition` HashSet/Wildcard Bucket Split (plugins-runtime-F005)](superseded/conditions-hashset-wildcard-bucket-split.md)

@@ -499,20 +499,16 @@ impl EdgionGatewayCli {
             Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
         );
 
-        // 4e. Wasm OCI disk cache: unset dir => default under the work dir;
-        // empty string => disabled (memory-only module cache).
+        // 4e. Wasm OCI artifacts are retained only in bounded process memory.
         {
-            use crate::plugins::http::wasm::oci::cache::{configure_oci_disk_cache, OciDiskCacheConfig};
-            let cache_cfg = match config.gateway.wasm_oci_cache_dir.as_deref() {
-                Some("") => None,
-                other => Some(OciDiskCacheConfig {
-                    dir: edgion_resources::work_dir().resolve(other.unwrap_or("wasm-oci-cache")),
-                    ttl: Duration::from_secs(config.gateway.wasm_oci_cache_ttl_secs),
-                    purge_interval: Duration::from_secs(config.gateway.wasm_oci_cache_purge_interval_secs),
-                    max_bytes: config.gateway.wasm_oci_cache_max_bytes,
-                }),
-            };
-            configure_oci_disk_cache(cache_cfg);
+            use crate::plugins::http::wasm::oci::cache::{configure_oci_memory_cache, OciMemoryCacheConfig};
+            configure_oci_memory_cache(OciMemoryCacheConfig {
+                ttl: Duration::from_secs(config.gateway.wasm_oci_cache_ttl_secs),
+                purge_interval: Duration::from_secs(config.gateway.wasm_oci_cache_purge_interval_secs),
+                max_bytes: config.gateway.wasm_oci_cache_max_bytes,
+                max_entries: config.gateway.wasm_oci_cache_max_entries,
+            })
+            .map_err(|error| anyhow!("Failed to initialize Wasm OCI memory cache: {error}"))?;
             crate::plugins::http::wasm::oci::configure_oci_pull(
                 Duration::from_secs(config.gateway.wasm_oci_pull_timeout_secs),
                 config.gateway.wasm_oci_pull_attempts,

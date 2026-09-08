@@ -384,6 +384,7 @@ async fn clear_access_logs() -> Json<ApiResponse<String>> {
 /// Response for /api/v1/debug/store-stats
 #[derive(Serialize)]
 struct StoreStatsResponse {
+    wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats,
     http_routes: crate::routes::http::HttpRouteManagerStats,
     grpc_routes: crate::routes::grpc::GrpcRouteManagerStats,
     tcp_routes: crate::routes::tcp::TcpRouteManagerStats,
@@ -488,6 +489,7 @@ struct PluginStoreStatsV2 {
 
 /// Collect statistics from all derived stores for config-sync leak detection.
 async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<StoreStatsResponse>> {
+    let wasm_oci_cache = crate::plugins::http::wasm::oci::cache::memory_cache_stats();
     let http_routes = crate::routes::http::get_global_http_route_managers().stats();
     let grpc_routes = crate::routes::grpc::get_global_grpc_route_managers().stats();
     let tcp_routes = crate::routes::tcp::get_global_tcp_route_managers().stats();
@@ -586,6 +588,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     };
 
     Json(ApiResponse::ok_body(StoreStatsResponse {
+        wasm_oci_cache,
         http_routes,
         grpc_routes,
         tcp_routes,
@@ -1881,6 +1884,11 @@ mod store_stats_tests {
     #[test]
     fn store_stats_response_serializes() {
         let resp = StoreStatsResponse {
+            wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats {
+                entries: 0,
+                keys: Vec::new(),
+                retained_bytes: 0,
+            },
             http_routes: crate::routes::http::HttpRouteManagerStats {
                 exact_domains: 0,
                 wildcard_domains: 0,
@@ -1962,6 +1970,9 @@ mod store_stats_tests {
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.is_object());
+        assert_eq!(json["wasm_oci_cache"]["entries"], 0);
+        assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
+        assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));
         assert!(json.get("client_caches").is_some());
         assert!(json.get("service_discovery").is_some());
         assert!(json.get("service_store").is_none());

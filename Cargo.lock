@@ -1744,7 +1744,6 @@ dependencies = [
  "edgion-wasm",
  "etcd-client",
  "expect-test",
- "filetime",
  "flate2",
  "foreign-types",
  "fred",

@@ -107,7 +107,6 @@ axum-server.workspace = true
 # Utilities
 bytes.workspace = true
 base64.workspace = true
-filetime.workspace = true
 flate2.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
