@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Debug access-log response header: accepted development-only limitations](intentional-design/debug-access-log-development-surface.md)
+
 - [`BandwidthLimit::create` invalid-rate path — NO RUNTIME LOG, DOC CLARIFIED](intentional-design/bandwidth-limit-invalid-rate-no-tracing.md)
 - [`ServerCache::apply_change` per-change INFO is intentionally kept at INFO](intentional-design/cache-server-apply-change-info-level.md)
 - [DSL runtime-error line numbers in access log — DESIGN-TRADEOFF (DECLINED)](intentional-design/dsl-error-line-number-declined.md)
