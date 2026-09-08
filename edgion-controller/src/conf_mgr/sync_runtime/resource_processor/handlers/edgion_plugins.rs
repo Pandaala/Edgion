@@ -1735,6 +1735,9 @@ profiles:
 
     #[tokio::test]
     async fn test_parse_resolves_hmac_credentials_and_registers_refs() {
+        use std::io::{Read, Seek};
+        use tracing::instrument::WithSubscriber;
+
         let credentials_yaml = r#"
 - username: alice
   secret: alice-secret-32-bytes-0123456789abcd
@@ -1749,6 +1752,32 @@ profiles:
         let hmac_secret = build_secret("default", "hmac-credentials", "credentials.yaml", credentials_yaml);
         let mut secrets = HashMap::new();
         secrets.insert("default/hmac-credentials".to_string(), hmac_secret);
+        // Both malformed and truncated UTF-8 must be skipped before YAML parsing.
+        let mut secret_refs = Vec::new();
+        for (name, suffix) in [("invalid-hmac", &[0xff][..]), ("truncated-hmac", &[0xe2, 0x82][..])] {
+            let mut secret = build_secret("default", name, "credentials.yaml", "private-credential-marker");
+            secret
+                .data
+                .as_mut()
+                .unwrap()
+                .get_mut("credentials.yaml")
+                .unwrap()
+                .0
+                .extend_from_slice(suffix);
+            secrets.insert(format!("default/{name}"), secret);
+            secret_refs.push(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: name.to_string(),
+                namespace: None,
+            });
+        }
+        secret_refs.push(SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "hmac-credentials".to_string(),
+            namespace: None,
+        });
 
         let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
@@ -1759,12 +1788,7 @@ profiles:
                 secret_groups: Some(vec![HmacAuthSecretGroup {
                     name: "default".to_string(),
                     description: None,
-                    secret_refs: vec![SecretObjectReference {
-                        group: None,
-                        kind: None,
-                        name: "hmac-credentials".to_string(),
-                        namespace: None,
-                    }],
+                    secret_refs,
                 }]),
                 ..Default::default()
             },
@@ -1772,11 +1796,29 @@ profiles:
             ..Default::default()
         }))]);
 
+        let mut log_file = tempfile::tempfile().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log_file.try_clone().unwrap())
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_ansi(false)
+            .finish();
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx).await {
+        let parsed = match handler.parse(ep, &ctx).with_subscriber(subscriber).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
+        log_file.rewind().unwrap();
+        let mut logs = String::new();
+        log_file.read_to_string(&mut logs).unwrap();
+        assert_eq!(logs.matches("Failed to decode credentials.yaml as UTF-8").count(), 2);
+        assert!(logs.contains("secret_key=default/invalid-hmac"));
+        assert!(logs.contains("secret_key=default/truncated-hmac"));
+        assert!(!logs.contains("Failed to parse credentials.yaml"));
+        assert!(!logs.contains("private-credential-marker"));
+        for name in ["invalid-hmac", "truncated-hmac"] {
+            assert_eq!(ctx.secret_ref_manager().get_refs(&format!("default/{name}")).len(), 1);
+        }
 
         let entry = parsed
             .spec

@@ -20,6 +20,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [HMAC credential YAML decoding borrows the fetched Secret](regression-guards/credential-yaml-borrowed-decoding.md)
 - [HMAC Request-Body Hashing After Cheap Authentication — FIXED](regression-guards/request-body-hash-after-cheap-auth.md)
 - [HMAC Body Integrity Requires a Signed-Digest Tamper Test — FIXED](regression-guards/signed-digest-body-tamper-negative-test.md)
 - [HMAC Auth Wire Format Is Edgion's Contract — FIXED](regression-guards/wire-format-is-edgion-contract.md)

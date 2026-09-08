@@ -100,7 +100,7 @@ fn resolve_group(
             );
             continue;
         };
-        let credentials_yaml_str = match String::from_utf8(credentials_yaml_bytes.0.clone()) {
+        let credentials_yaml_str = match std::str::from_utf8(&credentials_yaml_bytes.0) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(
@@ -114,7 +114,7 @@ fn resolve_group(
             }
         };
 
-        let entries: Vec<serde_yaml::Value> = match serde_yaml::from_str(&credentials_yaml_str) {
+        let entries: Vec<serde_yaml::Value> = match serde_yaml::from_str(credentials_yaml_str) {
             Ok(list) => list,
             Err(e) => {
                 tracing::warn!(
