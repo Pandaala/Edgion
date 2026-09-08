@@ -2,7 +2,7 @@ use super::{
     resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy,
 };
 use crate::ctx::NormalizedHostname;
-use crate::plugins::http::get_global_plugin_store;
+use crate::plugins::http::global_plugin_store;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
 use crate::runtime::hostname_matches_listener;
 use crate::runtime::store::get_listener_gateway_info_store;
@@ -127,10 +127,10 @@ pub async fn request_filter(
     // and every later plugin stage observe one request-coherent generation.
     // GRPCRoute keeps its existing post-preflight capture timing.
     if let Some(route_unit) = ctx.route_unit.as_ref() {
-        let plugin_store = get_global_plugin_store();
+        let plugin_store = global_plugin_store();
         let keys = route_unit.plugin_runtime.ext_ref_keys();
         if !keys.is_empty() {
-            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&plugin_store, keys));
+            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(plugin_store, keys));
         }
     }
 
@@ -183,9 +183,9 @@ pub async fn request_filter(
     // directly without paying any format!() / store-lookup cost.
     // Fetch the global plugin store once and share &PluginStore across both
     // resolve calls to avoid redundant Arc::clone on the hot path.
-    let plugin_store = get_global_plugin_store();
+    let plugin_store = global_plugin_store();
     let global_plugins = resolve_global_plugins(
-        &plugin_store,
+        plugin_store,
         edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
     );
     ctx.install_resolved_global_plugins(global_plugins);
@@ -197,7 +197,7 @@ pub async fn request_filter(
             .map(|unit| unit.plugin_runtime.ext_ref_keys())
             .unwrap_or_default();
         if !keys.is_empty() {
-            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&plugin_store, keys));
+            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(plugin_store, keys));
         }
     }
 
@@ -206,7 +206,7 @@ pub async fn request_filter(
         .as_deref()
         .map(|info| info.plugin_store_keys.as_slice())
         .unwrap_or_default();
-    ctx.install_resolved_gateway_plugins(resolve_gateway_plugins(&plugin_store, gateway_plugin_keys));
+    ctx.install_resolved_gateway_plugins(resolve_gateway_plugins(plugin_store, gateway_plugin_keys));
 
     let global_plugins = ctx.resolved_global_plugins();
     let gateway_plugins = ctx.resolved_gateway_plugins();

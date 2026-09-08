@@ -121,21 +121,12 @@ pub(crate) fn select_waf_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::http::get_global_plugin_store;
     use edgion_resources::resources::edgion_plugins::{
         EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry,
     };
     use edgion_resources::resources::http_route::HTTPHeaderFilter;
     use kube::core::ObjectMeta;
-    use parking_lot::Mutex;
     use std::collections::HashMap;
-    use std::sync::LazyLock;
-
-    /// Serialize tests within this module since they all mutate the global
-    /// plugin store via `replace_all`. Cross-module collisions with other
-    /// tests that touch the store are still possible — that matches the
-    /// existing convention in `extension_ref.rs` tests.
-    static TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     /// Build a minimal EdgionPlugins keyed by `{ns}/{name}`.
     fn make_plugin(ns: &str, name: &str) -> (String, EdgionPlugins) {
@@ -160,19 +151,15 @@ mod tests {
         (format!("{}/{}", ns, name), ep)
     }
 
-    /// Replace the entire global store contents with the given plugins.
-    fn install_plugins(entries: Vec<(&str, &str)>) {
+    /// Replace the store contents with the given plugins.
+    fn install_plugins(store: &PluginStore, entries: Vec<(&str, &str)>) {
         use crate::plugins::http::compile_plugins;
         let mut map = HashMap::new();
         for (ns, name) in entries {
             let (k, ep) = make_plugin(ns, name);
             map.insert(k, compile_plugins(&ep));
         }
-        get_global_plugin_store().replace_all(map);
-    }
-
-    fn clear_store() {
-        get_global_plugin_store().replace_all(HashMap::new());
+        store.replace_all(map);
     }
 
     fn waf_runtime(priority: u16) -> Arc<PluginRuntime> {
@@ -226,60 +213,62 @@ mod tests {
 
     #[test]
     fn resolve_global_plugins_empty_when_none() {
-        let _g = TEST_LOCK.lock();
-        clear_store();
-        let store = get_global_plugin_store();
+        let store = PluginStore::new();
         let resolved = resolve_global_plugins(&store, None);
         assert!(resolved.is_empty());
     }
 
     #[test]
     fn resolve_global_plugins_keeps_order_and_drops_dangling() {
-        let _g = TEST_LOCK.lock();
-        install_plugins(vec![("ns1", "p1"), ("ns1", "p3")]);
+        let store = PluginStore::new();
+        install_plugins(&store, vec![("ns1", "p1"), ("ns1", "p3")]);
+        let p1 = store.get_plugin_runtime("ns1/p1").expect("p1 is installed");
+        let p3 = store.get_plugin_runtime("ns1/p3").expect("p3 is installed");
 
         let refs = vec![
             pref("p1", Some("ns1")),
             pref("p2", Some("ns1")), // dangling
             pref("p3", Some("ns1")),
         ];
-        let store = get_global_plugin_store();
         let resolved = resolve_global_plugins(&store, Some(&refs));
         assert_eq!(resolved.len(), 2, "dangling p2 should be dropped");
+        assert!(Arc::ptr_eq(&resolved[0], &p1));
+        assert!(Arc::ptr_eq(&resolved[1], &p3));
     }
 
     #[test]
     fn resolve_global_plugins_default_namespace_when_none() {
-        let _g = TEST_LOCK.lock();
-        install_plugins(vec![("default", "global1")]);
+        let store = PluginStore::new();
+        install_plugins(&store, vec![("default", "global1")]);
+        let global1 = store
+            .get_plugin_runtime("default/global1")
+            .expect("global1 is installed");
         let refs = vec![pref("global1", None)];
-        let store = get_global_plugin_store();
         let resolved = resolve_global_plugins(&store, Some(&refs));
         assert_eq!(resolved.len(), 1);
+        assert!(Arc::ptr_eq(&resolved[0], &global1));
     }
 
     #[test]
     fn resolve_route_ext_refs_preserves_position_with_none_for_dangling() {
-        let _g = TEST_LOCK.lock();
-        install_plugins(vec![("ns1", "p1")]);
+        let store = PluginStore::new();
+        install_plugins(&store, vec![("ns1", "p1")]);
+        let p1 = store.get_plugin_runtime("ns1/p1").expect("p1 is installed");
         let keys = vec![
             ("ns1".to_string(), "p1".to_string()),
             ("ns1".to_string(), "missing".to_string()),
             ("ns1".to_string(), "p1".to_string()), // duplicate ok
         ];
-        let store = get_global_plugin_store();
         let resolved = resolve_route_ext_refs(&store, &keys);
         assert_eq!(resolved.len(), 3);
-        assert!(resolved[0].is_some());
+        assert!(Arc::ptr_eq(resolved[0].as_ref().expect("p1 resolves"), &p1));
         assert!(resolved[1].is_none(), "dangling slot must be None");
-        assert!(resolved[2].is_some());
+        assert!(Arc::ptr_eq(resolved[2].as_ref().expect("duplicate p1 resolves"), &p1));
     }
 
     #[test]
     fn resolve_route_ext_refs_empty_keys_yields_empty_vec() {
-        let _g = TEST_LOCK.lock();
-        clear_store();
-        let store = get_global_plugin_store();
+        let store = PluginStore::new();
         let resolved = resolve_route_ext_refs(&store, &[]);
         assert!(resolved.is_empty());
     }
@@ -288,18 +277,17 @@ mod tests {
 #[cfg(test)]
 mod gateway_plugins_resolve_tests {
     use super::*;
-    use crate::plugins::http::get_global_plugin_store;
 
     #[test]
     fn empty_keys_yield_empty() {
-        let store = get_global_plugin_store();
+        let store = PluginStore::new();
         assert!(resolve_gateway_plugins(&store, &[]).is_empty());
     }
 
     #[test]
     fn dangling_keys_dropped() {
-        let store = get_global_plugin_store();
-        // A key that does not exist in the (empty in unit tests) store is dropped.
+        let store = PluginStore::new();
+        // A key that does not exist in the empty store is dropped.
         let out = resolve_gateway_plugins(&store, &["nope/missing".to_string()]);
         assert!(out.is_empty());
     }

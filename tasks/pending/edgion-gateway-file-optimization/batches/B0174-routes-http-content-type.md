@@ -16,4 +16,4 @@
 - Preserved behavior: gRPC-Web bridge activation, native gRPC route selection, SSE classification, compression eligibility, streaming processors, and all malformed/missing media-type handling remain unchanged.
 - Review: a fresh independent reviewer verified all four consumers, request protocol ordering, response SSE/compression/streaming ownership, malformed and missing values, and the rejected parser/visibility alternatives; verdict LGTM with no Must Fix or deferred finding. Two pre-existing comments name obsolete hook locations, accepted as-is outside this frozen no-write scope because they do not affect classifier correctness or value.
 - Testing: focused content-type tests passed 6/6. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed. Existing frozen gRPC-Web and SSE integrations remain sufficient. No deferred issue or integration gap.
-- Commit: pending; never push.
+- Commit: `efcc445f`; never pushed by the campaign.
