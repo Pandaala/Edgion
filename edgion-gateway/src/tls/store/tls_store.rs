@@ -1,36 +1,21 @@
+use super::cert_matcher::{AttachmentMatchSlot, TlsCertMatcher, TlsCertMatcherSnapshot, MAX_ATTACHMENT_CANDIDATES};
 use crate::tls::validation::cert::{validate_cert, CertValidationResult};
-use arc_swap::ArcSwap;
 use edgion_resources::listener_key::ListenerKey;
-use edgion_resources::matcher::HashHost;
+use edgion_resources::matcher::canonical_host_key;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
+use rpds::{HashTrieMapSync as PersistentHashMap, HashTrieSetSync as PersistentHashSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 pub(crate) const MAX_EDGION_TLS_COLLISION_LOG_PARTICIPANTS: usize = 64;
 
-#[derive(Default)]
-struct AttachmentCandidateBuild {
-    total: usize,
-    candidates: Option<Vec<Arc<EdgionTls>>>,
-}
-
-impl AttachmentCandidateBuild {
-    fn add(&mut self, tls: Arc<EdgionTls>) {
-        self.total = self.total.saturating_add(1);
-        if self.total > super::cert_matcher::MAX_ATTACHMENT_CANDIDATES {
-            self.candidates = None;
-            return;
-        }
-        self.candidates.get_or_insert_with(Vec::new).push(tls);
-    }
-}
-
 /// Internal entry for TLS certificate with validation status
 #[derive(Clone)]
-struct TlsEntry {
+pub(super) struct TlsEntry {
     tls: Arc<EdgionTls>,
     validation: CertValidationResult,
+    matchable: bool,
     /// true once a bad update was rejected for this key; used to log only on
     /// the valid->rejected transition (cleared when a valid update lands).
     rejected_active: bool,
@@ -53,6 +38,7 @@ fn edgion_tls_precedence(a: &Arc<EdgionTls>, b: &Arc<EdgionTls>) -> std::cmp::Or
 /// Add one resource's hosts to a listener bucket using the same canonical
 /// ASCII case as SNI lookup. Duplicate case variants within one resource are
 /// collapsed so they cannot create a false self-collision.
+#[cfg(test)]
 fn add_canonical_hosts(host_map: &mut HashMap<String, Vec<Arc<EdgionTls>>>, tls: &Arc<EdgionTls>) -> usize {
     let mut added = 0;
     for host in &tls.spec.hosts {
@@ -181,66 +167,95 @@ fn record_rejected(key: &str, validation: &CertValidationResult) {
     }
 }
 
-/// TlsStore manages all TLS certificates and builds the TLS matcher
-pub struct TlsStore {
-    // Key: namespace/name (or name for cluster-scoped).
-    // Single writer (config-sync). Readers are lock-free.
-    tls_data: ArcSwap<HashMap<String, TlsEntry>>,
+type TlsEntries = PersistentHashMap<String, Arc<TlsEntry>>;
+type HostCandidates = PersistentHashMap<String, Arc<EdgionTls>>;
+
+pub(super) struct HostBucket {
+    candidates: HostCandidates,
+    pub(super) ordered: Arc<Vec<Arc<EdgionTls>>>,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct ListenerBucket {
+    pub(super) hosts: PersistentHashMap<String, Arc<HostBucket>>,
+}
+
+pub(super) struct AttachmentBucket {
+    candidates: PersistentHashSet<String>,
+    pub(super) slot: AttachmentMatchSlot,
+}
+
+/// The raw entries and both derived indexes have exactly one publication point.
+#[derive(Clone, Default)]
+pub(super) struct TlsSnapshotData {
+    entries: TlsEntries,
+    pub(super) listeners: PersistentHashMap<ListenerKey, Arc<ListenerBucket>>,
+    pub(super) attachments: PersistentHashMap<ResolvedListenerAttachment, Arc<AttachmentBucket>>,
+    invalid_count: usize,
+}
+
+impl TlsCertMatcherSnapshot {
+    pub fn entry_count(&self) -> usize {
+        self.data.entries.size()
+    }
+
+    /// Certificate validity, independently of listener attachment admission.
+    pub fn get_cert_stats(&self) -> (usize, usize) {
+        (self.entry_count() - self.data.invalid_count, self.data.invalid_count)
+    }
+
+    pub fn listener_count(&self) -> usize {
+        self.data.listeners.size()
+    }
+
     #[cfg(test)]
-    isolated_matcher: Option<Arc<super::cert_matcher::TlsCertMatcher>>,
+    fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
+        self.data.entries.get(key).map(|entry| entry.validation.clone())
+    }
+}
+
+/// A store owns one matcher publication source. Independent stores are isolated.
+pub struct TlsStore {
+    matcher: Arc<TlsCertMatcher>,
 }
 
 impl TlsStore {
     pub fn new() -> Self {
         Self {
-            tls_data: ArcSwap::from_pointee(HashMap::new()),
-            #[cfg(test)]
-            isolated_matcher: None,
+            matcher: Arc::new(TlsCertMatcher::new()),
         }
+    }
+
+    pub fn snapshot(&self) -> TlsCertMatcherSnapshot {
+        self.matcher.snapshot()
     }
 
     #[cfg(test)]
-    fn new_isolated() -> (Self, Arc<super::cert_matcher::TlsCertMatcher>) {
-        let matcher = Arc::new(super::cert_matcher::TlsCertMatcher::new());
-        (
-            Self {
-                tls_data: ArcSwap::from_pointee(HashMap::new()),
-                isolated_matcher: Some(matcher.clone()),
-            },
-            matcher,
-        )
+    fn new_isolated() -> (Self, Arc<TlsCertMatcher>) {
+        let store = Self::new();
+        let matcher = store.matcher.clone();
+        (store, matcher)
     }
 
-    /// Insert `tls` under `key`, optionally retaining the existing valid entry
-    /// when the new cert fails validation (last-known-good / Envoy SDS NACK
-    /// semantics for updates, disabled for a new resource generation).
-    fn insert_validated(
-        &self,
-        new_map: &mut HashMap<String, TlsEntry>,
-        key: String,
-        tls: Arc<EdgionTls>,
-        retain_last_known_good: bool,
-    ) {
+    fn validated_entry(key: &str, tls: Arc<EdgionTls>, previous: Option<&Arc<TlsEntry>>) -> Arc<TlsEntry> {
         let dimensions_valid = dimensions_are_bounded(&tls);
+        warn_cert_advisories(key, &tls);
+        let tls = compile_allowed_sans_for_runtime(tls);
+        // Regex compilation clones the spec and resets its derived attachment
+        // index. Warm only the final resource that will reach the matcher.
         if dimensions_valid {
             tls.spec.warm_listener_attachment_index();
         }
-        warn_cert_advisories(&key, &tls);
-        let tls = compile_allowed_sans_for_runtime(tls);
         let validation = validate_cert(&tls);
         if !validation.is_valid {
-            if retain_last_known_good && dimensions_valid {
-                if let Some(existing) = new_map.get(&key) {
-                    if existing.validation.is_valid {
-                        if !existing.rejected_active {
-                            record_rejected(&key, &validation);
-                        }
-                        let mut kept = existing.clone();
-                        kept.rejected_active = true;
-                        new_map.insert(key, kept);
-                        return;
-                    }
+            if let Some(existing) = previous.filter(|entry| dimensions_valid && entry.validation.is_valid) {
+                if existing.rejected_active {
+                    return existing.clone();
                 }
+                record_rejected(key, &validation);
+                let mut kept = (**existing).clone();
+                kept.rejected_active = true;
+                return Arc::new(kept);
             }
             let reason = validation
                 .errors
@@ -248,301 +263,292 @@ impl TlsStore {
                 .map(|error| error.status_reason())
                 .unwrap_or("Invalid");
             tracing::warn!(component = "tls_store", key = %key, reason = %reason,
-                error_count = validation.errors.len(),
-                "Certificate validation failed");
+                error_count = validation.errors.len(), "Certificate validation failed");
         }
-        new_map.insert(
-            key,
-            TlsEntry {
-                tls,
-                validation,
-                rejected_active: false,
-            },
-        );
+        let matchable = validation.is_valid && dimensions_valid;
+        if validation.is_valid && !dimensions_valid {
+            tracing::warn!(component = "tls_store", key = %key,
+                "Skipping EdgionTls whose attachment dimensions exceed runtime limits");
+        }
+        if matchable && tls.spec.resolved_listeners.as_ref().is_none_or(Vec::is_empty) {
+            tracing::warn!(component = "tls_store", key = %key,
+                host_count = tls.spec.hosts.len(),
+                parent_ref_count = tls.spec.parent_refs.as_ref().map_or(0, Vec::len),
+                "Skipping EdgionTls from matcher because no listener keys were resolved");
+        }
+        Arc::new(TlsEntry {
+            tls,
+            validation,
+            matchable,
+            rejected_active: false,
+        })
     }
 
-    /// Replace all TLS certificates with the provided data.
-    ///
-    /// Last-known-good semantics (mirrors `insert_validated`, but "existing" is the
-    /// current store snapshot rather than `new_map`, because a full snapshot has no
-    /// in-flight predecessor for the same key):
-    /// - Invalid incoming cert + current store has a VALID entry for that key
-    ///   → carry the old valid entry forward, log the rejection, skip inserting bad data.
-    /// - Keys absent from `data` are intentionally removed (never carried forward).
+    /// Full List/reconnect replaces absent keys; only same-key invalid input can
+    /// retain a valid predecessor. Full builds use the same slot builders as deltas.
     pub fn replace_all_tls(&self, data: HashMap<String, Arc<EdgionTls>>) {
-        let cert_count = data.len();
         tracing::info!(
             component = "tls_store",
-            count = cert_count,
+            count = data.len(),
             "Full set of TLS certificates"
         );
-
-        // Read current snapshot ONCE before the loop so we can fall back to the
-        // last-known-good entry per key when an incoming cert is invalid.
-        let current = self.tls_data.load_full();
-        let mut new_map: HashMap<String, TlsEntry> = HashMap::with_capacity(cert_count);
-
+        let current = self.matcher.data.load_full();
+        let mut next = TlsSnapshotData::default();
+        let mut deltas = IndexDeltas::default();
         for (key, tls) in data {
-            let dimensions_valid = dimensions_are_bounded(&tls);
-            if dimensions_valid {
-                tls.spec.warm_listener_attachment_index();
-            }
-            warn_cert_advisories(&key, &tls);
-            let tls = compile_allowed_sans_for_runtime(tls);
-            let validation = validate_cert(&tls);
-            if !validation.is_valid {
-                if dimensions_valid {
-                    if let Some(existing) = current.get(&key).filter(|existing| existing.validation.is_valid) {
-                        if !existing.rejected_active {
-                            record_rejected(&key, &validation);
-                        }
-                        let mut kept = existing.clone();
-                        kept.rejected_active = true;
-                        new_map.insert(key, kept);
-                        continue;
-                    }
-                }
-                let reason = validation
-                    .errors
-                    .first()
-                    .map(|error| error.status_reason())
-                    .unwrap_or("Invalid");
-                tracing::warn!(component = "tls_store", key = %key, reason = %reason,
-                    error_count = validation.errors.len(),
-                    "Certificate validation failed");
-            }
-            new_map.insert(
-                key,
-                TlsEntry {
-                    tls,
-                    validation,
-                    rejected_active: false,
-                },
-            );
+            let entry = Self::validated_entry(&key, tls, current.entries.get(&key));
+            next.invalid_count += usize::from(!entry.validation.is_valid);
+            deltas.add(&key, &entry, true);
+            next.entries.insert_mut(key, entry);
         }
-
-        self.rebuild_matcher_from_data(&new_map);
-        self.tls_data.store(Arc::new(new_map));
+        next.apply_indexes(deltas, &current);
+        self.matcher.data.store(Arc::new(next));
     }
 
-    /// Partially update TLS certificates
+    /// Production writers are serialized by the conf-sync CacheData write lock.
+    /// HAMT root/path copies share every unaffected entry, listener and host slot.
     pub fn apply_partial_update(
         &self,
         add: HashMap<String, Arc<EdgionTls>>,
         update: HashMap<String, Arc<EdgionTls>>,
-        remove: &std::collections::HashSet<String>,
+        remove: &HashSet<String>,
     ) {
-        // Capture counts before moving
-        let add_count = add.len();
-        let update_count = update.len();
-        let remove_count = remove.len();
-
-        tracing::info!(
-            component = "tls_store",
-            add = add_count,
-            update = update_count,
-            remove = remove_count,
-            "Partial update of TLS certificates"
-        );
-
-        // TODO(incremental-publication-03-edgion-tls): replace this
-        // whole-map clone and matcher rebuild with a genuine per-key update and
-        // publish data plus matcher as one immutable generation.
-        let current = self.tls_data.load_full();
-        let mut new_map = (*current).clone();
-
-        // Add new certificates
-        for (key, tls) in add {
-            // A compressed add can represent delete→create for the same key.
-            // Never inherit the deleted generation's last-known-good entry.
-            self.insert_validated(&mut new_map, key, tls, false);
-        }
-
-        // Update existing certificates
-        for (key, tls) in update {
-            self.insert_validated(&mut new_map, key, tls, true);
-        }
-
-        // Remove certificates
-        for key in remove {
-            new_map.remove(key);
-        }
-
-        self.rebuild_matcher_from_data(&new_map);
-
-        self.tls_data.store(Arc::new(new_map));
-    }
-
-    /// Rebuild the TLS certificate matcher from provided data.
-    /// Only listener-resolved certs are admitted into the matcher.
-    ///
-    /// # Arguments
-    /// * `tls_data` - Reference to the TLS data map
-    fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) {
-        let mut listener_host_map: HashMap<ListenerKey, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
-        let mut attachment_candidates: HashMap<ResolvedListenerAttachment, AttachmentCandidateBuild> = HashMap::new();
-        let mut total_hosts = 0;
-        let mut valid_certs = 0;
-        let mut invalid_certs = 0;
-        let mut skipped_unbound_certs = 0;
-
-        for (key, entry) in tls_data.iter() {
-            if !entry.validation.is_valid {
-                tracing::debug!(
-                    component = "tls_store",
-                    key = %key,
-                    "Skipping invalid certificate from matcher"
-                );
-                invalid_certs += 1;
-                continue;
-            }
-
-            let tls = &entry.tls;
-
-            if !dimensions_are_bounded(tls) {
-                tracing::warn!(
-                    component = "tls_store",
-                    key = %key,
-                    "Skipping EdgionTls whose attachment dimensions exceed runtime limits"
-                );
-                invalid_certs += 1;
-                continue;
-            }
-
-            if let Some(attachments) = tls.spec.resolved_listener_attachments.as_deref() {
-                let mut seen_attachments = HashSet::with_capacity(attachments.len());
-                for attachment in attachments {
-                    if !attachment.gateway_proof.is_resolved() || !seen_attachments.insert(attachment) {
-                        continue;
-                    }
-                    attachment_candidates
-                        .entry(attachment.clone())
-                        .or_default()
-                        .add(tls.clone());
-                }
-            }
-
-            match &tls.spec.resolved_listeners {
-                Some(listeners) if !listeners.is_empty() => {
-                    for listener_key in listeners {
-                        let host_map = listener_host_map.entry(listener_key.clone()).or_default();
-                        total_hosts += add_canonical_hosts(host_map, tls);
-                    }
-                    valid_certs += 1;
-                }
-                _ => {
-                    skipped_unbound_certs += 1;
-                    tracing::warn!(
-                        component = "tls_store",
-                        key = %key,
-                        host_count = tls.spec.hosts.len(),
-                        parent_ref_count = tls.spec.parent_refs.as_ref().map_or(0, Vec::len),
-                        "Skipping EdgionTls from matcher because no listener keys were resolved"
-                    );
-                }
-            }
-        }
-
-        let mut listener_matcher = HashMap::new();
-        for (listener_key, host_map) in listener_host_map {
-            let mut matcher = HashHost::new();
-            for (host, mut tls_list) in host_map {
-                if tls_list.len() > 1 {
-                    // Two or more EdgionTls resources resolve to the same host on the same
-                    // listener. Nothing admission-blocks this, and `match_sni` returns the
-                    // first entry — so without a stable sort the served certificate would
-                    // flip with HashMap iteration order across rebuilds. Sort by the Gateway
-                    // API precedence (oldest creationTimestamp wins, then namespace/name) so
-                    // the selection is deterministic, and warn the operator.
-                    tls_list.sort_by(edgion_tls_precedence);
-                    let total = tls_list.len();
-                    warn_edgion_tls_collision(
-                        &host,
-                        &listener_key,
-                        &tls_list[..tls_list.len().min(MAX_EDGION_TLS_COLLISION_LOG_PARTICIPANTS)],
-                        total,
-                    );
-                }
-                matcher.insert(&host, Arc::new(tls_list));
-            }
-            listener_matcher.insert(listener_key, matcher);
-        }
-
-        let mut attachment_matcher = HashMap::new();
-        for (attachment, build) in attachment_candidates {
-            let slot = if let Some(mut candidates) = build.candidates {
-                candidates.sort_by(edgion_tls_precedence);
-                super::cert_matcher::AttachmentMatchSlot::Ready(Arc::new(candidates))
-            } else {
-                tracing::warn!(
-                    component = "tls_store",
-                    candidate_count = build.total,
-                    max = super::cert_matcher::MAX_ATTACHMENT_CANDIDATES,
-                    "Exact EdgionTls attachment candidate limit exceeded; omitting the complete overlay group"
-                );
-                super::cert_matcher::AttachmentMatchSlot::Overflow
-            };
-            attachment_matcher.insert(attachment, slot);
-        }
-
-        #[cfg(test)]
-        if let Some(matcher) = &self.isolated_matcher {
-            matcher.set(listener_matcher, attachment_matcher);
+        if add.is_empty() && update.is_empty() && remove.is_empty() {
             return;
         }
-        super::cert_matcher::get_tls_cert_matcher().set(listener_matcher, attachment_matcher);
-
         tracing::info!(
             component = "tls_store",
-            valid_certs = valid_certs,
-            invalid_certs = invalid_certs,
-            skipped_unbound_certs = skipped_unbound_certs,
-            total_hosts = total_hosts,
-            "TLS matcher rebuilt successfully"
+            add = add.len(),
+            update = update.len(),
+            remove = remove.len(),
+            "Partial update of TLS certificates"
         );
+        let current = self.matcher.data.load_full();
+        let mut next = (*current).clone();
+        let changed_keys: HashSet<String> = add.keys().chain(update.keys()).chain(remove.iter()).cloned().collect();
+
+        // Preserve sequential overlap semantics: update's LKG predecessor may
+        // be an add in this batch, never the deleted generation preceding that add.
+        for (key, tls) in add {
+            let entry = Self::validated_entry(&key, tls, None);
+            next.entries.insert_mut(key, entry);
+        }
+        for (key, tls) in update {
+            let entry = Self::validated_entry(&key, tls, next.entries.get(&key));
+            next.entries.insert_mut(key, entry);
+        }
+        for key in remove {
+            next.entries.remove_mut(key);
+        }
+
+        let mut deltas = IndexDeltas::default();
+        let mut changed = false;
+        for key in changed_keys {
+            let previous = current.entries.get(&key);
+            let incoming = next.entries.get(&key);
+            if matches!((previous, incoming), (None, None))
+                || matches!((previous, incoming), (Some(old), Some(new)) if Arc::ptr_eq(old, new))
+            {
+                continue;
+            }
+            changed = true;
+            next.invalid_count -= usize::from(previous.is_some_and(|entry| !entry.validation.is_valid));
+            next.invalid_count += usize::from(incoming.is_some_and(|entry| !entry.validation.is_valid));
+            // Rejection state can change while the effective resource stays
+            // identical. Do not touch any matcher for that bookkeeping change.
+            if matches!((previous, incoming), (Some(old), Some(new)) if Arc::ptr_eq(&old.tls, &new.tls)) {
+                continue;
+            }
+            if let Some(previous) = previous {
+                deltas.add(&key, previous, false);
+            }
+            if let Some(incoming) = incoming {
+                deltas.add(&key, incoming, true);
+            }
+        }
+        if changed {
+            next.apply_indexes(deltas, &current);
+            self.matcher.data.store(Arc::new(next));
+        }
     }
 
-    /// Returns true if a certificate with the given key ("namespace/name") exists,
-    /// regardless of validity.
-    ///
-    /// Lock-free: O(1) hash lookup on the current snapshot.
     #[cfg(test)]
     pub fn contains(&self, key: &str) -> bool {
-        let snapshot = self.tls_data.load();
-        snapshot.contains_key(key)
+        self.matcher.data.load().entries.contains_key(key)
     }
 
-    /// Returns the validation status for the given key ("namespace/name"),
-    /// or `None` if no such entry exists.
-    ///
-    /// Lock-free: O(1) hash lookup on the current snapshot. Result is cloned.
     #[cfg(test)]
     pub fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
-        let snapshot = self.tls_data.load();
-        snapshot.get(key).map(|entry| entry.validation.clone())
+        self.snapshot().get_validation_status(key)
     }
 
-    /// Returns `(valid_count, invalid_count)` for all stored certificates.
-    ///
-    /// Lock-free: O(n) iteration over the current snapshot.
-    ///
-    /// ```ignore
-    /// let (valid, invalid) = store.get_cert_stats();
-    /// println!("Valid: {}, Invalid: {}", valid, invalid);
-    /// ```
     pub fn get_cert_stats(&self) -> (usize, usize) {
-        let snapshot = self.tls_data.load();
-        let total = snapshot.len();
-        let invalid = snapshot.values().filter(|entry| !entry.validation.is_valid).count();
-        (total - invalid, invalid)
+        self.snapshot().get_cert_stats()
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.snapshot().entry_count()
     }
 }
 
-impl TlsStore {
-    /// Total number of TLS entries (valid + invalid).
-    pub fn entry_count(&self) -> usize {
-        self.tls_data.load().len()
+type HostChanges = HashMap<String, Option<Arc<EdgionTls>>>;
+
+#[derive(Default)]
+struct IndexDeltas {
+    listeners: HashMap<ListenerKey, HashMap<String, HostChanges>>,
+    attachments: HashMap<ResolvedListenerAttachment, HashMap<String, bool>>,
+}
+
+impl IndexDeltas {
+    fn add(&mut self, key: &str, entry: &TlsEntry, present: bool) {
+        if !entry.matchable {
+            return;
+        }
+        let tls = &entry.tls;
+        let hosts: HashSet<String> = tls
+            .spec
+            .hosts
+            .iter()
+            .filter_map(|host| canonical_host_key(host))
+            .collect();
+        if let Some(listeners) = &tls.spec.resolved_listeners {
+            for listener in listeners {
+                let changed_hosts = self.listeners.entry(listener.clone()).or_default();
+                for host in &hosts {
+                    changed_hosts
+                        .entry(host.clone())
+                        .or_default()
+                        .insert(key.to_string(), present.then(|| tls.clone()));
+                }
+            }
+        }
+        if let Some(attachments) = &tls.spec.resolved_listener_attachments {
+            for attachment in attachments
+                .iter()
+                .filter(|attachment| attachment.gateway_proof.is_resolved())
+            {
+                self.attachments
+                    .entry(attachment.clone())
+                    .or_default()
+                    .insert(key.to_string(), present);
+            }
+        }
     }
+}
+
+impl TlsSnapshotData {
+    fn apply_indexes(&mut self, deltas: IndexDeltas, warning_baseline: &Self) {
+        for (listener, changed_hosts) in deltas.listeners {
+            let mut bucket = self
+                .listeners
+                .get(&listener)
+                .map_or_else(ListenerBucket::default, |bucket| (**bucket).clone());
+            for (host, changes) in changed_hosts {
+                let mut candidates = bucket
+                    .hosts
+                    .get(&host)
+                    .map_or_else(HostCandidates::new_sync, |slot| slot.candidates.clone());
+                for (key, tls) in changes {
+                    if let Some(tls) = tls {
+                        candidates.insert_mut(key, tls);
+                    } else {
+                        candidates.remove_mut(&key);
+                    }
+                }
+                if candidates.is_empty() {
+                    bucket.hosts.remove_mut(&host);
+                    continue;
+                }
+                let mut ordered: Vec<_> = candidates.values().cloned().collect();
+                ordered.sort_by(edgion_tls_precedence);
+                let slot = HostBucket {
+                    candidates,
+                    ordered: Arc::new(ordered),
+                };
+                let previous = warning_baseline
+                    .listeners
+                    .get(&listener)
+                    .and_then(|bucket| bucket.hosts.get(&host));
+                if collision_changed(previous.map(Arc::as_ref), &slot) {
+                    warn_edgion_tls_collision(
+                        &host,
+                        &listener,
+                        &slot.ordered[..slot.ordered.len().min(MAX_EDGION_TLS_COLLISION_LOG_PARTICIPANTS)],
+                        slot.ordered.len(),
+                    );
+                }
+                bucket.hosts.insert_mut(host, Arc::new(slot));
+            }
+            if bucket.hosts.is_empty() {
+                self.listeners.remove_mut(&listener);
+            } else {
+                self.listeners.insert_mut(listener, Arc::new(bucket));
+            }
+        }
+
+        for (attachment, changes) in deltas.attachments {
+            let mut candidates = self
+                .attachments
+                .get(&attachment)
+                .map_or_else(PersistentHashSet::new_sync, |bucket| bucket.candidates.clone());
+            for (key, present) in changes {
+                if present {
+                    candidates.insert_mut(key);
+                } else {
+                    candidates.remove_mut(&key);
+                }
+            }
+            if candidates.is_empty() {
+                self.attachments.remove_mut(&attachment);
+                continue;
+            }
+            let slot = if candidates.size() > MAX_ATTACHMENT_CANDIDATES {
+                if !warning_baseline
+                    .attachments
+                    .get(&attachment)
+                    .is_some_and(|bucket| matches!(bucket.slot, AttachmentMatchSlot::Overflow))
+                {
+                    tracing::warn!(
+                        component = "tls_store",
+                        candidate_count = candidates.size(),
+                        max = MAX_ATTACHMENT_CANDIDATES,
+                        "Exact EdgionTls attachment candidate limit exceeded; omitting the complete overlay group"
+                    );
+                }
+                AttachmentMatchSlot::Overflow
+            } else {
+                let mut ordered: Vec<_> = candidates
+                    .iter()
+                    .filter_map(|key| self.entries.get(key).map(|entry| entry.tls.clone()))
+                    .collect();
+                ordered.sort_by(edgion_tls_precedence);
+                AttachmentMatchSlot::Ready(Arc::new(ordered))
+            };
+            self.attachments
+                .insert_mut(attachment, Arc::new(AttachmentBucket { candidates, slot }));
+        }
+    }
+}
+
+/// Renewal alone is not a new collision: compare members and winner identity,
+/// not resource allocation or losing-candidate ordering.
+fn collision_changed(previous: Option<&HostBucket>, next: &HostBucket) -> bool {
+    if next.candidates.size() < 2 {
+        return false;
+    }
+    let Some(previous) = previous else {
+        return true;
+    };
+    previous.candidates.size() != next.candidates.size()
+        || next.candidates.keys().any(|key| !previous.candidates.contains_key(key))
+        || previous
+            .ordered
+            .first()
+            .map(|tls| (&tls.metadata.namespace, &tls.metadata.name))
+            != next
+                .ordered
+                .first()
+                .map(|tls| (&tls.metadata.namespace, &tls.metadata.name))
 }
 
 impl Default for TlsStore {
@@ -554,8 +560,10 @@ impl Default for TlsStore {
 #[cfg(test)]
 impl TlsStore {
     fn is_rejected_active(&self, key: &str) -> bool {
-        self.tls_data
+        self.matcher
+            .data
             .load()
+            .entries
             .get(key)
             .map(|e| e.rejected_active)
             .unwrap_or(false)
@@ -563,7 +571,11 @@ impl TlsStore {
 }
 
 /// Global TlsStore instance
-static GLOBAL_TLS_STORE: LazyLock<Arc<TlsStore>> = LazyLock::new(|| Arc::new(TlsStore::new()));
+static GLOBAL_TLS_STORE: LazyLock<Arc<TlsStore>> = LazyLock::new(|| {
+    Arc::new(TlsStore {
+        matcher: super::cert_matcher::TLS_CERT_MATCHER.clone(),
+    })
+});
 
 /// Get the global TlsStore instance
 pub fn get_global_tls_store() -> Arc<TlsStore> {
@@ -756,10 +768,10 @@ mod tests {
             std::collections::HashMap::from([("ns/bounded".to_string(), forged)]),
             &std::collections::HashSet::new(),
         );
-        let snapshot = store.tls_data.load();
-        assert_eq!(snapshot["ns/bounded"].tls.spec.hosts.len(), 2);
+        let snapshot = store.matcher.data.load();
+        assert_eq!(snapshot.entries["ns/bounded"].tls.spec.hosts.len(), 2);
         assert!(
-            !dimensions_are_bounded(&snapshot["ns/bounded"].tls),
+            !dimensions_are_bounded(&snapshot.entries["ns/bounded"].tls),
             "the forged generation must replace, rather than retain, the old valid object and is excluded on rebuild"
         );
         drop(snapshot);
@@ -946,8 +958,9 @@ mod tests {
             &std::collections::HashSet::new(),
         );
 
-        let snapshot = store.tls_data.load();
+        let snapshot = store.matcher.data.load();
         let entry = snapshot
+            .entries
             .get("ns/recreated")
             .expect("recreated entry must remain visible as invalid");
         assert!(Arc::ptr_eq(&entry.tls, &recreated));
@@ -1010,6 +1023,388 @@ mod tests {
         assert!(store.get_validation_status("ns/r").unwrap().is_valid);
     }
 
+    fn listener(port: u16) -> ListenerKey {
+        ListenerKey::new(format!("0.0.0.0:{port}").parse().unwrap(), "HTTPS")
+    }
+
+    fn attachment(port: u16) -> ResolvedListenerAttachment {
+        use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
+        ResolvedListenerAttachment {
+            gateway_namespace: "ns".to_string(),
+            gateway_name: "gateway".to_string(),
+            listener_name: "https".to_string(),
+            listener_key: listener(port),
+            gateway_proof: GatewayAttachmentProof {
+                instance: "uid-1".to_string(),
+                generation: 1,
+                epoch: "boot:1".to_string(),
+                attachment_digest: "a".repeat(64),
+            },
+        }
+    }
+
+    fn publish_update(store: &TlsStore, name: &str, tls: Arc<EdgionTls>) {
+        store.apply_partial_update(
+            HashMap::new(),
+            HashMap::from([(format!("ns/{name}"), tls)]),
+            &HashSet::new(),
+        );
+    }
+
+    #[test]
+    fn delta_shares_unaffected_entries_hosts_and_listeners() {
+        let store = TlsStore::new();
+        let changed = make_valid_tls("ns", "changed", &["changed.example.com"]);
+        let same_listener = make_valid_tls("ns", "same", &["same.example.com"]);
+        let mut other_listener = make_valid_tls("ns", "other", &["other.example.com"]);
+        Arc::get_mut(&mut other_listener).unwrap().spec.resolved_listeners = Some(vec![listener(8443)]);
+        store.replace_all_tls(HashMap::from([
+            ("ns/changed".to_string(), changed),
+            ("ns/same".to_string(), same_listener.clone()),
+            ("ns/other".to_string(), other_listener.clone()),
+        ]));
+        let before = store.snapshot();
+        publish_update(&store, "changed", make_valid_tls("ns", "changed", &["new.example.com"]));
+        let after = store.snapshot();
+        assert!(Arc::ptr_eq(
+            &before.data.entries["ns/same"],
+            &after.data.entries["ns/same"]
+        ));
+        assert!(Arc::ptr_eq(&after.data.entries["ns/same"].tls, &same_listener));
+        assert!(Arc::ptr_eq(&after.data.entries["ns/other"].tls, &other_listener));
+        assert!(Arc::ptr_eq(
+            &before.data.listeners[&listener(8443)],
+            &after.data.listeners[&listener(8443)]
+        ));
+        assert!(Arc::ptr_eq(
+            &before.data.listeners[&listener(443)].hosts["same.example.com"],
+            &after.data.listeners[&listener(443)].hosts["same.example.com"],
+        ));
+        assert!(after
+            .match_sni_candidates(&listener(443), "changed.example.com")
+            .is_empty());
+        assert_eq!(after.match_sni_candidates(&listener(443), "new.example.com").len(), 1);
+        assert_eq!(
+            before.match_sni_candidates(&listener(443), "changed.example.com").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn wildcard_delta_removes_canonical_slot_and_preserves_exact_priority() {
+        let store = TlsStore::new();
+        let wildcard = make_valid_tls("ns", "wildcard", &["*.example.com"]);
+        let exact = make_valid_tls("ns", "exact", &["one.example.com"]);
+        store.replace_all_tls(HashMap::from([
+            ("ns/wildcard".to_string(), wildcard.clone()),
+            ("ns/exact".to_string(), exact.clone()),
+        ]));
+        let snapshot = store.snapshot();
+        assert!(Arc::ptr_eq(
+            &snapshot.match_sni_candidates(&listener(443), "ONE.EXAMPLE.COM")[0],
+            &exact
+        ));
+        assert!(Arc::ptr_eq(
+            &snapshot.match_sni_candidates(&listener(443), "two.example.com")[0],
+            &wildcard
+        ));
+        assert!(snapshot
+            .match_sni_candidates(&listener(443), "a.b.example.com")
+            .is_empty());
+        store.apply_partial_update(HashMap::new(), HashMap::new(), &HashSet::from(["ns/exact".to_string()]));
+        assert!(Arc::ptr_eq(
+            &store.snapshot().match_sni_candidates(&listener(443), "one.example.com")[0],
+            &wildcard
+        ));
+        publish_update(
+            &store,
+            "wildcard",
+            make_valid_tls("ns", "wildcard", &["*.new.example.com"]),
+        );
+        let next = store.snapshot();
+        assert!(next.match_sni_candidates(&listener(443), "one.example.com").is_empty());
+        assert_eq!(
+            next.match_sni_candidates(&listener(443), "one.new.example.com").len(),
+            1
+        );
+        assert!(!next.data.listeners[&listener(443)].hosts.contains_key(".example.com"));
+    }
+
+    #[test]
+    fn one_snapshot_never_mixes_entries_listener_and_attachment_generations() {
+        let store = TlsStore::new();
+        let old_attachment = attachment(443);
+        let new_attachment = attachment(8443);
+        let mut old = make_valid_tls("ns", "moving", &["old.example.com"]);
+        Arc::get_mut(&mut old).unwrap().spec.resolved_listener_attachments = Some(vec![old_attachment.clone()]);
+        store.replace_all_tls(HashMap::from([("ns/moving".to_string(), old.clone())]));
+        let before = store.snapshot();
+        let mut new = make_valid_tls("ns", "moving", &["new.example.com"]);
+        let spec = &mut Arc::get_mut(&mut new).unwrap().spec;
+        spec.resolved_listeners = Some(vec![listener(8443)]);
+        spec.resolved_listener_attachments = Some(vec![new_attachment.clone()]);
+        publish_update(&store, "moving", new.clone());
+        let after = store.snapshot();
+        assert!(Arc::ptr_eq(&before.data.entries["ns/moving"].tls, &old));
+        assert!(before.get_validation_status("ns/moving").unwrap().is_valid);
+        assert_eq!(before.get_cert_stats(), (1, 0));
+        assert!(Arc::ptr_eq(
+            &before.match_sni_candidates(&listener(443), "old.example.com")[0],
+            &old
+        ));
+        assert!(Arc::ptr_eq(
+            &before.match_attachment_sni(&old_attachment, "old.example.com").unwrap(),
+            &old
+        ));
+        assert!(after.match_sni_candidates(&listener(443), "old.example.com").is_empty());
+        assert!(after.match_attachment_sni(&old_attachment, "old.example.com").is_none());
+        assert!(Arc::ptr_eq(&after.data.entries["ns/moving"].tls, &new));
+        assert!(Arc::ptr_eq(
+            &after.match_attachment_sni(&new_attachment, "new.example.com").unwrap(),
+            &new
+        ));
+        assert_eq!(after.listener_count(), 1);
+
+        // Full empty publication cannot mutate a retained generation.
+        store.replace_all_tls(HashMap::new());
+        assert_eq!(store.snapshot().get_cert_stats(), (0, 0));
+        assert_eq!(store.snapshot().listener_count(), 0);
+        assert!(store.snapshot().data.attachments.is_empty());
+        assert_eq!(after.entry_count(), 1);
+        assert!(after.match_attachment_sni(&new_attachment, "new.example.com").is_some());
+    }
+
+    #[test]
+    fn rejected_replacement_keeps_all_effective_indexes_and_rearms() {
+        let store = TlsStore::new();
+        let original = make_valid_tls("ns", "kept", &["old.example.com"]);
+        store.replace_all_tls(HashMap::from([("ns/kept".to_string(), original.clone())]));
+        let before = store.snapshot();
+        let mut bad = make_invalid_tls("ns", "kept", &["new.example.com"]);
+        Arc::get_mut(&mut bad).unwrap().spec.resolved_listeners = Some(vec![listener(8443)]);
+        publish_update(&store, "kept", bad.clone());
+        let rejected = store.snapshot();
+        assert!(store.is_rejected_active("ns/kept"));
+        assert!(Arc::ptr_eq(
+            &before.data.listeners[&listener(443)],
+            &rejected.data.listeners[&listener(443)]
+        ));
+        assert!(!rejected.data.listeners.contains_key(&listener(8443)));
+        assert!(Arc::ptr_eq(&rejected.data.entries["ns/kept"].tls, &original));
+        publish_update(&store, "kept", bad.clone());
+        assert!(Arc::ptr_eq(&rejected.data, &store.snapshot().data));
+
+        let repaired = make_valid_tls("ns", "kept", &["new.example.com"]);
+        publish_update(&store, "kept", repaired.clone());
+        assert!(!store.is_rejected_active("ns/kept"));
+        publish_update(&store, "kept", bad);
+        assert!(store.is_rejected_active("ns/kept"));
+        assert!(Arc::ptr_eq(&store.snapshot().data.entries["ns/kept"].tls, &repaired));
+    }
+
+    #[test]
+    fn overlapping_add_update_uses_added_predecessor_and_remove_wins() {
+        let store = TlsStore::new();
+        store.replace_all_tls(HashMap::from([(
+            "ns/recreated".to_string(),
+            make_valid_tls("ns", "recreated", &["old.example.com"]),
+        )]));
+        let added = make_valid_tls("ns", "recreated", &["new.example.com"]);
+        let invalid = make_invalid_tls("ns", "recreated", &["bad.example.com"]);
+        store.apply_partial_update(
+            HashMap::from([("ns/recreated".to_string(), added.clone())]),
+            HashMap::from([("ns/recreated".to_string(), invalid.clone())]),
+            &HashSet::new(),
+        );
+        assert!(Arc::ptr_eq(&store.snapshot().data.entries["ns/recreated"].tls, &added));
+        assert!(store
+            .snapshot()
+            .match_sni_candidates(&listener(443), "old.example.com")
+            .is_empty());
+        store.apply_partial_update(
+            HashMap::from([("ns/recreated".to_string(), invalid.clone())]),
+            HashMap::from([("ns/recreated".to_string(), invalid.clone())]),
+            &HashSet::new(),
+        );
+        assert_eq!(store.snapshot().get_cert_stats(), (0, 1));
+        assert_eq!(store.snapshot().listener_count(), 0);
+        store.apply_partial_update(
+            HashMap::from([("ns/recreated".to_string(), added)]),
+            HashMap::from([("ns/recreated".to_string(), invalid)]),
+            &HashSet::from(["ns/recreated".to_string()]),
+        );
+        assert_eq!(store.snapshot().entry_count(), 0);
+        assert_eq!(store.snapshot().get_cert_stats(), (0, 0));
+    }
+
+    #[test]
+    fn collision_membership_and_winner_transitions_are_bounded() {
+        let store = TlsStore::new();
+        let old_time = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+        let new_time = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+        let mut older = make_valid_tls("ns", "z-old", &["shared.example.com"]);
+        Arc::get_mut(&mut older).unwrap().metadata.creation_timestamp = Some(old_time.clone());
+        let mut newer = make_valid_tls("ns", "a-new", &["shared.example.com"]);
+        Arc::get_mut(&mut newer).unwrap().metadata.creation_timestamp = Some(new_time.clone());
+        store.replace_all_tls(HashMap::from([
+            ("ns/z-old".to_string(), older.clone()),
+            ("ns/a-new".to_string(), newer.clone()),
+        ]));
+        let first = store.snapshot();
+        let first_slot = &first.data.listeners[&listener(443)].hosts["shared.example.com"];
+        assert!(Arc::ptr_eq(&first_slot.ordered[0], &older));
+        assert!(collision_changed(None, first_slot));
+
+        let mut renewal = make_valid_tls("ns", "z-old", &["shared.example.com"]);
+        Arc::get_mut(&mut renewal).unwrap().metadata.creation_timestamp = Some(old_time);
+        publish_update(&store, "z-old", renewal);
+        let renewed = store.snapshot();
+        let renewed_slot = &renewed.data.listeners[&listener(443)].hosts["shared.example.com"];
+        assert!(
+            !collision_changed(Some(first_slot), renewed_slot),
+            "renewal must not re-warn an unchanged collision"
+        );
+
+        let mut promoted = (*newer).clone();
+        promoted.metadata.creation_timestamp = None;
+        publish_update(&store, "a-new", Arc::new(promoted));
+        let promoted = store.snapshot();
+        let promoted_slot = &promoted.data.listeners[&listener(443)].hosts["shared.example.com"];
+        assert!(collision_changed(Some(renewed_slot), promoted_slot));
+        assert_eq!(promoted_slot.ordered[0].metadata.name.as_deref(), Some("a-new"));
+
+        store.apply_partial_update(HashMap::new(), HashMap::new(), &HashSet::from(["ns/a-new".to_string()]));
+        let single = store.snapshot();
+        let single_slot = &single.data.listeners[&listener(443)].hosts["shared.example.com"];
+        assert!(!collision_changed(Some(promoted_slot), single_slot));
+        assert_eq!(single_slot.ordered[0].metadata.name.as_deref(), Some("z-old"));
+
+        publish_update(&store, "a-new", newer);
+        let collided_again = store.snapshot();
+        assert!(collision_changed(
+            Some(single_slot),
+            &collided_again.data.listeners[&listener(443)].hosts["shared.example.com"]
+        ));
+    }
+
+    #[test]
+    fn exact_attachment_overflow_recovers_without_scanning_unrelated_candidates() {
+        let store = TlsStore::new();
+        let exact = attachment(443);
+        let template = make_valid_tls("ns", "template", &["shared.example.com"]);
+        let resources: HashMap<_, _> = (0..MAX_ATTACHMENT_CANDIDATES)
+            .map(|index| {
+                let mut tls = (*template).clone();
+                tls.metadata.name = Some(format!("cert-{index:02}"));
+                tls.spec.resolved_listener_attachments = Some(vec![exact.clone(), exact.clone()]);
+                // Duplicate resolved listeners must not create self-collisions.
+                tls.spec.resolved_listeners = Some(vec![listener(443), listener(443)]);
+                (format!("ns/cert-{index:02}"), Arc::new(tls))
+            })
+            .collect();
+        store.replace_all_tls(resources);
+        let ready = store.snapshot();
+        assert_eq!(
+            ready.data.attachments[&exact].candidates.size(),
+            MAX_ATTACHMENT_CANDIDATES
+        );
+        assert_eq!(
+            ready
+                .match_attachment_sni(&exact, "shared.example.com")
+                .unwrap()
+                .metadata
+                .name
+                .as_deref(),
+            Some("cert-00")
+        );
+
+        let mut extra = (*template).clone();
+        extra.metadata.name = Some("overflow".to_string());
+        extra.spec.resolved_listener_attachments = Some(vec![exact.clone()]);
+        publish_update(&store, "overflow", Arc::new(extra));
+        let overflow = store.snapshot();
+        assert_eq!(
+            overflow.data.attachments[&exact].candidates.size(),
+            MAX_ATTACHMENT_CANDIDATES + 1
+        );
+        assert!(overflow.match_attachment_sni(&exact, "shared.example.com").is_none());
+        assert!(ready.match_attachment_sni(&exact, "shared.example.com").is_some());
+
+        store.apply_partial_update(
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::from(["ns/cert-00".to_string()]),
+        );
+        let recovered = store.snapshot();
+        assert_eq!(
+            recovered.data.attachments[&exact].candidates.size(),
+            MAX_ATTACHMENT_CANDIDATES
+        );
+        assert_eq!(
+            recovered
+                .match_attachment_sni(&exact, "shared.example.com")
+                .unwrap()
+                .metadata
+                .name
+                .as_deref(),
+            Some("cert-01")
+        );
+        assert!(overflow.match_attachment_sni(&exact, "shared.example.com").is_none());
+    }
+
+    #[test]
+    fn exact_attachment_lookup_is_not_shadowed_by_more_than_64_unrelated_candidates() {
+        let store = TlsStore::new();
+        let template = make_valid_tls("ns", "template", &["shared.example.com"]);
+        let exact = attachment(443);
+        let mut resources: HashMap<_, _> = (0..65)
+            .map(|index| {
+                let mut tls = (*template).clone();
+                tls.metadata.name = Some(format!("unrelated-{index}"));
+                (format!("ns/unrelated-{index}"), Arc::new(tls))
+            })
+            .collect();
+        let mut overlay = (*template).clone();
+        overlay.metadata.name = Some("overlay".to_string());
+        overlay.spec.resolved_listener_attachments = Some(vec![exact.clone()]);
+        let overlay = Arc::new(overlay);
+        resources.insert("ns/overlay".to_string(), overlay.clone());
+        store.replace_all_tls(resources);
+        assert!(Arc::ptr_eq(
+            &store
+                .snapshot()
+                .match_attachment_sni(&exact, "shared.example.com")
+                .unwrap(),
+            &overlay
+        ));
+    }
+
+    #[test]
+    fn full_and_partial_publication_agree_and_empty_deltas_do_not_publish() {
+        let full = TlsStore::new();
+        let partial = TlsStore::new();
+        let valid = make_valid_tls("ns", "valid", &["shared.example.com"]);
+        let invalid = make_invalid_tls("ns", "invalid", &["bad.example.com"]);
+        let data = HashMap::from([("ns/valid".to_string(), valid), ("ns/invalid".to_string(), invalid)]);
+        full.replace_all_tls(data.clone());
+        partial.apply_partial_update(data, HashMap::new(), &HashSet::new());
+        let snapshot = partial.snapshot();
+        assert_eq!(snapshot.get_cert_stats(), full.snapshot().get_cert_stats());
+        assert_eq!(snapshot.listener_count(), full.snapshot().listener_count());
+        assert!(Arc::ptr_eq(
+            &snapshot.match_sni_candidates(&listener(443), "shared.example.com")[0],
+            &full
+                .snapshot()
+                .match_sni_candidates(&listener(443), "shared.example.com")[0],
+        ));
+        partial.apply_partial_update(HashMap::new(), HashMap::new(), &HashSet::new());
+        partial.apply_partial_update(
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::from(["ns/absent".to_string()]),
+        );
+        assert!(Arc::ptr_eq(&snapshot.data, &partial.snapshot().data));
+    }
     #[test]
     fn conf_handler_preserves_shared_resource_allocation() {
         use edgion_common::conf_sync::traits::ConfHandler;
@@ -1019,8 +1414,8 @@ mod tests {
         let full = HashMap::from([("ns/shared".to_string(), initial.clone())]);
         ConfHandler::<EdgionTls>::full_set(&store, &full);
 
-        let snapshot = store.tls_data.load();
-        assert!(Arc::ptr_eq(&snapshot["ns/shared"].tls, &initial));
+        let snapshot = store.matcher.data.load();
+        assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].tls, &initial));
         drop(snapshot);
 
         let updated = make_valid_tls("ns", "shared", &["updated.example.com"]);
@@ -1031,7 +1426,7 @@ mod tests {
             std::collections::HashSet::new(),
         );
 
-        let snapshot = store.tls_data.load();
-        assert!(Arc::ptr_eq(&snapshot["ns/shared"].tls, &updated));
+        let snapshot = store.matcher.data.load();
+        assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].tls, &updated));
     }
 }

@@ -17,9 +17,11 @@ proposal as a documented design decision.
 
 `TlsCertMatcher` (`edgion-gateway/src/tls/store/cert_matcher.rs`) and
 `GatewayTlsMatcher` (`edgion-gateway/src/runtime/matching/tls.rs`) both wrap
-`HashMap<ListenerKey, HashHost<Vec<T>>>` + `ArcSwap*` for lock-free SNI lookup at
+listener/hostname indexes + `ArcSwap*` for lock-free SNI lookup at
 TLS handshake time. The two `match_sni` hot paths share the same shape:
-`load snapshot → get(listener_key) → get_rfc6125(sni) → entries.first()`.
+`load snapshot → get(listener_key) → RFC6125 lookup → entries.first()`.
+The TLS resource store now uses persistent hostname maps; Gateway listener
+matching retains `HashHost`. Both call the shared `lookup_rfc6125` algorithm.
 
 The proposal to factor both out into a generic
 `ListenerSniMatcher<T: Clone>` exposing
@@ -34,11 +36,11 @@ The shape is similar; the substrate is not:
 | Aspect | `TlsCertMatcher` | `GatewayTlsMatcher` |
 |---|---|---|
 | Value type | `Arc<EdgionTls>` | `GatewayTlsEntry` (carries `gateway_creation_ts`, `frontend_validation`, resolved CA secrets) |
-| Container | `ArcSwap<TlsCertMatcherData>` (always populated) | `ArcSwapOption<TlsMatcherData>` (`None` = empty fast-path, common case) |
+| Container | `ArcSwap<TlsSnapshotData>` (entries and indexes together) | `ArcSwapOption<TlsMatcherData>` (`None` = empty fast-path, common case) |
 | Layers | single hostname matcher | two: `listener_map` (hostname) + `fallback_listener_map` (catch-all listeners without hostname) |
 | Rebuild source | EdgionTls CRD store | Gateway listener spec; includes intra-gateway TLS resolution + `is_listener_not_programmed` gating |
-| Precedence sort | not applicable (single owner) | `tls_entry_order` (creationTimestamp, namespace, name, listener_name) for cross-Gateway collisions |
-| Collision logging | none needed | `warn_tls_sni_collision` at rebuild time |
+| Precedence sort | `edgion_tls_precedence` in each affected hostname/attachment slot | `tls_entry_order` (creationTimestamp, namespace, name, listener_name) for cross-Gateway collisions |
+| Collision logging | transition-bounded warnings in `TlsStore` | `warn_tls_sni_collision` at rebuild time |
 
 A `ListenerSniMatcher<T>` that captures only the common skeleton leaves the
 distinguishing parts — fast-path `Option`, fallback layer, precedence sort,
@@ -61,18 +63,17 @@ EdgionTls-backed vs. Gateway-TLS-backed certificates" — is real but already
 managed:
 
 - Both matchers route their hostname lookup through the **single shared**
-  `HashHost::get_rfc6125` (see `wildcard-depth-gateway-api-vs-rfc6125.md`). RFC
+  `lookup_rfc6125` (also used by `HashHost::get_rfc6125`) (see `wildcard-depth-gateway-api-vs-rfc6125.md`). RFC
   6125 §6.4.3 single-label wildcard semantics live there; changing them changes
   both call sites at once.
 - Both `match_sni` doc comments cite RFC 6125 §6.4.3 + Gateway API §4.3 and
   cross-reference `TlsRouteTable::match_route` to spell out the intentional
   divergence from the multi-label route layer.
-- The cross-Gateway precedence rule (oldest `creationTimestamp`, then
-  namespace/name) is unique to `GatewayTlsMatcher` because only Gateway
-  listeners can produce cross-resource collisions on the same hostname.
-  EdgionTls collisions are handled at a different layer
-  (`TlsStore::rebuild_matcher_from_data` / `edgion_tls_precedence`) and recorded
-  in the earlier `tls-F007` row.
+- Both resource families can collide across resources on one hostname.
+  EdgionTls precedence is maintained by `TlsSnapshotData::apply_indexes` /
+  `edgion_tls_precedence`; Gateway listener precedence stays in its own builder.
+  The original single-owner description was incorrect, not an accepted absence
+  of EdgionTls collision handling.
 
 ## Decision Rule
 
@@ -85,7 +86,7 @@ When a review/audit report claims any of the following, close as "accepted trade
    share enough to make a generic wrapper a net win.
 2. "Future SNI normalization / wildcard fixes will diverge between the two
    matchers" → **rejected as a refactor trigger**; the actual normalization
-   lives in `HashHost::get_rfc6125`, which is already shared. Wildcard depth
+   lives in `lookup_rfc6125`, also called by `HashHost::get_rfc6125`. Wildcard depth
    semantics are governed by `wildcard-depth-gateway-api-vs-rfc6125.md`.
 3. "`GatewayTlsMatcher`'s fallback layer should also exist on `TlsCertMatcher`
    for symmetry" → **rejected**; EdgionTls is keyed by hostname by
@@ -120,3 +121,6 @@ Re-evaluation triggers (re-open under a new ID, not this one):
 ## Resolution references
 
 - `tls-F007-dup` — 2026-05-27 (⚠️ accepted tradeoff).
+- `incremental-publication-03-edgion-tls` — updates the EdgionTls storage shape
+  and corrects the old single-owner description; the separate-product matcher
+  decision remains applicable.

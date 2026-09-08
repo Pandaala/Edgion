@@ -64,9 +64,10 @@ edgion-gateway/src/tls/
 
 `TlsStore` is the canonical certificate storage layer; it stores all `EdgionTls` resources keyed by `namespace/name`:
 
-- Internally uses `RwLock<HashMap<String, TlsEntry>>`; each entry contains an `Arc<EdgionTls>` and a `CertValidationResult`.
-- Validation (`validate_cert`) runs synchronously on write; invalid certificates are still stored but never enter the matcher.
-- Write operations (`full_set` / `partial_update`) rebuild the matcher synchronously while holding the write lock, ensuring consistency between store and matcher.
+- Publishes entries, listener/hostname slots, exact attachment candidates, and certificate counts in one immutable `TlsSnapshotData` through one `ArcSwap`.
+- Uses structurally shared `rpds` maps: partial updates touch only changed resource keys and their old/new hostname and attachment slots, including when all certificates share one listener.
+- Validation runs synchronously on write. An invalid update retains the same key's last-known-good certificate; an add representing delete/create never inherits it. Invalid attachment dimensions revoke old matcher admission.
+- The conf-sync cache write lock serializes production writers. Store instances own isolated publication sources; the global store and global matcher share one source. Readers capture one snapshot without a lock.
 - Global singleton: `GLOBAL_TLS_STORE` (`LazyLock<Arc<TlsStore>>`).
 
 ### TlsCertMatcher
@@ -74,20 +75,16 @@ edgion-gateway/src/tls/
 `TlsCertMatcher` is a high-performance matcher used on the TLS handshake hot path:
 
 ```rust
-struct TlsCertMatcherData {
-    listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>,
-}
-
 pub struct TlsCertMatcher {
-    data: ArcSwap<TlsCertMatcherData>,
+    data: ArcSwap<TlsSnapshotData>,
 }
 ```
 
-- Two-level index: `ListenerKey → HashHost(SNI → EdgionTls)`.
-- `HashHost` supports both exact and wildcard hostname matches (`*.example.com`).
+- Two-level persistent index: `ListenerKey → hostname slot → ordered EdgionTls candidates`.
+- Uses shared `lookup_rfc6125` for exact and single-label wildcard matches, the same algorithm as `HashHost::get_rfc6125`.
 - Uses `ArcSwap` for lock-free reads. The match call (`match_sni`) runs inside the TLS handshake callback and must return quickly.
-- Global singleton: `TLS_CERT_MATCHER` (`LazyLock<TlsCertMatcher>`).
-- Includes only certificates that pass validation and have `resolved_listeners` (certificates not bound to a listener are skipped).
+- Global singleton: `TLS_CERT_MATCHER` (`LazyLock<Arc<TlsCertMatcher>>`), shared with the global TLS store.
+- Includes only valid certificates with bounded dimensions. Physical listener slots use `resolved_listeners`; the separate exact attachment index uses resolved Gateway attachment proofs and rejects complete groups above 64 candidates.
 
 ### GatewayTlsMatcher
 

@@ -500,7 +500,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let listener_gateway_info = crate::runtime::store::listener_gateway_info::get_listener_gateway_info_store().stats();
     let gateway_tls_matcher = crate::runtime::matching::tls::get_gateway_tls_matcher().stats();
 
-    let tls = crate::tls::store::tls_store::get_global_tls_store();
+    let tls = crate::tls::store::tls_store::get_global_tls_store().snapshot();
     let (valid, invalid) = tls.get_cert_stats();
     let tls_store = TlsStoreStats {
         entries: tls.entry_count(),
@@ -509,7 +509,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     };
 
     let tls_cert_matcher = TlsCertMatcherStats {
-        listener_count: crate::tls::store::cert_matcher::get_tls_cert_matcher().listener_count(),
+        listener_count: tls.listener_count(),
     };
 
     let http_plugin_store = crate::plugins::http::get_global_plugin_store();

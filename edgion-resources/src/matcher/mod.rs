@@ -4,4 +4,4 @@ pub mod ip_radix_tree;
 pub mod key_group_helpers;
 pub mod radix_tree;
 
-pub use host_match::HashHost;
+pub use host_match::{canonical_host_key, lookup_rfc6125, HashHost};

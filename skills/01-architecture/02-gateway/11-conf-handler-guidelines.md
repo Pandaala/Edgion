@@ -46,7 +46,7 @@ Reference implementation: HTTPRoute computes affected `ListenerKey`s from the ol
 
 - The data plane (Gateway) uses `ArcSwap` for hot-path stores to enable lock-free reads.
 - The control plane (Controller) does not use `ArcSwap`; `RwLock` suffices.
-- Write pattern: clone current map → modify → `store(Arc::new(new_map))`.
+- Write pattern: build the next immutable snapshot, then publish once. A shallow outer-map clone is not a strict O(delta) update: BackendTLSPolicy and EdgionTls use persistent maps where unrelated entries must not be traversed.
 
 ## 4. Configuration leak protection
 
@@ -143,7 +143,7 @@ partial_update:
 | GRPCRoute | B | Incremental route_units_cache, but still merges all units to rebuild GrpcMatchEngine |
 | Service | B | Incremental store + per-item health check reconciliation |
 | EdgionPlugins | B | ArcSwap clone-modify-swap |
-| EdgionTls | B | RwLock per-item insert / remove |
+| EdgionTls | A | Persistent resource/hostname/attachment maps; changed slots only; one immutable publication |
 | EdgionStreamPlugins | B | ArcSwap clone-modify-swap |
 | BackendTLSPolicy | B | ArcSwap clone-modify-swap |
 | EdgionBackendTrafficPolicy | B | Incremental policy arbitration for affected Service keys |

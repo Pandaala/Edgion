@@ -1403,6 +1403,74 @@ mod tests {
     }
 
     #[test]
+    fn published_regex_san_preserves_attachment_and_rejects_dual_client_auth() {
+        use crate::tls::store::TlsStore;
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use edgion_resources::resources::edgion_tls::{AllowedSan, AllowedSanMatch, AllowedSanType};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use rcgen::{CertificateParams, KeyPair};
+        use std::collections::{BTreeMap, HashMap, HashSet};
+
+        let (fixture, gateway) = overlay_fixture("winner", true);
+        let mut tls = (*fixture).clone();
+        let key = KeyPair::generate().unwrap();
+        let cert = CertificateParams::new(vec!["example.com".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        tls.spec.secret = Some(Secret {
+            data: Some(BTreeMap::from([
+                (CERT.to_string(), ByteString(cert.pem().into_bytes())),
+                (KEY.to_string(), ByteString(key.serialize_pem().into_bytes())),
+            ])),
+            ..Default::default()
+        });
+        let mut san = AllowedSan::exact(AllowedSanType::Dns, r"^client\.example\.com$");
+        san.match_kind = AllowedSanMatch::RegularExpression;
+        let client_auth = tls.spec.client_auth.as_mut().unwrap();
+        client_auth.allowed_sans = Some(vec![san]);
+        client_auth.ca_secret_ref = Some(SecretObjectReference {
+            name: "client-ca".to_string(),
+            ..tls.spec.secret_ref.clone()
+        });
+
+        let store = TlsStore::new();
+        for phase in ["full", "add", "update"] {
+            let resource = Arc::new(tls.clone());
+            let data = HashMap::from([("default/tls".to_string(), resource)]);
+            match phase {
+                "full" => store.replace_all_tls(data),
+                "add" => {
+                    store.replace_all_tls(HashMap::new());
+                    store.apply_partial_update(data, HashMap::new(), &HashSet::new());
+                }
+                "update" => store.apply_partial_update(HashMap::new(), data, &HashSet::new()),
+                _ => unreachable!(),
+            }
+            assert!(store.get_validation_status("default/tls").unwrap().is_valid);
+            let published = store
+                .snapshot()
+                .match_attachment_sni(&gateway.attachment, "example.com")
+                .expect("valid published certificate must match its exact attachment");
+            let san = &published
+                .spec
+                .client_auth
+                .as_ref()
+                .unwrap()
+                .allowed_sans
+                .as_ref()
+                .unwrap()[0];
+            assert!(san.compiled_regex.is_some(), "SAN must compile during {phase}");
+            // Do not manually warm the candidate: publication owns this cache.
+            assert!(
+                select_gateway_edgion_tls_overlay(Some(published), &gateway).is_err(),
+                "dual client-auth must reject after {phase} publication"
+            );
+        }
+    }
+
+    #[test]
     fn empty_list_returns_none() {
         assert_eq!(pick_secret_index(&[], true), None);
         assert_eq!(pick_secret_index(&[], false), None);

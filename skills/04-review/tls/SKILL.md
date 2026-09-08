@@ -26,6 +26,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [EdgionTls incremental and atomic publication](regression-guards/edgion-tls-incremental-atomic-publication.md)
 - [tls-08 — Backend (upstream) TLS CA bundle loads every PEM block + fail-closed](regression-guards/backend-ca-bundle-multi-pem.md)
 - [Boring 5 FIPS opt-in build and verification](regression-guards/boring-v5-fips-build-verification.md)
 - [tls-06 — mTLS CA bundle loads every PEM block](regression-guards/ca-bundle-multi-pem.md)

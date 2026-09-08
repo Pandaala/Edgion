@@ -5,13 +5,21 @@
 //       (last-known-good): the served cert serial is unchanged after the bad update.
 //   (b) CONTROLLER reports the failure on the EdgionTls `ResolvedRefs` status
 //       condition as status=False, reason="InvalidCertificate".
+// This is end-to-end availability/status evidence. The controller may reject an
+// invalid Secret before publishing it; gateway-store unit tests cover its own
+// last-known-good retention and rejection-log rearming independently.
 //
 // Phase wiring (see dynamic/scenarios/edgion_tls_last_known_good.rs):
 //   - initial:  valid lkg-secret bound -> handshake OK, ResolvedRefs=True.
-//               The served cert serial is stashed for the next phase.
+//               The static suite stashes the served serial. The dynamic runner
+//               instead seeds the stash from its exact valid Secret fixture and
+//               waits for that serial, avoiding stale-certificate convergence.
 //   - fallback: garbage lkg-secret applied -> handshake STILL OK and serial
 //               equals the stashed serial (old cert still serving), while
 //               ResolvedRefs flips to False/InvalidCertificate.
+//   - recovered: valid Secret restored -> ResolvedRefs=True and the original
+//               serial is still served; this phase must not rewrite the stash.
+// The dynamic scenario repeats fallback after recovery and restores on exit.
 //
 // Required fixtures (edgion-tests/integration/conf/EdgionTls/LastKnownGood/):
 //   - initial/Gateway.yaml          # HTTPS listener https-lkg on 31201
@@ -22,7 +30,7 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
@@ -73,6 +81,10 @@ fn get_served_serial(host: &str, port: u16, servername: &str) -> Result<String, 
     let end_idx = start_idx + end_rel + end.len();
     let pem = &stdout[start_idx..end_idx];
 
+    get_pem_serial(pem.as_bytes())
+}
+
+fn get_pem_serial(pem: &[u8]) -> Result<String, String> {
     let mut child = Command::new("openssl")
         .args(["x509", "-noout", "-serial"])
         .stdin(Stdio::piped())
@@ -84,7 +96,7 @@ fn get_served_serial(host: &str, port: u16, servername: &str) -> Result<String, 
         .stdin
         .as_mut()
         .ok_or_else(|| "openssl x509 stdin unavailable".to_string())?
-        .write_all(pem.as_bytes())
+        .write_all(pem)
         .map_err(|e| format!("failed to write PEM to openssl x509: {}", e))?;
     let out = child
         .wait_with_output()
@@ -190,6 +202,37 @@ fn contains_wall_clock_year(s: &str) -> bool {
 pub struct LastKnownGoodInitialTestSuite;
 
 impl LastKnownGoodInitialTestSuite {
+    /// Seed the dynamic baseline from the exact Secret being applied, so an old
+    /// certificate plus an already-True status cannot satisfy its initial phase.
+    pub(crate) fn stash_fixture_serial(ctx: &TestContext, fixture: &Path) -> Result<(), String> {
+        use base64::Engine;
+
+        let content =
+            std::fs::read_to_string(fixture).map_err(|_| "failed to read the valid TLS Secret fixture".to_string())?;
+        let secret: serde_yaml::Value =
+            serde_yaml::from_str(&content).map_err(|_| "failed to parse the valid TLS Secret fixture".to_string())?;
+        let encoded = secret["data"]["tls.crt"]
+            .as_str()
+            .ok_or_else(|| "valid TLS Secret fixture has no data.tls.crt".to_string())?;
+        let pem = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| "valid TLS Secret fixture has invalid certificate base64".to_string())?;
+        let serial = get_pem_serial(&pem)?;
+        let path = stash_path(ctx);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create serial stash directory: {error}"))?;
+        }
+        std::fs::write(path, serial).map_err(|error| format!("failed to stash expected certificate serial: {error}"))
+    }
+
+    pub(crate) fn recovery_test_cases() -> Vec<TestCase> {
+        vec![
+            LastKnownGoodFallbackTestSuite::serves_old_cert(),
+            Self::resolved_refs_true(),
+        ]
+    }
+
     fn handshake_ok_and_stash_serial() -> TestCase {
         TestCase::new(
             "lkg_initial_handshake_and_stash_serial",

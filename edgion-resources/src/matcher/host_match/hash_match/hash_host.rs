@@ -1,6 +1,39 @@
 use crate::schema::is_valid_domain;
 use std::collections::HashMap;
 
+/// Normalize a hostname pattern to its storage key, rejecting invalid domains.
+/// Wildcards use `.example.com` keys; exact names use `example.com` keys.
+pub fn canonical_host_key(hostname: &str) -> Option<String> {
+    let lower = hostname.to_lowercase();
+    if let Some(rest) = lower.strip_prefix("*.") {
+        is_valid_domain(rest).then(|| format!(".{rest}"))
+    } else {
+        is_valid_domain(&lower).then_some(lower)
+    }
+}
+
+/// Look up an exact hostname, then a single-label wildcard per RFC 6125 §6.4.3.
+/// The callback reads keys produced by [`canonical_host_key`] from any storage.
+/// Already lowercase ASCII hostnames require no allocation.
+pub fn lookup_rfc6125<'a, T: 'a>(hostname: &str, mut lookup: impl FnMut(&str) -> Option<&'a T>) -> Option<&'a T> {
+    let lower;
+    let hostname = if hostname.bytes().any(|b| b.is_ascii_uppercase()) {
+        lower = hostname.to_ascii_lowercase();
+        lower.as_str()
+    } else {
+        hostname
+    };
+    if !is_valid_domain(hostname) {
+        return None;
+    }
+    if let Some(value) = lookup(hostname) {
+        return Some(value);
+    }
+    // Strip exactly one label, preserving the wildcard key's leading dot.
+    let dot = hostname.find('.')?;
+    lookup(&hostname[dot..])
+}
+
 /// Hash-based hostname matcher with exact and wildcard support.
 ///
 /// Wildcard patterns (`*.example.com`) are stored as `.example.com` keys.
@@ -36,17 +69,7 @@ impl<T> HashHost<T> {
     }
 
     pub fn insert(&mut self, k: &str, v: T) -> bool {
-        let k_lower = k.to_lowercase();
-        let k = k_lower.as_str();
-        let key = if let Some(rest) = k.strip_prefix("*.") {
-            if is_valid_domain(rest) {
-                format!(".{}", rest) // "*.aaa.com" -> ".aaa.com" to distinguish from "aaa.com"
-            } else {
-                return false;
-            }
-        } else if is_valid_domain(k) {
-            k.to_string()
-        } else {
+        let Some(key) = canonical_host_key(k) else {
             return false;
         };
 
@@ -82,30 +105,7 @@ impl<T> HashHost<T> {
     /// handshake. Route matching (which is governed by Gateway API §4.3) still
     /// uses [`HashHost::get`], so the two semantics coexist intentionally.
     pub fn get_rfc6125(&self, k: &str) -> Option<&T> {
-        if k.bytes().any(|b| b.is_ascii_uppercase()) {
-            self.get_rfc6125_lower(&k.to_ascii_lowercase())
-        } else {
-            self.get_rfc6125_lower(k)
-        }
-    }
-
-    fn get_rfc6125_lower(&self, k: &str) -> Option<&T> {
-        if !is_valid_domain(k) {
-            return None;
-        }
-        // Exact match wins over wildcard (parallel to `get_lower`).
-        if let Some(value) = self.map.get(k) {
-            return Some(value);
-        }
-        // Strip exactly the first DNS label and look up the `.suffix` form
-        // (e.g., `foo.example.com` -> `.example.com`). The suffix slice is
-        // used directly as the HashMap key — never re-validated as a domain,
-        // because (a) `get_lower` follows the same convention, and (b) a
-        // malformed slice can only cause a miss (returns `None`), never a
-        // wrong cert.
-        let dot = k.find('.')?;
-        let suffix = &k[dot..];
-        self.map.get(suffix)
+        lookup_rfc6125(k, |key| self.map.get(key))
     }
 
     fn get_lower(&self, k: &str) -> Option<&T> {
@@ -170,19 +170,7 @@ impl<T> HashHost<T> {
     /// Use this when building a store to avoid accidentally merging a new hostname
     /// entry into an existing wildcard bucket.
     pub fn get_mut_exact(&mut self, k: &str) -> Option<&mut T> {
-        let k_lower = k.to_lowercase();
-        let k = k_lower.as_str();
-        let key = if let Some(rest) = k.strip_prefix("*.") {
-            if is_valid_domain(rest) {
-                format!(".{}", rest)
-            } else {
-                return None;
-            }
-        } else if is_valid_domain(k) {
-            k.to_string()
-        } else {
-            return None;
-        };
+        let key = canonical_host_key(k)?;
         self.map.get_mut(&key)
     }
 
@@ -194,6 +182,65 @@ impl<T> HashHost<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_canonical_host_key_rejects_invalid_patterns() {
+        assert_eq!(canonical_host_key("API.Example.COM"), Some("api.example.com".into()));
+        assert_eq!(canonical_host_key("*.Example.COM"), Some(".example.com".into()));
+        for invalid in [
+            "",
+            "*",
+            "*.",
+            ".example.com",
+            "*.*.example.com",
+            "foo..example.com",
+            "é.example.com",
+        ] {
+            assert_eq!(canonical_host_key(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn test_lookup_rfc6125_bounds_storage_probes() {
+        let exact = 1;
+        let wildcard = 2;
+        let mut keys = Vec::new();
+        assert_eq!(
+            lookup_rfc6125("API.Example.COM", |key| {
+                keys.push(key.to_owned());
+                (key == "api.example.com").then_some(&exact)
+            }),
+            Some(&exact)
+        );
+        assert_eq!(keys, ["api.example.com"]);
+
+        keys.clear();
+        assert_eq!(
+            lookup_rfc6125("api.example.com", |key| {
+                keys.push(key.to_owned());
+                (key == ".example.com").then_some(&wildcard)
+            }),
+            Some(&wildcard)
+        );
+        assert_eq!(keys, ["api.example.com", ".example.com"]);
+
+        keys.clear();
+        assert_eq!(
+            lookup_rfc6125("deep.api.example.com", |key| {
+                keys.push(key.to_owned());
+                (key == ".example.com").then_some(&wildcard)
+            }),
+            None
+        );
+        assert_eq!(keys, ["deep.api.example.com", ".api.example.com"]);
+
+        for invalid in ["", "*.example.com", "foo..example.com", "é.example.com"] {
+            assert_eq!(
+                lookup_rfc6125(invalid, |_| panic!("invalid hostname reached storage")),
+                None::<&u8>
+            );
+        }
+    }
 
     #[test]
     fn test_exact_match() {

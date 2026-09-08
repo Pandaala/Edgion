@@ -35,9 +35,10 @@ Three matchers, all fixed the same way:
    field to `GatewayTlsEntry` (populated from `gateway.metadata.creation_timestamp`).
    Covers exact-hostname, **wildcard-hostname**, and catch-all slots.
 2. **`TlsCertMatcher` / `TlsStore`** (`edgion-gateway/src/tls/store/tls_store.rs`) —
-   EdgionTls certs. `rebuild_matcher_from_data` sorts each `Vec<Arc<EdgionTls>>` slot
-   with `len > 1` via `edgion_tls_precedence` and warns via `warn_edgion_tls_collision`.
-   `cert_matcher.rs::match_sni` unchanged.
+   EdgionTls certs. `apply_indexes` sorts only affected hostname/attachment
+   candidates via `edgion_tls_precedence`. Host collisions warn only when
+   membership or the selected resource changes; renewal alone does not re-warn.
+   The immutable candidate vector stays ordered for `cert_matcher.rs::match_sni`.
 3. **`TlsRouteTable`** (`edgion-gateway/src/routes/tls/gateway_tls_routes.rs`) — TLSRoute
    passthrough routing. `from_routes` sorts each colliding hostname bucket (and the
    catch-all) via `tls_route_precedence` and warns via `warn_tls_route_collision`.
@@ -109,9 +110,11 @@ collisions reach the data plane unguarded.
   infeasible from the data plane (the `ConfigSync` gRPC channel is pull-only — no
   reverse status RPC). The right home is the controller (where `ListenerPortManager`
   lives); tracked separately, not part of this fix.
-- **Warn repeats per rebuild.** A standing misconfiguration re-warns on every config
-  sync (and N−1 times per N-way slot). Acceptable for a misconfig that must be fixed;
-  consider once-per-slot rate-limiting if it becomes noisy.
+- **Historical warning behavior:** the original correction accepted repeated
+  warnings during full rebuilds. For EdgionTls this is superseded by
+  [incremental publication](edgion-tls-incremental-atomic-publication.md): only
+  collision membership or winner transitions warn. This does not change the
+  warning policy of Gateway listener or TLSRoute matchers.
 - **The "oldest wins" semantic depends on `creationTimestamp` reaching the data plane.**
   Verified (multi-agent trace, 2026-05-20): in **K8s mode** the field survives the full
   Controller→Gateway sync — the gRPC `ConfigSync` proto carries the whole object as a JSON

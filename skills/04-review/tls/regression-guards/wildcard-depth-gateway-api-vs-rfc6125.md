@@ -15,7 +15,7 @@ the standards that govern their domains.
 |-------|------|----------------|--------------------|--------|
 | HTTP / TLS route matching | `route::hostname_matches_listener` | multi-level | Gateway API §4.3 | ✅ correct |
 | TLS cert SAN ↔ listener config validation | `tls::validation::matches_host_pattern` (+ `is_valid_san_pattern` pre-pass) | single-level | RFC 6125 §6.4.3 | ✅ correct |
-| TLS cert selection by SNI at handshake time | `HashHost::get_rfc6125` used by `TlsCertMatcher::match_sni`, `GatewayTlsMatcher::match_sni` | single-level | RFC 6125 §6.4.3 | ✅ correct |
+| TLS cert selection by SNI at handshake time | shared `lookup_rfc6125`, called by persistent `TlsCertMatcher` slots and `HashHost::get_rfc6125` for Gateway TLS | single-level | RFC 6125 §6.4.3 | ✅ correct |
 
 The first two diverge intentionally — they govern different domains:
 
