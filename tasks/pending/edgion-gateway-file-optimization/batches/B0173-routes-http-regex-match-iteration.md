@@ -22,4 +22,4 @@
 - Implementation: `match_route` now iterates `SetMatches` directly and lets an empty iterator fall through. The existing multi-match test pins `specific`, `general`, then `wildcard`, and the source plus two routing pages now state the upstream worst-case `O(P * M)` bound without claiming allocation-free matching.
 - Final review: a fresh independent reviewer confirmed iterator ownership, stable longest-first precedence, first deep-match/error propagation, documentation accuracy, the secondary allocation reduction, and exact scope; verdict LGTM with no Must Fix, Should Fix, or deferred finding.
 - Testing: target tests passed 13/13 and the complete HTTP route suite passed 345/345. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed. Existing integration coverage is sufficient and remains frozen.
-- Commit: pending; never push.
+- Commit: `c0273fb9`; never pushed by the campaign.

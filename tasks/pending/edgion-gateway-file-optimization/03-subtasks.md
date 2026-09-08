@@ -600,7 +600,7 @@
 | `edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs` | `routes-shared` | source | changed | B0173: remove redundant regex-match index collection |
 | `edgion-gateway/src/routes/http/match_unit.rs` | `routes-shared` | source | changed | B0172: expose borrowed zero-or-one path extraction |
 | `edgion-gateway/src/routes/http/mod.rs` | `routes-shared` | source | changed | B0171: restrict the match engine to crate visibility |
-| `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | examined-no-change | B0174: retain zero-allocation protocol/media-type classification |
 | `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs` | `routes-shared` | source | pending | — |
