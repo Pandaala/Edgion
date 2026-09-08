@@ -18,4 +18,4 @@
 - Deferred: none. D0028 owns numeric bounds, D0099 owns listener accept-loop scheduling and D0100 owns local-gate linearizability and registry contention.
 - Review: `b0135_final_review` independently confirmed the declarations, reexport chain, only runtime construction path, lack of alternate core exports and correct coverage/deferred boundaries. No Must Fix or Should Fix.
 - Verification: no facade-specific test would add signal beyond compilation. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,093-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `81cfc7eb`; local only, never pushed by the campaign.

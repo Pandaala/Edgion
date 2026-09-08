@@ -154,6 +154,12 @@ COLD_FUNCTION_REGISTRATIONS = [
         "plugin configuration initialization",
     ),
     (
+        "plugins/stream/connection_rate_limit/plugin.rs",
+        "ConnectionRateLimitPlugin",
+        "new",
+        "plugin construction",
+    ),
+    (
         "plugins/stream/stream_plugin_runtime.rs",
         "StreamPluginRuntime",
         "from_stream_plugins",

@@ -1,9 +1,9 @@
 //! L4 ConnectionRateLimit stream plugin.
 //!
-//! Two-stage admission per accepted connection (pre-TLS):
-//!   Stage 1 — local per-listener token-bucket gate (no Redis); always enforced
+//! Two-step admission whenever the plugin's owning stream lifecycle invokes it:
+//!   Step 1 — local per-listener token-bucket gate (no Redis); always enforced
 //!             when `perListener` is configured. Flood-robust backstop.
-//!   Stage 2 — optional Redis windowed check (perSourceIp always; perListener
+//!   Step 2 — optional Redis windowed check (perSourceIp always; perListener
 //!             only when redisDistributed), bounded by the configured
 //!             redis_timeout (default 100ms, capped at 1s). On Redis error/timeout the per-dimension onRedisFailure
 //!             policy applies (perListener default Deny, perSourceIp default Allow).
@@ -13,6 +13,8 @@
 //! (`record_connection_rate_limit_reject`) on Deny, plus the Redis-failure
 //! metric (`record_connection_rate_limit_redis_failure`) on every Redis failure
 //! (so fail-open is alertable).
+//! Listener attachment runs before inbound protocol parsing; TCP/UDP route and
+//! TLS compatibility attachments run at their respective stream lifecycles.
 
 use async_trait::async_trait;
 use std::time::Duration;
@@ -23,12 +25,15 @@ use crate::observe::metrics::{record_connection_rate_limit_redis_failure, record
 use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
 use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 use edgion_resources::duration::parse_duration;
-use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy};
+use edgion_resources::resources::edgion_plugins::{
+    OnRedisFailure, PluginValidation, RateLimitAlgorithm, RateLimitPolicy,
+};
 use edgion_resources::resources::edgion_stream_plugins::ConnectionRateLimitConfig;
 
 const PLUGIN_NAME: &str = "ConnectionRateLimit";
 
 pub struct ConnectionRateLimitPlugin {
+    init_failed: bool,
     algorithm: RateLimitAlgorithm,
     /// `config.key_prefix` scoped by the owning entry's identity
     /// (`<namespace>/<name>/#<index>`; stream entries carry no alias). Resolved
@@ -68,6 +73,17 @@ impl ConnectionRateLimitPlugin {
     /// `entry_scope` is the owning EdgionStreamPlugins entry's identity; see
     /// `scoped_key_prefix`.
     pub fn new(cfg: &ConnectionRateLimitConfig, entry_scope: &str) -> Self {
+        let init_failed = if cfg.validation_error().is_some() {
+            tracing::error!(
+                component = "stream_connection_rate_limit",
+                entry_scope,
+                error = "invalid configuration",
+                "Failed to initialize ConnectionRateLimitConfig; all connections will be denied",
+            );
+            true
+        } else {
+            false
+        };
         let parse_ms = |s: &str| {
             edgion_resources::duration::parse_duration(s)
                 .map(|d| d.as_millis() as u64)
@@ -93,6 +109,7 @@ impl ConnectionRateLimitPlugin {
             .min(edgion_resources::resources::edgion_stream_plugins::MAX_REDIS_ACCEPT_TIMEOUT_MS)
             .max(1);
         Self {
+            init_failed,
             algorithm: cfg.algorithm.clone(),
             scoped_key_prefix: format!("{}{}:conn:", cfg.key_prefix, entry_scope),
             entry_scope: entry_scope.to_string(),
@@ -164,9 +181,12 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
     }
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
+        if self.init_failed {
+            return StreamPluginResult::Deny("connrate:deny:invalid-config".to_string());
+        }
         let port = ctx.listener_port;
 
-        // ---- Stage 1+2: perListener (evaluated first) ----
+        // ---- Steps 1+2: perListener (evaluated first) ----
         if let Some(rate) = self.pl_rate {
             let gate = get_or_update_local_gate(&self.entry_scope, port, rate, self.pl_interval_ms);
             if !gate.try_acquire() {
@@ -185,7 +205,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
             }
         }
 
-        // ---- Stage 2: perSourceIp (Redis) ----
+        // ---- Step 2: perSourceIp (Redis) ----
         if let Some(rate) = self.ip_rate {
             let key = format!("ip:{}:{}", port, ctx.direct_peer_ip);
             let allowed = self
@@ -205,7 +225,9 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 mod tests {
     use super::*;
     use crate::plugins::stream::stream_plugin_trait::StreamLayer;
-    use edgion_resources::resources::edgion_stream_plugins::{ConnectionRateLimitConfig, PerListenerLimit};
+    use edgion_resources::resources::edgion_stream_plugins::{
+        ConnectionRateLimitConfig, PerListenerLimit, PerSourceIpLimit,
+    };
     use std::net::IpAddr;
 
     fn cfg_local_only(rate: u64) -> ConnectionRateLimitConfig {
@@ -255,5 +277,37 @@ mod tests {
         }
         // capacity 2 in a 1s window, all within the same test instant
         assert!(admitted <= 2, "expected <=2 admits, got {admitted}");
+    }
+
+    #[tokio::test]
+    async fn invalid_config_without_dimension_denies_before_runtime_work() {
+        let mut cfg = cfg_local_only(1);
+        cfg.per_listener = None;
+        let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/invalid-empty/#0");
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64112, StreamLayer::Stage1);
+
+        assert!(matches!(
+            plugin.on_connection(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == "connrate:deny:invalid-config"
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_redis_ref_denies_even_when_failure_policy_defaults_allow() {
+        let mut cfg = cfg_local_only(1);
+        cfg.per_listener = None;
+        cfg.per_source_ip = Some(PerSourceIpLimit {
+            rate: 1,
+            interval: "1s".to_string(),
+            on_redis_failure: OnRedisFailure::Allow,
+            interval_duration: None,
+        });
+        let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/invalid-redis/#0");
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64113, StreamLayer::Stage1);
+
+        assert!(matches!(
+            plugin.on_connection(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == "connrate:deny:invalid-config"
+        ));
     }
 }
