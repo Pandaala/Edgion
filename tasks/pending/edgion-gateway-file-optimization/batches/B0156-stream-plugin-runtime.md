@@ -20,4 +20,4 @@
 - Review: `b0135_final_review` independently verified all variants and priorities. It required adding `legacy_http_fields()` to IpRestriction prevalidation and a discriminating serde/state-consumption regression; the corrected diff received LGTM with no remaining Must Fix or Should Fix.
 - Verification: all 10 stream-runtime tests passed. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only and diff guards passed; Clippy retained only existing warnings.
 - External gate support: commit `9b6b6fa0` changed 14 integration paths (11 added, three modified); the independently reconstructed 3,104-path manifest matches byte-for-byte and no integration worktree edit exists. External commit `1c55ab7b` introduced canonical links to the previously missing blocked rustls task; the added task restores link validation and grants no implementation authority.
-- Commit: pending local batch commit; never push.
+- Commit: `c4805644`; never pushed by the campaign.

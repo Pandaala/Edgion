@@ -2,9 +2,13 @@
 //!
 //! The store holds **compiled** stream plugins (`Arc<CompiledStreamPlugins>`):
 //! the immutable `EdgionStreamPlugins` schema paired with the two gateway-built
-//! stream runtimes (Stage 1 ConnectionFilter, Stage 2 TlsRoute). The runtimes
-//! are built once per (namespace/name) by `compile_stream_plugins` and
-//! Arc-shared via the store, supporting hot reload through the dynamic store key.
+//! runtime families. `StreamPluginRuntime` evaluates `DirectPeerIp` plus the
+//! listener port at listener admission and TCP/UDP route session creation;
+//! TLSRoute may also invoke it through the legacy compatibility fallback,
+//! which new configurations must not rely on. The separate
+//! `TlsRoutePluginRuntime` evaluates TLSRoute context after route matching.
+//! Both runtimes are built once per namespace/name and Arc-shared through
+//! atomic store snapshots for hot reload.
 
 use arc_swap::ArcSwap;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -36,9 +40,9 @@ pub fn create_stream_plugin_handler() -> Box<dyn ConfHandler<EdgionStreamPlugins
 pub struct CompiledStreamPlugins {
     /// The serializable EdgionStreamPlugins schema (retained for store stats).
     pub spec: Arc<EdgionStreamPlugins>,
-    /// Stage 1 (ConnectionFilter) runtime — pre-TLS, IP-only.
+    /// Connection-context runtime used by listener and route-owned lifecycles.
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
-    /// Stage 2 (TlsRoute) runtime — post-handshake, post-route-match.
+    /// TLSRoute-context runtime used after route matching.
     pub tls_route_plugin_runtime: Arc<TlsRoutePluginRuntime>,
 }
 
@@ -92,13 +96,18 @@ impl StreamPluginStore {
         map.get(key).cloned()
     }
 
-    /// Replace all compiled stream plugins atomically
-    pub fn replace_all(&self, plugins: HashMap<String, Arc<CompiledStreamPlugins>>) {
+    /// Publish one complete generation for conf-sync full sets and crate tests.
+    pub(crate) fn replace_all(&self, plugins: HashMap<String, Arc<CompiledStreamPlugins>>) {
         self.plugins.store(Arc::new(plugins));
     }
 
-    /// Update compiled stream plugins atomically (clone map + modify + swap)
-    pub fn update(&self, add_or_update: HashMap<String, Arc<CompiledStreamPlugins>>, remove: &HashSet<String>) {
+    /// Apply one serialized conf-sync delta with one atomic publication.
+    ///
+    /// Loading and cloning the current map before `store` is correct because
+    /// `CacheData` holds the per-resource-type writer lock across production
+    /// `full_set` and `partial_update` calls. This method is not safe for
+    /// independent concurrent direct writers.
+    fn apply_delta(&self, add_or_update: HashMap<String, Arc<CompiledStreamPlugins>>, remove: &HashSet<String>) {
         let current = self.plugins.load();
         let mut new_map = (**current).clone();
 
@@ -203,13 +212,27 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
         );
         let mut add_or_update = compile_map(add);
         add_or_update.extend(compile_map(update));
-        self.update(add_or_update, &remove);
+        self.apply_delta(add_or_update, &remove);
     }
 }
 
 #[cfg(test)]
-mod kind_stats_tests {
+mod tests {
     use super::*;
+
+    fn fixture(name: &str) -> Arc<EdgionStreamPlugins> {
+        let yaml = format!(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: {name}
+  namespace: default
+spec: {{}}
+"#,
+        );
+        Arc::new(serde_yaml::from_str(&yaml).expect("minimal EdgionStreamPlugins fixture must parse"))
+    }
 
     #[test]
     fn empty_store_reports_empty_breakdown() {
@@ -218,5 +241,52 @@ mod kind_stats_tests {
         assert!(by_kind.is_empty());
         let keys = store.keys_by_kind("IpRestriction");
         assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn full_set_publishes_then_empty_full_set_clears() {
+        let store = StreamPluginStore::new();
+        let resource = fixture("full-set");
+        let key = resource.key_name();
+        store.full_set(&HashMap::from([(key.clone(), resource)]));
+
+        let published = store.get(&key).expect("full set must publish the compiled resource");
+        assert_eq!(store.count(), 1);
+        assert_eq!(published.spec.key_name(), key);
+
+        store.full_set(&HashMap::new());
+        assert_eq!(store.count(), 0);
+        assert!(!store.contains(&key));
+        assert_eq!(published.spec.key_name(), "default/full-set");
+    }
+
+    #[test]
+    fn partial_delta_preserves_replaces_adds_and_removes_snapshots() {
+        let store = StreamPluginStore::new();
+        let replace_key = "default/replace".to_string();
+        let keep_key = "default/keep".to_string();
+        let remove_key = "default/remove".to_string();
+        store.full_set(&HashMap::from([
+            (replace_key.clone(), fixture("replace")),
+            (keep_key.clone(), fixture("keep")),
+            (remove_key.clone(), fixture("remove")),
+        ]));
+
+        let old_replaced = store.get(&replace_key).expect("replacement predecessor must exist");
+        let old_kept = store.get(&keep_key).expect("unaffected entry must exist");
+        store.partial_update(
+            HashMap::from([("default/add".to_string(), fixture("add"))]),
+            HashMap::from([(replace_key.clone(), fixture("replace"))]),
+            HashSet::from([remove_key.clone()]),
+        );
+
+        let replacement = store.get(&replace_key).expect("updated entry must remain present");
+        let kept = store.get(&keep_key).expect("unaffected entry must remain present");
+        assert!(!Arc::ptr_eq(&old_replaced, &replacement));
+        assert!(Arc::ptr_eq(&old_kept, &kept));
+        assert!(store.contains("default/add"));
+        assert!(!store.contains(&remove_key));
+        assert_eq!(store.count(), 3);
+        assert_eq!(old_replaced.spec.key_name(), replace_key);
     }
 }
