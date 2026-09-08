@@ -66,7 +66,7 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 - `skills/01-architecture/02-gateway/07-backends.md`
 - `skills/01-architecture/05-resources/20-edgion-backend-traffic-policy.md`
 - `skills/02-features/03-resources/20-edgion-backend-traffic-policy.md`
-- `skills/04-review/backends/ebtp-ai-target-limits-preserve-service-fanout.md`
+- `skills/04-review/backends/regression-guards/ebtp-ai-target-limits-preserve-service-fanout.md`
 
 ## Decision log
 

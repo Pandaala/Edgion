@@ -89,7 +89,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0093 — Correct Gateway API RequestRedirect documentation | needs-implementation | [campaign finding](D0093-correct-gateway-api-request-redirect-documentation.md) |
 | D0094 — Reject DSL builtin calls beyond bytecode argument capacity | needs-implementation | [campaign finding](D0094-dsl-builtin-argument-count-encoding.md) |
 | D0095 — Investigate plugin policy and invalid-generation retention | needs-investigation | [campaign finding](D0095-plugin-policy-invalid-generation-retention.md) |
-| Precompile backend port resolution and fail closed on missing mappings | pending | [task](../../../todo/backend-port-resolution-precompiled-fail-closed.md) |
+| Precompile backend port resolution and fail closed on missing mappings | fixed (2026-09-08) | [resolution](../../../../skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
 | Promote BackendTLSPolicy handling atomically to v1 only | pending | [task](../../../todo/backend-tls-policy-v1-only-atomic-promotion.md) |

@@ -99,7 +99,7 @@ Touch only what the task file names. In particular:
   held two gaps that must not get tests until a decision landed; both decisions
   have landed — gap 7 fixed in the fork and tested there, gap 8 accepted with
   the terminate-shape test ban recorded in
-  `skills/04-review/h2-grpc/terminate-upstream-rst-not-rate-limited.md`. The
+  `skills/04-review/h2-grpc/intentional-design/terminate-upstream-rst-not-rate-limited.md`. The
   gap-8 ban still holds: do not add a test pinning "N terminates → N resets";
 - the fork's `test_basic.rs` / `test_upstream.rs` need a local openresty and are
   inert here. Do not try to run them, and do not re-add them as a task.

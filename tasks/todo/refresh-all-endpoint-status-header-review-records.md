@@ -16,9 +16,9 @@ Correct closed-review and user-documentation statements that still describe obso
 
 ## Requirements
 
-- Update `skills/04-review/CLOSED-FINDINGS.md` entry `FA-BODY-002` so it no longer says AllEndpointStatus relays `Expect` or `Content-Length`, and remove or replace the nonexistent follow-up task reference.
-- Update `skills/04-review/forward-auth/outbound-expect-continue-not-relayed.md` to describe AllEndpointStatus as an aligned independent-builder consumer, not an adjacent gap.
-- Update `skills/04-review/http1/hop-by-hop-dynamic-stripping.md` so its AllEndpointStatus/header inventory matches the current implementation.
+- Update `skills/04-review/SKILL.md` entry `FA-BODY-002` so it no longer says AllEndpointStatus relays `Expect` or `Content-Length`, and remove or replace the nonexistent follow-up task reference.
+- Update `skills/04-review/forward-auth/regression-guards/outbound-expect-continue-not-relayed.md` to describe AllEndpointStatus as an aligned independent-builder consumer, not an adjacent gap.
+- Update `skills/04-review/http1/regression-guards/hop-by-hop-dynamic-stripping.md` so its AllEndpointStatus/header inventory matches the current implementation.
 - Find the AllEndpointStatus user-facing summary text and define `failure_count` as responses outside 2xx/3xx plus transport/time-limit failures, matching runtime behavior.
 - Verify every statement against current source and existing focused tests; do not alter runtime code merely to preserve stale prose.
 

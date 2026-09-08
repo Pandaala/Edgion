@@ -64,12 +64,48 @@ instead fixes membership while retaining atomically updated endpoint state.
 One selection may still inspect an endpoint more than once when panic survivor
 counting precedes ordinary selection. The guarantee is one Service-level runtime
 capture and no repeated identity/hash construction, not one endpoint-state read
-per request. Expired outlier cooldown is a cold edge that may briefly take the
-endpoint completion lock to settle passive state and metrics.
+per request. This is not a lock-free or allocation-free selection guarantee.
+
+### Accepted residual cost
+
+On 2026-09-08, after reviewing the remaining locking and allocation costs, the
+user explicitly chose to close the task without further implementation. The
+original repeated Service lookup defect is corrected; the task's stronger
+no-blocking-lock and no-per-candidate-allocation criteria remain unmet and are
+accepted for this existing path, not declared fixed or made a general exemption.
+
+`EndpointRuntimeState::outlier_ejected` takes `completion_lock` at cooldown expiry
+and calls `PassiveEjectionState::expire_legacy_ejection`, which takes its own
+state mutex. This keeps passive recovery, the runtime gate, gauge accounting,
+and retirement coordinated. A competing failure completion can hold the endpoint
+lock while waiting for `ServiceCbState::eject_lock` and scanning endpoint states
+for percent arbitration. Waiting time is therefore not proven short. Ordinary
+healthy and unexpired eligibility reads avoid this recovery lock.
+
+`record_cb_rejection` and `record_cb_recovery` in
+`edgion-gateway/src/observe/metrics/registry.rs` allocate the Service label with
+`service_key.to_string()`. Rejection can occur per candidate; recovery runs on
+the transition edge. These costs remain real even though identity construction
+and top-level Service lookups have been removed.
+
+The accepted benefit is preserving the existing recovery/retirement protocol
+without a broad state-machine redesign for an unmeasured performance gain.
+Removing the lock alone risks stale recovery clearing a newer ejection;
+`try_lock` with continued rejection can delay recovery and change panic decisions,
+while early admission with deferred cleanup separates availability from passive
+state and gauge accounting. Background recovery adds scheduling and lifecycle
+costs. Cached metric handles need a separate lifetime and exporter-idle review.
+No contention benchmark or production latency measurement supports a stronger
+claim about the remaining cost.
+
+Policy capture coherence is separate and remains tracked in
+`tasks/todo/service-degrade-threshold-capture-coherence.md`; this acceptance does
+not resolve or waive that requirement.
 
 ## Verification and re-evaluation
 
-Fresh verification on 2026-09-07:
+Historical verification recorded on 2026-09-07 (not rerun for the 2026-09-08
+documentation-only decision):
 
 - `cargo test -p edgion-gateway --lib backends::discovery::coordinator::tests::`:
   24 passed. This covers late health and outlier completions, membership
@@ -78,16 +114,25 @@ Fresh verification on 2026-09-07:
 - `cargo test -p edgion-gateway --lib backends::selector::tests::`: 9 passed,
   including panic-selection metric ownership and lifecycle cases.
 
-No production behavior changed while closing the stale task. The repository-wide
-closing checks are reported by the task runner rather than duplicated here.
+The 2026-09-08 review traced selection, endpoint completion, passive expiry,
+retirement, and rejection/recovery metrics in current source. No production
+behavior or user-facing configuration changed. Repository-wide closing checks
+are reported by the task runner separately; the historical unit-test results
+above are not fresh verification.
 
 Re-evaluate if candidate eligibility stops receiving the captured
 `ServiceRuntimeSnapshot`, a selector performs a live top-level health/outlier
 store lookup, endpoint identity becomes request-built again, or health/outlier
-state stops using identity-guarded atomic runtime objects.
+state stops using identity-guarded atomic runtime objects. Revisit the accepted
+residual cost if profiles show selection latency at cooldown expiry, synchronized
+recoveries or large-Service arbitration cause contention, rejection-label
+allocation becomes material, or recovery/retirement semantics are redesigned.
 
 ## Resolution references
 
 - `lb-selection-service-runtime-state-capture` — previously deferred performance
-  defect, found already corrected by the Service discovery coordinator/runtime
-  identity redesign on 2026-09-07.
+  defect: repeated lookup and identity construction were already corrected by
+  the Service discovery coordinator/runtime identity redesign. On 2026-09-08
+  the user accepted the remaining locking/allocation costs and requested closure
+  without further code changes. This supersedes the earlier blanket closure
+  description; it does not claim every original acceptance criterion passed.
