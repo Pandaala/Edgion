@@ -24,4 +24,5 @@
 - Plan-first: required before implementation because the change crosses an async object-safe trait and both TLS lifecycles.
 - Integration coverage: no existing file may change; no new end-to-end gap was identified.
 - Deferred: legacy Stage-1 fallback removal remains existing migration debt; no new deferred task.
+- Freshness: refreshed at merge HEAD `f3c7bb80`; all seven proposed files and the target blob remained unchanged. External BackendTLS pool-isolation work is downstream of backend selection and does not intersect Stage-2 context construction. Corrected quantitative evidence: terminated mode avoids approximately five string allocations, passthrough approximately four; the discarded `LogBuffer` is large inline state, not a heap allocation. The value case, allow-list and plan-first classification remain unchanged.
 - Commit: pending; never push.

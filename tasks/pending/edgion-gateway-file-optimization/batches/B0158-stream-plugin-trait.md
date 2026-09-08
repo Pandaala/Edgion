@@ -19,4 +19,4 @@
 - Implementation: corrected only the trait and method Rustdoc. Every type, signature, implementation, result, ordering rule, async boundary, label, IP field and runtime behavior is unchanged.
 - Review: `b0135_final_review` independently traced all listener, TCP, UDP and legacy TLS callers and returned LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification result: focused stable-label test 1/1; `cargo fmt --all`; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards all passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `ea8dd592`; never pushed by the campaign.

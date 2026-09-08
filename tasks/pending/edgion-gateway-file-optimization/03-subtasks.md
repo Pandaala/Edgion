@@ -223,6 +223,7 @@
 | `edgion-gateway/src/backends/runtime.rs` | `backends-core` | source | changed | BACKENDS-RUNTIME-001: TLS-policy-safe selected-backend Debug boundary |
 | `edgion-gateway/src/backends/selector.rs` | `backends-core` | source | pending | reopened after concurrent-agent content drift at `9830fb2a`; re-audit current HEAD |
 | `edgion-gateway/src/backends/service_kind.rs` | `backends-core` | source | examined-no-change | BACKENDS-SERVICE-KIND-001: canonical resources-layer type re-export retained |
+| `edgion-gateway/src/backends/tests/backend_tls_pool_test.rs` | `backends-core` | test | pending | Added by external commit `1ca0ad0e`; full audit pending |
 | `edgion-gateway/src/backends/validation.rs` | `backends-core` | source | examined-no-change | BACKENDS-VALIDATION-001: DirectEndpoint membership/port proof redesign deferred to the shared backend-port TODO |
 | `edgion-gateway/src/bin/edgion_gateway.rs` | `crate-entry` | source | examined-no-change | `B0044`: minimal allocator, panic, crypto, capability, and CLI handoff retained |
 | `edgion-gateway/src/cache/lru.rs` | `cache` | source | changed | CACHE-001 / `40f7eb74` |
@@ -491,10 +492,13 @@
 | `edgion-gateway/src/plugins/http/request_access_policy/plugin.rs` | `plugins-http-request-access-policy` | source | changed | B0100 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
+| `edgion-gateway/src/plugins/http/request_mirror/budget.rs` | `plugins-http-request-mirror` | source | pending | Added by external commit `90a45683`; full audit pending |
+| `edgion-gateway/src/plugins/http/request_mirror/config.rs` | `plugins-http-request-mirror` | source | pending | Added by external commit `90a45683`; full audit pending |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | changed | B0102 |
+| `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | pending | Added by external commit `90a45683`; full audit pending |
 | `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | examined-no-change | B0103 |
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | examined-no-change | B0104 |
@@ -568,7 +572,7 @@
 | `edgion-gateway/src/plugins/stream/stream_plugin_store.rs` | `plugins-stream` | source | changed | B0157: documented serialized snapshot publication and strengthened replacement/delta tests |
 | `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs` | `plugins-stream` | source | changed | B0158: corrected listener, TCP/UDP and legacy TLS lifecycle contract |
 | `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
-| `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | analysis-ready | B0159: TLS-route lifecycle facade correction ready for promotion |
+| `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | changed | B0159: corrected terminated, passthrough and legacy fallback facade docs |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | analysis-ready | B0160: borrowed Stage-2 context plan ready after earlier batches |
 | `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | changed | REQ-BODY-OPS-001 / `f36d7576`; REQ-BODY-BLOCKING-001 / `1eb48138` |

@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0157 committed locally as `9e51b72f` |
-| Coverage | 540 current Gateway files: 175 changed, 157 examined-no-change, 11 deferred, 197 non-terminal; 3 historical rows are removed |
-| Active batch | none; B0158 passed its commit gate |
-| Analysis queue | B0159–B0160 are analysis-ready behind active B0158; D0074–D0102 retain their separate scopes |
-| Integration freeze | Refreshed after external commit `9b6b6fa0`: 3,104 `edgion-tests` files after DirectEndpoint coverage added 11 paths and changed three existing fingerprints; no campaign integration-test edit occurred |
+| Campaign status | in-progress; B0158 committed locally as `ea8dd592`; remote `1ca0ad0e` merged as `f3c7bb80` |
+| Coverage | 544 current Gateway files: 176 changed, 157 examined-no-change, 11 deferred, 200 non-terminal; 3 historical rows are removed |
+| Active batch | none; B0159 passed its commit gate |
+| Analysis queue | B0160 remains analysis-ready after post-merge refresh; four externally added Gateway files are pending; D0074–D0102 retain their separate scopes |
+| Integration freeze | Refreshed after merged external commit `1ca0ad0e`: 3,105 `edgion-tests` files after backend TLS pool-isolation coverage added one path and changed two existing fingerprints; no campaign integration-test edit occurred |
 
 ## AI guide summary
 
