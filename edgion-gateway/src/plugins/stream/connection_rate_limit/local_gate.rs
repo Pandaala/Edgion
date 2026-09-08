@@ -8,11 +8,13 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Instant;
 
 /// Token-bucket gate. `capacity == rate`, refilled `rate` tokens per `interval_ms`.
 /// Tokens are stored scaled by 1000 (milli-tokens) in an atomic to keep the hot
 /// path lock-light; the refill clock uses a short mutex only on refill.
 pub struct LocalRateGate {
+    origin: Instant,
     rate: AtomicU64,         // tokens per interval (== capacity)
     interval_ms: AtomicU64,  // refill interval
     milli_tokens: AtomicU64, // current tokens * 1000
@@ -23,6 +25,7 @@ pub struct LocalRateGate {
 impl LocalRateGate {
     pub fn new(rate: u64, interval_ms: u64) -> Self {
         Self {
+            origin: Instant::now(),
             rate: AtomicU64::new(rate.max(1)),
             interval_ms: AtomicU64::new(interval_ms.max(1)),
             milli_tokens: AtomicU64::new(rate.max(1) * 1000),
@@ -54,8 +57,19 @@ impl LocalRateGate {
         }
     }
 
-    /// Try to consume one connection token at `now_ms`. Returns true if admitted.
-    pub fn try_acquire_at(&self, now_ms: u64) -> bool {
+    /// Try to consume one connection token. Returns true if admitted.
+    pub fn try_acquire(&self) -> bool {
+        let elapsed = Instant::now().saturating_duration_since(self.origin);
+        let now_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX).max(1);
+        self.try_acquire_elapsed_ms(now_ms)
+    }
+
+    #[cfg(test)]
+    fn try_acquire_at(&self, now_ms: u64) -> bool {
+        self.try_acquire_elapsed_ms(now_ms)
+    }
+
+    fn try_acquire_elapsed_ms(&self, now_ms: u64) -> bool {
         self.refill(now_ms);
         loop {
             let cur = self.milli_tokens.load(Ordering::Acquire);
@@ -142,6 +156,15 @@ mod tests {
         assert!(gate.try_acquire_at(t0));
         assert!(gate.try_acquire_at(t0));
         assert!(!gate.try_acquire_at(t0)); // 4th in same instant denied
+    }
+
+    #[test]
+    fn production_method_allows_capacity_then_denies_without_sleep() {
+        let gate = LocalRateGate::new(3, u64::MAX);
+        assert!(gate.try_acquire());
+        assert!(gate.try_acquire());
+        assert!(gate.try_acquire());
+        assert!(!gate.try_acquire());
     }
 
     #[test]

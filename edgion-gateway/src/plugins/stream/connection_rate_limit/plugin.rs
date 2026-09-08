@@ -15,7 +15,7 @@
 //! (so fail-open is alertable).
 
 use async_trait::async_trait;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use super::local_gate::get_or_update_local_gate;
 use crate::link_sys::get_redis_client;
@@ -168,12 +168,8 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 
         // ---- Stage 1+2: perListener (evaluated first) ----
         if let Some(rate) = self.pl_rate {
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
             let gate = get_or_update_local_gate(&self.entry_scope, port, rate, self.pl_interval_ms);
-            if !gate.try_acquire_at(now_ms) {
+            if !gate.try_acquire() {
                 record_connection_rate_limit_reject("listener", "local");
                 return StreamPluginResult::Deny("connrate:deny:listener:local".to_string());
             }
