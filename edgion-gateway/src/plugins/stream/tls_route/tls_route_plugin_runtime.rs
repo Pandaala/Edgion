@@ -8,7 +8,6 @@ use std::sync::Arc;
 use super::ip_restriction::TlsRouteIpRestriction;
 
 /// Runtime for executing TLS route stage plugins.
-#[derive(Clone)]
 pub struct TlsRoutePluginRuntime {
     plugins: Vec<Arc<dyn TlsRoutePlugin>>,
 }
@@ -83,8 +82,7 @@ impl TlsRoutePluginRuntime {
     }
 
     /// Execute all plugins in order. Returns Deny on first deny, otherwise Allow.
-    pub async fn run(&self, ctx: &mut TlsRouteContext) -> StreamPluginResult {
-        ctx.push("sni matched");
+    pub async fn run(&self, ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
         for plugin in &self.plugins {
             match plugin.on_tls_route(ctx).await {
                 StreamPluginResult::Allow => continue,
@@ -110,11 +108,7 @@ struct PolicyBlockTlsRoutePlugin {
 
 #[async_trait::async_trait]
 impl TlsRoutePlugin for PolicyBlockTlsRoutePlugin {
-    fn name(&self) -> &str {
-        "PolicyBlock"
-    }
-
-    async fn on_tls_route(&self, _ctx: &TlsRouteContext) -> StreamPluginResult {
+    async fn on_tls_route(&self, _ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
         StreamPluginResult::Deny(self.reason.clone())
     }
 }
@@ -127,16 +121,15 @@ mod tests {
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
     use std::net::IpAddr;
 
-    fn make_ctx() -> TlsRouteContext {
+    fn make_ctx(rsc: &crate::Rsc) -> TlsRouteContext<'_> {
         TlsRouteContext {
             direct_peer_ip: "127.0.0.1".parse::<IpAddr>().unwrap(),
             remote_ip: "127.0.0.1".parse::<IpAddr>().unwrap(),
             listener_port: 443,
-            sni: "test.example.com".to_string(),
-            tls_id: Some("abcd1234".to_string()),
-            rsc: crate::Rsc::new("TLSRoute", "default", "test-route"),
+            sni: "test.example.com",
+            tls_id: Some("abcd1234"),
+            rsc,
             is_mtls: false,
-            log: crate::observe::logs::LogBuffer::new(),
         }
     }
 
@@ -144,10 +137,10 @@ mod tests {
     async fn test_empty_runtime_allows() {
         let rt = TlsRoutePluginRuntime::new();
         assert!(rt.is_empty());
-        let mut ctx = make_ctx();
-        let result = rt.run(&mut ctx).await;
+        let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
+        let ctx = make_ctx(&rsc);
+        let result = rt.run(&ctx).await;
         assert!(matches!(result, StreamPluginResult::Allow));
-        assert!(ctx.log.contains("sni matched"));
     }
 
     #[tokio::test]
@@ -182,8 +175,9 @@ mod tests {
     async fn block_stamp_denies_connection_bypass_stamp_skips() {
         let blocked = ip_restriction_entry(Some(PluginPolicyAction::Block { status: 503 }));
         let runtime = TlsRoutePluginRuntime::from_entries(&[blocked], "default");
-        let mut ctx = make_ctx();
-        match runtime.run(&mut ctx).await {
+        let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
+        let ctx = make_ctx(&rsc);
+        match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => assert!(reason.contains("plugin disabled by policy")),
             other => panic!("expected Deny, got {other:?}"),
         }
@@ -198,8 +192,9 @@ mod tests {
         let normal = ip_restriction_entry(None);
         let blocked = ip_restriction_entry(Some(PluginPolicyAction::Block { status: 503 }));
         let runtime = TlsRoutePluginRuntime::from_entries(&[normal, blocked], "default");
-        let mut ctx = make_ctx();
-        match runtime.run(&mut ctx).await {
+        let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
+        let ctx = make_ctx(&rsc);
+        match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => {
                 assert!(reason.contains("plugin disabled by policy: tls-route/IpRestriction"))
             }
@@ -213,7 +208,49 @@ mod tests {
         let runtime = TlsRoutePluginRuntime::from_entries(&[entry], "default");
         assert!(!runtime.is_empty());
         assert_eq!(runtime.plugin_count(), 1);
-        let mut ctx = make_ctx();
-        assert!(matches!(runtime.run(&mut ctx).await, StreamPluginResult::Allow));
+        let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
+        let ctx = make_ctx(&rsc);
+        assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Allow));
+    }
+
+    struct BorrowIdentityPlugin {
+        sni_ptr: usize,
+        tls_id_ptr: usize,
+        rsc_ptr: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl TlsRoutePlugin for BorrowIdentityPlugin {
+        async fn on_tls_route(&self, ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
+            assert_eq!(ctx.sni.as_ptr() as usize, self.sni_ptr);
+            assert_eq!(ctx.tls_id.unwrap().as_ptr() as usize, self.tls_id_ptr);
+            assert_eq!(std::ptr::from_ref(ctx.rsc) as usize, self.rsc_ptr);
+            StreamPluginResult::Allow
+        }
+    }
+
+    #[tokio::test]
+    async fn async_trait_dispatch_preserves_borrowed_metadata_identity() {
+        let sni = "borrowed.example.com".to_string();
+        let tls_id = "tls-identity".to_string();
+        let rsc = crate::Rsc::new("TLSRoute", "default", "borrowed-route");
+        let runtime = TlsRoutePluginRuntime {
+            plugins: vec![Arc::new(BorrowIdentityPlugin {
+                sni_ptr: sni.as_ptr() as usize,
+                tls_id_ptr: tls_id.as_ptr() as usize,
+                rsc_ptr: std::ptr::from_ref(&rsc) as usize,
+            })],
+        };
+        let ctx = TlsRouteContext {
+            direct_peer_ip: "127.0.0.1".parse().unwrap(),
+            remote_ip: "127.0.0.1".parse().unwrap(),
+            listener_port: 443,
+            sni: &sni,
+            tls_id: Some(&tls_id),
+            rsc: &rsc,
+            is_mtls: true,
+        };
+
+        assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Allow));
     }
 }

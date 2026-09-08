@@ -106,14 +106,19 @@ impl DuplexHooks for TlsDuplexHooks<'_> {
 /// Shared Stage 2 TLS route plugin execution.
 ///
 /// Used by both terminate and passthrough proxy.
-/// `tls_id` and `is_mtls` differ by mode: passthrough passes `None`/`false`.
+/// Negotiated TLS identity and mTLS state are available only in terminate mode.
+#[derive(Clone, Copy)]
+pub(super) enum TlsRouteMode {
+    Terminated,
+    Passthrough,
+}
+
 pub(super) async fn run_tls_route_plugins(
     store_key: Option<&str>,
     ctx: &mut TlsContext,
     sni: &str,
     listener_port: u16,
-    tls_id: Option<String>,
-    is_mtls: bool,
+    mode: TlsRouteMode,
 ) -> bool {
     let Some(store_key) = store_key else {
         return true;
@@ -153,21 +158,31 @@ pub(super) async fn run_tls_route_plugins(
     // Prefer Stage 2 (TlsRoute) runtime
     let tls_runtime = &resource.tls_route_plugin_runtime;
     if !tls_runtime.is_empty() {
-        let mut tls_ctx = TlsRouteContext {
-            direct_peer_ip,
-            remote_ip,
-            listener_port,
-            sni: sni.to_string(),
-            tls_id,
-            rsc: ctx
-                .matched
-                .as_ref()
-                .map(|m| m.rsc.clone())
-                .unwrap_or_else(|| crate::Rsc::new("TLSRoute", "", "")),
-            is_mtls,
-            log: crate::observe::logs::LogBuffer::new(),
+        let result = {
+            let fallback_rsc;
+            let rsc = match ctx.matched.as_ref() {
+                Some(matched) => &matched.rsc,
+                None => {
+                    fallback_rsc = crate::Rsc::new("TLSRoute", "", "");
+                    &fallback_rsc
+                }
+            };
+            let (tls_id, is_mtls) = match mode {
+                TlsRouteMode::Terminated => (ctx.tls_id.as_deref(), ctx.is_mtls),
+                TlsRouteMode::Passthrough => (None, false),
+            };
+            let tls_ctx = TlsRouteContext {
+                direct_peer_ip,
+                remote_ip,
+                listener_port,
+                sni,
+                tls_id,
+                rsc,
+                is_mtls,
+            };
+            tls_runtime.run(&tls_ctx).await
         };
-        return match tls_runtime.run(&mut tls_ctx).await {
+        return match result {
             StreamPluginResult::Allow => {
                 ctx.push_log("tls route plugin allowed");
                 true
@@ -245,7 +260,14 @@ mod fail_close_tests {
 
         let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
 
-        let allowed = run_tls_route_plugins(Some(key.as_str()), &mut ctx, "example.com", 443, None, false).await;
+        let allowed = run_tls_route_plugins(
+            Some(key.as_str()),
+            &mut ctx,
+            "example.com",
+            443,
+            TlsRouteMode::Passthrough,
+        )
+        .await;
         assert!(!allowed, "missing ESP must fail-close");
         let err = ctx.err_log.as_deref().unwrap_or("");
         assert!(
@@ -262,7 +284,7 @@ mod fail_close_tests {
     async fn admit_when_store_key_is_none() {
         // No ESP attached to the rule — intentional pass-through, must allow.
         let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-        let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, None, false).await;
+        let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, TlsRouteMode::Passthrough).await;
         assert!(allowed, "rule with no store_key must pass through");
         assert!(ctx.err_log.is_none());
     }
@@ -274,7 +296,14 @@ mod fail_close_tests {
         // Without a parseable client IP we cannot evaluate an IP-allowlist
         // policy, so the connection must be rejected (fail-close).
         let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string(), 0);
-        let allowed = run_tls_route_plugins(Some("default/anything"), &mut ctx, "example.com", 443, None, false).await;
+        let allowed = run_tls_route_plugins(
+            Some("default/anything"),
+            &mut ctx,
+            "example.com",
+            443,
+            TlsRouteMode::Passthrough,
+        )
+        .await;
         assert!(!allowed, "unparseable DirectPeerIp must fail-close");
         let err = ctx.err_log.as_deref().unwrap_or("");
         assert!(

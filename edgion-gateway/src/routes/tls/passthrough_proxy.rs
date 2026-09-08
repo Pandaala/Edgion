@@ -225,8 +225,7 @@ impl EdgionTlsPassthroughProxy {
             ctx,
             sni,
             self.listener_port,
-            None,
-            false,
+            super::TlsRouteMode::Passthrough,
         )
         .await
         {

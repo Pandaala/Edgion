@@ -1,8 +1,9 @@
-//! IP Restriction plugin for TLS route stage (Stage 2, post-handshake).
+//! IP Restriction plugin evaluated after TLSRoute matching.
 //!
 //! Uses the HTTP-layer `IpRestrictionConfig` (with protocol-level `message`/`status` support),
 //! distinct from the L4 `StreamIpRestriction` which uses `ConnectionIpRestrictionRules`.
-//! Applied post-TLS handshake, so it has access to SNI-routed context.
+//! Terminated TLS runs post-handshake; passthrough runs from inspected
+//! ClientHello/SNI context before forwarding the end-to-end handshake.
 
 use async_trait::async_trait;
 use smallvec::SmallVec;
@@ -15,8 +16,6 @@ use crate::plugins::stream::stream_plugin_trait::access_decision_to_stream_resul
 use crate::plugins::stream::StreamPluginResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_plugins::{IpRestrictionConfig, IpSource};
-
-const PLUGIN_NAME: &str = "TlsRouteIpRestriction";
 
 pub struct TlsRouteIpRestriction {
     config: IpRestrictionConfig,
@@ -57,11 +56,7 @@ impl TlsRouteIpRestriction {
 
 #[async_trait]
 impl TlsRoutePlugin for TlsRouteIpRestriction {
-    fn name(&self) -> &str {
-        PLUGIN_NAME
-    }
-
-    async fn on_tls_route(&self, ctx: &TlsRouteContext) -> StreamPluginResult {
+    async fn on_tls_route(&self, ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
         if self.init_failed {
             return StreamPluginResult::Deny("ip init fail".to_string());
         }
@@ -95,20 +90,19 @@ mod tests {
     use std::net::IpAddr;
     use std::sync::Arc;
 
-    fn ctx(ip: &str) -> TlsRouteContext {
-        ctx_with_ips(ip, ip)
+    fn ctx<'a>(ip: &str, rsc: &'a crate::Rsc) -> TlsRouteContext<'a> {
+        ctx_with_ips(ip, ip, rsc)
     }
 
-    fn ctx_with_ips(direct_peer_ip: &str, remote_ip: &str) -> TlsRouteContext {
+    fn ctx_with_ips<'a>(direct_peer_ip: &str, remote_ip: &str, rsc: &'a crate::Rsc) -> TlsRouteContext<'a> {
         TlsRouteContext {
             direct_peer_ip: direct_peer_ip.parse::<IpAddr>().unwrap(),
             remote_ip: remote_ip.parse::<IpAddr>().unwrap(),
             listener_port: 443,
-            sni: "test.example.com".to_string(),
-            tls_id: Some("t".to_string()),
-            rsc: crate::Rsc::new("TLSRoute", "default", "r"),
+            sni: "test.example.com",
+            tls_id: Some("t"),
+            rsc,
             is_mtls: false,
-            log: crate::observe::logs::LogBuffer::new(),
         }
     }
 
@@ -130,7 +124,8 @@ mod tests {
             allow_matcher: None,
             deny_matcher: None,
         };
-        let addresses = ctx_with_ips("10.0.0.7", "203.0.113.9");
+        let rsc = crate::Rsc::new("TLSRoute", "default", "r");
+        let addresses = ctx_with_ips("10.0.0.7", "203.0.113.9", &rsc);
         let direct = TlsRouteIpRestriction::new(&base, "default");
         assert!(matches!(
             direct.on_tls_route(&addresses).await,
@@ -183,12 +178,13 @@ mod tests {
             deny_matcher: None,
         };
         let plugin = TlsRouteIpRestriction::new(&config, ns);
+        let rsc = crate::Rsc::new("TLSRoute", "default", "r");
         assert!(matches!(
-            plugin.on_tls_route(&ctx("9.9.9.9")).await,
+            plugin.on_tls_route(&ctx("9.9.9.9", &rsc)).await,
             StreamPluginResult::Deny(_)
         ));
         assert!(matches!(
-            plugin.on_tls_route(&ctx("8.8.8.8")).await,
+            plugin.on_tls_route(&ctx("8.8.8.8", &rsc)).await,
             StreamPluginResult::Allow
         ));
     }
@@ -225,8 +221,12 @@ mod tests {
         // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
         // Empty key lists keep the snapshot absent, so on_tls_route reaches
         // check_ip_access_with_refs with empty ref slices — a whitelist miss → Deny.
+        let rsc = crate::Rsc::new("TLSRoute", "default", "r");
         assert!(
-            matches!(plugin.on_tls_route(&ctx("8.8.8.8")).await, StreamPluginResult::Deny(_)),
+            matches!(
+                plugin.on_tls_route(&ctx("8.8.8.8", &rsc)).await,
+                StreamPluginResult::Deny(_)
+            ),
             "denied allow_ref → empty allow matchers → non-matching IP must be DENIED (deny-all fail-closed)",
         );
     }

@@ -573,8 +573,8 @@
 | `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs` | `plugins-stream` | source | changed | B0158: corrected listener, TCP/UDP and legacy TLS lifecycle contract |
 | `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` | `plugins-stream` | source | changed | B0123: one lazy snapshot per referenced ACL decision |
 | `edgion-gateway/src/plugins/stream/tls_route/mod.rs` | `plugins-stream` | source | changed | B0159: corrected terminated, passthrough and legacy fallback facade docs |
-| `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | analysis-ready | B0160: borrowed Stage-2 context plan ready after earlier batches |
-| `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs` | `plugins-stream` | source | changed | B0160: borrowed Stage-2 metadata and removed discarded inner log state |
+| `edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_trait.rs` | `plugins-stream` | source | changed | B0160: borrowed context contract, dead API removal and accurate dual TLS lifecycle docs |
 | `edgion-gateway/src/request_body/body_scanners.rs` | `request-body` | source | changed | REQ-BODY-OPS-001 / `f36d7576`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/config.rs` | `request-body` | source | examined-no-change | REQ-BODY-CORE-001 / `a408d7fd` |
 | `edgion-gateway/src/request_body/mod.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd` |

@@ -82,10 +82,12 @@ runtime reuse must remain blocked while config-sync is unpublished.
 
 ## Verification and re-evaluation
 
-The approved S1-S20 matrix is in
-[the design spec](../../../../tasks/todo/kubernetes-namespace-initial-relist-generation/01-design.md).
-Executed targeted checks and final results are in
-[verification evidence](../../../../tasks/todo/kubernetes-namespace-initial-relist-generation/04-verification.md).
+The authoritative source/bootstrap lifecycle is documented in
+[the Kubernetes lifecycle guide](../../../01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md).
+The committed real-API regression procedure is
+[the namespace-watch test](../../../../edgion-tests/k8s/namespace-watch.md).
+Executed targeted and real-API results are summarized in the following
+paragraphs; no separate verification artifact is claimed.
 The original defect was derived
 from source/event ordering, not a production incident or live-cluster reproduction.
 

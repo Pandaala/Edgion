@@ -21,4 +21,4 @@
 - External gate support: external commit `65b1da92` introduced one missing AliDNS cleanup-response task link. After explicit user authorization, separate analysis verified that describe/delete responses can still be misclassified as cleanup success. The exact one-file task record was created without changing ACME runtime code, the regression guard, the validator or any test.
 - Review: `b0135_final_review` independently returned LGTM for the facade and the AliDNS task, with no Must Fix, Should Fix or deferred finding. It verified downstream/upstream TLS separation, AliDNS success-shape evidence, Controller-owned nonfatal cleanup warnings and exact scope containment.
 - Verification: `cargo fmt --all`; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,105-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `687f058f`; never pushed by the campaign.

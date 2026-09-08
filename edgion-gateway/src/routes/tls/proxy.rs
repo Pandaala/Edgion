@@ -449,7 +449,7 @@ impl EdgionTlsTcpProxy {
 
     /// Execute TLS route plugins (Stage 2).
     async fn run_tls_route_plugins(&self, store_key: Option<&str>, ctx: &mut TlsContext, sni: &str) -> bool {
-        super::run_tls_route_plugins(store_key, ctx, sni, self.listener_port, ctx.tls_id.clone(), ctx.is_mtls).await
+        super::run_tls_route_plugins(store_key, ctx, sni, self.listener_port, super::TlsRouteMode::Terminated).await
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)

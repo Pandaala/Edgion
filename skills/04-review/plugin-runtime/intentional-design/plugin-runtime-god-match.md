@@ -81,7 +81,7 @@ If a finding suggests `PluginRuntime` should `#[derive(Clone)]` or "implement Cl
 
 A real `Clone` impl is also not feasible without forcing a `Clone` bound onto every `dyn RequestFilter` / `dyn UpstreamResponse*` trait object in the four stage `Vec`s — an unwanted constraint on every plugin implementation.
 
-Sibling types `StreamPluginRuntime` and `TlsRoutePluginRuntime` already follow the same "no Clone" pattern; uniform treatment.
+Sibling types `StreamPluginRuntime` and `TlsRoutePluginRuntime` follow the same "no Clone" pattern; uniform treatment.
 
 ## Resolution references
 
