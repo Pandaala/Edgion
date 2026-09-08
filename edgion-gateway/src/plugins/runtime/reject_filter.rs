@@ -1,16 +1,16 @@
 //! RejectFilter — fail-closed placeholder for invalid plugin configs.
 //!
-//! When an `EdgionPlugins` resource contains a plugin whose config fails
-//! `validation_error()`, the runtime builder skips constructing that plugin
-//! (an invalid config must never run in the request path). To keep the route
-//! fail-closed, `PluginRuntime::seal_fail_closed` prepends one of these filters
-//! to the request stage: every request through the affected EdgionPlugins is
-//! rejected with 500 before reaching upstream, instead of silently flowing
-//! through as if the plugin were never configured.
+//! Controller validation is advisory: it reports invalid `EdgionPlugins`
+//! configuration through resource status while lenient admission still allows
+//! the resource to reach the Gateway. Runtime construction therefore provides
+//! the serving gate. When it omits an invalid plugin,
+//! `PluginRuntime::seal_fail_closed` prepends one of these filters so requests
+//! are rejected with 500 before reaching upstream instead of silently flowing
+//! through. Native HTTPRoute filter construction uses the same seal.
 //!
-//! The CRD schema is the primary gate (invalid resources should be rejected at
-//! the apiserver); this is the structural fallback for the cases the schema
-//! cannot express, and for non-Kubernetes config sources.
+//! `PluginStore`, not this filter, owns the narrow last-known-good retention
+//! policy for selected invalid `EdgionPlugins` updates before HTTP and gRPC
+//! routes resolve the published resource runtime.
 
 use async_trait::async_trait;
 

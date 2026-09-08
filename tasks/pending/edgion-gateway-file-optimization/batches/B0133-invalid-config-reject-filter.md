@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `b71f37f2fe8b3ae837bcfb08e159d540a0b97715`
-- Pipeline state: analysis-ready
+- Pipeline state: terminal; changed
 - Active anchor crate: `edgion-gateway`
 - Owned file: `edgion-gateway/src/plugins/runtime/reject_filter.rs`
 - Baseline blob: `8a6c43516329d3c9e813f8d2784469d0f28da108`
@@ -20,6 +20,8 @@ Read the complete reject filter and trace invalid configuration collection, runt
 - Proposed scope: only module/response-constant documentation; preserve every runtime byte, signature, log entry and visibility. Describe advisory Controller validation, runtime-selected fail-closed rejection and canonical HTTP/gRPC delivery. No new tests needed for comments only.
 - Evidence: plugin CRD preserves semantic errors/config fields for status visibility; native rule/backend ExternalAuth constructors also seal this filter. Existing direct tests prove fixed 500/body/static diagnostics. Do not break after a failed log append: later shorter entries may still fit.
 - Knowledge: lenient-admission design rules, fail-closed generic-body canon, native ExternalAuth sealing regression guard, plugin builder-duplication precedent, plugin-system, log safety, access-log and unit-testing guidance. No new deferred finding.
-- Review: pending promotion after the active serial batch.
-- Verification: pending.
-- Commit: pending batch completion; local commit only, never push.
+- Freshness: promoted at `1c4f28bb`; owned blob matched `8a6c43516329d3c9e813f8d2784469d0f28da108` before implementation.
+- Implementation: corrected only the module documentation to describe advisory Controller validation/status, the Gateway runtime fail-closed serving gate, native HTTPRoute consumers, and `PluginStore` ownership of narrow last-known-good retention. Runtime bytes, signatures, logs, result values, visibility, and tests are unchanged.
+- Review: `b0133_final_review` independently approved with no Must Fix or Should Fix. It verified the runtime suffix is byte-identical, traced Controller lenient admission, PluginRuntime sealing, rule/backend native HTTPRoute construction, PluginStore retention, and shared HTTP/gRPC publication, and confirmed D0079/D0089/D0095 remain separate.
+- Verification: `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
+- Commit: pending local batch commit; never push.

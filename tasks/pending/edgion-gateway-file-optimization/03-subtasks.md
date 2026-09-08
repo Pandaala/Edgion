@@ -538,7 +538,7 @@
 | `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | examined-no-change | B0130: compile-time facade retained; independent review and gates passed |
 | `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | changed | B0131: checked saturating microsecond timing; B0121 condition-publication support retained |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | examined-no-change | B0132: static Block/Bypass adapter retained after independent review |
-| `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | analysis-ready | B0133 |
+| `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | changed | B0133: corrected fail-closed ownership and lenient-admission documentation |
 | `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | analysis-ready | B0134; REQ-BODY-CORE-001 support retained |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | pending | — |
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |

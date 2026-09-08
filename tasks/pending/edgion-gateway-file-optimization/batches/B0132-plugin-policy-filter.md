@@ -23,4 +23,4 @@ Read the complete filter and trace policy configuration, compilation, all consum
 - Freshness: promoted at `2ae17ae1`; owned blob remains exactly `d3e1bf13b1e72fdc873c5e41175c645afe3179a3`.
 - Review: `b0132_nochange_review` independently approved the examined-no-change disposition with no Must Fix or Should Fix. It confirmed canonical fixed Block responses, ordered Bypass observations, bounded plugin-type metric labels, PluginLog/access-log ownership, four-stage builder ordering, immutable runtime publication, no request/body/I/O/lock/cache work, and the separate D0095 publication boundary.
 - Verification: complete static source/caller/configuration/publication/test review; `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `1c4f28bb`; local only, never pushed by the campaign.
