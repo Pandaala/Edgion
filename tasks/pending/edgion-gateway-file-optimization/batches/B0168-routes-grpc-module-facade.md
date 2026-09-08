@@ -24,4 +24,4 @@
 - Implementation: removed the singular wrapper and its two re-exports, switched admin store statistics to the canonical plural getter, and corrected both routing knowledge pages to record that the HTTP and gRPC legacy aliases are gone.
 - Review: fresh independent reviewer `b0168_final_review` verified the complete six-file diff, same-`OnceLock` caller substitution, zero remaining singular references and preserved historical knowledge. Verdict: LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification: gRPC tests 38/38 and admin store-stat tests 2/2; `cargo fmt --all`; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,113-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `656cf2c7`; never pushed by the campaign.

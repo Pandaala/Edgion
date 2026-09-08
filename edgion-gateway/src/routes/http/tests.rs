@@ -3,7 +3,7 @@ mod route_matching_tests {
     use crate::routes::http::routes_mgr::{GlobalHttpRouteManagers, HttpPortRouteManager};
     use crate::runtime::store::get_global_gateway_store;
     use edgion_common::conf_sync::traits::ConfHandler;
-    use edgion_resources::{Gateway, HTTPRoute};
+    use edgion_resources::{Gateway, HTTPRoute, ListenerKey};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
@@ -245,6 +245,34 @@ mod route_matching_tests {
         } else {
             panic!("RouteRules not found for hostname '{}'", hostname);
         }
+    }
+
+    fn make_listener_key(port: u16) -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        ListenerKey::new(addr, "HTTP")
+    }
+
+    fn seed_nonempty_manager(
+        managers: &GlobalHttpRouteManagers,
+        listener_key: &ListenerKey,
+    ) -> Arc<HttpPortRouteManager> {
+        let manager = managers.get_or_create_listener_manager(listener_key);
+        let mut route = create_test_httproute_with_paths(
+            "retained-test",
+            "prior",
+            vec!["retained.example.com"],
+            vec![("retained-test", "gateway")],
+            vec![("Exact", "/prior")],
+        );
+        route.spec.resolved_listeners = Some(vec![listener_key.clone()]);
+        let routes = HashMap::from([("retained-test/prior".to_string(), Arc::new(route))]);
+        manager
+            .store_route_table(crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(&routes));
+        assert!(manager
+            .load_route_table()
+            .exact_domain_map
+            .contains_key("retained.example.com"));
+        manager
     }
 
     #[test]
@@ -1449,5 +1477,35 @@ mod route_matching_tests {
         mgr.partial_update(wrap_arc(add_or_update), HashMap::new(), HashSet::new());
 
         verify_route_count(&domain_routes, "api.example.com", 1, 1);
+    }
+
+    #[test]
+    fn rebuild_all_clears_a_nonempty_retained_manager_before_drop() {
+        let managers = GlobalHttpRouteManagers::new();
+        let stale = make_listener_key(9810);
+        let retained = seed_nonempty_manager(&managers, &stale);
+
+        managers.rebuild_all_listener_managers_with_active(Vec::new());
+
+        assert!(!managers.by_listener.contains_key(&stale));
+        assert!(retained.load_route_table().exact_domain_map.is_empty());
+        let recreated = managers.get_or_create_listener_manager(&stale);
+        assert!(!Arc::ptr_eq(&retained, &recreated));
+    }
+
+    #[test]
+    fn affected_orphan_sweep_clears_a_nonempty_retained_manager_before_drop() {
+        let managers = GlobalHttpRouteManagers::new();
+        let affected = make_listener_key(9820);
+        let orphan = make_listener_key(9821);
+        let retained = seed_nonempty_manager(&managers, &orphan);
+        let affected_set = HashSet::from([affected.clone()]);
+
+        managers.rebuild_affected_listener_managers_with_active(&affected_set, vec![affected]);
+
+        assert!(!managers.by_listener.contains_key(&orphan));
+        assert!(retained.load_route_table().exact_domain_map.is_empty());
+        let recreated = managers.get_or_create_listener_manager(&orphan);
+        assert!(!Arc::ptr_eq(&retained, &recreated));
     }
 }

@@ -345,8 +345,15 @@ mod tests {
         let managers = GlobalTcpRouteManagers::new();
         let stale = make_listener_key(9100, "TCP");
 
-        // Pre-populate stale's manager (e.g. left over from a previous rebuild).
-        managers.get_or_create_listener_manager(&stale);
+        // Retain the same manager Arc a live proxy would hold and seed a real route.
+        let retained = managers.get_or_create_listener_manager(&stale);
+        let mut prior = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", stale.clone()),
+        );
+        retained.rebuild(&prior);
+        assert_eq!(retained.load_route_table().route_count(), 1);
         assert!(managers.by_listener.contains_key(&stale));
 
         // No routes, no active listeners.
@@ -356,6 +363,13 @@ mod tests {
             !managers.by_listener.contains_key(&stale),
             "by_listener entry with no routes and not in PGIS should be removed"
         );
+        assert_eq!(
+            retained.load_route_table().route_count(),
+            0,
+            "a retained handle must be cleared when its registry entry is removed"
+        );
+        let recreated = managers.get_or_create_listener_manager(&stale);
+        assert!(!Arc::ptr_eq(&retained, &recreated));
     }
 
     /// `rebuild_affected` rebuilds only the listeners passed in `affected`,
@@ -400,9 +414,16 @@ mod tests {
         let affected_key = make_listener_key(9300, "TCP");
         let orphan_key = make_listener_key(9301, "TCP");
 
-        // Pre-create an orphan by_listener entry (no routes reference it, and
-        // it is not in the active set).
-        managers.get_or_create_listener_manager(&orphan_key);
+        // Retain and seed the orphan manager as a live proxy could have done
+        // before its listener disappeared from PGIS.
+        let retained_orphan = managers.get_or_create_listener_manager(&orphan_key);
+        let mut prior = HashMap::new();
+        prior.insert(
+            "default/orphan-prior".to_string(),
+            test_unit("default", "orphan-prior", orphan_key.clone()),
+        );
+        retained_orphan.rebuild(&prior);
+        assert_eq!(retained_orphan.load_route_table().route_count(), 1);
         // And the affected listener which currently has a route.
         managers.insert_route(test_unit("default", "route-x", affected_key.clone()));
 
@@ -414,6 +435,13 @@ mod tests {
             !managers.by_listener.contains_key(&orphan_key),
             "orphan by_listener entry should be swept"
         );
+        assert_eq!(
+            retained_orphan.load_route_table().route_count(),
+            0,
+            "the orphan sweep must clear a retained manager handle"
+        );
+        let recreated = managers.get_or_create_listener_manager(&orphan_key);
+        assert!(!Arc::ptr_eq(&retained_orphan, &recreated));
         assert!(managers.by_listener.contains_key(&affected_key));
     }
 

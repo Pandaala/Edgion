@@ -58,16 +58,27 @@ convention.
    `tcp|tls|udp/routes_mgr.rs`). Inlining PGIS back into the helper would
    silently break test isolation.
 
+5. **Removed managers are cleared before their last local `Arc` is dropped**:
+   listener proxies retain their own `Arc<M>`, so deleting the registry entry
+   alone does not retire the route table. Both the full-rebuild stale sweep and
+   the partial-update orphan sweep must use the `Arc` returned by
+   `by_listener.remove`, publish the empty table through `rebuild_one`, and only
+   then drop it. The directly affected empty-bucket path already rebuilds the
+   manager before removing it and must keep that order. TCP tests exercise the
+   generic L4 helper with a genuinely non-empty retained handle; HTTP and gRPC
+   have matching family-specific tests.
+
 ## Hard boundary — do not fold gRPC or HTTP into this helper
 
 The same boundary as `apply_l4_partial_update`:
 
-- **gRPC** (`grpc/routes_mgr.rs`): `route_cache` is `DashMap<String, GRPCRoute>`
-  (owned, not `Arc`), there is a separate `route_units_cache: Mutex<HashMap<..>>`,
+- **gRPC** (`grpc/routes_mgr.rs`): `route_cache` is `DashMap<String, Arc<GRPCRoute>>`,
+  there is a separate `route_units_cache: Mutex<HashMap<..>>`,
   and rebuild goes via `store_route_table(build_grpc_route_rules_from_units(...))`,
   not `manager.rebuild(&HashMap)`. gRPC and HTTP already have the
   equivalent clear-pass.
-- **HTTP** (`http/routes_mgr.rs`): owned `route_cache` + `build_domain_route_rules_from_routes`.
+- **HTTP** (`http/routes_mgr.rs`): its route-cache and domain-builder shape uses
+  `build_domain_route_rules_from_routes` rather than the L4 unit API.
 
 Any "let's also pull HTTP/gRPC into `l4_rebuild`" proposal is rejected for
 the same reasons as the partial-update extraction (different per-listener

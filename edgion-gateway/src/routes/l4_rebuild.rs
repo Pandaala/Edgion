@@ -61,14 +61,18 @@ pub(crate) fn rebuild_all_l4_listener_managers<R, M>(
         .filter(|e| !listener_buckets.contains_key(e.key()) && !active_listeners.contains(e.key()))
         .map(|e| e.key().clone())
         .collect();
+    let empty: HashMap<String, Arc<R>> = HashMap::new();
+    let mut removed_stale = 0usize;
     for key in &stale_listeners {
-        by_listener.remove(key);
+        if let Some((_, manager)) = by_listener.remove(key) {
+            rebuild_one(&manager, &empty);
+            removed_stale += 1;
+        }
     }
 
     // Clear-pass: for active listeners that no longer have any routes, emit an
     // empty snapshot so the data plane stops forwarding to deleted backends.
     // (TCP/TLS/UDP `*RouteTable::from_routes(empty)` is equivalent to `::new()`.)
-    let empty: HashMap<String, Arc<R>> = HashMap::new();
     let mut cleared_active = 0u32;
     for entry in by_listener.iter() {
         let key = entry.key();
@@ -85,7 +89,7 @@ pub(crate) fn rebuild_all_l4_listener_managers<R, M>(
         total_route_entries = total_routes,
         rebuilt_listeners,
         cleared_active_listeners = cleared_active,
-        removed_stale_listeners = stale_listeners.len(),
+        removed_stale_listeners = removed_stale,
         "Rebuilt all per-listener L4 route managers"
     );
 }
@@ -142,8 +146,9 @@ pub(crate) fn rebuild_affected_l4_listener_managers<R, M>(
         let manager = get_or_create(key);
         rebuild_one(&manager, routes);
         if routes.is_empty() && !active_listeners.contains(key) {
-            by_listener.remove(key);
-            removed_stale += 1;
+            if by_listener.remove(key).is_some() {
+                removed_stale += 1;
+            }
         }
     }
 
@@ -155,10 +160,13 @@ pub(crate) fn rebuild_affected_l4_listener_managers<R, M>(
         .filter(|e| !route_referenced.contains(e.key()) && !active_listeners.contains(e.key()))
         .map(|e| e.key().clone())
         .collect();
+    let empty: HashMap<String, Arc<R>> = HashMap::new();
     for key in &orphans {
-        by_listener.remove(key);
+        if let Some((_, manager)) = by_listener.remove(key) {
+            rebuild_one(&manager, &empty);
+            removed_stale += 1;
+        }
     }
-    removed_stale += orphans.len();
 
     tracing::info!(
         component = component,

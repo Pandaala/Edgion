@@ -592,7 +592,7 @@
 | `edgion-gateway/src/routes/grpc/match_engine.rs` | `routes-shared` | source | changed | B0166: correct regex service/method character precedence |
 | `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | changed | B0167: precompile and borrow backend policy target identity |
 | `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager alias |
-| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 retained-manager/ArcSwap change remains analysis-ready |
+| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 clears retained managers and removes the inner ArcSwap |
 | `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | pending | — |
@@ -624,18 +624,18 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | changed | B0169: clear exact retained manager on stale/orphan removal |
 | `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/tests.rs` | `routes-shared` | test | pending | — |
+| `edgion-gateway/src/routes/http/tests.rs` | `routes-shared` | test | changed | B0169: retained nonempty HTTP manager removal regressions |
 | `edgion-gateway/src/routes/l4_duplex.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/l4_partial_update.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/l4_rebuild.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/l4_rebuild.rs` | `routes-shared` | source | changed | B0169: shared L4 clear-on-remove invariant |
 | `edgion-gateway/src/routes/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager re-export |
 | `edgion-gateway/src/routes/tcp/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tcp/edgion_tcp.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tcp/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tcp/route_unit.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/tcp/routes_mgr.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/tcp/routes_mgr.rs` | `routes-shared` | source | changed | B0169: retained nonempty manager tests for shared L4 removal |
 | `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | pending | — |

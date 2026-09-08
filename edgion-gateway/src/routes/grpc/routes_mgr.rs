@@ -72,7 +72,7 @@ impl GrpcRouteRules {
 
 /// gRPC route rules container (no hostname-based separation — gRPC uses a flat engine)
 pub struct DomainGrpcRouteRules {
-    pub grpc_routes: ArcSwap<GrpcRouteRules>,
+    pub grpc_routes: Arc<GrpcRouteRules>,
 }
 
 impl Default for DomainGrpcRouteRules {
@@ -84,7 +84,7 @@ impl Default for DomainGrpcRouteRules {
 impl DomainGrpcRouteRules {
     pub fn new() -> Self {
         Self {
-            grpc_routes: ArcSwap::from_pointee(GrpcRouteRules::new()),
+            grpc_routes: Arc::new(GrpcRouteRules::new()),
         }
     }
 
@@ -96,13 +96,12 @@ impl DomainGrpcRouteRules {
         index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
-        let grpc_routes = self.grpc_routes.load();
-        grpc_routes.match_route(session, ctx, index, hostname)
+        self.grpc_routes.match_route(session, ctx, index, hostname)
     }
 
     /// Returns true if this port has any gRPC routes registered.
     pub fn has_routes(&self) -> bool {
-        self.grpc_routes.load().match_engine.is_some()
+        self.grpc_routes.match_engine.is_some()
     }
 }
 
@@ -206,9 +205,13 @@ impl GlobalGrpcRouteManagers {
 
     /// Rebuild body. The caller MUST hold `rebuild_lock`.
     pub(crate) fn rebuild_all_listener_managers_locked(&self) {
+        let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
+        self.rebuild_all_listener_managers_with_active(active_listener_keys);
+    }
+
+    fn rebuild_all_listener_managers_with_active(&self, active_listener_keys: Vec<ListenerKey>) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
-        let pgis = crate::runtime::store::get_listener_gateway_info_store();
-        for key in pgis.all_listener_keys() {
+        for key in &active_listener_keys {
             self.get_or_create_listener_manager(&key);
         }
 
@@ -223,15 +226,19 @@ impl GlobalGrpcRouteManagers {
             rebuilt_listeners += 1;
         }
 
-        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
+        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
             .iter()
             .filter(|e| !listener_buckets.contains_key(e.key()) && !active_listeners.contains(e.key()))
             .map(|e| e.key().clone())
             .collect();
+        let mut removed_stale = 0usize;
         for key in &stale_listeners {
-            self.by_listener.remove(key);
+            if let Some((_, manager)) = self.by_listener.remove(key) {
+                manager.store_route_table(DomainGrpcRouteRules::new());
+                removed_stale += 1;
+            }
         }
         for entry in self.by_listener.iter() {
             let key = entry.key().clone();
@@ -244,7 +251,7 @@ impl GlobalGrpcRouteManagers {
             component = "global_grpc_route_managers",
             listeners = listener_buckets.len(),
             rebuilt_listeners,
-            removed_stale_listeners = stale_listeners.len(),
+            removed_stale_listeners = removed_stale,
             "Rebuilt all per-listener gRPC route managers"
         );
     }
@@ -254,7 +261,15 @@ impl GlobalGrpcRouteManagers {
         if affected_listeners.is_empty() {
             return;
         }
+        let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
+        self.rebuild_affected_listener_managers_with_active(affected_listeners, active_listener_keys);
+    }
 
+    fn rebuild_affected_listener_managers_with_active(
+        &self,
+        affected_listeners: &HashSet<ListenerKey>,
+        active_listener_keys: Vec<ListenerKey>,
+    ) {
         let units_cache = self.route_units_cache.lock();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
         for key in affected_listeners {
@@ -274,16 +289,16 @@ impl GlobalGrpcRouteManagers {
         }
         drop(units_cache);
 
-        let pgis = crate::runtime::store::get_listener_gateway_info_store();
-        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
+        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
         let mut removed_stale = 0usize;
         for (key, units) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);
             let table = build_grpc_route_rules_from_units(units);
             manager.store_route_table(table);
             if units.is_empty() && !active_listeners.contains(key) {
-                self.by_listener.remove(key);
-                removed_stale += 1;
+                if self.by_listener.remove(key).is_some() {
+                    removed_stale += 1;
+                }
             }
         }
 
@@ -301,9 +316,11 @@ impl GlobalGrpcRouteManagers {
             .map(|e| e.key().clone())
             .collect();
         for key in &orphans {
-            self.by_listener.remove(key);
+            if let Some((_, manager)) = self.by_listener.remove(key) {
+                manager.store_route_table(DomainGrpcRouteRules::new());
+                removed_stale += 1;
+            }
         }
-        removed_stale += orphans.len();
 
         tracing::info!(
             component = "global_grpc_route_managers",
@@ -376,15 +393,13 @@ fn build_grpc_route_rules_from_units(all_units: &HashMap<String, Vec<Arc<GrpcRou
         Some(Arc::new(GrpcMatchEngine::new(route_rules_list.clone())))
     };
 
-    let grpc_route_rules = Arc::new(GrpcRouteRules {
-        resource_keys,
-        route_rules_list,
-        match_engine,
-    });
-
-    let domain = DomainGrpcRouteRules::new();
-    domain.grpc_routes.store(grpc_route_rules);
-    domain
+    DomainGrpcRouteRules {
+        grpc_routes: Arc::new(GrpcRouteRules {
+            resource_keys,
+            route_rules_list,
+            match_engine,
+        }),
+    }
 }
 
 /// Get the resolved listeners for a GRPCRoute.
@@ -404,4 +419,120 @@ static GLOBAL_GRPC_ROUTE_MANAGERS: OnceLock<GlobalGrpcRouteManagers> = OnceLock:
 
 pub fn get_global_grpc_route_managers() -> &'static GlobalGrpcRouteManagers {
     GLOBAL_GRPC_ROUTE_MANAGERS.get_or_init(GlobalGrpcRouteManagers::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lb::BackendSelector;
+    use crate::plugins::PluginRuntime;
+    use crate::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity};
+    use crate::routes::grpc::GrpcRouteInfo;
+    use edgion_resources::{GRPCMethodMatch, GRPCRouteMatch, GRPCRouteRule};
+
+    fn make_listener_key(port: u16) -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        ListenerKey::new(addr, "GRPC")
+    }
+
+    fn route_unit(name: &str) -> Arc<GrpcRouteRuleUnit> {
+        let route_match = GRPCRouteMatch {
+            method: Some(GRPCMethodMatch {
+                match_type: None,
+                service: Some("retained.Service".to_string()),
+                method: Some("Call".to_string()),
+            }),
+            headers: None,
+        };
+        Arc::new(GrpcRouteRuleUnit {
+            resource_key: format!("default/{name}"),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, route_match, 0, None),
+            rule: Arc::new(GRPCRouteRule {
+                name: None,
+                matches: None,
+                filters: None,
+                backend_refs: None,
+                timeouts: None,
+                retry: None,
+                session_persistence: None,
+                parsed_timeouts: None,
+                parsed_retry: None,
+                parsed_allow_non_idempotent_retry: None,
+            }),
+            route: None,
+            route_info: Arc::new(GrpcRouteInfo {
+                parent_refs: None,
+                effective_hostnames: vec!["*".to_string()],
+            }),
+            specificity: GrpcMatchSpecificity {
+                header_count: 0,
+                creation_ts_ms: 0,
+                route_key: format!("default/{name}"),
+                rule_index: 0,
+                match_index: 0,
+            },
+            metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            backend_finder: Arc::new(BackendSelector::new()),
+            backends: Arc::new(Vec::new()),
+        })
+    }
+
+    fn seed_nonempty_manager(
+        managers: &GlobalGrpcRouteManagers,
+        listener_key: &ListenerKey,
+    ) -> Arc<GrpcPortRouteManager> {
+        let manager = managers.get_or_create_listener_manager(listener_key);
+        let units = HashMap::from([("default/prior".to_string(), vec![route_unit("prior")])]);
+        let table = build_grpc_route_rules_from_units(&units);
+        assert!(table.has_routes());
+        manager.store_route_table(table);
+        manager
+    }
+
+    #[test]
+    fn outer_swap_keeps_each_domain_grpc_snapshot_immutable() {
+        let manager = GrpcPortRouteManager::new();
+        let units = HashMap::from([("default/prior".to_string(), vec![route_unit("prior")])]);
+        manager.store_route_table(build_grpc_route_rules_from_units(&units));
+        let retained_snapshot = manager.load_route_table();
+        assert!(retained_snapshot.has_routes());
+
+        manager.store_route_table(DomainGrpcRouteRules::new());
+
+        assert!(retained_snapshot.has_routes());
+        let current = manager.load_route_table();
+        assert!(!current.has_routes());
+        assert!(!Arc::ptr_eq(&retained_snapshot.grpc_routes, &current.grpc_routes));
+    }
+
+    #[test]
+    fn rebuild_all_clears_a_nonempty_retained_manager_before_drop() {
+        let managers = GlobalGrpcRouteManagers::new();
+        let stale = make_listener_key(9830);
+        let retained = seed_nonempty_manager(&managers, &stale);
+
+        managers.rebuild_all_listener_managers_with_active(Vec::new());
+
+        assert!(!managers.by_listener.contains_key(&stale));
+        assert!(!retained.load_route_table().has_routes());
+        let recreated = managers.get_or_create_listener_manager(&stale);
+        assert!(!Arc::ptr_eq(&retained, &recreated));
+    }
+
+    #[test]
+    fn affected_orphan_sweep_clears_a_nonempty_retained_manager_before_drop() {
+        let managers = GlobalGrpcRouteManagers::new();
+        let affected = make_listener_key(9840);
+        let orphan = make_listener_key(9841);
+        let retained = seed_nonempty_manager(&managers, &orphan);
+        let affected_set = HashSet::from([affected.clone()]);
+
+        managers.rebuild_affected_listener_managers_with_active(&affected_set, vec![affected]);
+
+        assert!(!managers.by_listener.contains_key(&orphan));
+        assert!(!retained.load_route_table().has_routes());
+        let recreated = managers.get_or_create_listener_manager(&orphan);
+        assert!(!Arc::ptr_eq(&retained, &recreated));
+    }
 }

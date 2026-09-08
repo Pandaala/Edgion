@@ -363,17 +363,21 @@ impl GlobalHttpRouteManagers {
 
     /// Rebuild body. The caller MUST hold `rebuild_lock`.
     pub(crate) fn rebuild_all_listener_managers_locked(&self) {
+        let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
+        self.rebuild_all_listener_managers_with_active(active_listener_keys);
+    }
+
+    pub(crate) fn rebuild_all_listener_managers_with_active(&self, active_listener_keys: Vec<ListenerKey>) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
-        let pgis = crate::runtime::store::get_listener_gateway_info_store();
         // Physical listener keys the request path reads from; routes whose
         // resolved_listeners are not among these are unreachable.
         tracing::debug!(
             component = "global_http_route_managers",
-            listener_keys = ?pgis.all_listener_keys(),
+            listener_keys = ?active_listener_keys,
             "Per-listener route manager rebuild: known listener keys"
         );
-        for key in pgis.all_listener_keys() {
-            self.get_or_create_listener_manager(&key);
+        for key in &active_listener_keys {
+            self.get_or_create_listener_manager(key);
         }
 
         let listener_buckets = self.bucket_routes_by_listener();
@@ -389,15 +393,19 @@ impl GlobalHttpRouteManagers {
 
         // Remove stale listener entries: listeners that have no routes AND are not
         // registered in ListenerGatewayInfoStore (i.e. no Gateway listener for that key).
-        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
+        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
             .iter()
             .filter(|e| !listener_buckets.contains_key(e.key()) && !active_listeners.contains(e.key()))
             .map(|e| e.key().clone())
             .collect();
+        let mut removed_stale = 0usize;
         for key in &stale_listeners {
-            self.by_listener.remove(key);
+            if let Some((_, manager)) = self.by_listener.remove(key) {
+                manager.store_route_table(DomainRouteRules::new());
+                removed_stale += 1;
+            }
         }
         // Clear route tables for listeners that still exist (active listener) but have no routes
         for entry in self.by_listener.iter() {
@@ -413,7 +421,7 @@ impl GlobalHttpRouteManagers {
             listeners = listener_buckets.len(),
             total_route_entries = total_routes,
             rebuilt_listeners,
-            removed_stale_listeners = stale_listeners.len(),
+            removed_stale_listeners = removed_stale,
             "Rebuilt all per-listener HTTP route managers"
         );
     }
@@ -426,7 +434,15 @@ impl GlobalHttpRouteManagers {
         if affected_listeners.is_empty() {
             return;
         }
+        let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
+        self.rebuild_affected_listener_managers_with_active(affected_listeners, active_listener_keys);
+    }
 
+    pub(crate) fn rebuild_affected_listener_managers_with_active(
+        &self,
+        affected_listeners: &HashSet<ListenerKey>,
+        active_listener_keys: Vec<ListenerKey>,
+    ) {
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
@@ -447,16 +463,16 @@ impl GlobalHttpRouteManagers {
             }
         }
 
-        let pgis = crate::runtime::store::get_listener_gateway_info_store();
-        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
+        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
         let mut removed_stale = 0usize;
         for (key, routes) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);
             let table = crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(routes);
             manager.store_route_table(table);
             if routes.is_empty() && !active_listeners.contains(key) {
-                self.by_listener.remove(key);
-                removed_stale += 1;
+                if self.by_listener.remove(key).is_some() {
+                    removed_stale += 1;
+                }
             }
         }
 
@@ -473,9 +489,11 @@ impl GlobalHttpRouteManagers {
             .map(|e| e.key().clone())
             .collect();
         for key in &orphans {
-            self.by_listener.remove(key);
+            if let Some((_, manager)) = self.by_listener.remove(key) {
+                manager.store_route_table(DomainRouteRules::new());
+                removed_stale += 1;
+            }
         }
-        removed_stale += orphans.len();
 
         tracing::info!(
             component = "global_http_route_managers",
