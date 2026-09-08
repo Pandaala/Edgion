@@ -54,7 +54,7 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 
 `RegexRoutesEngine` performs efficient batch regex matching using `regex::RegexSet`:
 
-- All regex patterns are compiled into a single `RegexSet`; match complexity is O(M) where M is the input path length.
+- All regex patterns are compiled into a single `RegexSet`; match complexity is O(P * M), where P is the combined pattern-set size and M is the input path length.
 - Routes are sorted by pattern string length descending; longer (more specific) patterns are preferred.
 - When `RegexSet` construction fails, falls back to linear matching one by one.
 - `RouteRules.match_route` tries the radix Exact/PathPrefix engine first and uses the regex engine

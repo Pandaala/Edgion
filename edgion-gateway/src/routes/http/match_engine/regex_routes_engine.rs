@@ -12,7 +12,8 @@ use std::sync::Arc;
 /// Routes are sorted by pattern length (longest first) for priority matching.
 /// The engine is immutable after initialization, enabling lock-free concurrent reads.
 ///
-/// Performance: O(M) where M is the input path length, independent of route count.
+/// Performance: O(P * M), where P is the combined pattern-set size and M is
+/// the input path length.
 pub struct RegexRoutesEngine {
     /// Compiled regex set for fast pre-filtering (one-pass matching of all regexes)
     /// None if routes list is empty
@@ -89,16 +90,10 @@ impl RegexRoutesEngine {
         let path = ctx.path();
 
         if let Some(ref regex_set) = self.regex_set {
-            let matches: Vec<usize> = regex_set.matches(path).into_iter().collect();
-
-            if matches.is_empty() {
-                return Ok(None);
-            }
-
             // Indices from `RegexSet::matches()` are ascending; combined with the
             // build-time longest-first sort of `routes`, this iteration is already
             // in highest-precedence-first order. See the invariant note in `build`.
-            for &idx in &matches {
+            for idx in regex_set.matches(path) {
                 let regex_route = &self.routes[idx];
                 if let Some(matched_gi) = regex_route.deep_match(session, ctx, index)? {
                     return Ok(Some(RouteMatchResult {
@@ -314,18 +309,14 @@ mod tests {
         let engine = RegexRoutesEngine::build(routes);
         let regex_set = engine.regex_set.as_ref().unwrap();
 
-        // Path "/api/v1/users" should match all three patterns
-        let matches: Vec<usize> = regex_set.matches("/api/v1/users").into_iter().collect();
-        assert!(matches.len() >= 2); // At least 2 should match
-
-        // The longest pattern should be first in routes (due to sorting)
-        // In this case "^/api/v1/users$" is longest
-        let longest_idx = matches
-            .iter()
-            .max_by_key(|&&idx| engine.routes[idx].path_regex.as_ref().unwrap().as_str().len())
-            .unwrap();
-
-        assert!(engine.routes[*longest_idx].matched_info.rsc.name.contains("specific"));
+        // RegexSet yields ascending pattern indices, so after the stable
+        // longest-first route sort all matches are already in precedence order.
+        let matched_names: Vec<&str> = regex_set
+            .matches("/api/v1/users")
+            .into_iter()
+            .map(|idx| engine.routes[idx].matched_info.rsc.name.as_str())
+            .collect();
+        assert_eq!(matched_names, ["specific", "general", "wildcard"]);
     }
 
     #[test]

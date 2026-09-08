@@ -21,4 +21,4 @@
 - Review: fresh independent review verified iterator lifetime ownership, duplicate normalized-key bucket and path-index order, move-only storage, the concrete allocation reduction, immutable publication, and unchanged request/precedence/regex behavior; verdict LGTM with no Must Fix or Should Fix.
 - Testing: matcher tests 39/39, match-unit tests 10/10, three conf-handler engine tests, and the duplicate-hostname build-order regression passed. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed. Existing Clippy warnings are unrelated. No integration gap or edit.
 - Deferred: named parameter spelling currently affects path priority; the separate behavior-design task is `tasks/todo/http-route-named-parameter-precedence.md`.
-- Commit: pending; never push.
+- Commit: `04c9c442`; never pushed by the campaign.

@@ -88,7 +88,7 @@ Each `RouteRules` holds two engines internally:
 
 ### RegexRoutesEngine (RegularExpression)
 
-- Uses `regex::RegexSet` to batch-match all regex patterns at once, with O(M) complexity (M is path length), independent of route count.
+- Uses `regex::RegexSet` to batch-match all regex patterns at once, with O(P * M) complexity, where P is the combined pattern-set size and M is the input path length.
 - Routes are sorted by regex pattern length in descending order (longer patterns are preferred).
 - Match order: the radix engine runs first; the regex engine is the fallback, preserving
   Gateway API precedence `Exact > PathPrefix > RegularExpression`.

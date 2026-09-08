@@ -597,7 +597,7 @@
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | changed | B0171: enforce internal matcher construction boundary |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | changed | B0171: remove persistent fields exposed as dead by the internal boundary; B0172: move-only build value |
 | `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | `routes-shared` | source | changed | B0172: reduce route-table build allocations |
-| `edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs` | `routes-shared` | source | changed | B0173: remove redundant regex-match index collection |
 | `edgion-gateway/src/routes/http/match_unit.rs` | `routes-shared` | source | changed | B0172: expose borrowed zero-or-one path extraction |
 | `edgion-gateway/src/routes/http/mod.rs` | `routes-shared` | source | changed | B0171: restrict the match engine to crate visibility |
 | `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | pending | — |
