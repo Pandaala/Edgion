@@ -36,4 +36,4 @@ Independent plan review approved the plan without a Must Fix.
 - Implementation: all three gateway/plugin-owned trailer failures now use one static, explicitly non-retryable HTTP 500, preventing selected-backend local-origin attribution without moving claims, serial companion execution, log finalization, lease completion, or return points.
 - Review: fresh independent final review returned LGTM with no Must Fix or Should Fix; exact type/retry assertions cover unfrozen, closed-lease, and companion fail-close paths.
 - Verification: target 10/10 and full proxy-http 265/265; `cargo fmt --all`, locked workspace check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path checks passed.
-- Commit: pending; never push.
+- Commit: `2f7a26ab`; never pushed by the campaign.
