@@ -1,8 +1,6 @@
 /// Compiled route path pattern for radix tree matching.
 #[derive(Debug, Clone)]
 pub struct RadixPath {
-    /// Original path pattern (e.g., "/api/:version/users")
-    pub original: String,
     /// Normalized path (consecutive slashes merged)
     pub normalized: String,
     /// Priority weight for sorting (higher = more specific)
@@ -12,10 +10,6 @@ pub struct RadixPath {
     pub is_prefix_match: bool,
     /// Index of the associated route
     pub route_idx: usize,
-    /// Number of path segments (for exact match verification)
-    pub segment_count: usize,
-    /// Whether the path contains parameter segments
-    pub has_params: bool,
     /// Global precedence rank within the route snapshot (0 = highest priority).
     ///
     /// `RadixPath::new` cannot compute this: the rank depends on every other
@@ -33,7 +27,6 @@ impl RadixPath {
     /// * `route_idx` - Index of the associated route
     /// * `is_prefix` - Whether this is a prefix match pattern
     pub fn new(path: &str, route_idx: usize, is_prefix: bool) -> Self {
-        let original = path.to_string();
         let is_prefix_match = is_prefix;
 
         // Normalize path: merge consecutive slashes and validate
@@ -59,7 +52,7 @@ impl RadixPath {
         }
 
         // Count segments and detect parameters
-        let (segment_count, has_params) = count_segments_and_params(&normalized);
+        let (_, has_params) = count_segments_and_params(&normalized);
 
         // Priority calculation per Gateway API spec:
         // Prefix match priority uses "largest number of characters" (not segment count).
@@ -80,13 +73,10 @@ impl RadixPath {
         let priority_weight = path_char_count * 4 + type_bonus;
 
         Self {
-            original,
             normalized,
             priority_weight,
             is_prefix_match,
             route_idx,
-            segment_count,
-            has_params,
             precedence_rank: 0,
         }
     }
@@ -180,11 +170,9 @@ mod tests {
     #[test]
     fn test_exact_match_simple_path() {
         let path = RadixPath::new("/api", 0, false);
-        assert_eq!(path.original, "/api");
         assert_eq!(path.normalized, "/api");
         assert!(!path.is_prefix_match);
-        assert_eq!(path.segment_count, 1);
-        assert!(!path.has_params);
+        assert_eq!(path.priority_weight, 4 * 4 + 3);
     }
 
     #[test]
@@ -192,8 +180,7 @@ mod tests {
         let path = RadixPath::new("/api", 0, true);
         assert_eq!(path.normalized, "/api");
         assert!(path.is_prefix_match);
-        assert_eq!(path.segment_count, 1);
-        assert!(!path.has_params);
+        assert_eq!(path.priority_weight, 4 * 4 + 1);
     }
 
     #[test]
@@ -201,8 +188,7 @@ mod tests {
         let path = RadixPath::new("/users/:id", 0, false);
         assert_eq!(path.normalized, "/users/:id");
         assert!(!path.is_prefix_match);
-        assert_eq!(path.segment_count, 2);
-        assert!(path.has_params);
+        assert_eq!(path.priority_weight, 10 * 4 + 2);
     }
 
     #[test]
@@ -210,18 +196,18 @@ mod tests {
         let path = RadixPath::new("/users/:id", 0, true);
         assert_eq!(path.normalized, "/users/:id");
         assert!(path.is_prefix_match);
-        assert_eq!(path.segment_count, 2);
-        assert!(path.has_params);
+        assert_eq!(path.priority_weight, 10 * 4);
     }
 
     #[test]
     fn test_root_path() {
         let exact = RadixPath::new("/", 0, false);
-        assert_eq!(exact.segment_count, 0);
-        assert!(!exact.has_params);
+        assert_eq!(exact.tree_key(), "/");
+        assert_eq!(exact.priority_weight, 4 + 3);
 
         let prefix = RadixPath::new("/", 0, true);
-        assert_eq!(prefix.segment_count, 0);
+        assert_eq!(prefix.tree_key(), "/");
+        assert_eq!(prefix.priority_weight, 4 + 1);
     }
 
     #[test]
@@ -271,45 +257,43 @@ mod tests {
     #[test]
     fn test_complex_pattern_segments() {
         let path = RadixPath::new("/api/:version/users/:userId/posts/:postId", 0, false);
-        assert_eq!(path.segment_count, 6);
-        assert!(path.has_params);
+        assert_eq!(path.tree_key(), "/api/:version/users/:userId/posts/:postId");
+        assert_eq!(count_segments_and_params(path.tree_key()), (6, true));
     }
 
     #[test]
     fn test_trailing_slash_handling() {
         let path_no_slash = RadixPath::new("/api", 0, false);
         let path_with_slash = RadixPath::new("/api/", 0, false);
-        assert_eq!(path_no_slash.segment_count, 1);
-        assert_eq!(path_with_slash.segment_count, 1);
+        assert_eq!(path_no_slash.tree_key(), "/api");
+        assert_eq!(path_with_slash.tree_key(), "/api/");
     }
 
     #[test]
     fn test_special_characters_in_literal() {
         let path = RadixPath::new("/api-v1/users_list", 0, false);
-        assert_eq!(path.segment_count, 2);
-        assert!(!path.has_params);
+        assert_eq!(path.tree_key(), "/api-v1/users_list");
+        assert_eq!(count_segments_and_params(path.tree_key()), (2, false));
     }
 
     #[test]
     fn test_escaped_colon() {
         let path = RadixPath::new("/api/::version/data", 0, false);
-        assert_eq!(path.segment_count, 3);
-        assert!(!path.has_params);
+        assert_eq!(count_segments_and_params(path.tree_key()), (3, false));
+        assert_eq!(path.priority_weight, path.normalized.chars().count() * 4 + 3);
     }
 
     #[test]
     fn test_consecutive_params() {
         let path = RadixPath::new("/data/:key:value", 0, false);
-        assert_eq!(path.segment_count, 2);
-        assert!(path.has_params);
+        assert_eq!(count_segments_and_params(path.tree_key()), (2, true));
+        assert_eq!(path.priority_weight, path.normalized.chars().count() * 4 + 2);
     }
 
     #[test]
-    fn test_original_path_preserved() {
-        let original = "/users/:userId/posts/:postId";
-        let path = RadixPath::new(original, 42, true);
-        assert_eq!(path.original, original);
-        assert_eq!(path.normalized, original);
+    fn test_compiled_path_preserves_route_metadata() {
+        let path = RadixPath::new("/users/:userId/posts/:postId", 42, true);
+        assert_eq!(path.normalized, "/users/:userId/posts/:postId");
         assert_eq!(path.route_idx, 42);
         assert!(path.is_prefix_match);
     }
@@ -326,16 +310,15 @@ mod tests {
     #[test]
     fn test_normalize_consecutive_slashes() {
         let path = RadixPath::new("/api//users", 0, false);
-        assert_eq!(path.original, "/api//users");
         assert_eq!(path.normalized, "/api/users");
-        assert_eq!(path.segment_count, 2);
+        assert_eq!(path.tree_key(), "/api/users");
     }
 
     #[test]
     fn test_normalize_multiple_consecutive_slashes() {
         let path = RadixPath::new("/api///v1//users/", 0, false);
         assert_eq!(path.normalized, "/api/v1/users/");
-        assert_eq!(path.segment_count, 3);
+        assert_eq!(count_segments_and_params(path.tree_key()), (3, false));
     }
 
     #[test]
@@ -352,7 +335,7 @@ mod tests {
         let exact = RadixPath::new("/api/v1", 0, false);
         let prefix = RadixPath::new("/api/v1", 1, true);
         assert!(exact.priority_weight > prefix.priority_weight);
-        assert_eq!(exact.segment_count, prefix.segment_count);
+        assert_eq!(exact.tree_key(), prefix.tree_key());
     }
 
     #[test]

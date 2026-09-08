@@ -594,12 +594,12 @@
 | `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager alias |
 | `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 clears retained managers and removes the inner ArcSwap |
 | `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | changed | B0170: share rule and metric handles across hostname/match expansion |
-| `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | changed | B0171: enforce internal matcher construction boundary |
+| `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | changed | B0171: remove persistent fields exposed as dead by the internal boundary |
 | `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_unit.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/mod.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/mod.rs` | `routes-shared` | source | changed | B0171: restrict the match engine to crate visibility |
 | `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | pending | — |

@@ -20,4 +20,4 @@
 - Tests: the conf-handler suite passed 21/21. A real two-host, two-rule, two-match regression proves same-rule schema/metric sharing across hosts and matches, distinct rule metric matrices and backend slot dimensions, same-host selector sharing, and cross-host/cross-rule selector isolation without relying on map iteration order.
 - Review: fresh independent reviewer `b0170_final_review` re-read the target and HTTP metrics/LB path, verified all pointer and isolation boundaries, and returned LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification: `cargo fmt --all`; focused tests 21/21; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,113-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `bf9e618e`; never pushed by the campaign.

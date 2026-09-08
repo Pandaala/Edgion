@@ -43,12 +43,9 @@ Core fields of `RadixPath`:
 
 | Field | Description |
 |-------|-------------|
-| `original` | Original path pattern |
 | `normalized` | Path normalization (collapse consecutive slashes) |
 | `priority_weight` | `path_char_count * 4 + type_bonus` |
 | `is_prefix_match` | Whether the match is a prefix |
-| `has_params` | Whether it contains a `:param` parameter segment |
-| `segment_count` | Number of path segments |
 | `precedence_rank` | Global candidate order, assigned in the last step of the build phase; 0 = highest priority |
 
 The radix tree internally supports `:param` parameter matching; a double colon `::` is escaped as a literal colon.

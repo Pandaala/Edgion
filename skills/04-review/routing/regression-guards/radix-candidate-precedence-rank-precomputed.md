@@ -80,17 +80,21 @@ The rank of one path depends on every other path in the same snapshot, which is
 not known until the build loop finishes. The field is documented as valid only
 through a fully built engine.
 
-`RadixPath` is `pub` through a fully public module chain
-(`edgion_gateway::routes::http::match_engine::radix_path::RadixPath`), so this is
-a convention, not a type-level guarantee, and `0` doubles as both "unassigned"
-and "highest precedence". It is nevertheless not a live hazard: outside `#[cfg(test)]` the only
-construction site is `initialize_internal` and the only read is
+The HTTP match-engine module is crate-private and its three child modules are
+visible only within `routes::http`. This type-level boundary prevents external
+callers from constructing a standalone `RadixPath`; outside `#[cfg(test)]`, the
+only construction site is `initialize_internal` and the only read is
 `ordered_candidates` (called from `match_route`), both behind the engine's
 private `radix_paths`. The tests reach the field through the `#[cfg(test)]`
-`paths_for_test` accessor. Splitting the
-struct into "pre-rank" and "ranked" types was considered and rejected as
-disproportionate for a single-consumer field. Revisit that if `RadixPath` ever
-gains a second construction site outside the engine.
+`paths_for_test` accessor.
+
+Historically, the fully public module chain exposed `RadixPath` outside the
+crate, leaving the ranked-only invariant as a convention while `0` doubled as
+both "unassigned" and "highest precedence". That accidental API surface was
+removed once consumer searches confirmed that all match-engine users belong to
+`routes::http`. Splitting the struct into "pre-rank" and "ranked" types remains
+disproportionate for a single internal construction site. Revisit that if
+`RadixPath` ever gains a second construction site outside the engine.
 
 **4. The bucket table is dense, so it is a `Vec`, not a `HashMap`**
 
