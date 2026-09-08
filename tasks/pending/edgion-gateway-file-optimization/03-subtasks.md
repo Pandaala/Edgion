@@ -542,9 +542,9 @@
 | `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | changed | B0134: ordered multi-field Cookie lookup with conservative malformed handling; REQ-BODY-CORE-001 support retained |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | changed | B0135: independent watchdogs for deliberately blocked storage tests |
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |
-| `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | pending | Added by external commit `b55375ca`; full audit pending |
-| `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | pending | — |
-| `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | pending | — |
+| `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | changed | B0136: exact per-name versus cross-name HeaderMap ordering contract |
+| `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | analysis-ready | B0137: facade retained candidate |
+| `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | analysis-ready | B0138: remove unused handler name API with two supporting implementations |
 | `edgion-gateway/src/plugins/runtime/traits/request_filter.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | pending | — |
 | `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | pending | — |

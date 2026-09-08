@@ -30,10 +30,13 @@ pub trait PluginSessionHeaderExt {
     /// replacement for `header_value(n).is_some()`.
     fn header_str(&self, name: &str) -> Option<&str>;
 
-    /// Every value for `name`, as raw bytes, preserving duplicates and order.
+    /// Every value for `name`, as raw bytes, preserving duplicates and their
+    /// insertion order for that requested name.
     fn header_all_bytes(&self, name: &str) -> impl Iterator<Item = &[u8]>;
 
-    /// Every (name, raw value) pair, preserving duplicates and order.
+    /// Every (name, raw value) pair, preserving duplicates and each name's
+    /// value insertion order. Distinct names follow `HeaderMap`'s arbitrary
+    /// iteration order; callers must not treat it as wire order.
     fn iter_headers(&self) -> impl Iterator<Item = (&str, &[u8])>;
 }
 
@@ -104,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_value_headers_preserve_order_and_duplicates() {
+    fn multi_value_header_preserves_per_name_order_and_duplicates() {
         let session = mock_with(&[("accept", b"a"), ("accept", b"b")]);
 
         // The single-value accessors expose only the first value, matching
