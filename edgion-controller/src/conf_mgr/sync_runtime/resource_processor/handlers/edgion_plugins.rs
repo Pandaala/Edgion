@@ -1538,6 +1538,95 @@ profiles:
     }
 
     #[tokio::test]
+    async fn basic_auth_duplicate_warnings_omit_credentials_and_preserve_first_wins() {
+        use std::io::{Read, Seek};
+        use tracing::instrument::WithSubscriber;
+
+        let username = "private-user@example.invalid";
+        let credentials = [
+            ("first-user", "first-password"),
+            ("duplicate-same", "same-group-password"),
+            ("duplicate-other", "other-group-password"),
+        ];
+        let secrets = credentials
+            .iter()
+            .map(|(name, password)| {
+                (
+                    format!("default/{name}"),
+                    build_basic_auth_secret("default", name, username, password),
+                )
+            })
+            .collect();
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
+        let groups = [
+            ("group-a", vec!["first-user", "duplicate-same"]),
+            ("group-b", vec!["duplicate-other"]),
+        ]
+        .into_iter()
+        .map(|(name, refs)| BasicAuthSecretGroup {
+            name: name.to_string(),
+            description: None,
+            secret_refs: refs
+                .into_iter()
+                .map(|name| SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: name.to_string(),
+                    namespace: None,
+                })
+                .collect(),
+        })
+        .collect();
+        let mut ep = EdgionPlugins::new("basic-auth-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::BasicAuth(
+            BasicAuthConfig {
+                secret_groups: Some(groups),
+                ..Default::default()
+            },
+        ))]);
+
+        let mut log_file = tempfile::tempfile().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log_file.try_clone().unwrap())
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_ansi(false)
+            .finish();
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).with_subscriber(subscriber).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        log_file.rewind().unwrap();
+        let mut logs = String::new();
+        log_file.read_to_string(&mut logs).unwrap();
+
+        let warnings: Vec<_> = logs.lines().filter(|line| line.contains("BasicAuth:")).collect();
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("Duplicate username within group, skipping"));
+        assert!(warnings[0].contains("secret_key=default/duplicate-same"));
+        assert!(warnings[0].contains("group=group-a"));
+        assert!(warnings[1].contains("duplicate username across groups; first-wins kept"));
+        assert!(warnings[1].contains("secret_key=default/duplicate-other"));
+        assert!(warnings[1].contains("existing_group=group-a"));
+        assert!(warnings[1].contains("incoming_group=group-b"));
+        assert!(!logs.contains(username));
+        assert!(!logs.contains("username="));
+        for (name, password) in credentials {
+            assert!(!logs.contains(password));
+            assert_eq!(ctx.secret_ref_manager().get_refs(&format!("default/{name}")).len(), 1);
+        }
+
+        let EdgionPlugin::BasicAuth(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected BasicAuth");
+        };
+        let users = config.resolved_users.as_ref().unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[username].password, "first-password");
+        assert_eq!(users[username].group, "group-a");
+    }
+
+    #[tokio::test]
     async fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
         let client_secret = build_secret("default", "oidc-client", "clientSecret", "client-secret-value");
         let session_secret = build_secret("default", "oidc-session", "sessionSecret", "session-secret-value");

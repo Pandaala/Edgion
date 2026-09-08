@@ -9,8 +9,16 @@ knowledge_type: mandatory-design
 The first-wins + warn policy (reject fail-fast / last-wins / silent-drop) is the
 shared rule for the grouping series — see the canonical statement in
 [key-auth/dup-key-first-wins.md](../../key-auth/mandatory-design/dup-key-first-wins.md). For HmacAuth
-the duplicated identity is the **username**; the warn carries `secret_key` +
-`username` + both `existing_group` and `incoming_group`.
+the duplicated identity is the **username**; cross-group warnings must carry
+`secret_key` plus `existing_group` and `incoming_group`, without raw identity
+values. Within-group warnings use `secret_key` and `group`.
+
+**Known implementation gap (D0036):** `hmac.rs::resolve_group` still emits raw
+`username` in its short-secret warning and both duplicate-warning branches.
+The previous username allowance here conflicted with canonical PII redaction;
+it is withdrawn, not accepted as a tradeoff. The implementation remains deferred
+in [the credential-copy audit task](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md).
+Only BasicAuth warning fields are corrected in the current scoped change.
 
 Implementation:
 `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac.rs`
@@ -21,8 +29,8 @@ Implementation:
 file (first-wins, length warning, parse failure, future branches) must NOT carry
 the secret value:
 
-- Allowed: `username`, `secret_key`, `group`, `secret_len` (numeric), `min_len`
-- Forbidden: `secret = %secret_value`, `secret_bytes = ?secret_value.as_bytes()`,
+- Allowed: `secret_key`, `group`, `secret_len` (numeric), `min_len`
+- Forbidden: raw username, `secret = %secret_value`, `secret_bytes = ?secret_value.as_bytes()`,
   any field that emits secret content (literal or hashed)
 
 Reviewers must `grep secret =` in this file and confirm zero leak points.

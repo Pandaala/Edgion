@@ -226,6 +226,8 @@ filters:
 
 **Duplicate username across groups**: if the same username appears in Secrets from multiple groups, the first occurrence (in `secretGroups` array order) wins; later duplicates are skipped and a warning is logged. This is a management-convenience design, not a tenant isolation boundary.
 
+Controller duplicate warnings identify the skipped Secret with `secret_key`. Cross-group warnings include `existing_group` and `incoming_group`; within-group warnings include `group`. These warnings omit usernames and passwords. Use the Secret reference and group names to investigate the conflict.
+
 ---
 
 ## Client Usage Examples

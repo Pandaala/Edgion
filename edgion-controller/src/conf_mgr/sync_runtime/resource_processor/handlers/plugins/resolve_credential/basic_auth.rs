@@ -104,7 +104,6 @@ fn resolve_group(
                 tracing::warn!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
-                    username = %username,
                     existing_group = %prev_group,
                     incoming_group = %group_name,
                     "BasicAuth: duplicate username across groups; first-wins kept"
@@ -113,7 +112,6 @@ fn resolve_group(
                 tracing::warn!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
-                    username = %username,
                     group = %group_name,
                     "BasicAuth: Duplicate username within group, skipping"
                 );

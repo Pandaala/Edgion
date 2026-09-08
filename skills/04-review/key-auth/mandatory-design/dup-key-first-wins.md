@@ -17,8 +17,16 @@ username for Basic/Hmac) appears in two groups, the controller must:
 1. **Keep the first occurrence** (iteration order of `secret_groups`),
 2. **Drop the later occurrence**,
 3. **Emit a `tracing::warn!`** carrying both `existing_group` and `incoming_group`
-   (plus `secret_key` + `username` where applicable) so operators can locate both
-   Secrets.
+   plus `secret_key` so operators can locate the rejected Secret and the relevant
+   groups. Within-group warnings carry `secret_key` and `group`. Do not emit raw
+   identity values; resource pointers are sufficient for follow-up.
+
+The previous allowance for `username` conflicted with
+[design rules, section A](../../../00-design-rules.md#a-sensitive-data--log-redaction)
+and the PII handling rule in [log safety](../../../03-coding/01-log-safety.md).
+D0036 corrects the shared guidance and BasicAuth warning fields. HmacAuth's
+remaining violations are tracked in [the active audit task](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md);
+this rule does not claim that every sibling implementation already conforms.
 
 When reviewing the `resolve_credential/*.rs` handlers, **reject**:
 

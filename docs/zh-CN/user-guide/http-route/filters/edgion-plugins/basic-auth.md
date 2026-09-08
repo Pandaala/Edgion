@@ -226,6 +226,8 @@ filters:
 
 **重复用户名跨组优先级**：若同一 username 出现在多个分组的 Secret 中，首次出现（按 `secretGroups` 数组顺序）的分组胜出，后续重复的 Secret 会被跳过并记录告警日志。这是管理便利性设计，不是租户隔离边界。
 
+Controller 的重复用户名告警通过 `secret_key` 标识被跳过的 Secret。跨组告警包含 `existing_group` 和 `incoming_group`，同组告警包含 `group`。这些告警不输出用户名或密码；排查冲突时，请根据 Secret 引用和组名定位配置。
+
 ---
 
 ## 客户端使用示例
