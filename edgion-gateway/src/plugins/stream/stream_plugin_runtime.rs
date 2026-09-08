@@ -50,6 +50,7 @@ impl StreamPluginRuntime {
         // regardless of the stamped entry's original position (mirrors the
         // HTTP "gate first" semantics).
         let mut policy_block_reason: Option<String> = None;
+        let mut invalid_config_reason: Option<String> = None;
 
         for (index, entry) in entries.iter().enumerate() {
             if !entry.is_enabled() {
@@ -98,11 +99,16 @@ impl StreamPluginRuntime {
                 )),
                 EdgionStreamPlugin::GeoIpLocation(cfg) => match GeoIpLocationStreamPlugin::new(cfg) {
                     Ok(p) => Arc::new(p),
-                    Err(e) => {
-                        // Should not happen if the controller validated before syncing
-                        // (both paths share `GeoIpLocationConfig::check_fields`); log and
-                        // skip rather than panic.
-                        tracing::error!(error = %e, "GeoIpLocation stream plugin skipped: config failed validation");
+                    Err(_error) => {
+                        tracing::error!(
+                            component = "stream_plugin_runtime",
+                            plugin = "GeoIpLocation",
+                            resource_key,
+                            "Invalid stream plugin configuration; all connections will be denied",
+                        );
+                        if invalid_config_reason.is_none() {
+                            invalid_config_reason = Some("invalid stream/GeoIpLocation configuration".to_string());
+                        }
                         continue;
                     }
                 },
@@ -111,7 +117,7 @@ impl StreamPluginRuntime {
             plugins.push(plugin);
         }
 
-        if let Some(reason) = policy_block_reason {
+        if let Some(reason) = policy_block_reason.or(invalid_config_reason) {
             plugins.insert(0, Arc::new(PolicyBlockStreamPlugin { reason }));
         }
 
@@ -159,6 +165,9 @@ impl StreamPlugin for PolicyBlockStreamPlugin {
 mod tests {
     use super::*;
     use crate::plugins::stream::stream_plugin_trait::StreamLayer;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{
+        DefaultAction, GeoIpLocationConfig, GeoRule, GeoRuleGroup, GeoRuleKey, GeoRuleSource,
+    };
     use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm};
     use edgion_resources::resources::edgion_stream_plugins::{ConnectionRateLimitConfig, PerListenerLimit};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
@@ -178,6 +187,23 @@ mod tests {
             }),
             per_source_ip: None,
             redis_timeout: "100ms".to_string(),
+        }
+    }
+
+    fn valid_geoip_config() -> GeoIpLocationConfig {
+        GeoIpLocationConfig {
+            fail_open: Some(false),
+            default_action: DefaultAction::Allow,
+            deny_rule_groups: vec![GeoRuleGroup {
+                name: None,
+                rules: vec![GeoRule {
+                    source: GeoRuleSource::DirectPeerIp,
+                    key: GeoRuleKey::Cidr,
+                    values: vec!["10.0.0.0/8".to_string()],
+                    cidr_matcher: None,
+                }],
+            }],
+            ..Default::default()
         }
     }
 
@@ -226,6 +252,65 @@ mod tests {
             }
             other => panic!("expected Deny, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_geoip_config_installs_an_always_deny_gate() {
+        let invalid = StreamPluginEntry {
+            enable: true,
+            policy_action: None,
+            plugin: EdgionStreamPlugin::GeoIpLocation(GeoIpLocationConfig::default()),
+        };
+        let runtime = StreamPluginRuntime::from_stream_plugins(&[invalid], "default", "default/test-esp");
+        assert!(!runtime.is_empty());
+
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
+        assert!(matches!(
+            runtime.run(&ctx).await,
+            StreamPluginResult::Deny(reason)
+                if reason == "invalid stream/GeoIpLocation configuration"
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_geoip_config_cannot_be_undone_and_policy_block_stays_first() {
+        let geo_entries = || {
+            [
+                StreamPluginEntry {
+                    enable: true,
+                    policy_action: None,
+                    plugin: EdgionStreamPlugin::GeoIpLocation(GeoIpLocationConfig::default()),
+                },
+                StreamPluginEntry {
+                    enable: true,
+                    policy_action: None,
+                    plugin: EdgionStreamPlugin::GeoIpLocation(valid_geoip_config()),
+                },
+            ]
+        };
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
+
+        let runtime = StreamPluginRuntime::from_stream_plugins(&geo_entries(), "default", "default/test-esp");
+        assert!(matches!(
+            runtime.run(&ctx).await,
+            StreamPluginResult::Deny(reason)
+                if reason == "invalid stream/GeoIpLocation configuration"
+        ));
+
+        let blocked = StreamPluginEntry {
+            enable: true,
+            policy_action: Some(PluginPolicyAction::Block { status: 503 }),
+            plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
+        };
+        let mut entries = geo_entries().to_vec();
+        entries.push(blocked);
+        let runtime = StreamPluginRuntime::from_stream_plugins(&entries, "default", "default/test-esp");
+
+        assert!(matches!(
+            runtime.run(&ctx).await,
+            StreamPluginResult::Deny(reason)
+                if reason == "plugin disabled by policy: stream/ConnectionRateLimit"
+        ));
     }
 
     #[tokio::test]

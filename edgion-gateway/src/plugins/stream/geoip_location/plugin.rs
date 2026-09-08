@@ -1,17 +1,22 @@
-//! `GeoIpLocation` stream plugin — L4 ConnectionFilter stage (Stage 1, pre-TLS).
+//! `GeoIpLocation` stream plugin for L4 stream lifecycles.
+//!
+//! Listener attachment runs at Stage 1. TCP/UDP route and TLS compatibility
+//! attachments run at their respective lifecycle points.
 //!
 //! Same config shape and matching core as the HTTP `GeoIpLocation`
 //! (`edgion_resources::resources::edgion_plugins::plugin_configs::GeoIpLocationConfig`),
 //! constrained to `DirectPeerIp`-sourced rules only (enforced at validation —
 //! see the config's `check_fields(is_stream: true)`).
 //!
-//! Unlike the HTTP side, L4 has no access log `geo` block to populate (see
-//! `StreamContext`'s doc — L4 geo denials are never logged, only metered), so
-//! **parse-only mode at L4 is a true no-op**: no GeoIP lookup is even
-//! attempted, since nothing would consume the result. Rule mode performs
-//! exactly one lookup (`ctx.direct_peer_ip`, the physical direct peer;
-//! address) and reports every deny via `edgion_geoip_denied_total{layer,reason}`,
-//! since that metric is the only record a geo-denied L4 connection leaves.
+//! Unlike the HTTP side, stream lifecycles do not populate an HTTP access-log
+//! `geo` block, so **parse-only mode at L4 is a true no-op**: no GeoIP lookup is
+//! attempted, since nothing would consume the result. Rule mode performs at
+//! most one lookup (`ctx.direct_peer_ip`, the physical direct-peer address);
+//! CIDR-only rule sets perform zero lookups. Every deny is reported via
+//! `edgion_geoip_denied_total{layer,reason}`. A listener Stage 1 denial is
+//! otherwise metric-only. TCP/UDP route and TLS lifecycle denials retain their
+//! canonical protocol logs, but those records contain neither GeoIP facts nor
+//! the sensitive Geo denial reason.
 
 use async_trait::async_trait;
 
@@ -36,6 +41,7 @@ fn dim_facts(info: &GeoInfo) -> GeoDimFacts<'_> {
 #[derive(Debug)]
 pub struct GeoIpLocationStreamPlugin {
     config: GeoIpLocationConfig,
+    needs_facts: bool,
 }
 
 impl GeoIpLocationStreamPlugin {
@@ -47,7 +53,8 @@ impl GeoIpLocationStreamPlugin {
         config
             .validate_and_init(true)
             .map_err(|e| format!("GeoIpLocation config validation failed: {e}"))?;
-        Ok(Self { config })
+        let needs_facts = config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
+        Ok(Self { config, needs_facts })
     }
 }
 
@@ -66,8 +73,9 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
         // A CIDR-only config needs no GeoIP database at all — skip the lookup
         // (and the Unavailable fail-open/close branch below) entirely when no
         // configured rule actually needs resolved dimensions.
-        let needs_facts = self.config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
-        let lookup = needs_facts.then(|| GeoIpProvider::global().lookup(ctx.direct_peer_ip));
+        let lookup = self
+            .needs_facts
+            .then(|| GeoIpProvider::global().lookup(ctx.direct_peer_ip));
         let (facts, unavailable, failed) = match &lookup {
             None => (GeoDimFacts::default(), false, false),
             Some(GeoLookup::Unavailable) => (GeoDimFacts::default(), true, false),
@@ -103,7 +111,9 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
                 // "defaultAction: Deny with nothing configured to explain why" —
                 // fold that (rare, degenerate) case into `deny_country` too
                 // rather than adding an undeclared fourth reason value.
-                let reason = if !self.config.allow_rule_groups.is_empty() && !self.config.allows(&rule_ctx) {
+                let reason = if self.config.denies(&rule_ctx) {
+                    "deny_country"
+                } else if !self.config.allow_rule_groups.is_empty() {
                     "allow_miss"
                 } else {
                     "deny_country"
@@ -250,6 +260,50 @@ mod tests {
         assert!(matches!(allowed, StreamPluginResult::Allow));
         let denied = plugin.on_connection(&stream_ctx("8.8.8.8")).await;
         assert!(matches!(denied, StreamPluginResult::Deny(_)));
+    }
+
+    #[tokio::test]
+    async fn cidr_deny_hit_and_allow_miss_have_exact_reasons_and_metrics() {
+        let cfg = GeoIpLocationConfig {
+            fail_open: Some(false),
+            default_action: DefaultAction::Allow,
+            deny_rule_groups: vec![GeoRuleGroup {
+                name: Some("blocked".into()),
+                rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["10.0.0.0/8"])],
+            }],
+            allow_rule_groups: vec![GeoRuleGroup {
+                name: Some("office".into()),
+                rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["192.168.0.0/16"])],
+            }],
+            ..Default::default()
+        };
+        let plugin = GeoIpLocationStreamPlugin::new(&cfg).unwrap();
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        let deny_hit = metrics::with_local_recorder(&recorder, || {
+            futures::FutureExt::now_or_never(plugin.on_connection(&stream_ctx("10.1.2.3")))
+                .expect("CIDR-only GeoIpLocation stream path must not yield")
+        });
+        assert!(matches!(
+            deny_hit,
+            StreamPluginResult::Deny(reason) if reason == "geo:deny:deny_country"
+        ));
+
+        let allow_miss = metrics::with_local_recorder(&recorder, || {
+            futures::FutureExt::now_or_never(plugin.on_connection(&stream_ctx("8.8.8.8")))
+                .expect("CIDR-only GeoIpLocation stream path must not yield")
+        });
+        assert!(matches!(
+            allow_miss,
+            StreamPluginResult::Deny(reason) if reason == "geo:deny:allow_miss"
+        ));
+
+        let rendered = handle.render();
+        assert!(
+            rendered.contains("reason=\"deny_country\"") && rendered.contains("reason=\"allow_miss\""),
+            "CIDR denials must retain their exact metric labels, got:\n{rendered}"
+        );
     }
 
     fn load_fixture_db() {

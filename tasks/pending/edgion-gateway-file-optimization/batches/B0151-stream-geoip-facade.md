@@ -18,4 +18,4 @@
 - Deferred: none. The facade owns no logging, metrics, time, allocation, provider lookup, failure policy or IP semantics.
 - Review: `b0135_final_review` independently confirmed the reexport chain, only production consumer, HTTP-facade precedent, private implementation boundary and absence of duplicate mechanisms or stale claims. No Must Fix or Should Fix.
 - Verification: no facade-specific test would add signal beyond compilation. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,093-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `c764d632`; local only, never pushed by the campaign.

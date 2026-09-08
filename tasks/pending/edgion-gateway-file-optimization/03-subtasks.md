@@ -558,7 +558,7 @@
 | `edgion-gateway/src/plugins/stream/connection_rate_limit/mod.rs` | `plugins-stream` | source | examined-no-change | B0149: coherent zero-cost rate-limit module facade retained |
 | `edgion-gateway/src/plugins/stream/connection_rate_limit/plugin.rs` | `plugins-stream` | source | changed | B0150: fail closed on invalid published connection-rate-limit config |
 | `edgion-gateway/src/plugins/stream/geoip_location/mod.rs` | `plugins-stream` | source | examined-no-change | B0151: minimal private-module/public-type GeoIP facade retained |
-| `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs` | `plugins-stream` | source | changed | B0152: invalid generations fail closed; cached lookup need and exact deny causes |
 | `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs` | `plugins-stream` | source | changed | B0123: Selector and profile references share one snapshot generation |
 | `edgion-gateway/src/plugins/stream/ip_restriction/mod.rs` | `plugins-stream` | source | pending | — |
