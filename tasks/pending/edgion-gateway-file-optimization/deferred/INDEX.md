@@ -175,3 +175,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Correct Gateway API RequestRedirect documentation | pending | [task](../../../todo/correct-gateway-api-request-redirect-documentation.md) |
 | Reject DSL builtin calls beyond bytecode argument capacity | pending | [task](../../../todo/reject-dsl-builtin-calls-beyond-argument-capacity.md) |
 | Investigate plugin policy and invalid-generation retention | pending | [task](../../../todo/investigate-plugin-policy-invalid-generation-retention.md) |
+| Align upstream response stage documentation | pending | [task](../../../todo/align-upstream-response-stage-documentation.md) |

@@ -16,4 +16,4 @@
 - Rejected churn: the unused path helper explicitly warns that it flattens entry/current views; deleting it offers only line-count benefit and does not improve current tests. Production behavior must not change for mock convenience.
 - Review: `b0135_final_review` independently approved with no Must Fix or Should Fix. It verified production-adapter parity for all four general header views, duplicate/raw-byte behavior, explicit invalid-UTF-8 multi-value expectations, fail-closed body defaults, test-only performance, and the unused path helper's explicit flattening warning.
 - Verification: complete static helper/consumer/adapter review; `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local record commit; never push.
+- Commit: `658f89f0`; local only, never pushed by the campaign.

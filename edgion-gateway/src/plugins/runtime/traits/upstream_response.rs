@@ -8,8 +8,18 @@ use crate::plugins::runtime::log::PluginLog;
 use async_trait::async_trait;
 use edgion_resources::filters::PluginRunningResult;
 
-/// UpstreamResponse trait for upstream response stage plugins
-/// Runs during response_filter hook (async)
+/// Async final-response-header processing in Pingora's `response_filter` hook.
+///
+/// The hook runs for the final response candidate after synchronous response
+/// filtering, retry arbitration, and response normalization. Interim 1xx
+/// responses are skipped. It completes before the downstream header is
+/// committed and before response body or terminal events are forwarded.
+///
+/// Implementations may await, mutate the current response headers through the
+/// session, install bounded streaming companions, and return a
+/// [`PluginRunningResult`] to continue or terminate processing. This stage does
+/// not provide access to a complete response or a complete response body; the
+/// main upstream response remains streaming.
 #[async_trait]
 pub trait UpstreamResponse: Send + Sync {
     /// Get the filter name
@@ -41,7 +51,6 @@ pub trait UpstreamResponse: Send + Sync {
         false
     }
 
-    /// Run the upstream response handler (async)
-    /// This is called during the response_filter stage after upstream responds
+    /// Run the async final-response-header handler.
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult;
 }
