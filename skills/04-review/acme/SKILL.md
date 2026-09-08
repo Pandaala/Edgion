@@ -16,6 +16,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [DNS provider error redaction](regression-guards/dns-provider-error-redaction.md)
+- [DNS cleanup response validation](regression-guards/dns-cleanup-response-validation.md)
 
 - [ACME dns-01 `propagationCheckInterval` — Removed as Dead Knob, Then Re-introduced WITH Real Polling](regression-guards/acme-propagation-check-interval-removed.md)
 - [fr-rhttp-01 — ACME HTTP-01 challenge host port-stripping preserves IPv6-literal brackets](regression-guards/challenge-host-split-ipv6-literal.md)

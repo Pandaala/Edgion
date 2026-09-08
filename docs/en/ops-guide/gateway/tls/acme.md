@@ -346,6 +346,13 @@ messages, response bodies, record IDs, and signed request URLs are omitted to
 protect credentials and identity data. Use the provider console for additional
 diagnostics. DNS record cleanup failures remain non-fatal to certificate issuance.
 
+AliDNS cleanup checks the HTTP status and business response of the record lookup
+and every deletion. Rejected, malformed, or oversized responses (over 256 KiB)
+are reported as cleanup errors. After an individual deletion fails, cleanup
+continues with later records within the existing cleanup timeout and reports the
+first error through the Controller's non-fatal cleanup warning. If a warning
+appears, check the provider console for leftover TXT records.
+
 1. **HTTP-01 fails** — confirm the domain resolves to the Gateway and its HTTP port (typically 80) is reachable from the internet. The Gateway must receive the published token via List-Watch and answer `/.well-known/acme-challenge/<token>`.
 2. **DNS-01 times out** — increase `propagationTimeout` (a generous value is cheap: the poll loop exits as soon as the records are visible); verify the `credentialRef` Secret keys are correct and the provider API is reachable. A "propagation not confirmed" failure means the zone's authoritative nameservers still did not serve the TXT record at the deadline.
 3. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.

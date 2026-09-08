@@ -58,12 +58,15 @@ fixed category retain diagnostics without forwarding arbitrary strings.
 Successful response payloads are still consumed for zone/record selection. This
 is a diagnostic boundary, not a new provider response-schema validator. Cloudflare
 delete business failures keep their local warning behavior; service-level cleanup
-remains best-effort and non-fatal. AliDNS's existing incomplete cleanup-response
-handling is deferred in [the cleanup response task](../../../../tasks/todo/acme-alidns-cleanup-response-validation.md).
+remains best-effort and non-fatal. AliDNS cleanup now validates lookup and delete
+responses through this same diagnostic boundary; see the separate
+[cleanup response guard](dns-cleanup-response-validation.md) for response shape
+checks, continuation behavior, and remaining record-selection work.
 
 ## Verification and re-evaluation
 
-Fresh verification for this correction:
+Historical verification for the error-redaction correction (not a fresh run of
+the cleanup response change):
 
 - `cargo test -p edgion-controller --lib services::acme::`: 29 passed.
 - `cargo fmt --all` and `git diff --check`: passed.

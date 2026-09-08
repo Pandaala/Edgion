@@ -344,6 +344,10 @@ HTTP 失败包含数字状态码；Cloudflare API 拒绝请求时可能包含一
 为保护凭据和身份信息，不输出提供方消息、响应正文、记录 ID 或签名请求 URL。
 需要更多诊断信息时，请查看提供方控制台。DNS 记录清理失败仍不会导致证书签发失败。
 
+AliDNS 清理会检查记录查询和每次删除的 HTTP 状态及业务响应。拒绝、格式异常或超过
+256 KiB 的响应会作为清理错误报告；单条删除失败后，会在现有清理超时内继续尝试后续记录，
+并通过 Controller 的非致命清理警告报告第一个错误。出现警告时，请在提供方控制台检查残留的 TXT 记录。
+
 1. **HTTP-01 失败**——确认域名已解析到 Gateway 且其 HTTP 端口（通常 80）可从公网访问。Gateway 必须通过 List-Watch 接收到已发布的 token 并响应 `/.well-known/acme-challenge/<token>`。
 2. **DNS-01 超时**——增大 `propagationTimeout`（设置宽松值没有代价：记录可见后轮询立即结束）；确认 `credentialRef` Secret 键正确且提供商 API 可访问。"propagation not confirmed" 失败表示到期时权威 DNS 服务器仍未提供 TXT 记录。
 3. **长期处于 `Failed`**——查看 `status.lastFailureReason`，修复原因后使用[手动触发](#手动触发)重新发起并重置重试计数器。
