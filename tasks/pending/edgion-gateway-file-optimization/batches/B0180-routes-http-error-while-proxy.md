@@ -23,4 +23,4 @@
 - Implementation: Case 1.5 now calls one private predicate containing its exact timeout/source/config/final-response gates. Real H1 sessions prove raw response state is populated for 100/102/103 while the production predicate remains retryable; 101/200 and every other excluded input remain non-retryable. The three existing review pages and bilingual retry guide now use the same final-response boundary without claiming end-to-end coverage.
 - Review: the approved plan had no correction. Fresh final review initially rejected helper-only tests because reverting the production call would still pass; the implementer bound the live-session tests to the production predicate, and correction re-review returned LGTM with no remaining Must Fix or Should Fix finding.
 - Verification: target tests passed 6/6 and the complete proxy-http suite passed 230/230. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `f8413d67`; never pushed by the campaign.

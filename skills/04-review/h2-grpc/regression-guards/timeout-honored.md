@@ -32,6 +32,12 @@ Suggestions of the form "the gateway still ignores `grpc-timeout`", "no upstream
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::configure_peer_timeouts` — folds `grpc_remaining` into `effective_read_write_timeout` via `min()`, sharing the same `Duration::ZERO` guard as the existing `request_remaining` branch.
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` — new `upstream_request_filter` hook that rewrites `grpc-timeout` on the upstream-bound `RequestHeader` to the formatted `grpc_remaining`.
 - Retry-decision sites (`pg_fail_to_connect.rs`, `pg_error_while_proxy.rs`, `pg_upstream_response_filter.rs` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, preventing a fresh LB pick / circuit-breaker counter increment after the caller has given up.
+- If connection establishment fails after a deadline has expired,
+  `pg_fail_to_connect.rs` records the canonical deadline diagnostic and returns
+  a non-retryable HTTP 504 while retaining the original connection error as its
+  binary-log cause. This produces gRPC `DEADLINE_EXCEEDED` instead of allowing a
+  non-timeout connect error to map to another status. The route request deadline
+  wins attribution when both it and `grpc-timeout` are expired.
 - `pg_upstream_peer.rs` retry backoff sleep bounds the delay by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep. Without this guard a tight `grpc-timeout` plus a coarse retry backoff (`grpc-timeout: 5S` + `retry.backoff: 10s` is the canonical case) would let the gateway sleep past the client's deadline and then open a fresh upstream connection nobody is waiting for.
 - `pg_upstream_request_filter.rs` writes `grpc-timeout: 1n` to the upstream when `grpc_remaining()` is exactly zero — the rare race between `upstream_peer` returning OK and Pingora invoking the filter (connect / TLS handshake) where the deadline decays to zero. Without this, the upstream would see the stale original client value (e.g. `5S`) and run the full duration the caller has already abandoned.
 - `edgion-tests/src/client/suites/grpc_route/basic/basic.rs::test_grpc_client_deadline_exceeded` — wire-level scenario: client sends `set_timeout(1ns)` and asserts `tonic::Code::DeadlineExceeded` arrives via the gateway.

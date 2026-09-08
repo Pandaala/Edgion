@@ -14,6 +14,47 @@ enum ConnectRetryContinuation {
     EvaluateOrdinaryBudget,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExpiredConnectDeadline {
+    Request,
+    Grpc,
+}
+
+fn select_expired_connect_deadline(
+    request_deadline_exceeded: bool,
+    grpc_deadline_exceeded: bool,
+) -> Option<ExpiredConnectDeadline> {
+    if request_deadline_exceeded {
+        Some(ExpiredConnectDeadline::Request)
+    } else if grpc_deadline_exceeded {
+        Some(ExpiredConnectDeadline::Grpc)
+    } else {
+        None
+    }
+}
+
+fn finish_expired_connect_deadline(
+    ctx: &mut EdgionHttpContext,
+    deadline: ExpiredConnectDeadline,
+    error: Box<Error>,
+) -> Box<Error> {
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        upstream.status = Some(504);
+    }
+    ctx.record_error(match deadline {
+        ExpiredConnectDeadline::Request => EdgionErrorCode::RequestTimeoutExceeded,
+        ExpiredConnectDeadline::Grpc => EdgionErrorCode::GrpcClientDeadlineExceeded,
+    });
+
+    let mut timeout_error = Error::because(
+        ErrorType::HTTPStatus(504),
+        "end-to-end deadline expired after upstream connect failure",
+        error,
+    );
+    timeout_error.set_retry(false);
+    timeout_error
+}
+
 fn connect_retry_continuation(is_ai: bool, relay_allows_retry: bool) -> ConnectRetryContinuation {
     match (is_ai, relay_allows_retry) {
         (true, false) => ConnectRetryContinuation::SettleAiOnly,
@@ -72,12 +113,10 @@ pub fn fail_to_connect(
     // (which can be tighter than the route timeout) abort retries; either
     // deadline blown means a new LB pick / connection / outlier-detection
     // counter increment would only burn resources the caller has given up on.
-    if ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded() {
-        if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.status = Some(504);
-        }
-        // Do not set retry flag - this blocks any further retries
-        return e;
+    if let Some(deadline) =
+        select_expired_connect_deadline(ctx.request_timeout_exceeded(), ctx.grpc_deadline_exceeded())
+    {
+        return finish_expired_connect_deadline(ctx, deadline, e);
     }
 
     let relay_allows_retry = session.request_relay_retry_state().can_start_next_attempt();
@@ -140,7 +179,78 @@ pub fn fail_to_connect(
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_retry_continuation, ConnectRetryContinuation::*};
+    use super::{
+        connect_retry_continuation, finish_expired_connect_deadline, select_expired_connect_deadline,
+        ConnectRetryContinuation::*, ExpiredConnectDeadline,
+    };
+    use crate::observe::RequestDiagnostic;
+    use crate::{BackendContext, EdgionHttpContext, UpstreamInfo};
+    use edgion_resources::EdgionErrorCode;
+    use pingora_core::{Error, ErrorSource, ErrorType};
+    use std::time::Instant;
+
+    fn ctx_with_attempt() -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            effective_policy: None,
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: vec![UpstreamInfo {
+                ip: None,
+                port: None,
+                status: Some(503),
+                ct: None,
+                ht: None,
+                bt: None,
+                et: Some(7),
+                wpt: None,
+                response_body_size: Some(0),
+                start_time: Instant::now(),
+                err: vec!["ConnectError".to_string()],
+                lb_backend_addr: None,
+                lb_backend: None,
+                lb_outlier_completion: None,
+                service_key: None,
+                lb_policy: None,
+                tls: None,
+                lb_committed: None,
+            }],
+            current_upstream_id: Some(0),
+            backend_ref_idx: None,
+        });
+        ctx
+    }
+
+    fn assert_deadline_outcome(deadline: ExpiredConnectDeadline, expected_diagnostic: EdgionErrorCode) {
+        let mut ctx = ctx_with_attempt();
+        let mut original = Error::new_up(ErrorType::ConnectError);
+        original.set_retry(true);
+
+        let outcome = finish_expired_connect_deadline(&mut ctx, deadline, original);
+
+        assert_eq!(outcome.etype(), &ErrorType::HTTPStatus(504));
+        assert!(!outcome.retry());
+        assert_eq!(
+            ctx.diagnostics.entries(),
+            &[RequestDiagnostic::Error(expected_diagnostic)]
+        );
+
+        let upstream = ctx.get_current_upstream().unwrap();
+        assert_eq!(upstream.status, Some(504));
+        assert_eq!(upstream.et, Some(7));
+        assert_eq!(upstream.err, ["ConnectError"]);
+
+        let cause = outcome
+            .cause
+            .as_deref()
+            .and_then(|cause| cause.downcast_ref::<Box<Error>>())
+            .expect("deadline outcome must retain the original connect error");
+        assert_eq!(cause.etype(), &ErrorType::ConnectError);
+        assert_eq!(cause.esource(), &ErrorSource::Upstream);
+        assert!(cause.retry());
+    }
 
     #[test]
     fn disabled_relay_settles_ai_without_selecting_a_successor() {
@@ -152,5 +262,35 @@ mod tests {
     fn disabled_relay_stops_before_ordinary_retry_budget() {
         assert_eq!(connect_retry_continuation(false, false), Stop);
         assert_eq!(connect_retry_continuation(false, true), EvaluateOrdinaryBudget);
+    }
+
+    #[test]
+    fn expired_deadline_selection_prefers_request() {
+        assert_eq!(select_expired_connect_deadline(false, false), None);
+        assert_eq!(
+            select_expired_connect_deadline(true, false),
+            Some(ExpiredConnectDeadline::Request)
+        );
+        assert_eq!(
+            select_expired_connect_deadline(false, true),
+            Some(ExpiredConnectDeadline::Grpc)
+        );
+        assert_eq!(
+            select_expired_connect_deadline(true, true),
+            Some(ExpiredConnectDeadline::Request)
+        );
+    }
+
+    #[test]
+    fn request_deadline_returns_non_retryable_504_with_original_cause() {
+        assert_deadline_outcome(ExpiredConnectDeadline::Request, EdgionErrorCode::RequestTimeoutExceeded);
+    }
+
+    #[test]
+    fn grpc_deadline_returns_non_retryable_504_with_original_cause() {
+        assert_deadline_outcome(
+            ExpiredConnectDeadline::Grpc,
+            EdgionErrorCode::GrpcClientDeadlineExceeded,
+        );
     }
 }
