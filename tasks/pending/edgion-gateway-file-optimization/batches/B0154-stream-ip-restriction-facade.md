@@ -18,4 +18,4 @@
 - Deferred: none.
 - Review: `b0135_final_review` independently confirmed the visibility boundary, reexport chain, only production consumer, HTTP precedent and absence of duplicate mechanisms or stale claims. No Must Fix or Should Fix.
 - Verification: no facade-specific test adds signal beyond compilation. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,093-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `9e6b23e7`; local only, never pushed by the campaign.

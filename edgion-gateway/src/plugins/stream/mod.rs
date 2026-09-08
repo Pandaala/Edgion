@@ -1,8 +1,12 @@
-//! Stream plugin system for TCP/UDP routes and connection-level filtering.
+//! Stream plugin runtimes for connection and TLS-route policy.
 //!
-//! Two-stage architecture:
-//! - **Stage 1 (ConnectionFilter):** pre-TLS, IP-only — `connection_filter_bridge.rs`
-//! - **Stage 2 (TlsRoute):** post-handshake, post-route-match — `tls_route/`
+//! `StreamPluginRuntime` evaluates connection context (`DirectPeerIp` and the
+//! listener port) at listener admission and TCP/UDP route session creation.
+//! TLSRoute can also invoke it through a legacy compatibility fallback; new
+//! configurations must not rely on that fallback. `TlsRoutePluginRuntime` runs
+//! after TLSRoute matching: terminated TLS supplies post-handshake TLS context,
+//! while passthrough supplies inspected ClientHello/SNI route context before
+//! forwarding the end-to-end handshake.
 
 pub mod connection_filter_bridge;
 pub mod connection_rate_limit;
