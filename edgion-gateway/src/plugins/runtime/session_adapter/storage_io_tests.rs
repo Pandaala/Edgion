@@ -37,9 +37,12 @@ async fn h1_capture_storage_timeout_is_local_failure_and_disables_reuse() {
 
     let result = {
         let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-        STORAGE_IO_TEST_HOOK
-            .scope(hook, adapter.capture_request_body(None))
-            .await
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            STORAGE_IO_TEST_HOOK.scope(hook, adapter.capture_request_body(None)),
+        )
+        .await
+        .expect("capture must return within its storage deadline")
     };
     assert_eq!(result, Err(BodyReadError::StorageFailure));
     entered_rx
@@ -101,9 +104,12 @@ async fn h2_capture_cleanup_keeps_the_connection_available_to_a_sibling_stream()
         }
     });
     let result = {
-        STORAGE_IO_TEST_HOOK
-            .scope(hook, capture_request_body_core(&mut first, &mut ctx, None))
-            .await
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            STORAGE_IO_TEST_HOOK.scope(hook, capture_request_body_core(&mut first, &mut ctx, None)),
+        )
+        .await
+        .expect("capture must return within its storage deadline")
     };
     assert_eq!(result, Err(BodyReadError::StorageFailure));
     entered_rx
