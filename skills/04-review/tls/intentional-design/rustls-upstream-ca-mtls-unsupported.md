@@ -45,9 +45,9 @@ backend-selectable integration harness.
 The accepted boundary does not weaken the implemented BoringSSL path. BoringSSL
 continues to enforce custom CA and upstream client-certificate behavior, and a
 Gateway-level client identity is only a fallback after a `BackendTLSPolicy` has
-selected TLS. Complete connection-pool isolation across CA and client-identity
-changes remains a separate BoringSSL-relevant security task and is not accepted
-or closed by this rustls decision.
+selected TLS. BoringSSL connection-pool isolation across CA and client-identity
+changes is tracked in the [pool isolation regression guard](../regression-guards/backend-tls-pool-isolation.md).
+It is not accepted or closed by this rustls decision.
 
 ## Fix Suggestions Not Accepted
 
@@ -75,7 +75,7 @@ Re-open this decision only if:
   `rustls-upstream-ca-mtls` as an accepted unsupported capability.
 - `edgion-gateway/src/backends/peer_builder.rs`
 - `skills/01-architecture/02-gateway/04-tls/03-ssl-backends.md`
-- `tasks/todo/backend-tls-policy-connection-pool-isolation.md`
+- [Backend TLS pool isolation](../regression-guards/backend-tls-pool-isolation.md)
 
 ## Resolution references
 

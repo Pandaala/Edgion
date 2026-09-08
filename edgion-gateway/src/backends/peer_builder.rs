@@ -21,6 +21,11 @@ use pingora_core::utils::tls::CertKey;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+// Focused pool-isolation tests exercise the final Pingora reuse hash.
+#[cfg(all(test, feature = "boringssl"))]
+#[path = "tests/backend_tls_pool_test.rs"]
+mod pool_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendAppProtocol {
     H2c,

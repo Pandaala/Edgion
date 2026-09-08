@@ -11,7 +11,6 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [Backend TLS Peer `group_key` Uses `DefaultHasher`, and Legacy Endpoint Port Sentinels Are Already Gone](intentional-design/backend-tls-group-key-and-endpoint-sentinel.md)
 - [tls-F010 (cert/key install dup) — Shared `install_cert_key_to_ssl` extraction deferred](intentional-design/cert-key-install-helper-deferred.md)
 - [tls-F007 (duplication) — Two SNI matchers stay separate; semantics changes apply to both](intentional-design/cert-matcher-duplication-accepted.md)
 - [tls-07 — `revocationCheck` / `ocspStapling` are reserved schema, not implemented](intentional-design/revocation-config-not-implemented.md)
@@ -26,6 +25,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Backend TLS connection-pool trust and identity isolation](regression-guards/backend-tls-pool-isolation.md)
 - [EdgionTls incremental and atomic publication](regression-guards/edgion-tls-incremental-atomic-publication.md)
 - [tls-08 — Backend (upstream) TLS CA bundle loads every PEM block + fail-closed](regression-guards/backend-ca-bundle-multi-pem.md)
 - [Boring 5 FIPS opt-in build and verification](regression-guards/boring-v5-fips-build-verification.md)

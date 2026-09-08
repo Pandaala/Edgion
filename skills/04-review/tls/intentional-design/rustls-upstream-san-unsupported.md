@@ -28,8 +28,10 @@ support remains outside the product boundary.
 
 **1. The current backend-specific behavior is explicit**
 
-`create_tls_peer` installs the additional-SAN handshake hook and SAN-derived
-connection-pool discriminator only in the BoringSSL build. The pinned Pingora
+`create_tls_peer` installs the additional-SAN handshake hook only in the
+BoringSSL build. Its pool discriminator now covers the complete TLS profile,
+including SANs; see the [pool isolation regression guard](../regression-guards/backend-tls-pool-isolation.md).
+The pinned Pingora
 fork exposes that handshake-result hook only for OpenSSL-derived backends, so a
 rustls peer has no equivalent result for `connected_to_upstream` to consume.
 
