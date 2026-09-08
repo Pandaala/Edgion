@@ -18,4 +18,4 @@
 - Implementation: corrected only Rustdoc for the synchronous final non-retried response-header phase, 1xx/101 behavior, ordering, header/body ownership, nonblocking DSL exception, result handling and canonical log suppression. API and runtime bytes are unchanged.
 - Review: `b0135_final_review` independently approved with no Must Fix or Should Fix. It traced interim/101 handling, retry/normalization and layered dispatch, async successor/framing/terminal behavior, all nine implementations/wrappers, the DSL bridge, runtime-owned local reply/fail-safe handling and WAF access-log ownership. D0068 and D0096 boundaries remain accurate.
 - Verification: exact one-file documentation diff; `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,093-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `295a13e7`; local only, never pushed by the campaign.
