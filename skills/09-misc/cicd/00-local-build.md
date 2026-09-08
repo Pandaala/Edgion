@@ -79,7 +79,7 @@ cargo build -p edgion-gateway --release --no-default-features --features "alloca
 ```
 
 The Gateway's rustls backend feature is an unsupported future-development seam
-and is not a local-build target. See `tasks/todo/rustls-gateway-tls-support.md`.
+and is not a local-build target. See `tasks/pending/rustls-gateway-tls-support.md`.
 
 For more detailed feature semantics:
 

@@ -40,8 +40,12 @@ The custom runtime is gated in `tls/runtime/mod.rs` and `tls/mod.rs`. Use
 BoringSSL for every Gateway deployment. Do not treat rustls-only compile errors,
 warnings, missing plugin portability, incomplete TLS behavior, Docker/CI gaps,
 or test-harness gaps as current findings. Future work is consolidated in
-`tasks/todo/rustls-gateway-tls-support.md` and starts only with explicit user
-authorization. Backend-independent uses of the `rustls` library are unaffected.
+`tasks/pending/rustls-gateway-tls-support.md`. Edgion will not implement Gateway
+rustls support until Pingora provides complete rustls support for the required
+downstream and upstream TLS surface, verified against the revision Edgion uses.
+A compiling feature or partial API availability is insufficient. After that gate
+is met, implementation still requires explicit user authorization and a complete
+product design. Backend-independent uses of the `rustls` library are unaffected.
 
 ## BoringSSL implementation
 

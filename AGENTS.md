@@ -60,18 +60,13 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
   `rustls` feature is a dormant future-development seam, not a supported build target
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
 
-### Gateway rustls backend boundary — future TODO, not current product scope
+### Gateway rustls boundary
 
-The Pingora Gateway's `rustls` Cargo feature is intentionally **unsupported** today. It does not
-carry a clean-build, CI, Docker, integration-test, downstream certificate automation/termination,
-or upstream `BackendTLSPolicy` parity contract. Known rustls-only compile failures, cfg warnings,
-missing HeaderCertAuth portability, missing TLS hooks, and missing test-harness or documentation
-parity are therefore not current defects. Do not open, re-report, or opportunistically fix them.
-Only resume this work when the user explicitly authorizes
-`tasks/todo/rustls-gateway-tls-support.md`; that task must design the complete product boundary
-rather than landing isolated parity patches. This restriction applies only to the Pingora Gateway
-TLS backend feature. It does not prohibit `rustls` libraries used by backend-independent outbound
-clients, control-plane links, or test utilities.
+BoringSSL is the only supported Gateway TLS backend. Do not implement rustls support
+until Pingora's required TLS capabilities are complete and the user authorizes the
+[pending task](tasks/pending/rustls-gateway-tls-support.md). Do not report or fix
+rustls-only support gaps in ordinary reviews or cleanup. Backend-independent rustls
+clients are unaffected. Details: [TLS backend policy](skills/01-architecture/02-gateway/04-tls/03-ssl-backends.md).
 
 **BoringSSL FIPS (opt-in image build)**: `fips` is a gateway cargo feature enabled explicitly
 through `cicd/build-image.sh` (requires `boringssl`; not a default, not enabled by the ordinary

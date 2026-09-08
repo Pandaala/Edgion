@@ -19,6 +19,11 @@ Fix suggestions of the form "repair this isolated rustls-only compile failure,
 warning, plugin incompatibility, TLS hook, Docker command, or test gap" are **not
 accepted** outside the explicitly authorized umbrella task.
 
+Edgion will not implement Gateway rustls support until Pingora provides complete
+rustls support for the required downstream and upstream TLS surface. The pending
+task remains blocked on this prerequisite; partial APIs or a compiling feature
+do not satisfy it, and Edgion must not fill the gaps with isolated parity patches.
+
 ## Core Rationale
 
 **1. Frontend TLS support is incomplete by product decision**
@@ -53,10 +58,11 @@ remains supported and unchanged.
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-open this decision only when all of the following hold:
 
-- the user explicitly authorizes `tasks/todo/rustls-gateway-tls-support.md`;
-- Edgion decides to ship or support a rustls Gateway image; or
+- Pingora provides complete rustls support for the required downstream and
+  upstream TLS surface, verified against the revision used by Edgion;
+- the user explicitly authorizes `tasks/pending/rustls-gateway-tls-support.md`;
 - the complete downstream and upstream TLS capability boundary, failure policy,
   packaging, CI, and integration strategy has been designed and approved.
 
@@ -66,7 +72,7 @@ Re-open this decision only if:
   decision on 2026-08-30.
 - `AGENTS.md`
 - `skills/01-architecture/02-gateway/04-tls/03-ssl-backends.md`
-- `tasks/todo/rustls-gateway-tls-support.md`
+- `tasks/pending/rustls-gateway-tls-support.md`
 
 ## Resolution references
 
