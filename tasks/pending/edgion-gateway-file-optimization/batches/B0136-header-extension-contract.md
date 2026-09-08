@@ -19,4 +19,4 @@
 - Implementation: corrected the same-name versus cross-name ordering contracts and renamed the existing duplicate-header test to state its per-name scope. Runtime code and assertions are unchanged.
 - Review: `b0135_final_review` independently approved B0136 with no Must Fix or Should Fix. It verified the locked HTTP 1.5 HeaderMap guarantees, every direct consumer's ordering needs, the no-wire-order warning, exact one-file scope, and unchanged runtime/assertions.
 - Verification: focused header extension tests passed 3/3. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `2963756d`; local only, never pushed by the campaign.
