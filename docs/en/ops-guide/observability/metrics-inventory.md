@@ -136,7 +136,7 @@ EdgionBackend retains its separate withdrawal policy.
 | edgion_circuit_breaker_ejected_endpoints | Gauge | gateway | service | business | Currently ejected endpoint count per service | - |
 | edgion_circuit_breaker_rejections_total | Counter | gateway | service | business | Requests blocked by an already-ejected backend | - |
 | edgion_gateway_circuit_breaker_shed_total | Counter | gateway | service | business | Requests shed by the per-endpoint circuit-breaker concurrency cap (`CbPermit::try_acquire` at cap) — distinct from the outlier-detection ejection/rejection metrics above, which trip on backend health rather than in-flight count | - |
-| edgion_lb_degrade_selections_total | Counter | gateway | service | business | Cumulative selections entering the degrade branch across all Service port sections; retries count separately and selection does not imply successful forwarding. Registered when a Service gains degrade capability; lifecycle changes do not clear totals, but unowned idle series may expire | `sum by (service) (rate(edgion_lb_degrade_selections_total[5m]))` |
+| edgion_lb_degrade_selections_total | Counter | gateway | service | business | Cumulative selections entering the degrade branch across all Service port sections; retries count separately and selection does not imply successful forwarding. Registered when a Service gains health/outlier policy, including zero-threshold Services; lifecycle changes do not clear totals, but unowned idle series may expire | `sum by (service) (rate(edgion_lb_degrade_selections_total[5m]))` |
 | edgion_rr_selector_truncated_total | Counter | gateway | none | business | RoundRobin selector backend-count truncation (backend count exceeded `u16::MAX`) — an alarm for an extreme configuration anomaly | - |
 | edgion_region_route_overlay_events_total | Counter | gateway | result (overlay_missing/overlay_disabled/overlay_type_mismatch/overlay_invalid) | business | `RegionRoute` overlay resolution events (fail-to-base outcomes when an EdgionConfigData overlay is missing, disabled, mismatched, or invalid) | - |
 | edgion_acme_challenge_lookup_total | Counter | gateway | result (hit/expired/domain_mismatch/not_found/empty_host) | business | ACME HTTP-01 challenge token lookup outcomes | - |
@@ -145,8 +145,9 @@ EdgionBackend retains its separate withdrawal policy.
 
 The degrade selection Counter measures events across Service port sections, not
 the current health of a Service. A zero rate can mean normal selection, disabled
-degrade mode, or no traffic. Services that never gain degrade capability have no
-series. A captured in-flight selection can still add an event after Service
+degrade mode, or no traffic. Health/outlier policy registers a zero-valued series
+even when the live threshold is zero, because an in-flight request may retain a
+nonzero Service override. Services without either capability do not register a series. A captured in-flight selection can still add an event after Service
 deletion; policy updates do not erase history. Live snapshots retain their metric
 series across idle scrapes. After the last snapshot releases, the configured idle
 timeout can expire the series; recreating it then starts a new total. Process

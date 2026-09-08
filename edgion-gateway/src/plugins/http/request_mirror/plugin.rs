@@ -11,7 +11,9 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
-use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
+use crate::backends::{
+    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+};
 use crate::ctx::{MirrorAbandonReason, MirrorCancellation};
 use crate::observe::metrics::record_mirror_metric;
 #[cfg(not(test))]
@@ -225,7 +227,9 @@ impl RequestMirrorPlugin {
         // Use the gateway's standard backend resolution and selector cache.
         let section = service_section_key_from_port(Some(port))
             .map_err(|_| "mirror backend_ref.port is missing or invalid".to_string())?;
-        if let Ok(endpoint) = select_service_endpoint(&service_key, section, &None, None, "", None) {
+        if let Ok(endpoint) =
+            select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
+        {
             let addr = endpoint.backend.inner().addr.clone();
             if validate_endpoint_backend_addr(&addr, allow_loopback_upstream).is_err() {
                 return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());

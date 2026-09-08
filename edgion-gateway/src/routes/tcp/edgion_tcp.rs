@@ -8,7 +8,9 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
+use crate::backends::{
+    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+};
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::stream::get_global_stream_plugin_store;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
@@ -209,13 +211,14 @@ impl EdgionTcpProxy {
                 return;
             }
         };
-        let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
-            Ok(endpoint) => endpoint,
-            Err(_) => {
-                ctx.status = TcpStatus::NoBackendResolved;
-                return;
-            }
-        };
+        let endpoint =
+            match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None) {
+                Ok(endpoint) => endpoint,
+                Err(_) => {
+                    ctx.status = TcpStatus::NoBackendResolved;
+                    return;
+                }
+            };
         let backend = endpoint.backend;
 
         // 6. Build upstream address

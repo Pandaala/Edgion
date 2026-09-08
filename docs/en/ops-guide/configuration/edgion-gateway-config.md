@@ -289,6 +289,22 @@ Changes to `linkSys` take effect immediately through EdgionGatewayConfig partial
 
 Because EdgionGatewayConfig is cluster-scoped, multiple instances may coexist. The Gateway derives a single process-global value deterministically across all instances rather than letting whichever was applied last win: `webhookMaxResponseBytes` uses the **strictest** (`min`) value. When the last instance carrying `linkSys` is deleted, the global resets to the default (`16384`). The same deterministic aggregation applies to `loadBalancing.degradeThreshold`, which uses the **highest** (`max`) value across instances and resets to `0` (degrade mode disabled) when none is configured.
 
+### spec.loadBalancing
+
+`degradeThreshold` is a percentage from 0 to 100, defaulting to 0 (disabled).
+When the healthy endpoint fraction falls below the threshold, degrade mode bypasses
+health/outlier filtering and balances across all endpoints. This can send traffic
+to unhealthy backends. It applies only when health or outlier detection is active.
+
+`EdgionBackendTrafficPolicy.spec.loadBalancer.degradeThreshold` overrides this
+global default for its target Service, including an explicit 0 to disable degrade.
+HTTP/gRPC requests capture the Service override on their first upstream attempt;
+retries retain it across policy updates or removal. A request that captured no
+override continues to use the current global default, even if a Service override
+is subsequently added. Global-default updates remain independent and can affect
+such requests. Endpoint membership and health remain live. TCP/UDP/TLS and request
+mirrors use the current Service override or global default at each selection.
+
 ## Common Scenarios
 
 ### Configuring Real IP Extraction

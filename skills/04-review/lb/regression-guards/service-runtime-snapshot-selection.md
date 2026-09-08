@@ -98,9 +98,10 @@ costs. Cached metric handles need a separate lifetime and exporter-idle review.
 No contention benchmark or production latency measurement supports a stronger
 claim about the remaining cost.
 
-Policy capture coherence is separate and remains tracked in
-`tasks/todo/service-degrade-threshold-capture-coherence.md`; this acceptance does
-not resolve or waive that requirement.
+Policy capture coherence is separate: HTTP/gRPC now pass the captured override
+while L4/mirrors use the runtime threshold. See the
+[captured Service policy rule](../../backends/regression-guards/ebtp-atomic-service-snapshot.md).
+The residual-cost acceptance above does not waive that requirement.
 
 ## Verification and re-evaluation
 

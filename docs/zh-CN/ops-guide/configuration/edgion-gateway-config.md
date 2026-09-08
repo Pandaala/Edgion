@@ -242,6 +242,18 @@ accessLogExtern:
 | `mode` | `String` | `cors-standard` | `cors-standard`：选入带 `Origin` + `ACRM` 的 OPTIONS 请求；`all-options`：将所有 OPTIONS 请求选入全局处理。路由 CORS filter 仍决定是否在本地响应。详见 [Preflight 策略](../gateway/preflight-policy.md)。 |
 | `statusCode` | `Integer` | `204` | 无 CORS 插件时 preflight 最终响应的状态码（200-599） |
 
+### spec.loadBalancing
+
+`degradeThreshold` 是 0 到 100 的百分比，默认为 0（禁用）。当健康端点比例低于阈值时，
+降级模式绕过健康检查和异常剔除过滤，在所有端点之间进行负载均衡，因此可能向不健康的后端
+发送流量。此功能仅在启用了健康检查或异常检测时生效。
+
+`EdgionBackendTrafficPolicy.spec.loadBalancer.degradeThreshold` 可为目标 Service 覆盖全局默认值，
+包括用显式的 0 禁用降级。HTTP/gRPC 请求在首次上游尝试时捕获 Service 覆盖值，后续重试在策略
+更新或删除后仍保留该值。未捕获覆盖值的请求继续使用当前全局默认值，即使随后新增了 Service
+覆盖值也不会采用它。全局默认值独立更新，仍可能影响这类请求。端点成员与健康状态保持实时。
+TCP/UDP/TLS 和请求镜像在每次选择端点时使用当前 Service 覆盖值或全局默认值。
+
 ## 常见配置场景
 
 ### 配置真实 IP 提取

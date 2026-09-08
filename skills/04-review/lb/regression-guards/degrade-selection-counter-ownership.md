@@ -31,11 +31,13 @@ a short degrade interval could also erase all evidence before the next scrape.
 - `GatewayMetrics::lb_degrade_selections` owns registration in the canonical
   metrics registry. Labels contain only a canonical `namespace/name` Service key.
 - `ServiceRuntimeSnapshot::with_degrade_counter` registers on the cold publication
-  path only when threshold > 0 and health or outlier policy is present. Snapshots
-  reuse a prior handle across policy and membership changes, including disable.
-- `select_service_endpoint` uses its existing `degrade_engaged(selector, active)`
-  result and the same snapshot's Counter. There is no additional configuration
-  read, label construction, or metric registry lookup on the selection path.
+  path whenever health or outlier policy is present, even at a zero live threshold:
+  an in-flight HTTP/gRPC request can retain a nonzero override from an older policy.
+  Snapshots reuse a prior handle across policy and membership changes, including disable.
+- `select_service_endpoint` uses `degrade_engaged(selector, active, threshold)`
+  and the same runtime snapshot's Counter. The threshold comes from the explicit
+  captured/live policy argument. There is no extra metric configuration read,
+  label construction, or metric registry lookup for recording the event.
 - Empty/unavailable/deleted Services do not create new selection events. Already
   captured handles remain valid for in-flight events; historical totals are not
   explicitly cleared on resource updates or deletion.
@@ -79,7 +81,8 @@ and current-generation collection. That capability is not provided by this Count
 `rate(...[5m])` describes recent events, not health while idle. No-traffic, disabled,
 and healthy Services cannot be distinguished by this Counter alone. Do not divide
 by a unique-request counter to claim a selection percentage. Zero registration is
-allowed for degrade-capable Services before their first event. Label cardinality
+allowed for Services with health/outlier policy before their first event, including
+those whose current threshold is zero. Label cardinality
 scales with configured Service keys seen by the recorder, not with active requests;
 the weak registry contains live owners plus releases deferred since the last cold
 operation. Pending cleanup runs before adding registrations, so historical Service
@@ -94,10 +97,11 @@ on `increment(0)`. All production Gateway render paths must use the keepalive
 boundary; a new raw-render or push-export path must preserve it. This fix does
 not certify other cached Gateway metric handles against idle eviction.
 
-The metric follows the threshold actually used by the selector. The broader
-captured-EBTP versus current runtime threshold discrepancy is tracked separately in
-`tasks/todo/service-degrade-threshold-capture-coherence.md`; this correction does
-not certify or change that policy-generation contract.
+The metric follows the threshold actually used by the selector. The
+[captured EBTP rule](../../backends/regression-guards/ebtp-atomic-service-snapshot.md)
+owns the configuration-generation contract. The threshold-coherence correction
+extends cold registration to zero-threshold health/outlier Services, ensuring
+captured nonzero overrides can never engage without an event handle.
 
 ## Verification and re-evaluation
 
@@ -132,7 +136,17 @@ Re-evaluate if selection accounting moves to a different boundary, a new label
 is added, current-state monitoring becomes required, or Service snapshot ownership
 changes. Do not resurrect the request-written Service gauge.
 
+Fresh threshold-coherence verification on 2026-09-08: `cargo test -p edgion-gateway
+--lib degrade` passed 21 tests, including a cold-registered Counter at zero live
+threshold, a captured nonzero override, live health transitions, and registration
+isolation under a different request-time recorder. The shared-stack
+`ServiceDegradeThreshold` dynamic scenario passed with actual Counter deltas.
+Full command results and the capture-specific verification limits are recorded in
+the [Service policy rule](../../backends/regression-guards/ebtp-atomic-service-snapshot.md).
+
 ## Resolution references
 
 - `lb-degrade-mode-metric-lifecycle` — real observability defect; user-approved
   replacement of the gauge by a cached selection Counter, 2026-09-07.
+- `service-degrade-threshold-capture-coherence` — cold registration covers
+  captured nonzero overrides even when the active runtime threshold is zero.

@@ -216,9 +216,10 @@ requests capture the same Arc at first `begin_upstream_attempt` onto
 attempts. A missing capture means “no policy”, not “read the live generation”.
 The store is also the **sole writer** of `HealthCheckConfigStore`, Service
 outlier configuration, and the `DegradeThresholdStore` per-service override.
-The current shared section selector uses `ServiceRuntimeSnapshot.degrade_threshold`
-from the active runtime cell. This differs from the required captured HTTP/gRPC
-panic-override contract; see `tasks/todo/service-degrade-threshold-capture-coherence.md`.
+The shared section selector receives `ServiceDegradePolicy::CapturedOverride`
+from the HTTP/gRPC request's effective policy. An absent override uses the current
+global default; an explicit zero disables degrade. It never substitutes the live
+Service override. Health/outlier state and membership remain live per selection.
 The policy store replaced the former
 route-fed, ref-counted `lb/lb_policy/PolicyStore` (deleted) and the later
 request-visible DashMaps.
@@ -245,7 +246,8 @@ request-visible DashMaps.
 Accepted residuals (not mixed-generation Service HTTP/gRPC reads):
 
 - TCP/UDP/TLS passthrough and `request_mirror` use the shared section selector
-  without the HTTP/gRPC captured-policy context. The former
+  with `ServiceDegradePolicy::Live`, reading the active runtime snapshot's
+  already resolved threshold without the HTTP/gRPC captured-policy context. The former
   `select_roundrobin_backend_key`/`degrade_engaged_l4` helpers have been removed.
 - `request_mirror` uses the backend address as Host and does **not** apply
   `upstreamAuthority`.

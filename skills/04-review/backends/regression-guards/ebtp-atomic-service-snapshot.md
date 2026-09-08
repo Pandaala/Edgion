@@ -11,12 +11,13 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-**Current verification limit (2026-09-07):** the shared section selector now reads
-`ServiceRuntimeSnapshot.degrade_threshold`, not the captured EBTP override. The
-panic-capture claims below describe the required contract and historical fix,
-not verified current compliance. The discrepancy is tracked in
-`tasks/todo/service-degrade-threshold-capture-coherence.md`. The selection Counter
-fix uses the actual selector snapshot and does not resolve this policy boundary.
+The shared section selector takes an explicit `ServiceDegradePolicy`.
+HTTP/gRPC pass `CapturedOverride` from the request's
+`EffectiveBackendTrafficPolicy.degrade_threshold_override`; L4 and mirrors pass
+`Live`. This closes `service-degrade-threshold-capture-coherence`: the September 7
+implementation had read `ServiceRuntimeSnapshot.degrade_threshold` even for
+requests retaining an older EBTP generation. That historical implementation
+violated this contract; it was not an accepted live-policy exception.
 
 HTTP/gRPC Service requests capture an optional `Arc<EffectiveBackendTrafficPolicy>` at
 first `begin_upstream_attempt` and reuse it for later attempts of that request.
@@ -55,13 +56,28 @@ case; the 2026-09-07 retry-budget follow-up adds the first-attempt gate and a
 `None -> Some` hot-reload regression. Existing requests retain absence, new
 requests capture the added policy, and old retries do not fund its budget.
 
+**4. Captured Service overrides and live runtime have different boundaries**
+
+`backends::try_get_peer` passes the captured degrade policy to the Service,
+controller-resolved ExternalName, and ServiceEndpointSlice selection branches.
+`CapturedOverride(Some(0))` disables degrade even if a newer Service or global
+threshold enables it. `CapturedOverride(None)` uses the current process-global
+default, never the live Service override. EGC remains independently updated;
+this accepted cross-store default boundary does not merge EGC into EBTP.
+
+Each selector invocation still captures one live runtime snapshot for membership
+and health/outlier eligibility. Neither retries nor this threshold argument freeze
+endpoints or their health. L4 and mirror selection retain RoundRobin and resolve
+the already published runtime threshold per selection; they do not acquire the
+HTTP/gRPC request capture contract.
+
 ## Fix Suggestions Not Accepted
 
 - Restore live `get_lb_policy` / `resolve_lb_policy` on the HTTP/gRPC `try_get_peer`
   path — reopens mixed-generation LB versus timeout/authority/retry.
 - Keep `resolve_connect_deadline` → `get_connect_timeout` as the Service timeout
   source after capture exists — a half-migration.
-- Let HTTP `pick` call `resolve_degrade_threshold` internally — the captured
+- Let HTTP `select_service_endpoint` call `resolve_degrade_threshold` internally — the captured
   override never pins panic for that request.
 - Gate Service capture on `selected_backend.is_some()` — gRPC has only
   `service_key` and would keep a live fallback.
@@ -69,7 +85,7 @@ requests capture the added policy, and old retries do not fund its budget.
   snapshot — those are live runtime, not configuration.
 - Swap `RetryBudget` / logical-CB / AI outlier Arcs on equivalent conf_sync
   replay — live counters must not change object identity on a no-op resync.
-- Treat L4/`request_mirror` panic-store reads or `request_mirror` Host-as-address
+- Treat L4/`request_mirror` live runtime threshold reads or `request_mirror` Host-as-address
   as this finding — those are documented residuals, not HTTP/gRPC mixed-generation
   defects.
 
@@ -99,3 +115,39 @@ Re-open this decision only if:
 ## Resolution references
 
 - `ebtp-atomic-service-snapshot` — 2026-09-05.
+- `service-degrade-threshold-capture-coherence` — real correctness defect;
+  restored the captured Service override at the shared selection boundary,
+  verified 2026-09-08.
+
+## Verification
+
+The correction adds `service_degrade_capture_controls_actual_selection_across_retries`
+and `captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_threshold`.
+They exercise actual endpoint selection and Counter outcomes, threshold increases
+and decreases, explicit disable, absent policy/override, policy removal, retry
+capture, global-default updates, and live health transitions. Runtime health is
+controlled directly without network probes; these tests do not certify probe IO.
+The `ServiceDegradeThreshold` dynamic scenario verifies new-request hot updates
+with shared-stack traffic and actual degrade Counter deltas. It does not claim
+an in-flight network retry barrier; deterministic capture coverage owns that case.
+
+Fresh verification on 2026-09-08:
+
+- `cargo test -p edgion-gateway --lib degrade`: 21 passed.
+- The resulting Gateway libtest executable also ran the complete selector,
+  discovery coordinator, and `pg_upstream_peer` test modules: 10, 27, and 88
+  passed respectively. These groups overlap the degrade-filter run.
+- `cargo build -p edgion-gateway -p edgion-tests --bin edgion-gateway --bin test_client`:
+  passed; `test_client --list-dynamic-scenarios` includes `ServiceDegradeThreshold`.
+- `test_client -g --dynamic-scenario ServiceDegradeThreshold`: passed on the
+  shared Gateway/Controller/test-server topology. Observed disabled -> degraded ->
+  disabled traffic and verified actual Counter deltas, then removed scenario resources.
+  Startup and tests ran in one execution session to retain the child processes.
+- `test_client -g -r HTTPRoute -i Backend/DegradeThreshold`: 1 passed.
+- `cargo fmt --all`, format check, `cargo check --workspace --all-targets`, and
+  `cargo clippy --workspace --all-targets`: passed. Clippy reported existing
+  warnings outside the new code; no warning cleanup was included.
+- Agent-doc consistency, SSA-force, metrics inventory, Pingora source-policy,
+  and diff-whitespace guards: passed.
+- Independent read-only review: LGTM. No full integration suite or
+  `cargo test --all` was run.

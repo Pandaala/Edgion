@@ -35,7 +35,7 @@ before applying a decision to current code.
 - [backends-F017 — ClusterIP backend address handles IPv6 (no manual brackets)](regression-guards/clusterip-ipv6-no-brackets.md)
 - [backends-F014 — Consistent-hash query-arg match decodes percent/plus-encoded param names](regression-guards/consistent-hash-arg-percent-encoded-name.md)
 - [ctrl-02 — AI target limits preserve existing Service policy behavior — FIXED](regression-guards/ebtp-ai-target-limits-preserve-service-fanout.md)
-- [ebtp-atomic-service-snapshot — one captured Service policy generation — FIXED](regression-guards/ebtp-atomic-service-snapshot.md)
+- [Captured Service policy generation and degrade-threshold selection](regression-guards/ebtp-atomic-service-snapshot.md)
 - [backends-F013 — no-port EndpointSlices fail closed instead of defaulting to 8080](regression-guards/ep-slice-no-port-fail-closed.md)
 - [ExternalName DNS Cache Identity and Lifecycle (task-externalname-dns-cache-identity-and-lifecycle, origin D0001) — FIXED](regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
 - [runtime-F010 — backend error path reuses the listener's HSTS decision](regression-guards/hsts-on-plain-http-error-responses.md)

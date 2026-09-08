@@ -21,6 +21,7 @@ static INIT: Once = Once::new();
 static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
+    "ServiceDegradeThreshold",
     "DirectEndpointPortResolution",
     "AllEndpointStatusTls",
     "AiBackendLifecycle",
@@ -1451,6 +1452,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "RateLimitDynamic"
         | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "WafDynamic" => Some(("EdgionPlugins", PortKind::Http)),
+        "ServiceDegradeThreshold" => Some(("HTTPRoute/Backend/DegradeThreshold", PortKind::Http)),
         "GatewayDynamic" => Some(("Gateway/Dynamic", PortKind::Http)),
         "RouteDelegationDynamic" => Some(("HTTPRoute/Delegation/DynamicTest", PortKind::Http)),
         "GrpcRouteDelegationDynamic" => Some(("GRPCRoute/Delegation/DynamicTest", PortKind::Grpc)),

@@ -2873,6 +2873,170 @@ mod tests {
     }
 
     #[test]
+    fn service_degrade_capture_controls_actual_selection_across_retries() {
+        use crate::backends::degrade_threshold::configure_lb_degrade_default;
+        use crate::backends::discovery::{get_service_discovery_coordinator, HealthPolicyIdentity};
+        use crate::backends::{
+            captured_degrade_policy, select_service_endpoint, service_section_key_from_port, ServiceDegradePolicy,
+        };
+        use crate::observe::metrics::GatewayMetrics;
+        use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
+        use serde_json::json;
+        use std::collections::{HashMap, HashSet};
+
+        const KEY: &str = "degrade-capture/svc";
+        const POLICY: &str = "degrade-capture/policy";
+        const SLICE: &str = "degrade-capture/slice";
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                get_backend_traffic_policy_store().partial_update_policies(
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashSet::from([POLICY.to_string()]),
+                );
+                let coordinator = get_service_discovery_coordinator();
+                coordinator.set_health_policy(KEY, None);
+                coordinator.update_services(HashMap::new(), HashMap::new(), HashSet::from([KEY.to_string()]));
+                coordinator.update_endpoint_slices(HashMap::new(), HashMap::new(), HashSet::from([SLICE.to_string()]));
+            }
+        }
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let _cleanup = Cleanup;
+        configure_lb_degrade_default(20);
+        let coordinator = get_service_discovery_coordinator();
+        coordinator.update_services(
+            HashMap::from([(
+                KEY.to_string(),
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "metadata": {"name": "svc", "namespace": "degrade-capture", "uid": "degrade-capture-service"},
+                        "spec": {"ports": [{"name": "http", "port": 80, "targetPort": 8080, "protocol": "TCP"}]}
+                    }))
+                    .unwrap(),
+                ),
+            )]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        coordinator.update_endpoint_slices(
+            HashMap::from([(
+                SLICE.to_string(),
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "metadata": {"name": "slice", "namespace": "degrade-capture", "uid": "degrade-capture-slice",
+                            "labels": {"kubernetes.io/service-name": "svc"}},
+                        "addressType": "IPv4",
+                        "ports": [{"name": "http", "port": 8080, "protocol": "TCP"}],
+                        "endpoints": [
+                            {"addresses": ["10.8.2.1"], "conditions": {"ready": true}},
+                            {"addresses": ["10.8.2.2"], "conditions": {"ready": true}},
+                            {"addresses": ["10.8.2.3"], "conditions": {"ready": true}},
+                            {"addresses": ["10.8.2.4"], "conditions": {"ready": true}}
+                        ]
+                    }))
+                    .unwrap(),
+                ),
+            )]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let health = Arc::new(HealthPolicyIdentity { generation: 1 });
+        let section = service_section_key_from_port(Some(80)).unwrap();
+        let publish = |threshold: Option<Option<u8>>| {
+            let store = get_backend_traffic_policy_store();
+            if let Some(threshold) = threshold {
+                store.partial_update_policies(
+                    HashMap::new(),
+                    HashMap::from([(
+                        POLICY.to_string(),
+                        service_policy_fields(
+                            "degrade-capture",
+                            "policy",
+                            "svc",
+                            Some(LoadBalancerType::RoundRobin),
+                            threshold,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                    )]),
+                    HashSet::new(),
+                );
+            } else {
+                store.partial_update_policies(HashMap::new(), HashMap::new(), HashSet::from([POLICY.to_string()]));
+            }
+            // Control live health independently of the request configuration.
+            // No probe tasks or network I/O are needed for these transitions.
+            coordinator.set_health_policy(KEY, Some(Arc::clone(&health)));
+            let generation = coordinator.load_generation();
+            let available = generation.available(KEY).unwrap();
+            for slot in available.resolve_section(&section).unwrap().all_slots.iter() {
+                let healthy = slot.backend.addr.as_inet().unwrap().ip().to_string() == "10.8.2.1";
+                assert!(coordinator.record_health_completion(
+                    &health,
+                    available.membership_identity,
+                    slot.backend.runtime_identity().unwrap(),
+                    healthy,
+                    1,
+                    1
+                ));
+            }
+        };
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let mut count = 0;
+            let mut select = |policy, threshold| {
+                let endpoint = select_service_endpoint(KEY, section.clone(), &None, policy, None, "", None).unwrap();
+                if threshold > 25 {
+                    count += 1;
+                } else {
+                    assert_eq!(endpoint.backend.addr.as_inet().unwrap().ip().to_string(), "10.8.2.1");
+                }
+                let rendered = GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
+                assert!(
+                    rendered
+                        .lines()
+                        .any(|line| line == format!("edgion_lb_degrade_selections_total{{service=\"{KEY}\"}} {count}")),
+                    "{rendered}"
+                );
+            };
+            for (old, new) in [
+                (Some(Some(20)), Some(Some(80))),
+                (Some(Some(80)), Some(Some(20))),
+                (Some(Some(0)), Some(Some(100))),
+                (None, Some(Some(100))),
+                (Some(None), Some(Some(100))),
+                (Some(Some(80)), None),
+            ] {
+                publish(old);
+                // This capture does not require selected_backend, as on gRPC.
+                let mut existing = capture_service_ctx(KEY);
+                let old_threshold = old.flatten().unwrap_or(20);
+                select(
+                    captured_degrade_policy(existing.backend_context.as_ref()),
+                    old_threshold,
+                );
+                publish(new);
+                for _ in 0..3 {
+                    super::begin_upstream_attempt(&mut existing);
+                    select(
+                        captured_degrade_policy(existing.backend_context.as_ref()),
+                        old_threshold,
+                    );
+                }
+                let fresh = capture_service_ctx(KEY);
+                let new_threshold = new.flatten().unwrap_or(20);
+                select(captured_degrade_policy(fresh.backend_context.as_ref()), new_threshold);
+                select(ServiceDegradePolicy::Live, new_threshold);
+            }
+        });
+    }
+
+    #[test]
     fn captured_arc_retains_old_lb_after_reload() {
         use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
         use edgion_resources::resources::lb_policy::ParsedLBPolicy;

@@ -33,7 +33,9 @@ pub use policy::{
 pub use runtime::{
     LogicalBackendHandle, SelectedAiBackend, SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend,
 };
-pub use selector::{backends_for_service_section, select_service_endpoint, service_section_key_from_port};
+pub use selector::{
+    backends_for_service_section, select_service_endpoint, service_section_key_from_port, ServiceDegradePolicy,
+};
 pub use service_kind::ServiceBackendKind;
 pub use validation::validate_endpoint_in_route;
 
@@ -117,6 +119,14 @@ fn captured_lb_policy(backend_context: Option<&crate::BackendContext>) -> Option
         .and_then(|policy| policy.load_balancer.clone())
 }
 
+pub(crate) fn captured_degrade_policy(backend_context: Option<&crate::BackendContext>) -> ServiceDegradePolicy {
+    ServiceDegradePolicy::CapturedOverride(
+        backend_context
+            .and_then(|context| context.effective_policy.as_ref())
+            .and_then(|policy| policy.degrade_threshold_override),
+    )
+}
+
 /// Internal: try to get peer, returns Result with EdgionErrorCode on error
 pub(crate) async fn try_get_peer(
     ctx: &mut EdgionHttpContext,
@@ -197,6 +207,7 @@ pub(crate) async fn try_get_peer(
     }
 
     let section_key = service_section_key_from_port(br_port)?;
+    let degrade_policy = captured_degrade_policy(ctx.backend_context.as_ref());
 
     match service_type {
         ServiceBackendKind::Service => {
@@ -217,6 +228,7 @@ pub(crate) async fn try_get_peer(
                     &service_key,
                     section_key.clone(),
                     &lb_policy,
+                    degrade_policy,
                     Some(session),
                     &remote_ip,
                     query,
@@ -332,6 +344,7 @@ pub(crate) async fn try_get_peer(
                             &service_key,
                             section_key.clone(),
                             &lb_policy,
+                            degrade_policy,
                             Some(session),
                             &remote_ip,
                             query,
@@ -418,6 +431,7 @@ pub(crate) async fn try_get_peer(
                     &service_key,
                     section_key.clone(),
                     &lb_policy,
+                    degrade_policy,
                     Some(session),
                     &remote_ip,
                     query,

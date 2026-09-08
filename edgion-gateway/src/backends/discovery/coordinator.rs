@@ -277,7 +277,9 @@ impl ServiceRuntimeSnapshot {
     /// historical selection events are never reset when capability is removed.
     fn with_degrade_counter(mut self, service_key: &str, previous: &Self) -> Self {
         self.degrade_selections = previous.degrade_selections.clone().or_else(|| {
-            (self.degrade_threshold > 0 && (self.health_policy_present || self.outlier_policy_present))
+            // An in-flight request may retain a nonzero override even when the
+            // live threshold is zero. Prepare its counter on publication too.
+            (self.health_policy_present || self.outlier_policy_present)
                 .then(|| crate::observe::metrics::GatewayMetrics::lb_degrade_selections(service_key))
         });
         self

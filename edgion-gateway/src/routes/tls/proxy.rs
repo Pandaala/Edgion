@@ -12,7 +12,9 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
+use crate::backends::{
+    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+};
 use crate::observe::log_tls;
 use crate::observe::logs::LogBuffer;
 use crate::observe::AccessLogger;
@@ -289,13 +291,15 @@ impl EdgionTlsTcpProxy {
                     continue;
                 }
             };
-            let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
-                Ok(endpoint) => endpoint,
-                Err(_) => {
-                    last_err = format!("no endpoint: {}", service_key);
-                    continue;
-                }
-            };
+            let endpoint =
+                match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
+                {
+                    Ok(endpoint) => endpoint,
+                    Err(_) => {
+                        last_err = format!("no endpoint: {}", service_key);
+                        continue;
+                    }
+                };
             let backend = endpoint.backend;
 
             let upstream_addr = backend.inner().addr.clone();

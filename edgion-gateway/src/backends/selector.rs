@@ -19,6 +19,25 @@ pub struct ResolvedServiceEndpoint {
     pub slot_proof: [u8; 32],
 }
 
+/// Configuration boundary for one Service selection. HTTP/gRPC preserve their
+/// captured Service override, including absence; L4 and mirrors use live policy.
+#[derive(Clone, Copy)]
+pub enum ServiceDegradePolicy {
+    /// `None` uses the independently updated global default, never a live
+    /// Service override. `Some(0)` explicitly disables degrade mode.
+    CapturedOverride(Option<u8>),
+    Live,
+}
+
+impl ServiceDegradePolicy {
+    fn threshold(self, active: &ServiceRuntimeSnapshot) -> u8 {
+        match self {
+            Self::CapturedOverride(value) => value.unwrap_or_else(super::degrade_threshold::get_lb_degrade_default),
+            Self::Live => active.degrade_threshold,
+        }
+    }
+}
+
 pub fn service_section_key_from_port(port: Option<i32>) -> Result<ServiceSectionKey, EdgionErrorCode> {
     port.and_then(|value| u16::try_from(value).ok())
         .and_then(NonZeroU16::new)
@@ -59,11 +78,14 @@ fn runtime_eligible(active: &ServiceRuntimeSnapshot, backend: &LbBackend, record
 /// or outlier-detection state (otherwise every backend passes and degrade can
 /// never trigger). The caller records an event only when selection takes the
 /// degrade branch, using the handle captured in this same runtime snapshot.
-fn degrade_engaged(selector: &compiled_selector::CompiledSelector, active: &ServiceRuntimeSnapshot) -> bool {
+fn degrade_engaged(
+    selector: &compiled_selector::CompiledSelector,
+    active: &ServiceRuntimeSnapshot,
+    threshold: u8,
+) -> bool {
     if !active.health_policy_present && !active.outlier_policy_present {
         return false;
     }
-    let threshold = active.degrade_threshold;
     if threshold == 0 {
         return false;
     }
@@ -202,6 +224,7 @@ pub fn select_service_endpoint(
     service_key: &str,
     section: ServiceSectionKey,
     lb_policy: &Option<ParsedLBPolicy>,
+    degrade_policy: ServiceDegradePolicy,
     session: Option<&Session>,
     remote_ip: &str,
     query: Option<&str>,
@@ -225,7 +248,7 @@ pub fn select_service_endpoint(
     };
 
     let now = crate::lb::ewma::score::now_units();
-    let result = if degrade_engaged(selector, &active) {
+    let result = if degrade_engaged(selector, &active, degrade_policy.threshold(&active)) {
         if let Some(counter) = &active.degrade_selections {
             counter.record_selection();
         }
@@ -442,6 +465,69 @@ mod tests {
     }
 
     #[test]
+    fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_threshold() {
+        use crate::backends::degrade_threshold::{configure_lb_degrade_default, GLOBAL_STORE_TEST_LOCK};
+        use crate::backends::discovery::HealthPolicyIdentity;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        configure_lb_degrade_default(0);
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            let published = publish_degrade_service("captured-zero-live");
+            let key = &published.service_key;
+            let coordinator = get_service_discovery_coordinator();
+            let policy = Arc::new(HealthPolicyIdentity { generation: 1 });
+            coordinator.set_health_policy(key, Some(Arc::clone(&policy)));
+            let (available, active) = load_active_projection(key).unwrap();
+            assert_eq!(active.degrade_threshold, 0);
+            assert_degrade_count(&handle, key, 0);
+            let section = available.resolve_section(&section_number(80)).unwrap();
+            let identity = section.all_slots[0].backend.runtime_identity().unwrap();
+            let select = |degrade| select_service_endpoint(key, section_number(80), &None, degrade, None, "", None);
+            let captured = ServiceDegradePolicy::CapturedOverride(Some(100));
+            assert!(select(captured).is_ok());
+            assert_degrade_count(&handle, key, 0);
+            assert!(coordinator.record_health_completion(
+                &policy,
+                available.membership_identity,
+                identity,
+                false,
+                1,
+                1
+            ));
+
+            // A different recorder catches any accidental hot-path registration.
+            let other = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            metrics::with_local_recorder(&other, || {
+                assert!(select(ServiceDegradePolicy::Live).is_err());
+                assert!(select(captured).is_ok());
+            });
+            assert_degrade_count(&handle, key, 1);
+            assert!(!other.handle().render().contains("edgion_lb_degrade_selections_total"));
+
+            // No captured override uses only the global default. It must not
+            // adopt a subsequently installed live Service override.
+            coordinator.set_degrade_threshold(key, 100);
+            assert!(select(ServiceDegradePolicy::CapturedOverride(None)).is_err());
+            assert!(select(ServiceDegradePolicy::CapturedOverride(Some(0))).is_err());
+            assert!(select(ServiceDegradePolicy::Live).is_ok());
+            assert_degrade_count(&handle, key, 2);
+            configure_lb_degrade_default(100);
+            assert!(select(ServiceDegradePolicy::CapturedOverride(None)).is_ok());
+            assert!(select(ServiceDegradePolicy::CapturedOverride(Some(0))).is_err());
+            assert_degrade_count(&handle, key, 3);
+
+            assert!(coordinator.record_health_completion(&policy, available.membership_identity, identity, true, 1, 1));
+            assert!(select(captured).is_ok());
+            assert_degrade_count(&handle, key, 3);
+            coordinator.set_health_policy(key, None);
+            assert!(select(captured).is_ok());
+            assert_degrade_count(&handle, key, 3);
+        });
+    }
+
+    #[test]
     fn degrade_selections_survive_idle_scrapes_until_the_last_snapshot_is_released() {
         use crate::backends::degrade_threshold::{configure_lb_degrade_default, GLOBAL_STORE_TEST_LOCK};
         use crate::backends::discovery::HealthPolicyIdentity;
@@ -474,7 +560,16 @@ mod tests {
             drop(available);
             let weak = Arc::downgrade(captured.degrade_selections.as_ref().unwrap());
             metrics::counter!("test_idle_control_total").increment(1);
-            select_service_endpoint(&key, section_number(80), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                &key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, &key, 1);
 
             std::thread::sleep(Duration::from_millis(20));
@@ -484,7 +579,16 @@ mod tests {
                 !rendered.contains("test_idle_control_total"),
                 "idle eviction must be enabled"
             );
-            select_service_endpoint(&key, section_number(80), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                &key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, &key, 2);
 
             drop(published);
@@ -518,7 +622,16 @@ mod tests {
         let published = metrics::with_local_recorder(&recorder, || {
             let published = publish_degrade_service("health");
             for _ in 0..3 {
-                select_service_endpoint(&published.service_key, section_number(80), &None, None, "", None).unwrap();
+                select_service_endpoint(
+                    &published.service_key,
+                    section_number(80),
+                    &None,
+                    ServiceDegradePolicy::Live,
+                    None,
+                    "",
+                    None,
+                )
+                .unwrap();
             }
             assert!(!handle.render().contains("edgion_lb_degrade_selections_total"));
             configure_lb_degrade_default(50);
@@ -545,12 +658,39 @@ mod tests {
         let other_recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
         metrics::with_local_recorder(&other_recorder, || {
             for _ in 0..3 {
-                select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
-                select_service_endpoint(key, section_number(81), &None, None, "", None).unwrap();
+                select_service_endpoint(
+                    key,
+                    section_number(80),
+                    &None,
+                    ServiceDegradePolicy::Live,
+                    None,
+                    "",
+                    None,
+                )
+                .unwrap();
+                select_service_endpoint(
+                    key,
+                    section_number(81),
+                    &None,
+                    ServiceDegradePolicy::Live,
+                    None,
+                    "",
+                    None,
+                )
+                .unwrap();
             }
             assert_degrade_count(&handle, key, 3);
             configure_lb_degrade_default(0);
-            assert!(select_service_endpoint(key, section_number(80), &None, None, "", None).is_err());
+            assert!(select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None
+            )
+            .is_err());
             assert_degrade_count(&handle, key, 3);
             configure_lb_degrade_default(50);
             let metrics_section = available.resolve_section(&section_number(81)).unwrap();
@@ -562,12 +702,39 @@ mod tests {
                 1,
                 1,
             ));
-            select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
-            select_service_endpoint(key, section_number(81), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
+            select_service_endpoint(
+                key,
+                section_number(81),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, key, 5);
 
             coordinator.set_health_policy(key, None);
-            select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, key, 5);
             assert!(!other_recorder
                 .handle()
@@ -602,19 +769,55 @@ mod tests {
                 max_ejection_percent: 0,
             };
             outliers.set_service_config_in(&coordinator, key, Some(config.clone()));
-            let endpoint = select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
+            let endpoint = select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             let token = outliers.capture_completion_token(&endpoint.backend).unwrap();
             outliers.record_failure_for_backend_in(&coordinator, &endpoint.backend, &token, FailureClass::Gateway);
-            select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, key, 1);
             outliers.set_service_config_in(&coordinator, key, None);
-            select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, key, 1);
 
             outliers.set_service_config_in(&coordinator, key, Some(config));
             let token = outliers.capture_completion_token(&endpoint.backend).unwrap();
             outliers.record_failure_for_backend_in(&coordinator, &endpoint.backend, &token, FailureClass::Gateway);
-            select_service_endpoint(key, section_number(80), &None, None, "", None).unwrap();
+            select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None,
+            )
+            .unwrap();
             assert_degrade_count(&handle, key, 2);
             let (_, captured) = load_active_projection(key).unwrap();
             coordinator.update_endpoint_slices(
@@ -627,14 +830,33 @@ mod tests {
             assert_eq!(empty_section.selectors.get(PolicyKind::RoundRobin).backend_count(), 0);
             assert!(!degrade_engaged(
                 empty_section.selectors.get(PolicyKind::RoundRobin),
-                &active
+                &active,
+                active.degrade_threshold
             ));
-            assert!(select_service_endpoint(key, section_number(80), &None, None, "", None).is_err());
+            assert!(select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None
+            )
+            .is_err());
             assert_degrade_count(&handle, key, 2);
             coordinator.update_services(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
             assert!(load_active_projection(key).is_none());
             assert!(coordinator.runtime_cell(key).is_none());
-            assert!(select_service_endpoint(key, section_number(80), &None, None, "", None).is_err());
+            assert!(select_service_endpoint(
+                key,
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None
+            )
+            .is_err());
             assert_degrade_count(&handle, key, 2);
 
             // A worker already holding an old event handle can finish after
@@ -673,9 +895,26 @@ mod tests {
             vec![("http", 8080), ("metrics", 8081)],
             "10.8.0.1",
         );
-        let http = select_service_endpoint(&published.service_key, section_number(80), &None, None, "", None).unwrap();
-        let metrics =
-            select_service_endpoint(&published.service_key, section_number(81), &None, None, "", None).unwrap();
+        let http = select_service_endpoint(
+            &published.service_key,
+            section_number(80),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        )
+        .unwrap();
+        let metrics = select_service_endpoint(
+            &published.service_key,
+            section_number(81),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        )
+        .unwrap();
         assert_eq!(http.serving_port.get(), 8080);
         assert_eq!(metrics.serving_port.get(), 8081);
         assert_eq!(
@@ -687,7 +926,15 @@ mod tests {
             &"10.8.0.1:8081".parse::<StdSocketAddr>().unwrap()
         );
         assert!(matches!(
-            select_service_endpoint(&published.service_key, section_number(82), &None, None, "", None),
+            select_service_endpoint(
+                &published.service_key,
+                section_number(82),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None
+            ),
             Err(EdgionErrorCode::BackendPortResolutionFailed)
         ));
     }
@@ -706,8 +953,16 @@ mod tests {
             vec![("http-web", 9090)],
             "10.8.0.2",
         );
-        let endpoint =
-            select_service_endpoint(&published.service_key, section_number(80), &None, None, "", None).unwrap();
+        let endpoint = select_service_endpoint(
+            &published.service_key,
+            section_number(80),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        )
+        .unwrap();
         assert_eq!(endpoint.serving_port.get(), 9090);
         assert_eq!(endpoint.section.identity.number.get(), 80);
         assert_eq!(endpoint.section.identity.name.as_deref(), Some("http-web"));
@@ -716,7 +971,15 @@ mod tests {
     #[test]
     fn missing_service_and_invalid_section_fail_closed() {
         assert!(matches!(
-            select_service_endpoint("sel-absent/backend", section_number(80), &None, None, "", None),
+            select_service_endpoint(
+                "sel-absent/backend",
+                section_number(80),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None
+            ),
             Err(EdgionErrorCode::BackendEndpointSliceNotFoundByRoundRobinDefault)
         ));
         let published = publish_service(
@@ -731,7 +994,15 @@ mod tests {
             Err(EdgionErrorCode::BackendPortResolutionFailed)
         ));
         assert!(matches!(
-            select_service_endpoint(&published.service_key, section_number(81), &None, None, "", None),
+            select_service_endpoint(
+                &published.service_key,
+                section_number(81),
+                &None,
+                ServiceDegradePolicy::Live,
+                None,
+                "",
+                None
+            ),
             Err(EdgionErrorCode::BackendPortResolutionFailed)
         ));
     }
@@ -750,8 +1021,16 @@ mod tests {
             vec![("http", 8080)],
             "10.8.0.4",
         );
-        let endpoint =
-            select_service_endpoint(&published.service_key, section_number(80), &None, None, "", None).unwrap();
+        let endpoint = select_service_endpoint(
+            &published.service_key,
+            section_number(80),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        )
+        .unwrap();
         assert_eq!(
             endpoint.section.identity.app_protocol.as_deref(),
             Some("kubernetes.io/h2c")

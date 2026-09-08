@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: service-degrade-dynamic
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: service-degrade-dynamic
+  loadBalancer:
+    type: RoundRobin
+    degradeThreshold: 0
+  healthCheck:
+    active:
+      type: http
+      path: /status/503
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses: [200]

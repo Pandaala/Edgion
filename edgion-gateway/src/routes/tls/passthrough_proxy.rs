@@ -21,7 +21,9 @@ use super::proxy::{TlsContext, TlsUpstreamInfo};
 use super::sni_parser;
 use super::TlsDuplexHooks;
 use super::TlsRouteManager;
-use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
+use crate::backends::{
+    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+};
 use crate::observe::log_tls;
 use crate::observe::AccessLogger;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
@@ -267,13 +269,15 @@ impl EdgionTlsPassthroughProxy {
                     continue;
                 }
             };
-            let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
-                Ok(endpoint) => endpoint,
-                Err(_) => {
-                    last_err = format!("no endpoint: {}", service_key);
-                    continue;
-                }
-            };
+            let endpoint =
+                match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
+                {
+                    Ok(endpoint) => endpoint,
+                    Err(_) => {
+                        last_err = format!("no endpoint: {}", service_key);
+                        continue;
+                    }
+                };
             let backend = endpoint.backend;
 
             let upstream_addr = backend.inner().addr.clone();

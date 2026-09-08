@@ -8,7 +8,9 @@ use tokio::net::UdpSocket;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::backends::{select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr};
+use crate::backends::{
+    select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
+};
 use crate::observe::{log_udp, UdpLogEntry};
 use crate::routes::common::{
     classify_l4_selected_backend, L4SelectedBackend, L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_STATUS,
@@ -322,19 +324,20 @@ impl EdgionUdpProxy {
                 return;
             }
         };
-        let endpoint = match select_service_endpoint(&service_key, section, &None, None, "", None) {
-            Ok(endpoint) => endpoint,
-            Err(_) => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    UdpStatus::NoBackendResolved.as_str(),
-                ))
-                .await;
-                return;
-            }
-        };
+        let endpoint =
+            match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None) {
+                Ok(endpoint) => endpoint,
+                Err(_) => {
+                    log_udp(&UdpLogEntry::failure(
+                        self.listener_port,
+                        direct_peer_ip,
+                        direct_peer_port,
+                        UdpStatus::NoBackendResolved.as_str(),
+                    ))
+                    .await;
+                    return;
+                }
+            };
 
         let upstream_pingora_addr = endpoint.backend.inner().addr.clone();
         let upstream_addr = match upstream_pingora_addr {
