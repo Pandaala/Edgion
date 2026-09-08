@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0131 verified and ready for its local commit |
-| Coverage | 540 current Gateway files: 155 changed, 150 examined-no-change, 11 deferred, 224 non-terminal; 3 historical rows are removed |
-| Active batch | none; B0131 passed its commit gate |
-| Analysis queue | B0132 policy filter, B0133 invalid-config reject filter and B0134 session adapter are analysis-ready; D0074–D0095 retain their separate scopes |
+| Campaign status | in-progress; B0132 verified and ready for its local record commit |
+| Coverage | 540 current Gateway files: 155 changed, 151 examined-no-change, 11 deferred, 223 non-terminal; 3 historical rows are removed |
+| Active batch | none; B0132 passed its commit gate |
+| Analysis queue | B0133 invalid-config reject filter and B0134 session adapter are analysis-ready; B0135 storage-I/O tests are under read-only analysis; D0074–D0095 retain their separate scopes |
 | Integration freeze | Refreshed at external HEAD `69ac468b`: 3,090 `edgion-tests` files after committed external updates `6ab45e17`/`8cbf7773`/`13e0890f` changed six existing fingerprints and added six LDAP/OIDC paths; no campaign integration-test edit occurred |
 
 ## AI guide summary
