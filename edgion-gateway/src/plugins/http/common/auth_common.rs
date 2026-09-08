@@ -12,6 +12,17 @@ use std::time::Duration;
 
 use crate::plugins::runtime::PluginSession;
 
+/// Materialize an authentication credential or identity without losing its sensitivity.
+pub fn set_sensitive_request_header(
+    session: &mut dyn PluginSession,
+    name: &str,
+    value: &str,
+) -> crate::plugins::runtime::PluginSessionResult<()> {
+    let mut value = http::HeaderValue::from_str(value)?;
+    value.set_sensitive(true);
+    session.set_request_header_value(name, value)
+}
+
 /// Remove a named parameter from the forwarded request query string.
 ///
 /// Surviving pairs retain their original encoding, and only the query is
@@ -62,7 +73,7 @@ pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
 /// [`strip_query_param`] — decoded key there, raw key here — is deliberate:
 /// each side matches the extractor it undoes.
 ///
-/// Assumes `PluginSession::set_request_header` has replace-all-lines semantics
+/// Assumes `PluginSession::set_request_header_value` has replace-all-lines semantics
 /// (today it does — the adapter routes it through `insert_header`). Were it to
 /// become append semantics, every surviving cookie would be duplicated.
 pub fn strip_cookie(session: &mut dyn PluginSession, name: &str) {
@@ -91,7 +102,7 @@ pub fn strip_cookies(session: &mut dyn PluginSession, names: &[&str]) {
             let _ = session.remove_request_header("Cookie");
         }
         CookieStripPlan::Replace(value) => {
-            let _ = session.set_request_header("Cookie", &value);
+            let _ = set_sensitive_request_header(session, "Cookie", &value);
         }
     }
 }
@@ -379,7 +390,7 @@ pub fn set_claims_headers(
             break;
         }
 
-        let _ = session.set_request_header(header_name, &header_value);
+        let _ = set_sensitive_request_header(session, header_name, &header_value);
     }
 }
 
@@ -570,8 +581,8 @@ mod tests {
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("Cookie", "api_key=secret; other=1")]);
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "Cookie" && value == "other=1")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "Cookie" && value == "other=1" && value.is_sensitive())
             .times(1)
             .returning(|_, _| Ok(()));
 
@@ -596,8 +607,8 @@ mod tests {
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("cookie", "api_key=secret; a=1"), ("cookie", "b=2")]);
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "Cookie" && value == "a=1; b=2")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "Cookie" && value == "a=1; b=2" && value.is_sensitive())
             .times(1)
             .returning(|_, _| Ok(()));
 

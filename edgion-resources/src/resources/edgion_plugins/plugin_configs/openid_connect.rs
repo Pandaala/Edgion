@@ -1,6 +1,8 @@
 //! OpenID Connect plugin configuration
 
 use super::{lru_cache_config::LruCacheConfig, tiny_ufo_ttl_cache_config::TinyUfoTtlCacheConfig};
+
+crate::redact::impl_redacted_debug!(OpenidConnectConfig);
 use crate::resources::common::OutboundTlsLocal;
 use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::gateway::SecretObjectReference;
@@ -63,7 +65,7 @@ pub enum VerificationMode {
 }
 
 /// OpenID Connect plugin configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenidConnectConfig {
     // Required

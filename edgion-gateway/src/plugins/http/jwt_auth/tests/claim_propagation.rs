@@ -39,8 +39,11 @@ async fn test_claims_to_headers() {
 
     let headers_set: Arc<Mutex<StdHashMap<String, String>>> = Arc::new(Mutex::new(StdHashMap::new()));
     let headers_clone = headers_set.clone();
-    mock.expect_set_request_header().returning(move |name, value| {
-        headers_clone.lock().insert(name.to_string(), value.to_string());
+    mock.expect_set_request_header_value().returning(move |name, value| {
+        assert!(value.is_sensitive());
+        headers_clone
+            .lock()
+            .insert(name.to_string(), value.to_str().unwrap().to_string());
         Ok(())
     });
 

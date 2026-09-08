@@ -10,6 +10,8 @@
 //! mTLS client identity is specified via `clientCertificateRef` (kubernetes.io/tls Secret).
 
 use k8s_openapi::api::core::v1::Secret;
+
+crate::redact::impl_redacted_debug!(OutboundTlsConfig);
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +56,7 @@ pub struct OutboundTlsLocal {
 }
 
 /// Cluster-wide outbound TLS default carried on EdgionGatewayConfig.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboundTlsConfig {
     /// Global default verify; defaults to true when the field/block is absent.

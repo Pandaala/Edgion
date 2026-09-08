@@ -3,7 +3,8 @@
 
 use super::{JwtAuth, JwtAuthResult};
 use crate::plugins::http::common::auth_common::{
-    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, strip_cookie, strip_query_param,
+    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, set_sensitive_request_header,
+    strip_cookie, strip_query_param,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
@@ -71,8 +72,8 @@ impl JwtAuth {
     pub(super) fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
             plugin_log.push_fmt("Anon={}", la![sensitive(anonymous)]);
-            let _ = session.set_request_header("X-Anonymous-Consumer", "true");
-            let _ = session.set_request_header("X-Consumer-Username", anonymous);
+            let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
+            let _ = set_sensitive_request_header(session, "X-Consumer-Username", anonymous);
             return true;
         }
         false

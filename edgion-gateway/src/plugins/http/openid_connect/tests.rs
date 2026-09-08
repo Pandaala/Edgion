@@ -15,6 +15,50 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[test]
+fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
+    let state: super::AuthorizationStateCookie = serde_json::from_value(json!({
+        "state": "private-state", "original_url": "/private-url", "code_verifier": "private-verifier",
+        "nonce": "private-nonce", "created_at": 1
+    }))
+    .unwrap();
+    let session: OidcSessionCookie = serde_json::from_value(json!({
+        "session_ref": "private-session", "access_token": "private-access", "created_at": 1,
+        "id_token": "private-id", "refresh_token": "private-refresh"
+    }))
+    .unwrap();
+    let response: super::TokenEndpointResponse = serde_json::from_value(json!({
+        "access_token": "private-access", "id_token": "private-id", "refresh_token": "private-refresh"
+    }))
+    .unwrap();
+    let introspection = IntrospectionCacheEntry {
+        claims: json!({"sub": "private-identity"}),
+    };
+    let access = super::AccessTokenCacheEntry {
+        token: "private-access".to_string(),
+    };
+    for value in [
+        &state as &dyn std::fmt::Debug,
+        &session,
+        &response,
+        &introspection,
+        &access,
+    ] {
+        assert!(!format!("{value:?}").contains("private-"));
+        assert!(!format!("{value:#?}").contains("private-"));
+        assert!(!format!("{:?}", Some(value)).contains("private-"));
+    }
+    assert_eq!(
+        serde_json::to_value(&state).unwrap()["code_verifier"],
+        "private-verifier"
+    );
+    assert_eq!(
+        serde_json::to_value(&session).unwrap()["refresh_token"],
+        "private-refresh"
+    );
+    assert_eq!(response.access_token, "private-access");
+}
+
 fn base_config() -> OpenidConnectConfig {
     OpenidConnectConfig {
         discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
@@ -61,9 +105,10 @@ fn install_request_cookies(session: &mut MockPluginSession, cookie_header: &str)
         setup_header_mocks(session, &[("cookie", cookie_header)]);
     }
     let for_set = Arc::clone(&cookie);
-    session.expect_set_request_header().returning(move |name, value| {
+    session.expect_set_request_header_value().returning(move |name, value| {
+        assert!(value.is_sensitive());
         if name.eq_ignore_ascii_case("Cookie") {
-            *for_set.lock() = Some(value.to_string());
+            *for_set.lock() = Some(value.to_str().unwrap().to_string());
         }
         Ok(())
     });
@@ -1394,11 +1439,12 @@ fn strip_gateway_owned_cookies_merges_multiple_cookie_lines() {
     );
     let for_set = Arc::clone(&cookie);
     session
-        .expect_set_request_header()
+        .expect_set_request_header_value()
         .times(1)
         .returning(move |name, value| {
             assert!(name.eq_ignore_ascii_case("Cookie"));
-            *for_set.lock() = Some(value.to_string());
+            assert!(value.is_sensitive());
+            *for_set.lock() = Some(value.to_str().unwrap().to_string());
             Ok(())
         });
     session.expect_remove_request_header().returning(|_| {
@@ -1976,23 +2022,23 @@ fn test_apply_upstream_headers_sets_id_token_and_userinfo_headers() {
     let mut session = MockPluginSession::new();
 
     session
-        .expect_set_request_header()
-        .withf(|name, value| name == "X-Access-Token" && value == "access-token")
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Access-Token" && value == "access-token" && value.is_sensitive())
         .times(1)
         .returning(|_, _| Ok(()));
     session
-        .expect_set_request_header()
-        .withf(|name, value| name == "X-ID-Token" && value == "id-token")
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-ID-Token" && value == "id-token" && value.is_sensitive())
         .times(1)
         .returning(|_, _| Ok(()));
     session
-        .expect_set_request_header()
-        .withf(|name, value| name == "Authorization" && value == "Bearer access-token")
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "Authorization" && value == "Bearer access-token" && value.is_sensitive())
         .times(1)
         .returning(|_, _| Ok(()));
     session
-        .expect_set_request_header()
-        .withf(|name, value| name == "X-Userinfo" && value == "{\"sub\":\"userinfo-user\"}")
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Userinfo" && value == "{\"sub\":\"userinfo-user\"}" && value.is_sensitive())
         .times(1)
         .returning(|_, _| Ok(()));
 
@@ -2013,7 +2059,7 @@ fn test_apply_upstream_headers_skips_oversized_id_token_header() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
-    session.expect_set_request_header().never();
+    session.expect_set_request_header_value().never();
     plugin.apply_upstream_headers(
         &mut session,
         "access-token",
@@ -2030,7 +2076,7 @@ fn test_apply_upstream_headers_rejects_unsafe_userinfo_header_value() {
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let mut session = MockPluginSession::new();
 
-    session.expect_set_request_header().never();
+    session.expect_set_request_header_value().never();
     plugin.apply_upstream_headers(
         &mut session,
         "access-token",

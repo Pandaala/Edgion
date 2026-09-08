@@ -123,7 +123,7 @@ fn resolve_wasm_plugin(
         match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &auth.secret) {
             FetchOutcome::Ok(secret) => match super::read_secret_utf8(&secret, &[auth.key.as_str()]) {
                 Some(value) => {
-                    fetch.resolved_auth_header = Some(value);
+                    fetch.resolved_auth_header = Some(value.to_owned());
                 }
                 None => {
                     tracing::warn!(
@@ -222,6 +222,7 @@ fn extract_dockerconfigjson(secret: &k8s_openapi::api::core::v1::Secret) -> Resu
         ));
     }
     super::read_secret_utf8(secret, &[".dockerconfigjson"])
+        .map(str::to_owned)
         .ok_or_else(|| "Secret key .dockerconfigjson is missing or not UTF-8".to_string())
 }
 

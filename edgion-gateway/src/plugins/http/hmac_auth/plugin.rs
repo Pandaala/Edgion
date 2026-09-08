@@ -6,6 +6,7 @@
 //! - clock skew validation via Date / X-Date
 //! - enforceHeaders validation
 
+use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -37,12 +38,17 @@ type HmacSha384 = Hmac<Sha384>;
 type HmacSha512 = Hmac<Sha512>;
 
 /// Parsed HMAC authorization parameters.
-#[derive(Debug)]
 struct HmacAuthParams {
     username: String,
     algorithm: HmacAlgorithm,
     headers: Vec<String>,
     signature: Vec<u8>,
+}
+
+impl std::fmt::Debug for HmacAuthParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HmacAuthParams").finish_non_exhaustive()
+    }
 }
 
 /// HMAC Auth plugin.
@@ -69,13 +75,24 @@ pub(crate) struct HmacVerifier {
     body_requirement: BodyRequirement,
 }
 
-#[derive(Debug)]
 pub(crate) enum HmacVerifyOutcome {
     Verified { username: String },
     NoMatch(HmacVerifyFailure),
     CaptureFailure(BodyReadError),
     LogicalBodyLimit(BodyReadError),
     DigestReadFailure(BodyReadError),
+}
+
+impl std::fmt::Debug for HmacVerifyOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Verified { .. } => f.debug_struct("Verified").finish_non_exhaustive(),
+            Self::NoMatch(reason) => f.debug_tuple("NoMatch").field(reason).finish(),
+            Self::CaptureFailure(reason) => f.debug_tuple("CaptureFailure").field(reason).finish(),
+            Self::LogicalBodyLimit(reason) => f.debug_tuple("LogicalBodyLimit").field(reason).finish(),
+            Self::DigestReadFailure(reason) => f.debug_tuple("DigestReadFailure").field(reason).finish(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -277,8 +294,8 @@ impl HmacAuth {
     }
 
     fn set_anonymous_headers(&self, session: &mut dyn PluginSession, username: &str) {
-        let _ = session.set_request_header("X-Anonymous-Consumer", "true");
-        let _ = session.set_request_header("X-Consumer-Username", username);
+        let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
+        let _ = set_sensitive_request_header(session, "X-Consumer-Username", username);
     }
 
     fn split_auth_params(input: &str) -> Vec<&str> {
@@ -599,7 +616,7 @@ impl HmacAuth {
             if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
                 continue;
             }
-            let _ = session.set_request_header(name, value);
+            let _ = set_sensitive_request_header(session, name, value);
         }
     }
 
@@ -712,6 +729,27 @@ mod tests {
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use bytes::Bytes;
     use mockall::Sequence;
+
+    #[test]
+    fn credential_debug_omits_identity_and_signature() {
+        let params = HmacAuthParams {
+            username: "private-identity".to_string(),
+            algorithm: HmacAlgorithm::HmacSha256,
+            headers: vec!["private-header".to_string()],
+            signature: b"private-signature".to_vec(),
+        };
+        let outcome = HmacVerifyOutcome::Verified {
+            username: params.username.clone(),
+        };
+        for value in [&params as &dyn std::fmt::Debug, &outcome] {
+            assert!(!format!("{value:?}").contains("private-"));
+            assert!(!format!("{value:#?}").contains("private-"));
+            assert!(!format!("{:?}", Some(value)).contains("private-"));
+        }
+        assert!(!format!("{params:?}").contains("112, 114"));
+        assert_eq!(params.signature, b"private-signature");
+        assert!(matches!(outcome, HmacVerifyOutcome::Verified { username } if username == "private-identity"));
+    }
 
     fn create_plugin() -> HmacAuth {
         let mut config = HmacAuthConfig {
@@ -1138,7 +1176,10 @@ mod tests {
         session
             .expect_request_body_sha256()
             .returning(move || Ok(Sha256::digest(body).into()));
-        session.expect_set_request_header().returning(|_, _| Ok(()));
+        session.expect_set_request_header_value().returning(|_, value| {
+            assert!(value.is_sensitive());
+            Ok(())
+        });
         session.expect_remove_request_header().returning(|_| Ok(()));
         session.expect_write_response_header().returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));

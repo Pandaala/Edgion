@@ -4,6 +4,8 @@
 //! stored in Kubernetes Secrets.
 
 use schemars::JsonSchema;
+
+crate::redact::impl_redacted_debug!(KeyAuthConfig, KeyMetadata);
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -56,7 +58,7 @@ pub struct KeyAuthSecretGroup {
 /// ```
 ///
 /// If not specified, defaults to header "apikey" then query "apikey".
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyAuthConfig {
     // === Key Source ===
@@ -116,7 +118,7 @@ pub struct KeyAuthConfig {
 }
 
 /// API Key metadata attached to a resolved key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KeyMetadata {
     /// Headers to forward to upstream (field_name -> value).
     pub headers: HashMap<String, String>,

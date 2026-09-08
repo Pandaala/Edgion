@@ -25,8 +25,8 @@ The previous allowance for `username` conflicted with
 [design rules, section A](../../../00-design-rules.md#a-sensitive-data--log-redaction)
 and the PII handling rule in [log safety](../../../03-coding/01-log-safety.md).
 D0036 corrects the shared guidance and the BasicAuth and HmacAuth warning fields.
-The broader credential-copy and disclosure audit remains tracked in
-[the active audit task](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md);
+The broader credential-copy and disclosure audit is recorded in
+[ownership evidence](../../security/review-evidence/credential-copy-ownership.md);
 these scoped corrections do not establish that every credential surface conforms.
 
 When reviewing the `resolve_credential/*.rs` handlers, **reject**:

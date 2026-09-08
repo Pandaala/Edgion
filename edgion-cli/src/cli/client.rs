@@ -211,14 +211,16 @@ impl EdgionClient {
         format!("{}{}", self.base_url, path)
     }
 
-    /// Send HTTP request with detailed error handling
-    async fn send_request(&self, mut request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
+    fn authenticate_request(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref token) = self.token {
-            // Borrow through Zeroizing<String> → &str; the formatted header String lives
-            // only for this call, so the credential is not pinned in a long-lived field.
-            request = request.header("Authorization", format!("Bearer {}", token.as_str()));
+            request = request.bearer_auth(token.as_str());
         }
-        request.send().await.map_err(|e| {
+        request
+    }
+
+    /// Send HTTP request with detailed error handling
+    async fn send_request(&self, request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
+        self.authenticate_request(request).send().await.map_err(|e| {
             let error_msg = format_request_error(url, &e, self.target);
             anyhow::anyhow!("{}", error_msg)
         })
@@ -635,6 +637,14 @@ mod ensure_auth_tests {
             .expect("constructor");
         // The stored token must be the supplied bearer, not None
         assert_eq!(c.token_for_test(), Some("edg_testtoken"));
+        let request = c
+            .authenticate_request(c.client.get("http://localhost/"))
+            .build()
+            .expect("request must build without I/O");
+        let authorization = &request.headers()[reqwest::header::AUTHORIZATION];
+        assert_eq!(authorization, "Bearer edg_testtoken");
+        assert!(authorization.is_sensitive());
+        assert!(!format!("{request:?}").contains("edg_testtoken"));
     }
 
     /// `with_static_bearer` uses the supplied base_url and the token is set.

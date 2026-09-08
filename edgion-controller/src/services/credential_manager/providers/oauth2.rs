@@ -246,7 +246,8 @@ fn build_request_form(scopes: &[String]) -> Result<String, OAuth2ProviderError> 
 
 fn build_basic_authorization(bootstrap: &BootstrapCredentials) -> Result<HeaderValue, OAuth2ProviderError> {
     let encoded_id: String = url::form_urlencoded::byte_serialize(bootstrap.client_id.as_bytes()).collect();
-    let encoded_secret: String = url::form_urlencoded::byte_serialize(bootstrap.client_secret.as_bytes()).collect();
+    let encoded_secret =
+        Zeroizing::new(url::form_urlencoded::byte_serialize(bootstrap.client_secret.as_bytes()).collect::<String>());
     let mut joined = Zeroizing::new(String::with_capacity(encoded_id.len() + encoded_secret.len() + 1));
     joined.push_str(&encoded_id);
     joined.push(':');

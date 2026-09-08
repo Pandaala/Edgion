@@ -68,14 +68,14 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_h
 /// derivation (`resolve_wasm_refs`) can re-run the *exact* same usable-material
 /// check the Wasm resolver used at `parse` time — sharing this one function is
 /// what guarantees status and the resolver never disagree.
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn read_secret_utf8(
-    secret: &k8s_openapi::api::core::v1::Secret,
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn read_secret_utf8<'a>(
+    secret: &'a k8s_openapi::api::core::v1::Secret,
     keys: &[&str],
-) -> Option<String> {
+) -> Option<&'a str> {
     let data = secret.data.as_ref()?;
     for key in keys {
         if let Some(bytes) = data.get(*key) {
-            if let Ok(value) = String::from_utf8(bytes.0.clone()) {
+            if let Ok(value) = std::str::from_utf8(&bytes.0) {
                 if !value.trim().is_empty() {
                     return Some(value);
                 }
@@ -83,4 +83,28 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn read_secr
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_secret_utf8;
+    use k8s_openapi::{api::core::v1::Secret, ByteString};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn secret_utf8_borrows_exact_first_usable_value() {
+        let secret = Secret {
+            data: Some(BTreeMap::from([
+                ("invalid".into(), ByteString(vec![0xff])),
+                ("blank".into(), ByteString(b" \t ".to_vec())),
+                ("usable".into(), ByteString(b"  exact-secret \t".to_vec())),
+                ("later".into(), ByteString(b"other-secret".to_vec())),
+            ])),
+            ..Default::default()
+        };
+        let value = read_secret_utf8(&secret, &["missing", "invalid", "blank", "usable", "later"]).unwrap();
+        assert_eq!(value, "  exact-secret \t");
+        assert_eq!(value.as_ptr(), secret.data.as_ref().unwrap()["usable"].0.as_ptr());
+        assert!(read_secret_utf8(&secret, &["missing", "invalid", "blank"]).is_none());
+    }
 }

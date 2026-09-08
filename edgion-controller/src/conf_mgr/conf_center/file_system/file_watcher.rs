@@ -217,30 +217,28 @@ impl FileSystemWatcher {
     /// snapshot still receives an empty `Init` + `InitDone` so its processor
     /// reaches ready.
     pub async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
-        // Clone the needed slice of the snapshot out from under the lock.
-        let per_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = {
-            let guard = self.primed.lock().unwrap();
+        let senders = self.senders.read().await.clone();
+        // Transfer subscribed kinds without retaining their raw documents in runtime.
+        let mut per_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = {
+            let mut guard = self.primed.lock().unwrap();
             let snap = guard
-                .as_ref()
+                .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("dispatch_init called before prime"))?;
             kinds
                 .iter()
-                .filter_map(|k| snap.get(*k).map(|v| (*k, v.clone())))
+                .filter(|k| senders.contains_key(**k))
+                .filter_map(|k| snap.remove(*k).map(|v| (*k, v)))
                 .collect()
         };
 
-        let senders = self.senders.read().await;
         for kind in kinds {
             let Some(sender) = senders.get(*kind) else {
                 continue;
             };
             let _ = sender.send(FileSystemEvent::Init);
-            if let Some(files) = per_kind.get(kind) {
+            if let Some(files) = per_kind.remove(kind) {
                 for (path, content) in files {
-                    let _ = sender.send(FileSystemEvent::InitApply {
-                        path: path.clone(),
-                        content: content.clone(),
-                    });
+                    let _ = sender.send(FileSystemEvent::InitApply { path, content });
                 }
             }
             let _ = sender.send(FileSystemEvent::InitDone);
@@ -258,6 +256,8 @@ impl FileSystemWatcher {
 
     /// Runtime phase only: watch for changes and dispatch Apply/Delete events.
     pub async fn run_runtime(&self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
+        // Unsupported or unsubscribed kinds no longer need an initial snapshot.
+        self.primed.lock().unwrap().take();
         self.runtime_phase(&mut shutdown_signal).await
     }
 
@@ -698,6 +698,77 @@ fn parse_resource_filename(path: &Path) -> Option<ParsedFileInfo> {
 mod tests {
     use super::*;
     use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+
+    #[tokio::test]
+    async fn init_documents_release_per_subscribed_phase() {
+        let dir = tempfile::tempdir().unwrap();
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), Arc::new(PathRegistry::new()), None);
+        let first_path = dir.path().join("Secret_default_first.yaml");
+        let later_path = dir.path().join("EdgionPlugins_default_later.yaml");
+        let first_document = "first document".to_owned();
+        let later_document = "later document".to_owned();
+        *watcher.primed.lock().unwrap() = Some(HashMap::from([
+            ("Secret", vec![(first_path.clone(), first_document.clone())]),
+            ("EdgionPlugins", vec![(later_path.clone(), later_document.clone())]),
+        ]));
+        let mut first = watcher.subscribe("Secret").await;
+        let mut empty = watcher.subscribe("Gateway").await;
+        watcher
+            .dispatch_init(&["Secret", "EdgionPlugins", "Gateway"])
+            .await
+            .unwrap();
+        assert!(matches!(first.recv().await.unwrap(), FileSystemEvent::Init));
+        match first.recv().await.unwrap() {
+            FileSystemEvent::InitApply { path, content } => {
+                assert_eq!(path, first_path);
+                assert_eq!(content, first_document);
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+        assert!(matches!(first.recv().await.unwrap(), FileSystemEvent::InitDone));
+        assert!(matches!(empty.recv().await.unwrap(), FileSystemEvent::Init));
+        assert!(matches!(empty.recv().await.unwrap(), FileSystemEvent::InitDone));
+        {
+            let guard = watcher.primed.lock().unwrap();
+            let remaining = guard.as_ref().unwrap();
+            assert!(!remaining.contains_key("Secret"));
+            assert_eq!(remaining["EdgionPlugins"][0].1, later_document);
+        }
+        let mut later = watcher.subscribe("EdgionPlugins").await;
+        watcher.dispatch_init(&["EdgionPlugins"]).await.unwrap();
+        assert!(matches!(later.recv().await.unwrap(), FileSystemEvent::Init));
+        match later.recv().await.unwrap() {
+            FileSystemEvent::InitApply { path, content } => {
+                assert_eq!(path, later_path);
+                assert_eq!(content, later_document);
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+        assert!(matches!(later.recv().await.unwrap(), FileSystemEvent::InitDone));
+        assert!(watcher.primed.lock().unwrap().as_ref().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_releases_leftover_documents_without_requiring_prime() {
+        let dir = tempfile::tempdir().unwrap();
+        for primed in [
+            None,
+            Some(HashMap::from([(
+                "Secret",
+                vec![(PathBuf::from("unused"), "document".into())],
+            )])),
+        ] {
+            let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), Arc::new(PathRegistry::new()), None);
+            *watcher.primed.lock().unwrap() = primed;
+            let shutdown = crate::conf_mgr::sync_runtime::ShutdownHandle::new();
+            shutdown.shutdown();
+            tokio::time::timeout(Duration::from_secs(2), watcher.run_runtime(shutdown.signal()))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(watcher.primed.lock().unwrap().is_none());
+        }
+    }
 
     #[test]
     fn poll_interval_clamps_at_min_for_empty_or_small_conf() {

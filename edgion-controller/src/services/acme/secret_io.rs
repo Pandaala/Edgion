@@ -23,11 +23,12 @@ const EDGION_IO_ACME_RESOURCE: &str = "edgion.io/acme-resource";
 /// # Zeroize scope
 ///
 /// See docs on [`edgion_resources::credentials::AcmeAccountMaterial`]. The
-/// intermediate `String::from_utf8(raw.0.clone())` allocation below materializes
-/// a plaintext copy of the account JSON that is **not** zero-wiped (only the
-/// returned `Zeroizing<String>` is). Additionally, the raw `ByteString` inside
-/// `data` remains plaintext in the caller-owned `Secret`. Callers should treat
-/// the `Zeroizing` wrapper here as best-effort defense-in-depth.
+/// cloned byte buffer below is moved into the decoded `String`, then into the
+/// returned `Zeroizing<String>` without another allocation. That successful
+/// decode buffer is wiped on wrapper drop. On invalid UTF-8, the failed buffer
+/// belongs to the decode error and is not wiped. The original `ByteString` in
+/// the caller-owned `Secret` also remains unprotected. This is local
+/// defense-in-depth, not an end-to-end erasure guarantee.
 pub fn extract_account_json_string(data: &BTreeMap<String, ByteString>) -> Result<Option<Zeroizing<String>>> {
     let entry = if let Some(b) = data.get(ACME_ACCOUNT_KEY) {
         Some((ACME_ACCOUNT_KEY, b))

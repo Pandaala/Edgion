@@ -31,7 +31,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                         FetchOutcome::Ok(secret) => {
                             let resolved = read_secret_utf8(&secret, &["clientSecret", "client_secret", "secret"]);
                             if let Some(value) = resolved {
-                                config.resolved_oidc_client_secret = Some(value);
+                                config.resolved_oidc_client_secret = Some(value.to_owned());
                                 tracing::debug!(
                                     edgion_plugins = %resource_ref.key(),
                                     secret_key = %secret_key,
@@ -75,7 +75,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                         FetchOutcome::Ok(secret) => {
                             let resolved = read_secret_utf8(&secret, &["sessionSecret", "session_secret", "secret"]);
                             if let Some(value) = resolved {
-                                config.resolved_session_secret = Some(value);
+                                config.resolved_session_secret = Some(value.to_owned());
                                 tracing::debug!(
                                     edgion_plugins = %resource_ref.key(),
                                     secret_key = %secret_key,

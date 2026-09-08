@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+crate::redact::impl_redacted_debug!(ResolvedJweCredential, JweDecryptConfig);
+
 use base64::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -58,7 +60,7 @@ impl JweKeyManagement {
 }
 
 /// Resolved JWE credential from Secret (populated by controller).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJweCredential {
     /// Symmetric key, base64-encoded.
@@ -67,7 +69,7 @@ pub struct ResolvedJweCredential {
 }
 
 /// JWE Decrypt plugin configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JweDecryptConfig {
     /// Reference to K8s Secret containing decryption key.

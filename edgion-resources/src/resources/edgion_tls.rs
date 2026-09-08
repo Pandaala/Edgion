@@ -1,4 +1,6 @@
 use super::common::ParentReference;
+
+crate::redact::impl_redacted_debug!(ClientAuthConfig, EdgionTlsSpec);
 use super::gateway::SecretObjectReference;
 use super::http_route::RouteParentStatus;
 use crate::constants::annotations;
@@ -97,7 +99,7 @@ pub enum ClientAuthMode {
 }
 
 /// Client authentication configuration for mTLS
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientAuthConfig {
     /// TLS mode (default: Terminate)
@@ -156,7 +158,7 @@ impl ClientAuthConfig {
     }
 }
 
-#[derive(CustomResource, Serialize, Deserialize, Debug, JsonSchema)]
+#[derive(CustomResource, Serialize, Deserialize, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",

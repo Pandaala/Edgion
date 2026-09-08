@@ -1,5 +1,6 @@
 //! Basic Authentication plugin implementation
 
+use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -172,15 +173,15 @@ impl BasicAuth {
 
     fn set_consumer_headers(&self, session: &mut dyn PluginSession, username: &str) -> BasicAuthResult<()> {
         // Set X-Consumer-Username header
-        session.set_request_header("X-Consumer-Username", username)?;
+        set_sensitive_request_header(session, "X-Consumer-Username", username)?;
         Ok(())
     }
 
     fn handle_anonymous_access(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> bool {
         if let Some(ref anonymous) = self.config.anonymous {
             plugin_log.push("Allow anonymous");
-            let _ = session.set_request_header("X-Consumer-Username", anonymous);
-            let _ = session.set_request_header("X-Anonymous-Consumer", "true");
+            let _ = set_sensitive_request_header(session, "X-Consumer-Username", anonymous);
+            let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
             return true;
         }
         false
@@ -253,6 +254,19 @@ mod tests {
     use crate::plugins::runtime::PluginLog;
     use base64::engine::general_purpose;
     use serde_json::Value;
+
+    #[test]
+    fn consumer_identity_header_preserves_bytes_and_marks_sensitive() {
+        let auth = BasicAuth::new(&BasicAuthConfig::default());
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Consumer-Username" && value == "private-user" && value.is_sensitive())
+            .times(1)
+            .returning(|_, _| Ok(()));
+        auth.set_consumer_headers(&mut session, "private-user").unwrap();
+        assert!(auth.set_consumer_headers(&mut session, "invalid\r\nidentity").is_err());
+    }
 
     fn make_user_map(username: &str, password: &str, group: &str) -> HashMap<String, ResolvedBasicAuthUser> {
         let mut map = HashMap::new();

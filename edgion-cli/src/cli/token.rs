@@ -16,7 +16,7 @@ pub fn token_file_path() -> Option<PathBuf> {
 /// window a core dump / swap page could expose the bearer credential.
 pub fn read_token() -> Option<Zeroizing<String>> {
     let path = token_file_path()?;
-    let raw = fs::read_to_string(&path).ok()?;
+    let raw = Zeroizing::new(fs::read_to_string(&path).ok()?);
     let trimmed = raw.trim().to_string();
     if trimmed.is_empty() {
         None

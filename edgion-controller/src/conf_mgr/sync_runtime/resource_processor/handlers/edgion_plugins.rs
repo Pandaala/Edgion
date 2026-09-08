@@ -1627,6 +1627,139 @@ profiles:
     }
 
     #[tokio::test]
+    async fn credential_parse_warnings_omit_yaml_scalars_and_jwt_identities() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyAuthSecretGroup,
+        };
+        use std::io::{Read, Seek};
+        use tracing::instrument::WithSubscriber;
+
+        let scalar = "private-yaml-credential-marker";
+        let kid = "private-jwt-identity@example.invalid";
+        let mut secrets = HashMap::new();
+        for (name, field, value) in [
+            ("bad-hmac", "credentials.yaml", scalar),
+            ("bad-key", "keys.yaml", scalar),
+            ("good-key", "keys.yaml", "- key: preserved-api-key\n"),
+            ("jwt-first", "key", kid),
+            ("jwt-duplicate", "key", kid),
+            ("jwt-missing", "key", kid),
+        ] {
+            secrets.insert(format!("default/{name}"), build_secret("default", name, field, value));
+        }
+        for (name, value) in [
+            ("jwt-first", "  preserved-jwt-secret  "),
+            ("jwt-duplicate", "  rejected-jwt-secret  "),
+        ] {
+            secrets
+                .get_mut(&format!("default/{name}"))
+                .unwrap()
+                .data
+                .as_mut()
+                .unwrap()
+                .insert("secret".into(), k8s_openapi::ByteString(value.as_bytes().to_vec()));
+        }
+        let secret_ref = |name: &str| SecretObjectReference {
+            group: None,
+            kind: None,
+            namespace: None,
+            name: name.to_owned(),
+        };
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
+        let mut ep = EdgionPlugins::new("credential-parse", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![
+            RequestFilterEntry::new(EdgionPlugin::HmacAuth(HmacAuthConfig {
+                match_config: edgion_resources::resources::edgion_plugins::HmacMatchConfig {
+                    secret_groups: Some(vec![HmacAuthSecretGroup {
+                        name: "auth-group".into(),
+                        description: None,
+                        secret_refs: vec![secret_ref("bad-hmac")],
+                    }]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })),
+            RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig {
+                secret_groups: Some(vec![KeyAuthSecretGroup {
+                    name: "auth-group".into(),
+                    description: None,
+                    secret_refs: vec![secret_ref("bad-key"), secret_ref("good-key")],
+                }]),
+                ..Default::default()
+            })),
+            RequestFilterEntry::new(EdgionPlugin::JwtAuth(JwtAuthConfig {
+                issuer_groups: Some(vec![JwtIssuerGroup {
+                    name: "auth-group".into(),
+                    description: None,
+                    issuers: vec!["https://issuer.example".into()],
+                    algorithm: None,
+                    audiences: None,
+                    secret_refs: vec![
+                        secret_ref("jwt-first"),
+                        secret_ref("jwt-duplicate"),
+                        secret_ref("jwt-missing"),
+                    ],
+                }]),
+                ..Default::default()
+            })),
+        ]);
+        let mut log_file = tempfile::tempfile().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log_file.try_clone().unwrap())
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_ansi(false)
+            .finish();
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).with_subscriber(subscriber).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        log_file.rewind().unwrap();
+        let mut logs = String::new();
+        log_file.read_to_string(&mut logs).unwrap();
+        assert!(!logs.contains(scalar));
+        assert!(!logs.contains(kid));
+        assert!(!logs.contains("preserved-jwt-secret"));
+        assert!(!logs.contains("rejected-jwt-secret"));
+        for (name, message) in [
+            ("bad-hmac", "Failed to parse credentials.yaml"),
+            ("bad-key", "Failed to parse keys.yaml"),
+            ("jwt-duplicate", "Duplicate kid within group"),
+            ("jwt-missing", "Secret missing both 'secret' and 'publicKey'"),
+        ] {
+            let line = logs.lines().find(|line| line.contains(message)).unwrap();
+            assert!(line.contains(&format!("secret_key=default/{name}")));
+            assert!(line.contains("group=auth-group"));
+            if name.starts_with("bad-") {
+                assert!(line.contains("line=1"));
+                assert!(line.contains("column=1"));
+            }
+        }
+        let entries = parsed.spec.request_plugins.as_ref().unwrap();
+        let EdgionPlugin::KeyAuth(config) = &entries[1].plugin else {
+            panic!("expected KeyAuth")
+        };
+        assert!(config.resolved_keys.as_ref().unwrap().contains_key("preserved-api-key"));
+        let EdgionPlugin::JwtAuth(config) = &entries[2].plugin else {
+            panic!("expected JwtAuth")
+        };
+        let credentials = &config.resolved_groups_by_iss.as_ref().unwrap()["https://issuer.example"].credentials;
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[kid].secret.as_deref(), Some("preserved-jwt-secret"));
+        for name in [
+            "bad-hmac",
+            "bad-key",
+            "good-key",
+            "jwt-first",
+            "jwt-duplicate",
+            "jwt-missing",
+        ] {
+            assert_eq!(ctx.secret_ref_manager().get_refs(&format!("default/{name}")).len(), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn test_parse_resolves_openid_connect_secrets_and_registers_refs() {
         let client_secret = build_secret("default", "oidc-client", "clientSecret", "client-secret-value");
         let session_secret = build_secret("default", "oidc-session", "sessionSecret", "session-secret-value");

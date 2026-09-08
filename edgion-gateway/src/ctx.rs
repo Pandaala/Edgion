@@ -1025,7 +1025,7 @@ impl fmt::Display for MatchInfo {
 }
 
 /// Client certificate information extracted from TLS connection
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ClientCertInfo {
     /// Certificate subject DN (Distinguished Name)
     #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
@@ -1044,6 +1044,12 @@ pub struct ClientCertInfo {
     pub cn: Option<String>,
     /// Certificate fingerprint (SHA256 hex) — not PII
     pub fingerprint: String,
+}
+
+impl fmt::Debug for ClientCertInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ClientCertInfo([redacted])")
+    }
 }
 
 /// TLS connection identifier stored in SslDigestExtension
@@ -1170,6 +1176,21 @@ impl fmt::Display for NormalizedHostname {
 #[cfg(test)]
 mod normalized_hostname_tests {
     use super::NormalizedHostname;
+
+    #[test]
+    fn client_certificate_debug_omits_identity() {
+        let info = super::ClientCertInfo {
+            subject: "private-subject".into(),
+            sans: vec!["private-san".into()],
+            cn: Some("private-cn".into()),
+            fingerprint: "public-fingerprint".into(),
+        };
+        for debug in [format!("{info:?}"), format!("{info:#?}"), format!("{:?}", Some(&info))] {
+            assert!(debug.contains("[redacted]"));
+            assert!(!debug.contains("private"));
+        }
+        assert_eq!(info.subject, "private-subject");
+    }
 
     #[test]
     fn normalization_strips_only_unambiguous_ports() {

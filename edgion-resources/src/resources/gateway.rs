@@ -3,6 +3,12 @@
 //! Gateway defines a network gateway
 
 use k8s_openapi::{api::core::v1::Secret, ByteString};
+
+crate::redact::impl_redacted_debug!(
+    GatewayBackendTLS,
+    ResolvedFrontendCAReference,
+    ResolvedServingCertificateReference
+);
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -196,7 +202,7 @@ pub struct GatewaySpecTLS {
 }
 
 /// Gateway-level backend TLS — default client cert for upstream mTLS
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayBackendTLS {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -305,7 +311,7 @@ pub struct GatewayTLSConfig {
     pub frontend_matcher_eligibility: Option<FrontendMatcherEligibility>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedFrontendCAReference {
     pub index: u8,
@@ -351,7 +357,7 @@ pub enum FrontendMatcherEligibility {
     RequireExactEdgionTlsCertificate,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedServingCertificateReference {
     pub index: u16,

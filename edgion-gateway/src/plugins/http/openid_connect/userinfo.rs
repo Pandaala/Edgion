@@ -29,7 +29,8 @@ impl OpenidConnect {
         }
 
         *total_added_bytes = total_added_bytes.saturating_add(add);
-        let _ = session.set_request_header(header_name, header_value);
+        let _ =
+            crate::plugins::http::common::auth_common::set_sensitive_request_header(session, header_name, header_value);
     }
 
     pub(super) fn apply_upstream_headers(

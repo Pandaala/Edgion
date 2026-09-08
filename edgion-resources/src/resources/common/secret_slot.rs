@@ -8,12 +8,14 @@
 //! conf_sync. Operators never write it.
 
 use k8s_openapi::api::core::v1::Secret;
+
+crate::redact::impl_redacted_debug!(SecretSlot);
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::SecretObjectReference;
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretSlot {
     /// Reference to the Kubernetes Secret carrying credential / TLS material.

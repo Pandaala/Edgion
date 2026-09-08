@@ -72,7 +72,7 @@ fn resolve_group(
             );
             continue;
         };
-        let keys_yaml_str = match String::from_utf8(keys_yaml_bytes.0.clone()) {
+        let keys_yaml_str = match std::str::from_utf8(&keys_yaml_bytes.0) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(
@@ -86,14 +86,15 @@ fn resolve_group(
             }
         };
 
-        let keys_list: Vec<HashMap<String, String>> = match serde_yaml::from_str(&keys_yaml_str) {
+        let keys_list: Vec<HashMap<String, String>> = match serde_yaml::from_str(keys_yaml_str) {
             Ok(list) => list,
             Err(e) => {
                 tracing::warn!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
                     group = %group_name,
-                    error = %e,
+                    line = e.location().map(|location| location.line()),
+                    column = e.location().map(|location| location.column()),
                     "KeyAuth: Failed to parse keys.yaml"
                 );
                 continue;

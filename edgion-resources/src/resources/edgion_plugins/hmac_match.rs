@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+crate::redact::impl_redacted_debug!(HmacCredential, HmacMatchConfig);
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +50,7 @@ impl HmacAlgorithm {
 }
 
 /// HMAC credential loaded from K8s Secret.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HmacCredential {
     /// HMAC shared secret bytes.
@@ -93,7 +95,7 @@ pub struct HmacAuthSecretGroup {
 /// HMAC fields stay siblings of `type` on the wire (`type: hmacAuth` plus
 /// `secretGroups`, `algorithms`, …). `negate` is a sibling too; the standalone
 /// HmacAuth plugin ignores it.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HmacMatchConfig {
     // === Credential Source ===

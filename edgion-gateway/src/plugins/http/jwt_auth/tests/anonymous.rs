@@ -31,7 +31,20 @@ async fn test_no_token_with_anonymous() {
     setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
-    mock.expect_set_request_header().returning(|_, _| Ok(()));
+    mock.expect_set_request_header_value()
+        .times(2)
+        .returning(|name, value| {
+            assert!(value.is_sensitive());
+            assert_eq!(
+                value.as_bytes(),
+                if name == "X-Consumer-Username" {
+                    b"anon-user".as_slice()
+                } else {
+                    b"true".as_slice()
+                }
+            );
+            Ok(())
+        });
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
@@ -48,7 +61,20 @@ async fn test_no_token_with_anonymous_allows_access() {
     setup_header_mocks(&mut mock, &[]);
     mock.expect_get_query_param().returning(|_| None);
     mock.expect_get_cookie().returning(|_| None);
-    mock.expect_set_request_header().returning(|_, _| Ok(()));
+    mock.expect_set_request_header_value()
+        .times(2)
+        .returning(|name, value| {
+            assert!(value.is_sensitive());
+            assert_eq!(
+                value.as_bytes(),
+                if name == "X-Consumer-Username" {
+                    b"anon-user".as_slice()
+                } else {
+                    b"true".as_slice()
+                }
+            );
+            Ok(())
+        });
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);

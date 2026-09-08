@@ -4,6 +4,8 @@
 //! Supports HTTP-01 and DNS-01 challenges with automatic EdgionTls/Secret creation.
 
 use super::common::Condition;
+
+crate::redact::impl_redacted_debug!(ActiveHttpChallenge);
 use super::common::{ParentReference, SecretObjectReference};
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -218,7 +220,7 @@ fn default_true() -> bool {
 
 /// An active ACME HTTP-01 challenge token, published in `EdgionAcmeStatus`
 /// by the controller's AcmeService for the Gateway to serve.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveHttpChallenge {
     /// The domain being validated

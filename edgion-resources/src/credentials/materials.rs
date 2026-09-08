@@ -14,13 +14,13 @@
 //! copy** held by the Material. Several plaintext copies exist outside of
 //! that protection and are NOT zero-wiped:
 //!
-//! - The controller-side `SecretStore` caches the raw `ByteString` plaintext
-//!   for the lifetime of the resource watcher.
+//! - The controller-side `SecretStore` owns raw `ByteString` plaintext until
+//!   replacement, removal, or store destruction; fetched snapshots are independent.
 //! - The resolved `Secret` object is embedded on `*Auth.secret` /
-//!   `TlsConfig.resolved_ca_secret`/`resolved_client_secret` and serialized via `serde_json` / gRPC through
+//!   `TlsConfig.resolved_ca_certificates`/`resolved_client_certificate` and serialized via `serde_json` / gRPC through
 //!   conf_sync to the Gateway; none of those buffers are wiped.
-//! - The Gateway-side runtime store keeps the embedded `Secret` until the
-//!   resource is removed.
+//! - Gateway stores release their references on replacement/removal; outstanding
+//!   requests and runtime generations may keep material alive independently.
 //! - `serde_json::from_str::<Value>` and other intermediate allocations
 //!   (e.g. `String::from_utf8`, `json.to_string()`) produce short-lived
 //!   heap copies that are dropped normally, without zeroization.
@@ -95,12 +95,12 @@ pub struct AiApiKeyMaterial {
 ///
 /// - `SecretStore` retains the raw `ByteString` (plaintext `Vec<u8>`); its
 ///   lifetime is independent of this struct.
-/// - `serde_json::from_str::<Value>` (used for JSON well-formedness checks)
-///   builds a parsed tree in the heap that is dropped normally.
+/// - JSON parsing may allocate dependency-owned scratch buffers; syntax checking
+///   does not establish erasure of those buffers.
 /// - Transient `String` allocations produced during decoding (e.g.
 ///   `json.to_string()`) live until the allocator reclaims the memory.
-/// - The embedded `Secret` object on `*Auth.secret` / `TlsConfig.resolved_ca_secret`
-///   / `TlsConfig.resolved_client_secret` is serialized via `serde_json` and
+/// - The embedded `Secret` object on `*Auth.secret` / `TlsConfig.resolved_ca_certificates`
+///   / `TlsConfig.resolved_client_certificate` is serialized via `serde_json` and
 ///   transported over gRPC to the Gateway — none of those buffers are zero-wiped.
 ///
 /// In other words: `Zeroize` here reduces but does NOT eliminate the window
@@ -127,8 +127,8 @@ pub struct AcmeAccountMaterial {
 /// `client_key_pem` (the private key) is held in `Zeroizing<Vec<u8>>` and
 /// zero-wiped on drop. `ca_pem` and `client_cert_pem` are plaintext public
 /// material and deliberately not wrapped. The same caveats about the
-/// `SecretStore` cache, the embedded `Secret` on `TlsConfig.resolved_ca_secret`
-/// / `resolved_client_secret`, and the
+/// `SecretStore` cache, the embedded `Secret` on `TlsConfig.resolved_ca_certificates`
+/// / `resolved_client_certificate`, and the
 /// conf_sync transport buffers apply here — see [`AcmeAccountMaterial`] for
 /// the full list. `Zeroize` is defense-in-depth, not an end-to-end guarantee.
 pub struct TlsMaterial {
@@ -139,17 +139,7 @@ pub struct TlsMaterial {
 
 // Do not delegate to field Debug implementations: Zeroizing wipes on drop,
 // but does not redact Debug, and public certificate fields may contain PII.
-macro_rules! redacted_material_debug {
-    ($($material:ty),+ $(,)?) => {
-        $(impl fmt::Debug for $material {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(concat!(stringify!($material), "([redacted])"))
-            }
-        })+
-    };
-}
-
-redacted_material_debug!(
+crate::redact::impl_redacted_debug!(
     BasicAuthMaterial,
     EsApiKeyMaterial,
     HmacMaterial,

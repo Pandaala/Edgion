@@ -1,13 +1,15 @@
 //! LDAP Auth plugin configuration
 
 use crate::resources::common::OutboundTlsLocal;
+
+crate::redact::impl_redacted_debug!(LdapAuthConfig);
 use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// LDAP Authentication plugin configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LdapAuthConfig {
     // === LDAP Server Connection ===

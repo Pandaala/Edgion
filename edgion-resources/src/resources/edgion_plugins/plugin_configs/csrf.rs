@@ -1,4 +1,6 @@
 use schemars::JsonSchema;
+
+crate::redact::impl_redacted_debug!(CsrfConfig);
 use serde::{Deserialize, Serialize};
 
 use crate::gwapi_types::{is_valid_header_token, HEADER_NAME_MAX_LEN};
@@ -21,7 +23,7 @@ use crate::resources::gateway::SecretObjectReference;
 ///   expires: 7200  # 2 hours
 ///   name: "apisix-csrf-token"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CsrfConfig {
     /// Reference to a K8s Secret whose `key` data entry holds the CSRF signing key.

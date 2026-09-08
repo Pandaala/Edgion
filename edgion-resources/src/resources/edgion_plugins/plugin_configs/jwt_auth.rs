@@ -5,13 +5,15 @@
 //! that group's keys/algorithm/aud (closes issuer-key decoupling vulnerability).
 
 use crate::resources::common::group_name::default_group_name;
+
+crate::redact::impl_redacted_debug!(JwtAuthConfig, ResolvedJwtCredential, ResolvedJwtIssuerGroup);
 use crate::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Resolved JWT credential data (populated by controller from Secret)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtCredential {
     /// Payload credential-key value used to look up the credential within a group.
@@ -94,7 +96,7 @@ pub struct JwtIssuerGroup {
 
 /// Snapshot-merged group (controller-populated). Always carries concrete
 /// `algorithm` and the per-payload-credential-key map for this group.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtIssuerGroup {
     /// Group name (snapshot of `JwtIssuerGroup.name`). Always set by
@@ -118,7 +120,7 @@ pub struct ResolvedJwtIssuerGroup {
 }
 
 /// JWT Auth plugin configuration (route/service level)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JwtAuthConfig {
     /// Algorithm (default: HS256). Applied at plugin level; each group may override.

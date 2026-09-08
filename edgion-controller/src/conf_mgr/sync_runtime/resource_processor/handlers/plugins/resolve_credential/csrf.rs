@@ -50,7 +50,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                 };
 
                 if let Some(key) = read_secret_utf8(&secret, &["key"]) {
-                    config.resolved_key = Some(key);
+                    config.resolved_key = Some(key.to_owned());
                     tracing::debug!(
                         edgion_plugins = %resource_ref.key(),
                         secret_key = %secret_key,

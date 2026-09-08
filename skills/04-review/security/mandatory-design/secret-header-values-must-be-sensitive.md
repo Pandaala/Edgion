@@ -59,6 +59,24 @@ the known Pingora HTTP/1 instance.
 
 ## Reference Cases
 
+D0036 extends this boundary through `PluginSession::set_request_header_value`
+and the Pingora adapter. Authentication plugins use the canonical
+`common::auth_common::set_sensitive_request_header` helper when producing tokens,
+identity, claims, metadata, or cookies. The typed setter preserves replacement and
+deferred-mutation semantics without converting the value back into a String.
+
+Outbound `forward_all` copies typed values, preserving multiple values and their
+sensitivity while retaining the existing UTF-8 and hop-by-hop filtering. Rendered
+origin/custom headers are conservatively marked sensitive because their String
+collection no longer carries secret/template provenance; reconstructed cookies
+are sensitive too. This can reduce HTTP/2 dynamic-table compression for ordinary
+rendered headers. It does not add a new value allocation or classify arbitrary
+incoming headers as secret based on their names.
+
+Elasticsearch Basic/APIKey/Bearer headers and the CLI bearer header carry the same
+metadata. Regression coverage checks exact bytes, custom header names, clones,
+duplicate forwarding, and the real adapter's deferred overwrite behavior.
+
 - CI-R2 security review, 2026-08-27
 - `edgion-gateway/src/plugins/http/credential_injector/plugin.rs`
 - `edgion-gateway/src/ctx.rs`

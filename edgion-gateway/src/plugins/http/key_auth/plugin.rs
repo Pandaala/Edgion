@@ -3,6 +3,7 @@
 //! Validates requests using API keys from various sources (header, query, cookie, etc.).
 //! Keys and metadata are loaded from Kubernetes Secrets.
 
+use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -115,7 +116,7 @@ impl KeyAuth {
                 continue;
             }
             // Use set (not append) to prevent client header forgery
-            let _ = session.set_request_header(name, value);
+            let _ = set_sensitive_request_header(session, name, value);
         }
     }
 
@@ -162,9 +163,9 @@ impl RequestFilter for KeyAuth {
 
                     // Set anonymous consumer header if in whitelist
                     if self.forward_anonymous_username {
-                        let _ = session.set_request_header("X-Consumer-Username", anon_user);
+                        let _ = set_sensitive_request_header(session, "X-Consumer-Username", anon_user);
                     }
-                    let _ = session.set_request_header("X-Anonymous-Consumer", "true");
+                    let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
 
                     return PluginRunningResult::GoodNext;
                 }
@@ -489,14 +490,14 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_key_get().returning(|_| None);
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "X-Consumer-Username" && value == "guest")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Consumer-Username" && value == "guest" && value.is_sensitive())
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true" && value.is_sensitive())
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
@@ -554,8 +555,8 @@ mod tests {
             _ => None,
         });
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "X-Consumer-Username" && value == "private-user")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Consumer-Username" && value == "private-user" && value.is_sensitive())
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));

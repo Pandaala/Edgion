@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+crate::redact::impl_redacted_debug!(BasicAuthConfig);
+
 use crate::resources::common::group_name::default_group_name;
 use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::gateway::SecretObjectReference;
@@ -58,7 +60,7 @@ impl std::fmt::Debug for ResolvedBasicAuthUser {
 }
 
 /// Basic Auth plugin configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BasicAuthConfig {
     /// Named groups of Secret references. Optional so anonymous-only

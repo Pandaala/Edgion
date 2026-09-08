@@ -31,13 +31,15 @@
 //! the full caveat list.
 
 use k8s_openapi::api::core::v1::Secret;
+
+crate::redact::impl_redacted_debug!(TlsConfig);
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::outbound_tls::OutboundTlsLocal;
 
 /// TLS configuration shared by all LinkSys backend connections.
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Default, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsConfig {
     /// Enable TLS for the backend connection.

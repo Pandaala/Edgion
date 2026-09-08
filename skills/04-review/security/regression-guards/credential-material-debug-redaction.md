@@ -13,9 +13,17 @@ own Debug output, including alternate formatting. `ResolvedBasicAuthUser` also
 redacts its password/hash and group. Debug formatting must not delegate to raw
 credential fields, even when an enclosing `CredentialState` already redacts them.
 
-This correction covers direct Debug and nested formatting of these types. It does
-not make arbitrary resource Debug safe: map keys, sibling credential types, raw
-Secrets, explicitly formatted fields, and serialization need independent review.
+The D0036 follow-on correction also masks the owning auth configs and maps
+(Basic/Key/HMAC/JWT/OIDC/LDAP/HeaderCert/CSRF/JWE), shared SecretSlot and TLS
+containers, Wasm fetch/OCI credentials, resolved Gateway TLS fields, and ACME
+challenge material. Fixed container output protects identity-bearing map keys
+and nested raw Secrets. Runtime HMAC parameters, OIDC cookies/token/cache DTOs,
+client-certificate identity, and bounded outbound response Debug are masked too.
+The crate-private `impl_redacted_debug!` macro centralizes fixed resource output.
+
+This covers the named application containers, not arbitrary explicit field
+formatting, dependency Debug, or serialization. The complete inspected ownership
+scope and unresolved surfaces are in the [ownership audit](../review-evidence/credential-copy-ownership.md).
 
 ## Rationale and evidence
 
@@ -52,11 +60,17 @@ Targeted regression tests:
   hashed BasicAuth passwords, nested Debug, real transport round trips, and
   mandatory admin serialization redaction.
 
-Execution results are recorded in the active task. Re-evaluate when material
+- `credential_containers_hide_debug_but_preserve_transport` covers the expanded
+  resource containers, nested/alternate Debug and unchanged serde transport.
+- Runtime DTO, client-certificate and outbound-response tests exercise their
+  own Debug boundaries. Controller warning capture checks first-wins behavior
+  while omitting JWT kids and malformed credential YAML scalar contents.
+
+Current execution results are recorded in the ownership audit. Re-evaluate when material
 types, Debug implementations, enclosing containers, or credential serialization
 change. Direct field formatting remains subject to log-safety review.
 
 ## Resolution references
 
-- D0036 — partial correction; the complete copy/lifetime audit remains open in
-  [the canonical task](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md).
+- D0036 — formatting corrections; [ownership evidence and limits](../review-evidence/credential-copy-ownership.md)
+  distinguish corrected application surfaces from unresolved follow-up work.

@@ -20,6 +20,20 @@ use std::cell::Cell;
 
 use serde::{Serialize, Serializer};
 
+// Fixed Debug output must not delegate to credential fields or map keys.
+// Independent from admin serialization: conf_sync still carries real values.
+macro_rules! impl_redacted_debug {
+    ($($material:ty),+ $(,)?) => {
+        $(impl std::fmt::Debug for $material {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(concat!(stringify!($material), "([redacted])"))
+            }
+        })+
+    };
+}
+
+pub(crate) use impl_redacted_debug;
+
 thread_local! {
     static REDACT_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
@@ -98,6 +112,146 @@ pub mod redact_required {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_credential_debug<T>(value: T)
+    where
+        T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
+    {
+        let wire = serde_json::to_value(&value).unwrap();
+        let decoded: T = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), wire);
+        for debug in [
+            format!("{value:?}"),
+            format!("{value:#?}"),
+            format!("{:?}", Some(&decoded)),
+        ] {
+            assert!(debug.contains("[redacted]"));
+            assert!(!debug.contains("private-"));
+            assert!(!debug.contains("[112, 114, 105"));
+        }
+    }
+
+    #[test]
+    fn credential_containers_hide_debug_but_preserve_transport() {
+        use crate::resources::common::{OutboundTlsConfig, SecretSlot, TlsConfig};
+        use crate::resources::edgion_plugins::plugin_configs::*;
+        use serde_json::json;
+
+        let secret = json!({"stringData": {"private-key": "private-material"}});
+        macro_rules! check_config {
+            ($ty:ty, $extra:expr) => {{
+                let mut wire = serde_json::to_value(<$ty>::default()).unwrap();
+                wire.as_object_mut()
+                    .unwrap()
+                    .extend($extra.as_object().unwrap().clone());
+                let value: $ty = serde_json::from_value(wire).unwrap();
+                check_credential_debug(value);
+            }};
+        }
+        let hmac = json!({"secret": b"private-material", "headers": {"private-header": "private-identity"}, "group": "private-group"});
+        check_credential_debug(serde_json::from_value::<HmacCredential>(hmac.clone()).unwrap());
+        check_config!(HmacMatchConfig, json!({"resolvedCredentials": {"private-user": hmac}}));
+        check_config!(
+            BasicAuthConfig,
+            json!({"resolvedUsers": {"private-user": {"password": "private-password", "group": "private-group"}}})
+        );
+        let metadata = json!({"headers": {"private-header": "private-identity"}, "group": "private-group"});
+        check_credential_debug(serde_json::from_value::<KeyMetadata>(metadata.clone()).unwrap());
+        check_config!(KeyAuthConfig, json!({"resolvedKeys": {"private-api-key": metadata}}));
+        let jwt = json!({"key": "private-kid", "secret": "private-key", "publicKey": "private-cert"});
+        check_credential_debug(serde_json::from_value::<ResolvedJwtCredential>(jwt.clone()).unwrap());
+        let issuer = json!({"group": "private-group", "algorithm": "HS256", "credentials": {"private-kid": jwt}});
+        check_credential_debug(serde_json::from_value::<ResolvedJwtIssuerGroup>(issuer.clone()).unwrap());
+        check_config!(
+            JwtAuthConfig,
+            json!({"resolvedGroupsByIss": {"private-issuer": issuer}})
+        );
+        check_config!(
+            OpenidConnectConfig,
+            json!({"resolvedOidcClientSecret": "private-client", "resolvedSessionSecret": "private-session", "resolvedClientCertificate": secret})
+        );
+        check_config!(
+            LdapAuthConfig,
+            json!({"resolvedCaCertificates": [secret], "resolvedClientCertificate": secret})
+        );
+        check_config!(HeaderCertAuthConfig, json!({"resolvedCaSecrets": [secret]}));
+        check_config!(CsrfConfig, json!({"resolvedKey": "private-key"}));
+        check_credential_debug(ResolvedJweCredential {
+            secret: Some("private-key".into()),
+        });
+        check_config!(
+            JweDecryptConfig,
+            json!({"resolvedCredential": {"secret": "private-key"}})
+        );
+        check_config!(
+            TlsConfig,
+            json!({"resolvedCaCertificates": [secret], "resolvedClientCertificate": secret})
+        );
+        check_config!(
+            OutboundTlsConfig,
+            json!({"resolvedCaCertificates": [secret], "resolvedClientCertificate": secret})
+        );
+        check_config!(WasmFetchSpec, json!({"resolvedAuthHeader": "private-token"}));
+        check_config!(WasmOciSpec, json!({"resolvedPullSecret": "private-registry-token"}));
+        check_credential_debug(
+            serde_json::from_value::<SecretSlot>(json!({"secretRef": {"name": "source"}, "secret": secret})).unwrap(),
+        );
+
+        macro_rules! check_wire {
+            ($ty:ty, $wire:expr) => {
+                check_credential_debug(serde_json::from_value::<$ty>($wire).unwrap());
+            };
+        }
+        check_wire!(
+            crate::resources::edgion_plugins::conditions::SecretMatchCondition,
+            json!({"key": {"type": "header", "name": "x-token"}, "secretKey": "token", "secretRef": {"name": "source"}, "resolvedValues": ["private-token"]})
+        );
+        check_wire!(
+            crate::resources::edgion_tls::ClientAuthConfig,
+            json!({"caSecret": secret, "allowedCns": ["private-identity"]})
+        );
+        check_wire!(
+            crate::resources::edgion_tls::EdgionTlsSpec,
+            json!({"hosts": ["example.com"], "secretRef": {"name": "source"}, "secret": secret})
+        );
+        check_wire!(
+            crate::resources::backend_tls_policy::BackendTLSPolicySpec,
+            json!({"targetRefs": [], "validation": {"hostname": "example.com"}, "resolvedClientCertificate": secret})
+        );
+        check_wire!(
+            crate::resources::gateway::GatewayBackendTLS,
+            json!({"resolvedClientCertificate": secret})
+        );
+        check_wire!(
+            crate::resources::gateway::ResolvedServingCertificateReference,
+            json!({"index": 0, "source": {"group": "", "kind": "Secret", "namespace": "default", "name": "source"}, "secret": secret})
+        );
+        check_wire!(
+            crate::resources::gateway::ResolvedFrontendCAReference,
+            json!({"index": 0, "source": {"kind": "Secret", "namespace": "default", "name": "source"}, "caCertificate": "cHJpdmF0ZS1jZXJ0"})
+        );
+        check_wire!(
+            crate::resources::edgion_acme::ActiveHttpChallenge,
+            json!({"domain": "example.com", "token": "private-token", "keyAuthorization": "private-key", "expireAt": 1})
+        );
+
+        // Debug must not depend on the thread-local admin guard, and the guard
+        // must still redact the real transport fields independently.
+        let cfg = HmacMatchConfig {
+            resolved_credentials: Some(std::collections::HashMap::from([(
+                "private-user".to_string(),
+                HmacCredential {
+                    secret: b"private-material".to_vec(),
+                    headers: Default::default(),
+                    group: "private-group".into(),
+                },
+            )])),
+            ..Default::default()
+        };
+        assert!(serde_json::to_string(&cfg).unwrap().contains("private-user"));
+        let _guard = AdminRedactGuard::new();
+        assert_eq!(serde_json::to_value(&cfg).unwrap()["resolvedCredentials"], "[redacted]");
+    }
 
     #[derive(Serialize)]
     struct Demo {

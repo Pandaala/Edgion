@@ -44,7 +44,7 @@ impl AdminAuthState {
     /// treated as unconfigured. Logs a WARN (not a hard error) when a configured
     /// token is shorter than the recommended minimum.
     pub(super) fn from_token(token: Option<String>) -> Self {
-        let token = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let token = token.as_deref().map(str::trim).filter(|t| !t.is_empty());
         match token {
             None => Self { token_digest: None },
             Some(t) => {

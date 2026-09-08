@@ -177,7 +177,7 @@ fn build_discovery_validator(config: &OpenidConnectConfig) -> DiscoveryValidator
     })
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct AuthorizationStateCookie {
     state: String,
     original_url: String,
@@ -188,7 +188,7 @@ struct AuthorizationStateCookie {
     created_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct OidcSessionCookie {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     session_ref: String,
@@ -203,7 +203,7 @@ struct OidcSessionCookie {
     refresh_token: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenEndpointResponse {
     access_token: String,
     #[allow(dead_code)]
@@ -219,14 +219,44 @@ struct TokenEndpointResponse {
     token_type: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct IntrospectionCacheEntry {
     claims: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct AccessTokenCacheEntry {
     token: String,
+}
+
+impl std::fmt::Debug for AuthorizationStateCookie {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizationStateCookie").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for OidcSessionCookie {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcSessionCookie").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for TokenEndpointResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenEndpointResponse").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for IntrospectionCacheEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntrospectionCacheEntry").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for AccessTokenCacheEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccessTokenCacheEntry").finish_non_exhaustive()
+    }
 }
 
 impl crate::cache::tiny_ufo::sealed::Sealed for IntrospectionCacheEntry {}

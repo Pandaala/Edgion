@@ -57,15 +57,15 @@ access-log masking contract.
 the actual EdgionPlugins parse path with within-group and cross-group duplicates.
 It checks both warning branches, Secret/group attribution, absence of username
 and password values, first-wins contents, and reference registration. Execution
-results are maintained in the active task; existing selection tests are retained.
+results are maintained in the ownership audit; existing selection tests are retained.
 
 Re-evaluate when resolver logging, identity fields, first-wins handling, or log
-formatting changes. The complete credential-copy audit and HmacAuth log exposure
-remain open in [D0036's task](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md).
+formatting changes. Broader coverage, the subsequent HmacAuth correction, and
+remaining work are distinguished in [D0036's ownership evidence](../../security/review-evidence/credential-copy-ownership.md).
 
 ## Resolution references
 
-- D0036 — scoped BasicAuth duplicate-warning correction; the parent audit remains open.
+- D0036 — BasicAuth duplicate-warning correction; broader evidence is linked above.
 
 ## Related
 

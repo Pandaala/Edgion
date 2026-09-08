@@ -50,6 +50,8 @@
 //! ```
 
 use crate::common::KeyGet;
+
+crate::redact::impl_redacted_debug!(SecretMatchCondition);
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::path_normalization::{get_path_normalization_config, normalize_config_path};
 use crate::resources::common::SecretObjectReference;
@@ -433,7 +435,7 @@ pub struct ProbabilityCondition {
 }
 
 /// Exact match against Controller-resolved Secret values.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretMatchCondition {
     /// Request value to compare with the selected Secret data entry.

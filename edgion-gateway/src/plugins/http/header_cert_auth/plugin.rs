@@ -4,6 +4,7 @@
 //! - `mode=Connection`: read mTLS client cert info from request context
 //! - `mode=Header`: parse certificate from request header and verify with configured CA certs
 
+use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -42,9 +43,11 @@ impl HeaderCertAuth {
     /// Create plugin instance.
     pub fn new(config: &HeaderCertAuthConfig, plugin_namespace: String) -> Self {
         let ca_pool = Self::load_ca_certs(config, &plugin_namespace);
+        let mut config = config.clone();
+        config.resolved_ca_secrets = None;
         Self {
             name: "HeaderCertAuth".to_string(),
-            config: config.clone(),
+            config,
             ca_pool,
         }
     }
@@ -55,7 +58,7 @@ impl HeaderCertAuth {
         if let Some(secrets) = &config.resolved_ca_secrets {
             for secret in secrets {
                 if let Some(raw) = Self::read_ca_pem_from_secret(secret) {
-                    raw_ders.extend(Self::parse_ca_bundle_to_der(&raw));
+                    raw_ders.extend(Self::parse_ca_bundle_to_der(raw));
                 }
             }
         } else {
@@ -65,7 +68,7 @@ impl HeaderCertAuth {
                     continue;
                 };
                 if let Some(raw) = Self::read_ca_pem_from_secret(&secret) {
-                    raw_ders.extend(Self::parse_ca_bundle_to_der(&raw));
+                    raw_ders.extend(Self::parse_ca_bundle_to_der(raw));
                 }
             }
         }
@@ -90,15 +93,15 @@ impl HeaderCertAuth {
         pool
     }
 
-    fn read_ca_pem_from_secret(secret: &k8s_openapi::api::core::v1::Secret) -> Option<Vec<u8>> {
+    fn read_ca_pem_from_secret(secret: &k8s_openapi::api::core::v1::Secret) -> Option<&[u8]> {
         if let Some(data) = &secret.data {
             if let Some(value) = data.get("ca.crt") {
-                return Some(value.0.clone());
+                return Some(&value.0);
             }
         }
         if let Some(string_data) = &secret.string_data {
             if let Some(value) = string_data.get("ca.crt") {
-                return Some(value.as_bytes().to_vec());
+                return Some(value.as_bytes());
             }
         }
         None
@@ -134,18 +137,19 @@ impl HeaderCertAuth {
     }
 
     fn set_anonymous_headers(&self, session: &mut dyn PluginSession) {
-        let _ = session.set_request_header("X-Anonymous-Consumer", "true");
-        let _ = session.set_request_header(&self.config.upstream_headers.consumer_header, "anonymous");
+        let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
+        let _ = set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, "anonymous");
     }
 
     fn apply_headers(&self, session: &mut dyn PluginSession, cert_info: &ClientCertInfo) -> Result<(), &'static str> {
         if self.config.skip_consumer_lookup {
             if !Self::contains_header_control_chars(&cert_info.subject) {
-                let _ = session.set_request_header(&self.config.upstream_headers.dn_header, &cert_info.subject);
+                let _ =
+                    set_sensitive_request_header(session, &self.config.upstream_headers.dn_header, &cert_info.subject);
             }
             if let Some(san) = cert_info.sans.first() {
                 if !Self::contains_header_control_chars(san) {
-                    let _ = session.set_request_header(&self.config.upstream_headers.san_header, san);
+                    let _ = set_sensitive_request_header(session, &self.config.upstream_headers.san_header, san);
                 }
             }
         } else {
@@ -153,12 +157,15 @@ impl HeaderCertAuth {
             if Self::contains_header_control_chars(identity) {
                 return Err("invalid-identity");
             }
-            let _ = session.set_request_header(&self.config.upstream_headers.consumer_header, identity);
+            let _ = set_sensitive_request_header(session, &self.config.upstream_headers.consumer_header, identity);
         }
 
         if !Self::contains_header_control_chars(&cert_info.fingerprint) {
-            let _ =
-                session.set_request_header(&self.config.upstream_headers.fingerprint_header, &cert_info.fingerprint);
+            let _ = set_sensitive_request_header(
+                session,
+                &self.config.upstream_headers.fingerprint_header,
+                &cert_info.fingerprint,
+            );
         }
         Ok(())
     }
@@ -489,14 +496,14 @@ mod tests {
 
             let mut sequence = Sequence::new();
             session
-                .expect_set_request_header()
-                .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true")
+                .expect_set_request_header_value()
+                .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true" && value.is_sensitive())
                 .times(1)
                 .in_sequence(&mut sequence)
                 .returning(|_, _| Ok(()));
             session
-                .expect_set_request_header()
-                .withf(|name, value| name == "X-Consumer-Username" && value == "anonymous")
+                .expect_set_request_header_value()
+                .withf(|name, value| name == "X-Consumer-Username" && value == "anonymous" && value.is_sensitive())
                 .times(1)
                 .in_sequence(&mut sequence)
                 .returning(|_, _| Ok(()));
@@ -524,7 +531,13 @@ mod tests {
             .expect_client_cert_info()
             .times(1)
             .return_const(Some(sample_cert_info()));
-        session.expect_set_request_header().times(2).returning(|_, _| Ok(()));
+        session
+            .expect_set_request_header_value()
+            .times(2)
+            .returning(|_, value| {
+                assert!(value.is_sensitive());
+                Ok(())
+            });
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
@@ -544,7 +557,13 @@ mod tests {
         let mut log = PluginLog::new("HeaderCertAuth");
 
         session.expect_client_cert_info().times(1).return_const(None);
-        session.expect_set_request_header().times(2).returning(|_, _| Ok(()));
+        session
+            .expect_set_request_header_value()
+            .times(2)
+            .returning(|_, value| {
+                assert!(value.is_sensitive());
+                Ok(())
+            });
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
@@ -598,6 +617,33 @@ mod tests {
             ..Default::default()
         };
         HeaderCertAuth::new(&config, "default".to_string())
+    }
+
+    #[test]
+    fn prepared_ca_pool_drops_runtime_secrets_and_borrows_pem() {
+        let (ca_pem, _) = make_ca_and_leaf(-1, 30, -1, 30);
+        let secret = make_ca_secret(&ca_pem);
+        let borrowed = HeaderCertAuth::read_ca_pem_from_secret(&secret).unwrap();
+        assert_eq!(borrowed.as_ptr(), secret.data.as_ref().unwrap()["ca.crt"].0.as_ptr());
+        let string_secret = k8s_openapi::api::core::v1::Secret {
+            string_data: Some(std::collections::BTreeMap::from([("ca.crt".to_string(), ca_pem)])),
+            ..Default::default()
+        };
+        assert_eq!(
+            HeaderCertAuth::read_ca_pem_from_secret(&string_secret)
+                .unwrap()
+                .as_ptr(),
+            string_secret.string_data.as_ref().unwrap()["ca.crt"].as_ptr()
+        );
+        let config = HeaderCertAuthConfig {
+            mode: CertSourceMode::Header,
+            resolved_ca_secrets: Some(vec![secret]),
+            ..Default::default()
+        };
+        let plugin = HeaderCertAuth::new(&config, "default".to_string());
+        assert_eq!(plugin.ca_pool.len(), 1);
+        assert!(plugin.config.resolved_ca_secrets.is_none());
+        assert_eq!(config.resolved_ca_secrets.as_ref().unwrap().len(), 1);
     }
 
     #[test]

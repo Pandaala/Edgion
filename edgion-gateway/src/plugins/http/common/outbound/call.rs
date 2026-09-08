@@ -29,7 +29,6 @@ use crate::plugins::runtime::PluginSession;
 ///
 /// Returned by [`outbound_call`] for every completed exchange regardless of
 /// status code. Success/failure classification is the caller's responsibility.
-#[derive(Debug)]
 pub struct OutboundResponse {
     /// HTTP status code (e.g. 200, 403, 500).
     pub status: u16,
@@ -37,6 +36,16 @@ pub struct OutboundResponse {
     pub headers: reqwest::header::HeaderMap,
     /// Response body, capped to the effective `max_response_bytes` limit.
     pub body: Bytes,
+}
+
+impl std::fmt::Debug for OutboundResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutboundResponse")
+            .field("status", &self.status)
+            .field("headers", &"[redacted]")
+            .field("body", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Errors that prevent a completed HTTP response from being returned.
@@ -624,6 +633,23 @@ fn now_epoch_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_response_debug_omits_auth_payload() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-private-token", "private-token".parse().unwrap());
+        let response = OutboundResponse {
+            status: 200,
+            headers,
+            body: Bytes::from_static(b"private-body"),
+        };
+        for debug in [format!("{response:?}"), format!("{response:#?}")] {
+            assert!(debug.contains("200"));
+            assert!(!debug.contains("private"));
+        }
+        assert_eq!(response.body.as_ref(), b"private-body");
+        assert_eq!(response.headers["x-private-token"], "private-token");
+    }
     use std::time::Duration;
 
     use crate::plugins::http::common::http_client::get_http_client_arc;

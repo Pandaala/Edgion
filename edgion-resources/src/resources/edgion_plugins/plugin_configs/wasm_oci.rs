@@ -6,6 +6,8 @@
 //! and `IfNotPresent` otherwise; a digest reference is always a pin.
 
 use schemars::JsonSchema;
+
+crate::redact::impl_redacted_debug!(WasmOciSpec);
 use serde::{Deserialize, Serialize};
 
 use crate::resources::common::SecretObjectReference;
@@ -18,7 +20,7 @@ pub enum OciPullPolicy {
 }
 
 /// `source.oci`: pull the Wasm bytecode from an OCI registry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmOciSpec {
     /// Image reference: `registry/repo:tag` or `registry/repo@sha256:<digest>`.

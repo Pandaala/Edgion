@@ -2,6 +2,7 @@
 //!
 //! Supports compact JWE (alg=dir, enc=A256GCM).
 
+use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use async_trait::async_trait;
@@ -197,16 +198,16 @@ impl JweDecrypt {
         let secret_ref = config.secret_ref.as_ref().ok_or(KeyPreparationFailure::Missing)?;
 
         let ns = secret_ref.namespace.as_deref().unwrap_or(plugin_namespace);
-        let secret = get_secret(Some(ns), &secret_ref.name).ok_or(KeyPreparationFailure::Missing)?;
+        let mut secret = get_secret(Some(ns), &secret_ref.name).ok_or(KeyPreparationFailure::Missing)?;
 
-        if let Some(data) = &secret.data {
-            if let Some(secret_bytes) = data.get("secret") {
-                return Self::decode_secret_if_needed(secret_bytes.0.clone(), config.base64_secret);
+        if let Some(data) = &mut secret.data {
+            if let Some(secret_bytes) = data.remove("secret") {
+                return Self::decode_secret_if_needed(secret_bytes.0, config.base64_secret);
             }
         }
-        if let Some(string_data) = &secret.string_data {
-            if let Some(secret_str) = string_data.get("secret") {
-                return Self::decode_secret_if_needed(secret_str.as_bytes().to_vec(), config.base64_secret);
+        if let Some(string_data) = &mut secret.string_data {
+            if let Some(secret_str) = string_data.remove("secret") {
+                return Self::decode_secret_if_needed(secret_str.into_bytes(), config.base64_secret);
             }
         }
 
@@ -370,10 +371,7 @@ impl RequestFilter for JweDecrypt {
             return self.reject(session, plugin_log, JweFailure::InvalidFormat).await;
         }
 
-        if session
-            .set_request_header(&self.config.forward_header, &plaintext)
-            .is_err()
-        {
+        if set_sensitive_request_header(session, &self.config.forward_header, &plaintext).is_err() {
             return self.reject(session, plugin_log, JweFailure::InvalidFormat).await;
         }
 
@@ -689,14 +687,14 @@ mod tests {
 
         let mut sequence = Sequence::new();
         session
-            .expect_set_request_header()
-            .withf(move |name, value| name == "x-decrypted-auth" && value == plaintext)
+            .expect_set_request_header_value()
+            .withf(move |name, value| name == "x-decrypted-auth" && value == plaintext && value.is_sensitive())
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
         session
-            .expect_set_request_header()
-            .withf(|name, value| name == "x-sub" && value == "alice")
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "x-sub" && value == "alice" && value.is_sensitive())
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));

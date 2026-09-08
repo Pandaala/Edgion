@@ -3,6 +3,8 @@
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
 use super::common::PolicyAncestorStatus;
+
+crate::redact::impl_redacted_debug!(BackendTLSPolicySpec);
 use super::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass};
 use super::gateway::SecretObjectReference;
 use k8s_openapi::api::core::v1::Secret;
@@ -19,7 +21,7 @@ use std::collections::HashMap;
 pub const OPTION_CLIENT_CERTIFICATE_REF: &str = "edgion.io/client-certificate-ref";
 
 /// BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(CustomResource, Deserialize, Serialize, Clone, JsonSchema)]
 #[kube(
     group = "gateway.networking.k8s.io",
     version = "v1",

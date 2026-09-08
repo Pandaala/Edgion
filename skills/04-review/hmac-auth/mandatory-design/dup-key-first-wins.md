@@ -41,8 +41,9 @@ the secret value:
 
 Review all direct fields and error formatting, not only fields named `secret`.
 The focused regression does not prove parse-error formatting, derived Debug,
-map keys elsewhere, or the entire credential lifecycle safe. Those remain within
-[the credential-copy audit task](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md).
+map keys elsewhere, or the entire credential lifecycle safe. Broader inspection,
+subsequent corrections and limits are in the
+[credential ownership evidence](../../security/review-evidence/credential-copy-ownership.md).
 
 ## Verification and re-evaluation
 
@@ -50,7 +51,7 @@ map keys elsewhere, or the entire credential lifecycle safe. Those remain within
 parse logs for standalone HmacAuth and a shared HMAC condition. It covers a retained
 short secret, within-group and cross-group duplicates, omitted identities/keys,
 resource attribution, lengths, first-wins contents, metadata policy, and Secret
-reference registration. Execution results are recorded in the active task.
+reference registration. Execution results are recorded in the ownership evidence.
 Re-evaluate when resolver branches, credential field projection, or shared HMAC
 consumers change. Historical log retention and allocator erasure are outside scope.
 

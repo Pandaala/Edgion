@@ -6,6 +6,8 @@
 //! initialized instances per module.
 
 use schemars::JsonSchema;
+
+crate::redact::impl_redacted_debug!(WasmFetchSpec);
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,7 +41,7 @@ pub struct WasmSourceSpec {
 /// repository. Reuses the shared `TlsConfig` type (custom CA / mTLS) rather
 /// than referencing a LinkSys resource: a one-shot module fetch does not need
 /// long-lived connection governance (rate limit / health check).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmFetchSpec {
     /// TLS settings for the fetch (custom CA bundle and/or client identity).

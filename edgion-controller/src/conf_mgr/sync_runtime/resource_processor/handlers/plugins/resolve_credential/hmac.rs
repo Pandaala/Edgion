@@ -121,7 +121,8 @@ fn resolve_group(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
                     group = %group_name,
-                    error = %e,
+                    line = e.location().map(|location| location.line()),
+                    column = e.location().map(|location| location.column()),
                     "HmacAuth: Failed to parse credentials.yaml"
                 );
                 continue;

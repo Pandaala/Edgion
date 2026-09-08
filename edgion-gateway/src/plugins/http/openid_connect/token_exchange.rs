@@ -363,12 +363,12 @@ impl OpenidConnect {
 
         let now = Self::now_unix_secs();
         let should_persist_id_token = self.should_persist_id_token(&discovery);
-        session_cookie.access_token = token_response.access_token.clone();
+        session_cookie.access_token = token_response.access_token;
         session_cookie.expires_at = token_response.expires_in.map(|ttl| now.saturating_add(ttl));
         if should_persist_id_token {
-            let new_id_token = token_response.id_token.as_deref().filter(|v| !v.is_empty());
+            let new_id_token = token_response.id_token.filter(|v| !v.is_empty());
             if let Some(new_id_token) = new_id_token {
-                session_cookie.id_token = Some(new_id_token.to_string());
+                session_cookie.id_token = Some(new_id_token);
             }
         }
         if token_response.refresh_token.is_some() {

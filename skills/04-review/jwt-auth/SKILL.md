@@ -16,8 +16,6 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [jwt_auth credentials.rs 4-Path Credential Loading — Audited Design Tradeoff](intentional-design/jwt-auth-credentials-source-paths.md)
-- [jwt_auth Multi-Key Path Double Payload Decode — Audited Design Tradeoff](intentional-design/jwt-auth-multi-key-double-decode.md)
 - [openid_connect vs jwt_auth JWT Helper Split — DESIGN-TRADEOFF](intentional-design/jwt-oidc-helper-split-deliberate.md)
 - [JwtAuth — query-parameter token is opt-in (allowTokenInQuery, default false)](intentional-design/query-token-opt-in.md)
 
@@ -26,3 +24,8 @@ before applying a decision to current code.
 - [Gateway Bearer WWW-Authenticate error / error_description attributes](regression-guards/bearer-www-authenticate-error-attributes.md)
 - [JwtAuth `DecodingKey` construction — fixed](regression-guards/decoding-key-prebuilt.md)
 - [JwtAuth `hideCredentials` query/cookie stripping — fixed](regression-guards/hide-credentials-query-cookie-strip.md)
+
+## Superseded
+
+- [Historical four-path credential loading](superseded/jwt-auth-credentials-source-paths.md)
+- [Historical payload-selector decision](superseded/jwt-auth-multi-key-double-decode.md)

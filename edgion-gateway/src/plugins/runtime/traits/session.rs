@@ -309,6 +309,10 @@ pub trait PluginSession: Send + Sync {
     /// Set a request header (for upstream)
     fn set_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
+    /// Replace every field line while preserving typed value metadata, including sensitivity.
+    /// Credential and identity producers must mark the value sensitive before insertion.
+    fn set_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()>;
+
     /// Append a value to an existing request header (e.g., X-Forwarded-For)
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 

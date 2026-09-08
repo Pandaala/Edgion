@@ -1137,6 +1137,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn set_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        self.inner
+            .req_header_mut()
+            .insert_header(name.to_string(), value)
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.ctx.remove_deferred_credential_mutation(name);
+        Ok(())
+    }
+
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         // Append as a new header field line (preserves every existing field line
         // per RFC 7230 §3.2.2 list semantics; insert_header would replace all).
@@ -2761,6 +2770,39 @@ mod record_outcome_tests {
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert!(PluginSession::is_grpc_request(&adapter));
         assert!(adapter.is_grpc_request());
+    }
+
+    #[tokio::test]
+    async fn typed_request_header_preserves_sensitivity_and_replaces_deferred_credential() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let name = http::HeaderName::from_static("x-private-identity");
+        let mut old = http::HeaderValue::from_static("old-credential");
+        old.set_sensitive(true);
+        ctx.upsert_deferred_credential_mutation(name.clone(), Arc::new(old), None);
+        session
+            .req_header_mut()
+            .append_header(name.clone(), "first-line")
+            .unwrap();
+        session
+            .req_header_mut()
+            .append_header(name.clone(), "second-line")
+            .unwrap();
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let mut value = http::HeaderValue::from_static("current-identity");
+            value.set_sensitive(true);
+            adapter.set_request_header_value(name.as_str(), value).unwrap();
+        }
+        assert_eq!(session.req_header().headers.get_all(&name).iter().count(), 1);
+        let value = &session.req_header().headers[&name];
+        assert_eq!(value.as_bytes(), b"current-identity");
+        assert!(value.is_sensitive());
+        assert!(!format!("{value:?}").contains("current-identity"));
+        let mut upstream = session.req_header().clone();
+        ctx.apply_deferred_credentials(&mut upstream).unwrap();
+        assert_eq!(upstream.headers[&name].as_bytes(), b"current-identity");
+        assert!(upstream.headers[&name].is_sensitive());
     }
 
     #[tokio::test]

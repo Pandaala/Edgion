@@ -313,7 +313,8 @@ impl CompiledRequest {
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join("; ");
-            if let Ok(val) = reqwest::header::HeaderValue::from_str(&cookie_str) {
+            if let Ok(mut val) = reqwest::header::HeaderValue::from_str(&cookie_str) {
+                val.set_sensitive(true);
                 req.headers_mut().insert(reqwest::header::COOKIE, val);
             }
             // Silently skip Cookie header with invalid value (data-plane rule).
@@ -387,22 +388,17 @@ impl CompiledRequest {
         if self.headers.forward_all {
             let conn_val = session.header_str("connection").unwrap_or_default();
             let dynamic = connection_listed_hop_by_hop(conn_val);
-            for (name, value) in session.iter_headers() {
+            for (name, value) in session.request_header_map() {
                 // Preserve the owned accessor's behavior: a header whose value is
                 // not valid UTF-8 is skipped entirely.
-                let Ok(value) = std::str::from_utf8(value) else {
+                let Ok(_) = std::str::from_utf8(value.as_bytes()) else {
                     continue;
                 };
-                if !is_hop_by_hop_or_listed(name, &dynamic)
-                    && !is_body_framing_header(name)
-                    && !is_hop_owned_expectation_header(name)
+                if !is_hop_by_hop_or_listed(name.as_str(), &dynamic)
+                    && !is_body_framing_header(name.as_str())
+                    && !is_hop_owned_expectation_header(name.as_str())
                 {
-                    if let (Ok(name), Ok(value)) = (
-                        reqwest::header::HeaderName::from_bytes(name.as_bytes()),
-                        reqwest::header::HeaderValue::from_str(value),
-                    ) {
-                        result.append(name, value);
-                    }
+                    result.append(name.clone(), value.clone());
                 }
             }
         }
@@ -413,10 +409,14 @@ impl CompiledRequest {
         let mut pairs: Vec<(String, String)> = Vec::new();
         collect_list_fields(&self.headers, session, FieldKind::Header, &mut pairs, resolved)?;
         for (k, v) in pairs {
-            if let (Ok(name), Ok(value)) = (
+            if let (Ok(name), Ok(mut value)) = (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
                 reqwest::header::HeaderValue::from_str(&v),
             ) {
+                // String rendering has discarded provenance. Conservatively protect
+                // explicit fields, including custom credential names, at the cost of
+                // disabling HPACK dynamic indexing for these constructed values.
+                value.set_sensitive(true);
                 result.insert(name, value);
             }
         }
@@ -767,6 +767,99 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["configured"]
         );
+    }
+
+    #[test]
+    fn forward_all_preserves_sensitive_values_and_utf8_filtering() {
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                forward_all: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        let mut headers = http::HeaderMap::new();
+        for bytes in [b"private-first".as_slice(), b"private-second".as_slice()] {
+            let mut value = http::HeaderValue::from_bytes(bytes).unwrap();
+            value.set_sensitive(true);
+            headers.append("x-custom-credential", value);
+        }
+        headers.insert("x-visible", http::HeaderValue::from_static("public"));
+        headers.insert("x-utf8", http::HeaderValue::from_bytes("é".as_bytes()).unwrap());
+        headers.insert("x-invalid-utf8", http::HeaderValue::from_bytes(&[0xff]).unwrap());
+        headers.insert("connection", http::HeaderValue::from_static("x-private-hop"));
+        let mut hop = http::HeaderValue::from_static("hop-secret");
+        hop.set_sensitive(true);
+        headers.insert("x-private-hop", hop);
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+
+        let result = compiled.collect_headers(&session, None).unwrap();
+        let values: Vec<_> = result.get_all("x-custom-credential").iter().collect();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].as_bytes(), b"private-first");
+        assert_eq!(values[1].as_bytes(), b"private-second");
+        assert!(values.iter().all(|value| value.is_sensitive()));
+        assert!(!result["x-visible"].is_sensitive());
+        assert_eq!(result["x-utf8"].as_bytes(), "é".as_bytes());
+        assert!(!result.contains_key("x-invalid-utf8"));
+        assert!(!result.contains_key("connection"));
+        assert!(!result.contains_key("x-private-hop"));
+        assert!(!format!("{result:?}").contains("private-first"));
+    }
+
+    #[test]
+    fn rendered_credentials_origin_headers_and_cookies_are_sensitive() {
+        use edgion_resources::resources::common::outbound_request::{OriginField, PresencePolicy};
+        let mut spec = body_spec(BodySpec::Raw { template: "".into() });
+        spec.headers = ListFields {
+            origin: vec![OriginField {
+                name: "x-identity".into(),
+                presence: PresencePolicy::Required,
+            }],
+            custom: vec![
+                CustomField {
+                    name: "x-arbitrary-credential".into(),
+                    source: CustomSource::Template("Bearer ${secretRef:default/auth:token}".into()),
+                },
+                CustomField {
+                    name: "x-configured".into(),
+                    source: CustomSource::Value("fixed-value".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        spec.cookies = ListFields {
+            custom: vec![CustomField {
+                name: "session".into(),
+                source: CustomSource::Template("${secretRef:default/auth:token}".into()),
+            }],
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "x-identity")
+            .return_const(Some("private-user".to_owned()));
+        let resolved = ResolvedSecrets(std::collections::BTreeMap::from([(
+            "default/auth:token".into(),
+            "private-token".into(),
+        )]));
+        let request = compiled
+            .build_request(&session, None, "http://upstream.test", Some(&resolved))
+            .unwrap();
+        for (name, expected) in [
+            ("x-identity", "private-user"),
+            ("x-arbitrary-credential", "Bearer private-token"),
+            ("x-configured", "fixed-value"),
+            ("cookie", "session=private-token"),
+        ] {
+            assert_eq!(request.headers()[name].as_bytes(), expected.as_bytes());
+            assert!(request.headers()[name].is_sensitive());
+        }
+        assert!(!format!("{:?}", request.headers()).contains("private-token"));
     }
 
     #[test]

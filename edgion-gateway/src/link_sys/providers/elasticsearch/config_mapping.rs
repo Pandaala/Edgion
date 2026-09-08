@@ -153,10 +153,9 @@ fn apply_auth(
             "Elasticsearch auth does not support WebhookApiKey material (internal bug: resolver selected wrong variant)"
         ),
     };
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
-    );
+    let mut value = HeaderValue::from_str(&auth_header).context("invalid auth header value")?;
+    value.set_sensitive(true);
+    headers.insert(AUTHORIZATION, value);
     Ok(())
 }
 
@@ -282,6 +281,8 @@ mod tests {
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
         let expected = format!("Basic {}", BASE64.encode("user:secret"));
         assert_eq!(auth, expected);
+        assert!(headers[AUTHORIZATION].is_sensitive());
+        assert!(!format!("{headers:?}").contains(&expected));
     }
 
     #[test]
@@ -309,6 +310,8 @@ mod tests {
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
         let expected = format!("ApiKey {}", BASE64.encode("id:sec"));
         assert_eq!(auth, expected);
+        assert!(headers[AUTHORIZATION].is_sensitive());
+        assert!(!format!("{headers:#?}").contains(&expected));
     }
 
     /// `Pending` state → fail-fast.
@@ -369,6 +372,8 @@ mod tests {
         let (_, headers) = build_es_client(&crd, &state).unwrap();
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
         assert_eq!(auth, "Bearer tokval");
+        assert!(headers[AUTHORIZATION].is_sensitive());
+        assert!(!format!("{headers:?}").contains("tokval"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! LDAP Authentication plugin implementation
 
+use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use std::ops::Range;
 use std::time::Duration;
 
@@ -440,13 +441,13 @@ impl LdapAuth {
     }
 
     fn apply_authenticated_headers(&self, session: &mut dyn PluginSession, username: &str) {
-        let _ = session.set_request_header(&self.auth.credential_identifier_header, username);
+        let _ = set_sensitive_request_header(session, &self.auth.credential_identifier_header, username);
         let _ = session.remove_request_header(&self.auth.anonymous_header);
     }
 
     fn apply_anonymous_headers(&self, session: &mut dyn PluginSession, anonymous_user: &str) {
-        let _ = session.set_request_header(&self.auth.credential_identifier_header, anonymous_user);
-        let _ = session.set_request_header(&self.auth.anonymous_header, "true");
+        let _ = set_sensitive_request_header(session, &self.auth.credential_identifier_header, anonymous_user);
+        let _ = set_sensitive_request_header(session, &self.auth.anonymous_header, "true");
     }
 
     fn hide_credentials_if_needed(&self, session: &mut dyn PluginSession) {
@@ -844,7 +845,6 @@ mod tests {
     #[tokio::test]
     async fn anonymous_applies_only_when_both_credential_headers_are_missing() {
         use crate::plugins::runtime::traits::session::MockPluginSession;
-        use mockall::predicate::eq;
 
         let config = LdapAuthConfig {
             anonymous: Some("guest".to_string()),
@@ -854,13 +854,13 @@ mod tests {
         let mut missing = MockPluginSession::new();
         setup_header_mocks(&mut missing, &[]);
         missing
-            .expect_set_request_header()
-            .with(eq("X-Credential-Identifier"), eq("guest"))
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Credential-Identifier" && value == "guest" && value.is_sensitive())
             .times(1)
             .returning(|_, _| Ok(()));
         missing
-            .expect_set_request_header()
-            .with(eq("X-Anonymous-Consumer"), eq("true"))
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "X-Anonymous-Consumer" && value == "true" && value.is_sensitive())
             .times(1)
             .returning(|_, _| Ok(()));
         let mut missing_log = PluginLog::new(PLUGIN_NAME);

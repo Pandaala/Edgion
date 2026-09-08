@@ -36,7 +36,7 @@ holding the SecretStore lock or changing its API.
 
 These are owner/release-event boundaries, not wall-clock or zeroization guarantees.
 Store copies, YAML allocations, rejected duplicate material, transport buffers,
-and retired generations still require the broader audit.
+and retired generations follow the separate ownership evidence linked below.
 
 ## Verification and re-evaluation
 
@@ -47,8 +47,8 @@ first-wins, metadata policy, and re-resolution. Tests verify semantics; the remo
 clone is established by source inspection, not an allocation-count benchmark.
 Re-evaluate if fetching becomes borrowed, decoding becomes asynchronous, the parser
 retains borrowed values, or resolved credential ownership changes. Fresh execution
-results are recorded in the active task.
+results are recorded in the ownership evidence.
 
 ## Resolution references
 
-- D0036 — scoped copy reduction; [the full audit remains open](../../../../tasks/todo/audit-auth-credential-copy-lifetimes.md).
+- D0036 — scoped copy reduction; [broader ownership evidence and remaining work](../../security/review-evidence/credential-copy-ownership.md).

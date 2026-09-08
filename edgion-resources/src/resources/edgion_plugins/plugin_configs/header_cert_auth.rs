@@ -5,6 +5,8 @@
 //! - Connection: reuse client certificate info from mTLS handshake context
 
 use k8s_openapi::api::core::v1::Secret;
+
+crate::redact::impl_redacted_debug!(HeaderCertAuthConfig);
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +65,7 @@ pub struct UpstreamHeaderConfig {
 }
 
 /// Header Cert Auth plugin configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeaderCertAuthConfig {
     // === Certificate source ===

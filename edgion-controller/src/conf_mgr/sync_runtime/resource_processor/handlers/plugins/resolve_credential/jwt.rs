@@ -67,17 +67,17 @@ fn resolve_group(
         // (RS*/ES*).
         let kid = data
             .get("key")
-            .and_then(|v| String::from_utf8(v.0.clone()).ok())
+            .and_then(|v| std::str::from_utf8(&v.0).ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let secret_str = data
             .get("secret")
-            .and_then(|v| String::from_utf8(v.0.clone()).ok())
+            .and_then(|v| std::str::from_utf8(&v.0).ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let public_key_str = data
             .get("publicKey")
-            .and_then(|v| String::from_utf8(v.0.clone()).ok())
+            .and_then(|v| std::str::from_utf8(&v.0).ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
@@ -96,7 +96,6 @@ fn resolve_group(
                 edgion_plugins = %resource_ref.key(),
                 secret_key = %secret_key,
                 group = %group.name,
-                kid = %kid,
                 "JwtAuth: Secret missing both 'secret' and 'publicKey' fields"
             );
             continue;
@@ -110,7 +109,6 @@ fn resolve_group(
                 edgion_plugins = %resource_ref.key(),
                 secret_key = %secret_key,
                 group = %group.name,
-                kid = %kid,
                 "JwtAuth: Duplicate kid within group, skipping"
             );
             continue;

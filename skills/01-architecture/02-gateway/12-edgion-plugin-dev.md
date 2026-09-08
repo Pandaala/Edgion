@@ -445,6 +445,10 @@ High-frequency APIs:
 - `get_path()` / `get_request_path()` / `get_uri()` / `get_request_uri()` / `get_query()`
 - `direct_peer_ip()` / `remote_ip()` / `client_cert_info()`
 - `set_request_header()` / `append_request_header()` / `remove_request_header()`
+- `set_request_header_value()` preserves typed `HeaderValue` metadata. Auth output
+  producers use `common::auth_common::set_sensitive_request_header` for credentials,
+  identity, claims, and cookies; do not convert a sensitive value back to String
+  before forwarding it. See the [sensitive-header rule](../../04-review/security/mandatory-design/secret-header-values-must-be-sensitive.md).
 - `set_upstream_uri()` / `set_upstream_host()` / `set_upstream_method()`
 - `write_response_header()` / `write_response_body()` / `shutdown()`
 - `set_ctx_var()` / `get_ctx_var()`
