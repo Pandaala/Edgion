@@ -20,4 +20,4 @@
 - Implementation: terminal completion, downstream abandonment, channel-full, byte-limit, closed-writer, and defensive pre-abandoned paths now detach the mirror source. Cancellation/disarm, sender close, and writer-handle drop ordering remains explicit; the outer request-body state is released only for a mirror-only request.
 - Review: the approved complex plan preserved the handler/WAF monotonic replay latch and observer residency. Fresh final review requested only correction of the knowledge page's verification date; after correction it returned LGTM with no remaining Must Fix or Should Fix item.
 - Verification: context state tests passed 6/6, filter/action tests 14/14, mirror tests 38/38, and the complete proxy-http suite passed 244/244. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `ec774be0`; never pushed by the campaign.
