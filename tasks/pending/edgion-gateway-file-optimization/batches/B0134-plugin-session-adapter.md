@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `b6060c7acf8796cedf59d1d1adc692e0f98accdc`; revalidated at `13e0890f`
-- Pipeline state: analysis-ready
+- Pipeline state: terminal; changed
 - Active anchor crate: `edgion-gateway`
 - Owned file: `edgion-gateway/src/plugins/runtime/session_adapter.rs`
 - Baseline blob: `8b6a310abdc698e74a96907d5f0e380abba9107e`
@@ -23,6 +23,9 @@ Preserve canonical URI normalization/finalization, direct-peer versus remote-IP 
 - Proposed scope: this file only with colocated tests for a later-field match and deterministic first-match ordering. `storage_io_tests.rs` remains pending and unchanged. No integration edit is needed.
 - Deferred boundaries: D0046 owns invalid final local-reply status. `session_persistence.rs` and `backends/selector.rs` have similar first-Cookie reads but remain subject to their own pending file audits.
 - Knowledge: root/design rules, plugin architecture, URI normalization, Rust/log/access-log/testing guidance, and focused body/IP/TLS/credential-stripping/OIDC/H2 review knowledge.
-- Review: pending promotion after the active serial batch.
-- Verification: pending.
-- Commit: pending local commit after its own serial gate; never push.
+- Freshness: promoted at `8ee29b1c`; owned blob remains exactly `8b6a310abdc698e74a96907d5f0e380abba9107e`.
+- Plan review: `b0134_plan_review` independently approved the exact one-file plan with no Must Fix or Should Fix after checking HeaderMap insertion ordering, RFC 9113/6265 multi-field semantics, allocation ownership, and conservative malformed-field behavior.
+- Implementation: added a private borrowed parser over every Cookie field in field order; preserved per-field `;` parsing, trimmed case-sensitive names, first `=`, first successful match and malformed-before-match fail-conservative behavior. The public owned API remains unchanged and allocates only the final result. Added colocated regressions for later-field lookup, cross-field first-match/case behavior, and malformed fields before/after a match.
+- Review: `b0134_final_review` independently approved with no Must Fix or Should Fix. It traced every shared authentication, key extraction, DSL/template, routing/outbound and access-log consumer, verified lifetime/allocation correctness, and confirmed body, URI, TLS, IP, logging, redaction, observability and failure paths are untouched. Similar pending readers in session persistence and backend selection remain outside this batch.
+- Verification: focused Cookie tests passed 4/4 and the complete session-adapter unit suite passed 31/31. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
+- Commit: pending local batch commit; never push.

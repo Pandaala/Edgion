@@ -24,4 +24,4 @@ Read the complete reject filter and trace invalid configuration collection, runt
 - Implementation: corrected only the module documentation to describe advisory Controller validation/status, the Gateway runtime fail-closed serving gate, native HTTPRoute consumers, and `PluginStore` ownership of narrow last-known-good retention. Runtime bytes, signatures, logs, result values, visibility, and tests are unchanged.
 - Review: `b0133_final_review` independently approved with no Must Fix or Should Fix. It verified the runtime suffix is byte-identical, traced Controller lenient admission, PluginRuntime sealing, rule/backend native HTTPRoute construction, PluginStore retention, and shared HTTP/gRPC publication, and confirmed D0079/D0089/D0095 remain separate.
 - Verification: `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `8ee29b1c`; local only, never pushed by the campaign.

@@ -151,24 +151,37 @@ pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> 
     }
 }
 
-/// Read one cookie from a request's `Cookie` header.
+/// Borrow one cookie value from all request `Cookie` fields in field order.
+///
+/// An invalid UTF-8 field reached before a match makes the lookup fail rather
+/// than allowing a later field to override an uninterpretable credential. A
+/// match returns immediately, so malformed fields after it are irrelevant.
+fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
+    for header in headers.get_all(http::header::COOKIE).iter() {
+        let cookies = header.to_str().ok()?;
+        if let Some(value) = cookies.split(';').find_map(|pair| {
+            let mut parts = pair.trim().splitn(2, '=');
+            let key = parts.next()?;
+            if key == name {
+                parts.next()
+            } else {
+                None
+            }
+        }) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Read one cookie from a request's `Cookie` headers.
 ///
 /// Free function so both `PluginSession::get_cookie` and the access-log `ext`
 /// collector share one parser — the collector cannot build a
 /// `PingoraSessionAdapter` (that needs `&mut` borrows the logging stage does not
 /// have).
 pub fn cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
-    headers.get("Cookie").and_then(|v| v.to_str().ok()).and_then(|cookies| {
-        cookies.split(';').find_map(|pair| {
-            let mut parts = pair.trim().splitn(2, '=');
-            let key = parts.next()?;
-            if key == name {
-                parts.next().map(|v| v.to_string())
-            } else {
-                None
-            }
-        })
-    })
+    cookie_value_ref(headers, name).map(str::to_owned)
 }
 
 /// Return every value for one header, preserving duplicate occurrences.
@@ -2355,6 +2368,46 @@ mod tests {
         headers.insert("Cookie", http::HeaderValue::from_static("a=1; b=2"));
         assert_eq!(cookie_value(&headers, "b").as_deref(), Some("2"));
         assert_eq!(cookie_value(&headers, "c"), None);
+    }
+
+    #[test]
+    fn cookie_value_finds_cookie_in_later_header_field() {
+        let mut headers = http::HeaderMap::new();
+        headers.append(http::header::COOKIE, http::HeaderValue::from_static("a=1"));
+        headers.append(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("session=later; b=2"),
+        );
+
+        assert_eq!(cookie_value(&headers, "session").as_deref(), Some("later"));
+    }
+
+    #[test]
+    fn cookie_value_uses_first_matching_cookie_across_fields() {
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("Session=upper; session=first"),
+        );
+        headers.append(http::header::COOKIE, http::HeaderValue::from_static("session=second"));
+
+        assert_eq!(cookie_value(&headers, "session").as_deref(), Some("first"));
+        assert_eq!(cookie_value(&headers, "SESSION"), None);
+    }
+
+    #[test]
+    fn cookie_value_handles_malformed_fields_conservatively_in_order() {
+        let malformed = http::HeaderValue::from_bytes(&[0xff]).expect("obs-text is a valid raw header value");
+
+        let mut malformed_first = http::HeaderMap::new();
+        malformed_first.append(http::header::COOKIE, malformed.clone());
+        malformed_first.append(http::header::COOKIE, http::HeaderValue::from_static("session=later"));
+        assert_eq!(cookie_value(&malformed_first, "session"), None);
+
+        let mut match_first = http::HeaderMap::new();
+        match_first.append(http::header::COOKIE, http::HeaderValue::from_static("session=first"));
+        match_first.append(http::header::COOKIE, malformed);
+        assert_eq!(cookie_value(&match_first, "session").as_deref(), Some("first"));
     }
 
     #[test]
