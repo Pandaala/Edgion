@@ -555,7 +555,7 @@
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response_trailer.rs` | `plugins-runtime` | source | changed | B0146: corrected typed response-trailer companion contract |
 | `edgion-gateway/src/plugins/stream/connection_filter_bridge.rs` | `plugins-stream` | source | changed | B0147: clarified pre-PROXY admission and DirectPeerIp contract |
 | `edgion-gateway/src/plugins/stream/connection_rate_limit/local_gate.rs` | `plugins-stream` | source | changed | B0148: replaced wall-clock refill sampling with a monotonic gate clock |
-| `edgion-gateway/src/plugins/stream/connection_rate_limit/mod.rs` | `plugins-stream` | source | pending | — |
+| `edgion-gateway/src/plugins/stream/connection_rate_limit/mod.rs` | `plugins-stream` | source | examined-no-change | B0149: coherent zero-cost rate-limit module facade retained |
 | `edgion-gateway/src/plugins/stream/connection_rate_limit/plugin.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/geoip_location/mod.rs` | `plugins-stream` | source | pending | — |
 | `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs` | `plugins-stream` | source | pending | — |
