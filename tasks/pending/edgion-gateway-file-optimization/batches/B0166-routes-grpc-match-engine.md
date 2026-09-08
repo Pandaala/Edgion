@@ -24,4 +24,4 @@
 - Integration coverage: selected comparator is unit-testable; existing integration files remain frozen.
 - Review: fresh independent final reviewer `b0166_final_review` re-read the three-file diff and matcher rules, verified every comparator/bucket/test boundary and returned LGTM with no Must Fix or Should Fix. External HEAD drift to `b179660c` did not touch the target or its call chain.
 - Verification: `cargo fmt --all`; focused tests 12/12; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,113-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `bc47034c`; never pushed by the campaign.

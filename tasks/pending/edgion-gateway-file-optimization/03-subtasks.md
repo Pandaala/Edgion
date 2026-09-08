@@ -588,11 +588,11 @@
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | changed | B0162: filter delegation reverse-lock refs from listener attachment |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | changed | B0163: share immutable rule-level metric handles across match units |
 | `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | `routes-shared` | source | changed | B0164: round encoded coarser timeout units upward |
-| `edgion-gateway/src/routes/grpc/integration.rs` | `routes-shared` | source | examined-no-change | B0165: integration facade and routing/backend lifecycle retained |
+| `edgion-gateway/src/routes/grpc/integration.rs` | `routes-shared` | source | changed | B0165 review retained the facade; B0167 borrows precompiled backend policy identity |
 | `edgion-gateway/src/routes/grpc/match_engine.rs` | `routes-shared` | source | changed | B0166: correct regex service/method character precedence |
-| `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | changed | B0167: precompile and borrow backend policy target identity |
+| `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | analysis-ready | B0168: remove legacy singular gRPC manager alias |
+| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | analysis-ready | B0169: retained-manager clearing and inner ArcSwap candidate |
 | `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | pending | — |

@@ -5,6 +5,7 @@ use crate::runtime::matching::route::{check_gateway_listener_match, hostname_mat
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
@@ -20,6 +21,9 @@ pub struct CompiledGrpcBackend {
     /// Pure backend-ref schema owned by the immutable per-rule generation.
     /// Request-specific policy winners are stored on `SelectedGrpcBackend`.
     pub schema: GRPCBackendRef,
+    /// Canonical policy identity proven once from the authorized Service ref.
+    /// `None` for denied, delegated, or otherwise unsupported backend refs.
+    policy_target_key: Option<PolicyTargetKey>,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
 }
@@ -51,11 +55,8 @@ impl GrpcBackendHandle {
     }
 
     #[inline]
-    pub fn policy_target_key(
-        &self,
-        route_namespace: &str,
-    ) -> Option<edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey> {
-        self.compiled().policy_target_key(route_namespace)
+    pub fn policy_target_key(&self) -> Option<&PolicyTargetKey> {
+        self.compiled().policy_target_key.as_ref()
     }
 }
 
@@ -125,30 +126,29 @@ impl std::ops::Deref for CompiledGrpcBackend {
 }
 
 impl CompiledGrpcBackend {
-    /// Canonical typed policy identity for this authorized gRPC Service ref.
-    pub fn policy_target_key(
-        &self,
-        route_namespace: &str,
-    ) -> Option<edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey> {
-        if self.schema.ref_denied.is_some() {
+    fn compile(schema: GRPCBackendRef, route_namespace: &str, plugin_runtime: Arc<PluginRuntime>) -> Self {
+        let policy_target_key = Self::compile_policy_target_key(&schema, route_namespace);
+        Self {
+            schema,
+            policy_target_key,
+            plugin_runtime,
+        }
+    }
+
+    fn compile_policy_target_key(schema: &GRPCBackendRef, route_namespace: &str) -> Option<PolicyTargetKey> {
+        if schema.ref_denied.is_some() {
             return None;
         }
-        let group = self.schema.group.as_deref().unwrap_or("");
-        let kind = self.schema.kind.as_deref().unwrap_or("Service");
-        if !matches!(group, "" | "core") || kind != "Service" {
+        if !matches!(schema.group.as_deref(), None | Some("") | Some("core"))
+            || !matches!(schema.kind.as_deref(), None | Some("Service"))
+        {
             return None;
         }
-        Some(
-            edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
-                target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
-                namespace: self
-                    .schema
-                    .namespace
-                    .clone()
-                    .unwrap_or_else(|| route_namespace.to_string()),
-                name: self.schema.name.clone(),
-            },
-        )
+        Some(PolicyTargetKey {
+            target_kind: PolicyTargetKind::Service,
+            namespace: schema.namespace.as_deref().unwrap_or(route_namespace).to_string(),
+            name: schema.name.clone(),
+        })
     }
 }
 
@@ -415,10 +415,7 @@ impl GrpcRouteRuleUnit {
                         Some(filters) => PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace),
                         None => PluginRuntime::new(),
                     });
-                    CompiledGrpcBackend {
-                        schema: br.clone(),
-                        plugin_runtime,
-                    }
+                    CompiledGrpcBackend::compile(br.clone(), namespace, plugin_runtime)
                 })
                 .collect()
         });
@@ -562,12 +559,12 @@ mod backend_handle_tests {
     use edgion_resources::resources::backend_tls_policy::{
         BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
     };
-    use edgion_resources::resources::BackendTLSPolicy;
+    use edgion_resources::resources::{BackendTLSPolicy, RefDenied};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     fn compiled(name: &str, weight: i32, runtime: Arc<PluginRuntime>) -> CompiledGrpcBackend {
-        CompiledGrpcBackend {
-            schema: GRPCBackendRef {
+        CompiledGrpcBackend::compile(
+            GRPCBackendRef {
                 name: name.to_string(),
                 namespace: Some("backend-ns".to_string()),
                 port: Some(8080),
@@ -578,7 +575,45 @@ mod backend_handle_tests {
                 backend_tls_policy: None,
                 ref_denied: None,
             },
-            plugin_runtime: runtime,
+            "route-ns",
+            runtime,
+        )
+    }
+
+    fn compile_one_backend(schema: GRPCBackendRef, route_namespace: &str) -> Arc<Vec<CompiledGrpcBackend>> {
+        GrpcRouteRuleUnit::compile_grpc_rule(
+            &GRPCRouteRule {
+                name: None,
+                matches: None,
+                filters: None,
+                backend_refs: Some(vec![schema]),
+                timeouts: None,
+                retry: None,
+                session_persistence: None,
+                parsed_timeouts: None,
+                parsed_retry: None,
+                parsed_allow_non_idempotent_retry: None,
+            },
+            route_namespace,
+        )
+        .backends
+    }
+
+    fn backend_ref(group: Option<&str>, kind: Option<&str>, namespace: Option<&str>, denied: bool) -> GRPCBackendRef {
+        GRPCBackendRef {
+            name: "api".to_string(),
+            namespace: namespace.map(str::to_string),
+            port: Some(8080),
+            weight: Some(1),
+            group: group.map(str::to_string),
+            kind: kind.map(str::to_string),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: denied.then(|| RefDenied {
+                target_namespace: namespace.unwrap_or("route-ns").to_string(),
+                target_name: "api".to_string(),
+                reason: Some("NoMatchingReferenceGrant".to_string()),
+            }),
         }
     }
 
@@ -633,8 +668,11 @@ mod backend_handle_tests {
 
         assert_eq!(selected.slot(), 1);
         assert_eq!(selected.name, "api");
+        assert_eq!(selected.logical().policy_target_key().unwrap().name, "api");
         assert!(Arc::ptr_eq(&selected.plugin_runtime(), &old_runtime));
         assert!(!Arc::ptr_eq(&selected.logical.generation, &replacement));
+        let replacement_handle = GrpcBackendHandle::new(replacement, 0).unwrap();
+        assert_eq!(replacement_handle.policy_target_key().unwrap().name, "new");
     }
 
     #[test]
@@ -654,6 +692,144 @@ mod backend_handle_tests {
         for _ in 0..8 {
             assert_eq!(selector.select().unwrap(), 1);
         }
+    }
+
+    #[test]
+    fn compiled_policy_target_key_accepts_only_authorized_service_refs() {
+        struct Case {
+            label: &'static str,
+            group: Option<&'static str>,
+            kind: Option<&'static str>,
+            namespace: Option<&'static str>,
+            denied: bool,
+            expected_namespace: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                label: "defaults",
+                group: None,
+                kind: None,
+                namespace: None,
+                denied: false,
+                expected_namespace: Some("route-ns"),
+            },
+            Case {
+                label: "empty-group-default-kind",
+                group: Some(""),
+                kind: None,
+                namespace: None,
+                denied: false,
+                expected_namespace: Some("route-ns"),
+            },
+            Case {
+                label: "core-group-default-kind",
+                group: Some("core"),
+                kind: None,
+                namespace: None,
+                denied: false,
+                expected_namespace: Some("route-ns"),
+            },
+            Case {
+                label: "default-group-service-kind",
+                group: None,
+                kind: Some("Service"),
+                namespace: None,
+                denied: false,
+                expected_namespace: Some("route-ns"),
+            },
+            Case {
+                label: "empty-group-service-kind",
+                group: Some(""),
+                kind: Some("Service"),
+                namespace: None,
+                denied: false,
+                expected_namespace: Some("route-ns"),
+            },
+            Case {
+                label: "core-service-explicit-namespace",
+                group: Some("core"),
+                kind: Some("Service"),
+                namespace: Some("backend-ns"),
+                denied: false,
+                expected_namespace: Some("backend-ns"),
+            },
+            Case {
+                label: "group-is-case-sensitive",
+                group: Some("Core"),
+                kind: Some("Service"),
+                namespace: None,
+                denied: false,
+                expected_namespace: None,
+            },
+            Case {
+                label: "kind-is-case-sensitive",
+                group: Some("core"),
+                kind: Some("service"),
+                namespace: None,
+                denied: false,
+                expected_namespace: None,
+            },
+            Case {
+                label: "unsupported-kind",
+                group: None,
+                kind: Some("Other"),
+                namespace: None,
+                denied: false,
+                expected_namespace: None,
+            },
+            Case {
+                label: "grpc-route-delegation",
+                group: Some("gateway.networking.k8s.io"),
+                kind: Some("GRPCRoute"),
+                namespace: Some("child-ns"),
+                denied: false,
+                expected_namespace: None,
+            },
+            Case {
+                label: "denied-service",
+                group: None,
+                kind: Some("Service"),
+                namespace: Some("backend-ns"),
+                denied: true,
+                expected_namespace: None,
+            },
+        ];
+
+        for case in cases {
+            let generation = compile_one_backend(
+                backend_ref(case.group, case.kind, case.namespace, case.denied),
+                "route-ns",
+            );
+            let handle = GrpcBackendHandle::new(generation, 0).unwrap();
+            match (handle.policy_target_key(), case.expected_namespace) {
+                (Some(target), Some(expected_namespace)) => {
+                    assert_eq!(target.target_kind, PolicyTargetKind::Service, "{}", case.label);
+                    assert_eq!(target.namespace, expected_namespace, "{}", case.label);
+                    assert_eq!(target.name, "api", "{}", case.label);
+                }
+                (None, None) => {}
+                (actual, expected) => panic!("{}: target {actual:?}, expected namespace {expected:?}", case.label),
+            }
+        }
+    }
+
+    #[test]
+    fn handle_policy_target_projection_is_borrowed_stable_and_allocation_free() {
+        let generation = compile_one_backend(backend_ref(None, None, None, false), "route-ns");
+        let stored = generation[0].policy_target_key.as_ref().unwrap() as *const PolicyTargetKey;
+
+        let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let handle = GrpcBackendHandle::new(Arc::clone(&generation), 0).unwrap();
+            let first = handle.policy_target_key().unwrap();
+            let second = handle.policy_target_key().unwrap();
+            assert!(std::ptr::eq(first, second));
+            assert_eq!(first as *const PolicyTargetKey, stored);
+            std::hint::black_box(first);
+        });
+
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 
     #[test]

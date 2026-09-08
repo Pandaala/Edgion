@@ -136,10 +136,8 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         });
     }
 
-    let target = backend_ref
-        .policy_target_key(&grpc_route_unit.matched_info.rsc.ns)
-        .ok_or_else(EdError::BackendNotFound)?;
-    let backend_tls_policy = crate::backends::policy::query_backend_tls_policy_for_target(&target, backend_ref.port);
+    let target = logical.policy_target_key().ok_or_else(EdError::BackendNotFound)?;
+    let backend_tls_policy = crate::backends::policy::query_backend_tls_policy_for_target(target, backend_ref.port);
 
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins
