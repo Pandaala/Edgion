@@ -23,4 +23,4 @@
 - Deferred: `tasks/todo/grpc-timeout-upstream-rewrite-wire-coverage.md` records future upstream-observed header coverage; no existing integration file changed.
 - Review: fresh independent final reviewer `b0164_final_review` re-read the two-file diff, parser and upstream rewrite caller, independently checked all unit boundaries and confirmed tests are not tautological. Verdict: LGTM with no Must Fix, Should Fix or additional deferred finding.
 - Verification: `cargo fmt --all`; focused tests 14/14; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,107-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `9329e2f0`; never pushed by the campaign.
