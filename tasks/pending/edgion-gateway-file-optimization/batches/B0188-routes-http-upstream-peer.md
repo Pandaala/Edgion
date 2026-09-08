@@ -31,4 +31,4 @@
 - Implementation: `finalize_request_uri` now writes any differing parsed URI before immediately setting its latch; equal URIs still latch, parse failures change neither value, and already-finalized retries remain no-ops. Four live H1 tests cover write/query, equality, idempotence, and rollback. DirectEndpoint/ExternalJump comments now match tested Service-policy and endpoint-breaker ownership.
 - Review: fresh final review inspected working blob `50add5a706084433e0d0f7dbc409cd3ece48b9e4` and returned LGTM with no Must Fix or Should Fix item. It confirmed no intervening fallible operation, preserved query/raw behavior, accurate policy comments, and the separate `D0106` classification.
 - Verification: URI tests passed 4/4 and the complete proxy-http suite passed 253/253. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `1aad294d`; never pushed by the campaign.

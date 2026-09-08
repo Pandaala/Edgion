@@ -181,3 +181,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add native WAF response-stage invalid-status integration coverage | pending | [task](../../../todo/add-native-waf-response-invalid-status-integration.md) |
 | Unify response Content-Encoding classification | pending | [task](../../../todo/unify-response-content-encoding-classification.md) |
 | Define backendRef upstream-selection plugin semantics | pending | [task](../../../todo/define-backendref-upstream-selection-plugin-semantics.md) |
+| Add deferred-credential Connection nomination integration coverage | pending | [task](../../../todo/add-deferred-credential-connection-nomination-integration.md) |

@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Deferred credential Connection nominations fail before materialization](regression-guards/deferred-credential-connection-nomination.md)
 - [Credential material Debug redaction](regression-guards/credential-material-debug-redaction.md)
 - [Authentication challenge realm quoted strings](regression-guards/auth-challenge-realm-quoted-strings.md)
 - [AI backend ReferenceGrant decisions are enforced through dispatch](regression-guards/ai-backend-referencegrant-enforced-through-dispatch.md)

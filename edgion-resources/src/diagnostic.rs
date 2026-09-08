@@ -222,6 +222,11 @@ pub enum EdgionErrorCode {
     /// fails closed even if an older immutable plugin generation is still live.
     CredentialExpired,
 
+    /// A downstream or attempt-local `Connection` field nominated a deferred
+    /// credential target, or could not be parsed as UTF-8. The Gateway rejects
+    /// the attempt before materializing any credential header.
+    CredentialConnectionConflict,
+
     /// ForwardAuth plugin could not reach the configured auth service
     /// (connection refused, DNS failure, or timeout). Emitted when the
     /// plugin rejects the request (auth is always fail-closed).
@@ -421,6 +426,7 @@ impl EdgionErrorCode {
             Self::UpstreamAuthorityRejected => "UpstreamAuthorityRejected",
             Self::PluginTerminateWithoutResponse => "PluginTerminateWithoutResponse",
             Self::CredentialExpired => "CredentialExpired",
+            Self::CredentialConnectionConflict => "CredentialConnectionConflict",
             Self::ForwardAuthServiceUnreachable => "ForwardAuthServiceUnreachable",
             Self::RequestTimeoutExceeded => "RequestTimeoutExceeded",
             Self::BodyRefusedWebsocket => "BodyRefusedWebsocket",
@@ -584,6 +590,10 @@ mod tests {
                 "PluginTerminateWithoutResponse",
             ),
             (EdgionErrorCode::CredentialExpired, "CredentialExpired"),
+            (
+                EdgionErrorCode::CredentialConnectionConflict,
+                "CredentialConnectionConflict",
+            ),
             (
                 EdgionErrorCode::ForwardAuthServiceUnreachable,
                 "ForwardAuthServiceUnreachable",
