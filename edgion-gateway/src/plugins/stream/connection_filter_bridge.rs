@@ -4,7 +4,9 @@
 //! `ConnectionFilter` trait by delegating to the existing `StreamPluginRuntime`.
 //!
 //! This allows reusing `EdgionStreamPlugins` resources (e.g., IP restriction) as
-//! early TCP-level connection filters — before TLS handshake or HTTP parsing.
+//! early TCP-level connection filters after accept, but before inbound PROXY
+//! parsing, TLS handshake, or HTTP parsing. The listener's fatal PROXY-policy
+//! guard runs before this bridge and remains authoritative.
 //!
 //! ## Usage
 //!
@@ -14,6 +16,8 @@
 //!   annotations:
 //!     edgion.io/edgion-stream-plugins: "policy-name"
 //! ```
+//! The bare resource name is resolved in the Gateway's own namespace; cross-
+//! namespace attachment is not supported.
 
 use async_trait::async_trait;
 use pingora_core::listeners::ConnectionFilter;
@@ -26,8 +30,14 @@ use super::stream_plugin_trait::{StreamContext, StreamLayer, StreamPluginResult}
 /// Bridge that adapts Edgion's StreamPlugin system to Pingora's ConnectionFilter.
 ///
 /// Holds a reference to the global `StreamPluginStore` and a store key
-/// (`namespace/name`). On every incoming TCP connection, it reads the latest
-/// `EdgionStreamPlugins` from the store (ArcSwap), ensuring hot-reload support.
+/// (`namespace/name`). Each invocation that reaches this bridge with an inet
+/// peer loads the latest ArcSwap snapshot and clones the selected
+/// `CompiledStreamPlugins` `Arc`, pinning its Stage 1 runtime for that admission
+/// decision.
+///
+/// Pingora supplies the physical transport peer. Therefore `addr.ip()` is
+/// `DirectPeerIp`, never `RemoteIp`; with inbound PROXY protocol enabled it is
+/// normally the load balancer's address because PROXY parsing happens later.
 pub struct StreamPluginConnectionFilter {
     /// Global stream plugin store (hot-reloadable via ArcSwap)
     store: Arc<StreamPluginStore>,
@@ -61,7 +71,9 @@ impl StreamPluginConnectionFilter {
 impl ConnectionFilter for StreamPluginConnectionFilter {
     async fn should_accept(&self, addr: Option<&SocketAddr>) -> bool {
         let Some(addr) = addr else {
-            return true; // No address info, allow by default
+            // Pingora has no inet peer. Ordinary Edgion TCP endpoints normally
+            // provide Some(addr), so this narrow transport case passes through.
+            return true;
         };
 
         // Look up the referenced EdgionStreamPlugins resource from the store.
@@ -79,6 +91,9 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
         }
 
         let ctx = StreamContext::new(addr.ip(), self.listener_port, StreamLayer::Stage1);
+        // ConnectionFilter exposes only a boolean and has no request/TcpContext
+        // or canonical access-log metadata channel. Fold Deny's reason into
+        // false; per-connection tracing is forbidden on this data-plane path.
         match runtime.run(&ctx).await {
             StreamPluginResult::Allow => true,
             StreamPluginResult::Deny(_) => false,
