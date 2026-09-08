@@ -44,9 +44,10 @@ has no notion of `ref_denied`, so a denied cross-namespace target was judged val
 published, and `DyeOutcome::Success` was recorded with the denied name — the configured
 `onInvalid` policy could never fire. `find_backend_by_name` reads the compiled backend view,
 which carries `schema.ref_denied`, and B0066 had already moved Canary onto it. DIU was the last
-raw scanner **on the named-jump path** — `validate_endpoint_in_route` (DirectEndpoint) still
-iterates `rule.backend_refs`, but it matches by endpoint address rather than name and carries its
-own `ref_denied` check, so it is not a second name matcher.
+raw scanner **on the named-jump path** — `validate_endpoint_in_route` (DirectEndpoint) now
+uses route-compiled `CompiledBackend.direct_endpoint` authorization, which excludes denied refs
+before requests and resolves addresses through the published Service section. It is not a second
+name matcher; see [Service port proofs](../../backends/regression-guards/named-port-resolve-against-originating-slice.md).
 
 **3. Kind matching did NOT change**
 

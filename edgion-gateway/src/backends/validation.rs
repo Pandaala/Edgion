@@ -1,137 +1,231 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
-use crate::backends::get_roundrobin_store;
-use edgion_resources::{HTTPBackendRef, HTTPBackendRefKind};
+use crate::backends::discovery::{ServiceSectionKey, ServiceSelectorGeneration};
+use crate::backends::policy::backend_tls::BackendTLSPolicySnapshot;
+use crate::backends::{service_section_key_from_port, BackendTlsPolicyLookup};
+use crate::routes::http::match_unit::CompiledBackend;
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::{EdgionErrorCode, HTTPBackendRef, HTTPBackendRefKind};
 
-/// Validate that a given IP is a valid EndpointSlice address for one of the route's backend_refs.
-///
-/// Returns:
-/// - `Ok((backend_ref_index, port))` if the IP is found in any backend_ref's EndpointSlices
-/// - `Err(reason)` if the IP is not found
-///
-/// Security: This prevents SSRF by ensuring the caller can only route to
-/// addresses that the route already has access to via its backend_refs.
+/// Route-owned permission to select an endpoint in one canonical Service section.
+/// Constructed before publication, never from request-supplied identity.
+#[derive(Clone)]
+pub struct DirectEndpointAuthorization {
+    service_key: String,
+    section: ServiceSectionKey,
+    policy_target: PolicyTargetKey,
+}
+
+impl DirectEndpointAuthorization {
+    pub fn compile(backend: &HTTPBackendRef, route_namespace: &str) -> Option<Self> {
+        if backend.ref_denied.is_some() || backend.backend_kind() != HTTPBackendRefKind::Service {
+            return None;
+        }
+        let section = service_section_key_from_port(backend.port).ok()?;
+        let namespace = backend.namespace.as_deref().unwrap_or(route_namespace);
+        Some(Self {
+            service_key: format!("{namespace}/{}", backend.name),
+            section,
+            policy_target: PolicyTargetKey {
+                target_kind: PolicyTargetKind::Service,
+                namespace: namespace.to_owned(),
+                name: backend.name.clone(),
+            },
+        })
+    }
+}
+
+pub struct ValidatedDirectEndpoint {
+    pub backend_ref_idx: usize,
+    pub addr: SocketAddr,
+    pub tls_policy: BackendTlsPolicyLookup,
+}
+
+/// Prove the requested socket against one captured discovery generation.
+/// Direct overrides deliberately include unready endpoints, but never another
+/// Service section. An omitted explicit port must have one unambiguous mapping.
 pub fn validate_endpoint_in_route(
-    target_ip: &IpAddr,
+    target_ip: IpAddr,
     target_port: Option<u16>,
-    route_backend_refs: &[HTTPBackendRef],
-    route_namespace: &str,
-) -> Result<(usize, u16), String> {
-    for (idx, br) in route_backend_refs.iter().enumerate() {
-        if !is_direct_endpoint_backend_ref(br) {
+    backends: &[CompiledBackend],
+    discovery: &ServiceSelectorGeneration,
+    policies: &BackendTLSPolicySnapshot,
+    inherit_tls: bool,
+) -> Result<ValidatedDirectEndpoint, EdgionErrorCode> {
+    for backend in backends {
+        let Some(authorization) = &backend.direct_endpoint else {
             continue;
-        }
-        let ns = br.namespace.as_deref().unwrap_or(route_namespace);
-        let service_key = format!("{}/{}", ns, br.name);
-        let br_port = br.port.map(|p| p as u16);
-
-        // Determine effective port
-        let Some(port) = target_port.or(br_port) else {
-            continue; // No port available for this backend_ref
         };
-
-        // Check EndpointSlice for this backend_ref
-        if is_ip_in_service_endpoints(target_ip, port, &service_key) {
-            return Ok((idx, port));
+        let Some(service) = discovery.available(&authorization.service_key) else {
+            continue;
+        };
+        let Ok(section) = service.resolve_section(&authorization.section) else {
+            continue;
+        };
+        let Some(addr) = section.direct_endpoint_addr(target_ip, target_port) else {
+            continue;
+        };
+        let tls_policy = if inherit_tls {
+            policies.lookup(&authorization.policy_target, section.identity.name.as_deref())
+        } else {
+            BackendTlsPolicyLookup::Absent
+        };
+        if tls_policy.is_invalid() {
+            return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
         }
+        return Ok(ValidatedDirectEndpoint {
+            backend_ref_idx: backend.slot,
+            addr,
+            tls_policy,
+        });
     }
-
-    Err(format!("IP {} not found in any backend_ref EndpointSlices", target_ip))
-}
-
-fn is_direct_endpoint_backend_ref(backend_ref: &HTTPBackendRef) -> bool {
-    backend_ref.ref_denied.is_none() && backend_ref.backend_kind() == HTTPBackendRefKind::Service
-}
-
-/// Check if a given IP:port exists in a Service's EndpointSlices.
-fn is_ip_in_service_endpoints(target_ip: &IpAddr, port: u16, service_key: &str) -> bool {
-    let store = get_roundrobin_store();
-    if let Some(slices) = store.get_slices_for_service(service_key) {
-        for slice in slices.iter() {
-            if check_endpoint_slice_with_port(slice, target_ip, port) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn check_endpoint_slice_with_port(
-    slice: &k8s_openapi::api::discovery::v1::EndpointSlice,
-    target_ip: &IpAddr,
-    port: u16,
-) -> bool {
-    // Check if port exists in slice ports
-    let has_port = slice
-        .ports
-        .as_ref()
-        .is_some_and(|ports| ports.iter().any(|p| p.port == Some(port as i32)));
-    if !has_port {
-        return false;
-    }
-
-    let target_ip_str = target_ip.to_string();
-
-    // Check IP
-    for ep in &slice.endpoints {
-        for addr in &ep.addresses {
-            if addr == &target_ip_str {
-                return true;
-            }
-        }
-    }
-    false
+    Err(EdgionErrorCode::BackendPortResolutionFailed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointSlice};
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use crate::backends::discovery::ServiceDiscoveryCoordinator;
+    use crate::backends::BackendTLSPolicyStore;
+    use crate::plugins::PluginRuntime;
+    use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
+    use edgion_resources::resources::BackendTLSPolicy;
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
 
-    #[test]
-    fn test_check_endpoint_slice_with_port() {
-        let slice = EndpointSlice {
-            metadata: ObjectMeta::default(),
-            address_type: "IPv4".to_string(),
-            endpoints: vec![Endpoint {
-                addresses: vec!["10.0.0.1".to_string()],
-                ..Default::default()
-            }],
-            ports: Some(vec![k8s_openapi::api::discovery::v1::EndpointPort {
-                port: Some(8080),
-                ..Default::default()
-            }]),
-        };
+    fn backend(port: Option<i32>) -> CompiledBackend {
+        let schema = serde_json::from_value(json!({"name": "app", "port": port})).unwrap();
+        CompiledBackend::compile(schema, "default", 3, Arc::new(PluginRuntime::new()))
+    }
 
-        let ip_valid: IpAddr = "10.0.0.1".parse().unwrap();
-        let ip_invalid: IpAddr = "10.0.0.2".parse().unwrap();
+    fn publish(coordinator: &ServiceDiscoveryCoordinator, target_port: i32) {
+        coordinator.replace_services(&HashMap::from([(
+            "default/app".to_owned(),
+            Arc::new(
+                serde_json::from_value(json!({
+                    "metadata": {"name": "app", "namespace": "default"},
+                    "spec": {"ports": [{"name": "https", "port": 443, "targetPort": target_port}]}
+                }))
+                .unwrap(),
+            ),
+        )]));
+        coordinator.replace_endpoint_slices(&HashMap::from([("default/app-a".to_owned(), Arc::new(
+            serde_json::from_value(json!({
+                "metadata": {"name": "app-a", "namespace": "default", "labels": {"kubernetes.io/service-name": "app"}},
+                "addressType": "IPv4",
+                "ports": [{"name": "https", "port": target_port}, {"name": "admin", "port": 9000}],
+                "endpoints": [{"addresses": ["10.0.0.1"], "conditions": {"ready": false}}]
+            })).unwrap()
+        ))]));
+    }
 
-        assert!(check_endpoint_slice_with_port(&slice, &ip_valid, 8080));
-        assert!(!check_endpoint_slice_with_port(&slice, &ip_valid, 9090)); // Wrong port
-        assert!(!check_endpoint_slice_with_port(&slice, &ip_invalid, 8080)); // Wrong IP
+    fn policy_store(valid: bool) -> BackendTLSPolicyStore {
+        let mut policy: BackendTLSPolicy = serde_json::from_value(json!({
+            "metadata": {"name": "app-tls", "namespace": "default"},
+            "spec": {
+                "targetRefs": [{"group": "", "kind": "Service", "name": "app", "sectionName": "https"}],
+                "validation": {"hostname": "backend.example.com"}
+            }
+        }))
+        .unwrap();
+        policy.spec.resolved_target_class = Some(ResolvedPolicyTargetClass::Service);
+        policy.spec.use_system_ca = valid;
+        if !valid {
+            policy.spec.validation.hostname = "invalid hostname".to_owned();
+        }
+        let store = BackendTLSPolicyStore::new();
+        store.replace_all(HashMap::from([("default/app-tls".to_owned(), Arc::new(policy))]));
+        store
     }
 
     #[test]
-    fn denied_service_refs_are_not_direct_endpoint_candidates() {
-        let mut backend_ref = HTTPBackendRef {
-            name: "cross-namespace".to_string(),
-            namespace: Some("other-ns".to_string()),
-            port: Some(8080),
-            weight: Some(1),
-            group: None,
-            kind: Some("Service".to_string()),
-            filters: None,
-            backend_tls_policy: None,
-            ref_denied: None,
-        };
-        assert!(is_direct_endpoint_backend_ref(&backend_ref));
+    fn direct_authorization_rejects_invalid_ports_and_denied_refs_before_requests() {
+        for port in [None, Some(0), Some(-1), Some(65536), Some(65979)] {
+            assert!(backend(port).direct_endpoint.is_none());
+        }
+        let mut schema = backend(Some(443)).schema;
+        schema.ref_denied = Some(
+            serde_json::from_value(json!({
+                "targetNamespace": "default", "targetName": "app", "reason": "NoMatchingReferenceGrant"
+            }))
+            .unwrap(),
+        );
+        assert!(DirectEndpointAuthorization::compile(&schema, "default").is_none());
+        schema.ref_denied = None;
+        schema.kind = Some("EdgionBackend".to_owned());
+        assert!(DirectEndpointAuthorization::compile(&schema, "default").is_none());
+    }
 
-        backend_ref.ref_denied = Some(edgion_resources::resources::common::RefDenied {
-            target_namespace: "other-ns".to_string(),
-            target_name: "cross-namespace".to_string(),
-            reason: Some("NoMatchingReferenceGrant".to_string()),
+    #[test]
+    fn direct_authorization_is_allocation_free_and_section_scoped() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        publish(&coordinator, 8443);
+        let discovery = coordinator.load_generation();
+        let policies = policy_store(true).snapshot();
+        let backends = [backend(Some(443))];
+        let ip = "10.0.0.1".parse().unwrap();
+        let (result, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            validate_endpoint_in_route(ip, None, &backends, &discovery, &policies, true)
         });
-        assert!(!is_direct_endpoint_backend_ref(&backend_ref));
+        let endpoint = result.unwrap();
+        assert_eq!(endpoint.addr.port(), 8443);
+        assert_eq!(endpoint.backend_ref_idx, 3);
+        assert_eq!(
+            endpoint.tls_policy.effective().unwrap().policy.spec.validation.hostname,
+            "backend.example.com"
+        );
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+        for port in [0, 443, 9000] {
+            assert!(validate_endpoint_in_route(ip, Some(port), &backends, &discovery, &policies, true).is_err());
+        }
+        assert!(validate_endpoint_in_route(ip, Some(8443), &backends, &discovery, &policies, true).is_ok());
+    }
+
+    #[test]
+    fn direct_authorization_pins_mapping_and_policy_and_rejects_missing_generations() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        publish(&coordinator, 8443);
+        let old = coordinator.load_generation();
+        let policies = policy_store(true).snapshot();
+        let backends = [backend(Some(443))];
+        let ip = "10.0.0.1".parse().unwrap();
+        let captured = validate_endpoint_in_route(ip, None, &backends, &old, &policies, true).unwrap();
+        publish(&coordinator, 9443);
+        let new = coordinator.load_generation();
+        assert_eq!(
+            validate_endpoint_in_route(ip, None, &backends, &old, &policies, true)
+                .unwrap()
+                .addr
+                .port(),
+            8443
+        );
+        assert_eq!(
+            validate_endpoint_in_route(ip, None, &backends, &new, &policies, true)
+                .unwrap()
+                .addr
+                .port(),
+            9443
+        );
+        assert!(validate_endpoint_in_route(ip, Some(8443), &backends, &new, &policies, true).is_err());
+        let invalid = policy_store(false).snapshot();
+        assert!(matches!(
+            validate_endpoint_in_route(ip, None, &backends, &new, &invalid, true),
+            Err(EdgionErrorCode::BackendTlsPolicyInvalid)
+        ));
+        assert!(validate_endpoint_in_route(ip, None, &backends, &new, &invalid, false)
+            .unwrap()
+            .tls_policy
+            .is_absent());
+        assert!(!captured.tls_policy.is_invalid());
+        coordinator.update_services(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from(["default/app".to_owned()]),
+        );
+        assert!(
+            validate_endpoint_in_route(ip, None, &backends, &coordinator.load_generation(), &policies, true).is_err()
+        );
     }
 }

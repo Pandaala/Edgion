@@ -91,6 +91,8 @@ pub struct CompiledBackend {
     /// Cold-path classification. Service-only consumers must explicitly match
     /// `Service`; AI routing consumes the full ordered slot list separately.
     pub target: CompiledBackendTarget,
+    /// Precompiled Service authorization for direct endpoint overrides.
+    pub direct_endpoint: Option<crate::backends::validation::DirectEndpointAuthorization>,
     /// Compiled backend-level plugin chain (built from `schema.filters`).
     pub plugin_runtime: Arc<PluginRuntime>,
 }
@@ -150,11 +152,14 @@ impl CompiledBackend {
         plugin_runtime: Arc<PluginRuntime>,
     ) -> Self {
         let target = Self::compile_target(&schema, route_namespace);
+        let direct_endpoint =
+            crate::backends::validation::DirectEndpointAuthorization::compile(&schema, route_namespace);
         Self {
             schema,
             slot,
             identity,
             target,
+            direct_endpoint,
             plugin_runtime,
         }
     }

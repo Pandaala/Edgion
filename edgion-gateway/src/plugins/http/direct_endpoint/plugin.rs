@@ -2,13 +2,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::net::{IpAddr, Ipv6Addr};
 
-use crate::backends::{validate_endpoint_backend_addr, validate_endpoint_in_route};
+use crate::backends::{
+    get_global_backend_tls_policy_store, get_service_discovery_coordinator, validate_endpoint_backend_addr,
+    validate_endpoint_in_route,
+};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::routes::http::match_unit::CompiledBackend;
 use crate::{DirectEndpointPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{DirectEndpointConfig, UpstreamFallback};
-use edgion_resources::HTTPBackendRef;
 
 const MISSING_TARGET_ENDPOINT_BODY: Bytes = Bytes::from_static(b"Missing target endpoint");
 const INVALID_TARGET_ENDPOINT_BODY: Bytes = Bytes::from_static(b"Invalid target endpoint");
@@ -25,12 +28,11 @@ impl DirectEndpoint {
         Self { config: validated }
     }
 
-    /// Pure function to resolve endpoint info from raw value + context
+    /// Resolve the override against one immutable discovery generation.
     fn resolve(
         &self,
         raw_value: String,
-        backend_refs: &[HTTPBackendRef],
-        route_ns: &str,
+        backends: &[CompiledBackend],
         allow_loopback_upstream: bool,
     ) -> Result<DirectEndpointPreset, ResolutionError> {
         // 1. Apply regex extraction if configured
@@ -51,18 +53,18 @@ impl DirectEndpoint {
         let (target_ip, extracted_port) = parse_endpoint(&endpoint_str).map_err(|_| ResolutionError::Invalid)?;
 
         // 3. Security: validate against route's backend_ref endpoints
-        let (backend_idx, effective_port) =
-            validate_endpoint_in_route(&target_ip, extracted_port.or(self.config.port), backend_refs, route_ns)
-                .map_err(|_| ResolutionError::NotAllowed)?;
-
-        // 4. Determine TLS config
-        let (use_tls, sni) = if self.config.inherit_tls {
-            extract_tls_from_backend_ref(&backend_refs[backend_idx])
-        } else {
-            (false, String::new())
-        };
-
-        let addr = std::net::SocketAddr::new(target_ip, effective_port);
+        let discovery = get_service_discovery_coordinator().load_generation();
+        let policies = get_global_backend_tls_policy_store().snapshot();
+        let endpoint = validate_endpoint_in_route(
+            target_ip,
+            extracted_port.or(self.config.port),
+            backends,
+            &discovery,
+            &policies,
+            self.config.inherit_tls,
+        )
+        .map_err(|_| ResolutionError::NotAllowed)?;
+        let addr = endpoint.addr;
         if validate_endpoint_backend_addr(
             &pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
             allow_loopback_upstream,
@@ -74,9 +76,8 @@ impl DirectEndpoint {
 
         Ok(DirectEndpointPreset {
             addr,
-            use_tls,
-            sni,
-            backend_ref_idx: backend_idx,
+            tls_policy: endpoint.tls_policy,
+            backend_ref_idx: endpoint.backend_ref_idx,
         })
     }
 }
@@ -126,14 +127,8 @@ impl RequestFilter for DirectEndpoint {
 
         // 2. Get route context
         let ctx = session.ctx();
-        let (backend_refs, route_ns) = match ctx.route_unit.as_ref() {
-            Some(unit) if unit.rule.backend_refs.as_ref().is_some_and(|r| !r.is_empty()) => (
-                unit.rule
-                    .backend_refs
-                    .as_ref()
-                    .expect("guarded by is_some_and match arm"),
-                unit.matched_info.rsc.ns.as_str(),
-            ),
+        let backends = match ctx.route_unit.as_ref() {
+            Some(unit) if !unit.backends.is_empty() => unit.backends.as_slice(),
             _ => {
                 log.push("no route refs");
                 return PluginRunningResult::GoodNext;
@@ -141,7 +136,7 @@ impl RequestFilter for DirectEndpoint {
         };
 
         // 3. Resolve endpoint info
-        match self.resolve(raw_value, backend_refs, route_ns, session.ctx().allow_loopback_upstream) {
+        match self.resolve(raw_value, backends, ctx.allow_loopback_upstream) {
             Ok(info) => {
                 let addr = info.addr;
                 match session.set_upstream_jump(UpstreamJumpTarget::Direct(info)) {
@@ -199,14 +194,6 @@ impl RequestFilter for DirectEndpoint {
     }
 }
 
-/// Extract TLS config from a backend_ref's BackendTLSPolicy
-fn extract_tls_from_backend_ref(br: &HTTPBackendRef) -> (bool, String) {
-    match &br.backend_tls_policy {
-        Some(policy) => (true, policy.spec.validation.hostname.clone()),
-        None => (false, String::new()),
-    }
-}
-
 /// Parse endpoint string into (IpAddr, optional port)
 fn parse_endpoint(s: &str) -> Result<(IpAddr, Option<u16>), InvalidEndpoint> {
     if let Some(bracketed) = s.strip_prefix('[') {
@@ -245,17 +232,39 @@ mod tests {
     use edgion_resources::common::KeyGet;
     use edgion_resources::constants::labels::k8s::SERVICE_NAME;
     use edgion_resources::resources::edgion_plugins::EndpointExtract;
-    use edgion_resources::{HTTPRouteMatch, HTTPRouteRule};
+    use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
     use k8s_openapi::api::discovery::v1::{Endpoint, EndpointPort, EndpointSlice};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
-    /// Register a single-address EndpointSlice in the global roundrobin store
-    /// (additive `update_data_only`, so it does not disturb other tests sharing
-    /// the process-wide singleton) so `validate_endpoint_in_route` finds `ip:port`
-    /// as a legitimate address for `ns/service_name`.
+    /// Publish a Service-port mapping and its single-address EndpointSlice.
     fn insert_test_endpoint_slice(ns: &str, service_name: &str, slice_name: &str, ip: &str, port: i32) {
+        use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
+        use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+        get_service_discovery_coordinator().update_services(
+            HashMap::from([(
+                format!("{ns}/{service_name}"),
+                Arc::new(Service {
+                    metadata: ObjectMeta {
+                        name: Some(service_name.to_owned()),
+                        namespace: Some(ns.to_owned()),
+                        ..Default::default()
+                    },
+                    spec: Some(ServiceSpec {
+                        ports: Some(vec![ServicePort {
+                            port: 443,
+                            target_port: Some(IntOrString::Int(port)),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            )]),
+            HashMap::new(),
+            Default::default(),
+        );
         let mut labels = BTreeMap::new();
         labels.insert(SERVICE_NAME.to_string(), service_name.to_string());
         let slice = EndpointSlice {
@@ -285,7 +294,7 @@ mod tests {
         HTTPBackendRef {
             name: name.to_string(),
             namespace: None,
-            port: None,
+            port: Some(443),
             weight: None,
             group: None,
             kind: None,
@@ -298,6 +307,18 @@ mod tests {
     /// Minimal `HttpRouteRuleUnit` fixture carrying only what the plugin reads:
     /// `rule.backend_refs` and `matched_info.rsc.ns`.
     fn test_route_unit(ns: &str, backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
+        let backends = backend_refs
+            .iter()
+            .enumerate()
+            .map(|(slot, backend)| {
+                CompiledBackend::compile(
+                    backend.clone(),
+                    ns,
+                    slot,
+                    Arc::new(crate::plugins::PluginRuntime::new()),
+                )
+            })
+            .collect();
         HttpRouteRuleUnit {
             resource_key: format!("{}/test-route", ns),
             matched_info: MatchInfo {
@@ -347,7 +368,7 @@ mod tests {
             },
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
-            backends: Arc::new(vec![]),
+            backends: Arc::new(backends),
             backend_finder: Arc::new(crate::lb::BackendSelector::new()),
         }
     }
@@ -407,8 +428,7 @@ mod tests {
                     target,
                     UpstreamJumpTarget::Direct(info)
                         if info.addr == "10.0.9.9:9191".parse().unwrap()
-                            && !info.use_tls
-                            && info.sni.is_empty()
+                            && info.tls_policy.is_absent()
                             && info.backend_ref_idx == 0
                 )
             })

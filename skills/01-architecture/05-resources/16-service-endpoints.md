@@ -19,14 +19,16 @@ BackendTLSPolicy, and EdgionBackendTrafficPolicy register target Service keys th
 runtime-owned reference manager. A Service create/update/delete requeues those owners so
 `ResolvedRefs`, resolved ports, and policy target status are recomputed.
 
-The Gateway `ServiceStore` supplies Service port/protocol metadata used with EndpointSlice data.
+The Gateway discovery coordinator combines Service port/protocol metadata with EndpointSlice
+sources and publishes one immutable generation of canonical Service sections.
 
 ## EndpointSlice
 
 The Controller passes EndpointSlice objects through and requeues dependent resources where the
-handler's indexes require it. On the Gateway, `EpSliceHandler` groups slices by the
-`kubernetes.io/service-name` label and updates each Service's `ServiceSelectorCell`, health-check
-targets, and removed-backend runtime state.
+handler's indexes require it. On the Gateway, `EpSliceHandler` publishes slices through the
+discovery coordinator, grouped by the `kubernetes.io/service-name` label. Section serving ports,
+numeric direct-endpoint authorization indexes, health-check targets, and backend runtime state
+are derived from that publication. See the [backend architecture](../02-gateway/07-backends.md).
 
 ## Relationships
 

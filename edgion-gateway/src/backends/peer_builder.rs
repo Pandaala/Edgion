@@ -349,6 +349,9 @@ pub(crate) fn validate_endpoint_backend_addr(
     addr: &SocketAddr,
     allow_loopback_upstream: bool,
 ) -> Result<(), EdgionErrorCode> {
+    if addr.as_inet().is_none() {
+        return Err(EdgionErrorCode::BackendPortResolutionFailed);
+    }
     match classify_backend_addr(addr) {
         Some(BlockedBackendReason::Localhost)
             if allow_loopback_upstream || edgion_common::test_mode::is_integration_testing_mode() =>
@@ -367,6 +370,22 @@ mod tests {
     use k8s_openapi::api::core::v1::Secret;
     use std::net::IpAddr;
     use std::sync::Arc;
+
+    #[cfg(unix)]
+    #[test]
+    fn endpoint_boundary_rejects_unix_even_with_loopback_override() {
+        let addr =
+            SocketAddr::Unix(std::os::unix::net::SocketAddr::from_pathname("/tmp/edgion-endpoint-test.sock").unwrap());
+        assert!(classify_backend_addr(&addr).is_none());
+        assert_eq!(
+            validate_endpoint_backend_addr(&addr, false),
+            Err(EdgionErrorCode::BackendPortResolutionFailed)
+        );
+        assert_eq!(
+            validate_endpoint_backend_addr(&addr, true),
+            Err(EdgionErrorCode::BackendPortResolutionFailed)
+        );
+    }
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()

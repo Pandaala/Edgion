@@ -40,7 +40,7 @@ before applying a decision to current code.
 - [ExternalName DNS Cache Identity and Lifecycle (task-externalname-dns-cache-identity-and-lifecycle, origin D0001) — FIXED](regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
 - [runtime-F010 — backend error path reuses the listener's HSTS decision](regression-guards/hsts-on-plain-http-error-responses.md)
 - [backends-F001 — IPv6 health-probe URLs are bracketed; gRPC probe no longer panics](regression-guards/ipv6-probe-url-brackets.md)
-- [resolve_target_port_key honors the selected endpoint's originating slice — FIXED](regression-guards/named-port-resolve-against-originating-slice.md)
+- [Service section port proofs and DirectEndpoint authorization](regression-guards/named-port-resolve-against-originating-slice.md)
 - [backends-F011 — remove_task dead one-line wrapper](regression-guards/remove-task-dead-wrapper.md)
 - [net-F001 — resolve_domain hands unbracketed IPv6 literal to lookup_host](regression-guards/resolve-domain-ipv6-literal.md)
 - [backends-F010 — set_service_config duplicate ServiceCbState literal](regression-guards/service-cb-state-new-ctor.md)

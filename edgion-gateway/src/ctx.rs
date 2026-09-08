@@ -1868,10 +1868,8 @@ pub struct ExternalJumpPreset {
 pub struct DirectEndpointPreset {
     /// Target socket address (ip:port)
     pub addr: std::net::SocketAddr,
-    /// Whether to use TLS
-    pub use_tls: bool,
-    /// SNI for TLS connections
-    pub sni: String,
+    /// Policy captured using the same proven Service section as the address.
+    pub tls_policy: crate::backends::BackendTlsPolicyLookup,
     /// Index of the matched backend_ref in route_unit.rule.backend_refs
     /// Used to pre-select the correct backend_ref for logging and metrics
     pub backend_ref_idx: usize,
@@ -4484,8 +4482,7 @@ mod jump_tests {
     fn sample_direct() -> DirectEndpointPreset {
         DirectEndpointPreset {
             addr: "10.0.0.1:8080".parse().unwrap(),
-            use_tls: false,
-            sni: String::new(),
+            tls_policy: crate::backends::BackendTlsPolicyLookup::Absent,
             backend_ref_idx: 0,
         }
     }

@@ -38,10 +38,10 @@ spec:
 | `extract` | Object | none | Extraction rules |
 | `extract.regex` | String | **Required** (within `extract`) | Regular expression applied to the raw value |
 | `extract.group` | Integer | `1` | Capture group index (`0` = full match) |
-| `port` | Integer | none | Port to use when the value carries no `ip:port` and the backendRef has none |
+| `port` | Integer | none | Explicit endpoint serving port when the value carries no `ip:port`; must be authorized by the backendRef's Service port |
 | `onMissing` | Enum | `Fallback` | Behavior when the value is missing. Allowed values: `Fallback` (normal LB) / `Reject` (400) |
 | `onInvalid` | Enum | `Reject` | Behavior when the endpoint is not in any backendRef. Allowed values: `Reject` (403) / `Fallback` |
-| `inheritTls` | Boolean | `true` | Inherit TLS from the matched backendRef's BackendTLSPolicy |
+| `inheritTls` | Boolean | `true` | Use the effective BackendTLSPolicy for the authorized Service port; an invalid policy rejects the override |
 
 `dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
 
@@ -117,9 +117,13 @@ requestPlugins:
 
 ## Behavior Details
 
-- The specified endpoint IP must belong to the Endpoints list of a Service in the current route's `backendRefs`
+- The route must authorize a Service with a valid `backendRefs.port`. The specified IP and serving port must belong to that Service port's EndpointSlice mapping, not merely another port on the same Service.
 - If the endpoint doesn't belong to any backend, it is handled as `onInvalid` (default `Reject` with 403)
-- The port is resolved in priority order: (1) port embedded in the value (`ip:port`), (2) the `port` field, (3) the matched backendRef's port. If none are available, the plugin returns an error
+- The port is resolved in priority order: (1) port embedded in the value (`ip:port`), (2) the `port` field, (3) the serving port mapped from the matched backendRef's Service port. For example, Service `443 → 8443` with an IP-only value dials `8443`. Explicit ports must match that mapping; an omitted port is rejected when the IP has multiple possible serving ports.
+- DirectEndpoint deliberately permits published unready endpoints for targeted debugging and overrides normal load-balancer eligibility. It still enforces route authorization and address safety. Ordinary load balancing retains its readiness rules.
+- Missing Service/port mappings, invalid ports, and unauthorized sibling ports follow `onInvalid`. `fallback` discards the override and uses normal load balancing; it never dials the rejected endpoint.
+- With `inheritTls: true`, an effective policy supplies TLS verification and client identity through the normal backend TLS path. An invalid policy rejects the override; only an absent policy uses plaintext. `inheritTls: false` explicitly disables inheritance.
+- Address and policy selection are captured when the override is resolved and reused for retries. Later requests use newly published Service/EndpointSlice mappings; already captured requests may finish on their prior mapping.
 - `dye` is default-off; a `success` rule (the default `on`) applies only after a successful endpoint resolution, and `fallback`/`reject` rules apply on the corresponding `onMissing`/`onInvalid` branch — see [Scenario 2: Dye Headers](#scenario-2-dye-headers) above
 - `Fallback` mode falls back to normal load balancing selection
 

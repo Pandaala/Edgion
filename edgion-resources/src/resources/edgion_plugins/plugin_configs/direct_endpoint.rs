@@ -36,9 +36,11 @@ pub struct DirectEndpointConfig {
     /// Priority:
     /// 1. Port extracted from the value (if value contains "ip:port" format)
     /// 2. This `port` field
-    /// 3. The matched backend_ref's port
+    /// 3. The serving port mapped from the matched backend_ref's Service port
     ///
-    /// If none of the above are available, the plugin returns an error.
+    /// The route must declare a valid Service port even when an explicit endpoint
+    /// port is supplied. Explicit ports must belong to that Service section;
+    /// an omitted port requires a unique serving port for the selected IP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<u16>,
@@ -58,8 +60,8 @@ pub struct DirectEndpointConfig {
     #[serde(default = "default_upstream_reject")]
     pub on_invalid: UpstreamFallback,
 
-    /// Whether to inherit TLS configuration from the matched backend_ref's
-    /// BackendTLSPolicy when connecting to the direct endpoint.
+    /// Whether to inherit the effective BackendTLSPolicy for the proven Service
+    /// port section. Invalid policies reject the override; absent policies use HTTP.
     ///
     /// Default: true
     #[serde(default = "default_true")]

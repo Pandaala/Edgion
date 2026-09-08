@@ -1,83 +1,106 @@
 ---
 name: named-port-resolve-against-originating-slice
-description: Use when reviewing resolve_target_port_key named-multi-port findings; covers why a named port is now resolved against the slice the selected endpoint came from, not the first slice declaring the name.
+description: Review canonical Service section port resolution, heterogeneous EndpointSlice origins, and DirectEndpoint authorization.
 status: fixed
 finding_id: port-resolver-heterogeneous-slice-ports
 closed: 2026-07-18
 knowledge_type: regression-guards
 ---
 
-# resolve_target_port_key honors the selected endpoint's originating slice — FIXED
+# Service ports resolve through immutable EndpointSlice section proofs
 
-## Conclusion
+## Conclusion and scope
 
-The request-path rewriter `resolve_target_port_key` is deleted. Named `targetPort` resolution now
-lives on the Service/EndpointSlice coordinator
-(`edgion-gateway/src/backends/discovery/coordinator.rs`) and is published into each section slot's
-`serving_port` before selection. A requested port cannot fall back to another section's serving
-address. The historical rewrite no longer collapses a named multi-port lookup onto the first
-EndpointSlice that declares the port name.
+The request-path `resolve_target_port_key` rewriter is removed. The discovery coordinator
+compiles each Service port section against its exact EndpointSlice serving ports and publishes
+immutable slots. HTTP, TCP, TLS passthrough/termination, UDP, and request-mirror selectors
+consume the section instead of retaining or rewriting an unrelated first port.
+AllEndpointStatus consumes ready slots and section-scoped TLS policy as described in
+[its owning rule](all-endpoint-status-tls-identity.md).
 
-Re-reports of the form "named port takes the first slice's number regardless of endpoint",
-"heterogeneous sibling slices misdirect traffic to the wrong pod port", or "first-match depends on
-HashSet order" are **not accepted** — verify the current `resolve_in_slice` + `slice_contains_ip`
-origin lookup before re-reporting.
+DirectEndpoint now uses route-compiled `CompiledBackend.direct_endpoint` authorization
+(Service key, checked port section, policy target). The section's numeric IP/port index is
+compiled from `all_slots` in both initial compilation and runtime materialization.
+Explicit endpoint ports must belong to the authorized section; absent explicit ports require
+a unique serving port for that IP. Missing Service/section, zero/overflow/negative backendRef
+ports, unproved endpoint ports, and ambiguous IP mappings cannot authorize a direct dial.
+Denied references remain excluded. No request-time raw EndpointSlice scan, key formatting,
+string-to-IP parse, resource clone, or blocking lock is needed for authorization.
 
-## Core Rationale
+The selected address and the policy looked up using the same proven section name are captured
+in `DirectEndpointPreset` for retries. `inheritTls: true` uses the canonical TLS peer builder;
+an invalid policy rejects the override, and only an absent policy permits plaintext.
+The existing explicit `inheritTls: false` opt-out remains. Endpoint-derived final dialing
+rejects Unix sockets and applies the canonical loopback/link-local checks.
 
-**1. Heterogeneous named ports are a legitimate K8s state, not just misconfiguration**
+## Rationale and evidence
 
-When a Service uses a *named* `targetPort` (a string), kube-controller resolves the name per-Pod
-against each Pod's `containerPort`. During a rollout where the new pod template exposes that named
-port on a different number, EndpointSlices legitimately carry different port numbers for the same
-name side by side. kube-proxy routes each endpoint on its own slice's port; the gateway must match
-that semantics. The old `slices.iter().find_map(...)` applied the first slice's port to every
-endpoint, connecting a slice-B pod on slice-A's port (wrong pod port → connection refused / wrong
-app) for the duration of the rollout window.
+A Service port and an EndpointSlice serving port are different identities: `443 -> 8443`
+must dial 8443. A request supplying a sibling port on the same IP must not gain authority
+merely because that number exists elsewhere on the slice. Heterogeneous named-targetPort
+rollouts legitimately publish distinct serving ports per endpoint; each section preserves
+those origins rather than selecting a global minimum.
 
-**2. The cell already carries correct per-slice ports; the rewrite only needed to stay slice-local**
+Sources:
+- `edgion-gateway/src/backends/discovery/coordinator.rs`: section compilation,
+  materialization, `direct_endpoint_addr`.
+- `edgion-gateway/src/backends/validation.rs`: precompiled route permission and
+  one-generation numeric authorization plus policy lookup.
+- `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs`: captured override.
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`: retry peer construction.
+- `edgion-gateway/src/backends/peer_builder.rs`: canonical TLS and final address boundary.
 
-Since the 2026-07-17 `get_backends_for_service` fix, each backend address is built with its own
-slice's port. The rewrite exists to select the *named* port out of a multi-port slice's port list;
-scoping that lookup to the originating slice keeps it consistent with the address the LB already
-chose. Homogeneous, numeric-port, and single-port Services are unaffected — those paths return
-before or resolve identically.
+Authority: `skills/00-design-rules.md` A/B/D/F/U/V and
+`skills/01-architecture/02-gateway/07-backends.md`.
 
-**3. Determinism for the unknown-origin fallback**
+## Alternatives and limits
 
-`get_slices_for_service` returns slices in `HashSet` iteration order, so a plain first-match is
-non-deterministic across rebuilds. The fallback now uses `min()` over the matching ports so a stale
-or unmatched endpoint resolves stably instead of flipping between rebuilds.
+The user explicitly approved allowing published unready endpoints for DirectEndpoint on
+2026-09-08. This supports targeted debugging and deliberately overrides normal LB eligibility;
+it does not bypass route authorization or address safety. Normal selectors still enforce their
+own readiness/health rules. `onInvalid: fallback` discards the direct override and selects
+normally; it never dials the rejected target.
 
-## Fix Suggestions Not Accepted
+Captured requests may finish on an older discovery mapping and policy. Later requests see the
+new publication; this is not revocation of already captured or dispatched requests. Gateway
+fallback client identity follows the existing canonical TLS builder lifecycle.
 
-- "Add a `tracing::warn!` when the port is rewritten / origin is unknown" — data-plane hot path,
-  Iron rule 3 (`skills/03-coding/01-log-safety.md`); no logging added here.
-- "Also make `get_backends_for_service`'s portless `fallback_port` deterministic / carry per-backend
-  port-name maps through the cell" — the portless-slice case is config-error territory
-  (kube-controller always sets slice ports) and was intentionally left out of this narrow fix; a
-  cell-schema change is out of scope. See the parked task for that direction.
-- "Match the originating slice by string-compare on the address" — addresses are parsed to
-  `IpAddr` before comparison so canonical vs. non-canonical IPv6 forms compare equal.
+Historical evidence: the July 18 fix used numeric origin matching in a request-time rewriter.
+Its unknown-origin `min()` fallback was deterministic but did not prove authorization. That
+fallback and its old scope restrictions are obsolete, not accepted current behavior. The
+September task's references to two EndpointSlice read locks and deep clones also describe the
+removed store implementation, not the current immutable facade.
 
-## Re-evaluation Triggers
+## Verification and re-evaluation
 
-Re-open this decision only if:
+Verified on 2026-09-08 using the supported default Gateway build:
 
-- Selection again rewrites a chosen address onto another section's or slice's port.
-- A cell-schema change starts carrying explicit per-backend port identity (then the IP-match origin
-  lookup can be replaced by the carried identity).
+- `cargo test -p edgion-gateway --lib backends:: -- --test-threads=1`: 249 passed.
+- `cargo test -p edgion-gateway --lib direct_endpoint -- --test-threads=1`: 15 passed
+  (overlaps the backend tests above).
+- Existing DirectEndpoint integration suite passed before and after the dynamic scenario.
+- `test_client -g --dynamic-scenario DirectEndpointPortResolution`: passed, including
+  HTTP serving-port changes, sibling-port rejection, unready override, missing section,
+  HTTPS with a named-section custom CA, missing-CA rejection, and recovery.
+- Final shared-topology metrics, unknown-field, requeue-loop, and cache-residue checks passed;
+  the scenario cleaned its resources and the test services were stopped.
+- Workspace check and Clippy passed; Clippy retains existing repository warnings.
+- Formatting, agent-doc consistency, SSA force, metrics inventory, Pingora source policy,
+  and Gateway tracing guards passed. Independent read-only review: LGTM.
 
-## Reference Cases
+This run did not execute full workspace tests or Kubernetes integration. Historical July
+integration results were not rerun by the knowledge migration and are not current evidence.
 
-- `tasks/todo/port-resolver-heterogeneous-slice-ports.md` (finding, 2026-07-17), closed 2026-07-18.
-- Sibling: [ep-slice-no-port-fail-closed.md](ep-slice-no-port-fail-closed.md) (backends-F013) — the
-  2026-07-17 fail-closed fix that narrowed the bug to this rewrite site.
-- Unit test: `backends::discovery::coordinator::tests::named_target_port_distinct_from_service_port_name_resolves`
-  and `backends::selector::tests::named_target_port_still_dials_slice_endpoint_port`.
-- Integration: `edgion-tests/src/client/suites/http_route/multi_port.rs` (homogeneous MultiPort path,
-  stays green).
+Re-evaluate when section construction/materialization changes, a consumer rewrites serving
+ports after proof, DirectEndpoint eligibility changes, or address/policy capture moves.
+Focused tests cover heterogeneous origins, numeric IPv6 equality, ambiguous same-IP ports,
+invalid backend refs, allocation-free authorization, unready overrides, and captured generations.
+The `DirectEndpointPortResolution` shared-topology scenario exercises actual HTTP/TLS dialing
+and reload/rejection/recovery.
 
 ## Resolution references
 
-- `port-resolver-heterogeneous-slice-ports` — 2026-07-18.
+- `port-resolver-heterogeneous-slice-ports`: historical real defect fixed 2026-07-18;
+  originating-slice semantics preserved by the coordinator.
+- `backend-port-resolution-precompiled-fail-closed`: partial prior implementation,
+  remaining DirectEndpoint authorization and endpoint-address boundary corrected in this task.

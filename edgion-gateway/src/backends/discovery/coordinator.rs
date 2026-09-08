@@ -97,6 +97,38 @@ pub struct ResolvedServiceSection {
     pub all_slots: Arc<[Arc<ResolvedBackendSlot>]>,
     pub ready_slots: Arc<[Arc<ResolvedBackendSlot>]>,
     pub selectors: CompiledSelectors,
+    direct_endpoint_ports: BTreeMap<IpAddr, BTreeSet<NonZeroU16>>,
+}
+
+impl ResolvedServiceSection {
+    /// Authorize a direct endpoint within this Service port section.
+    ///
+    /// Direct overrides intentionally include published unready slots. Without
+    /// an explicit port, the IP must have exactly one serving port in this section.
+    pub fn direct_endpoint_addr(&self, ip: IpAddr, explicit_port: Option<u16>) -> Option<SocketAddr> {
+        let ports = self.direct_endpoint_ports.get(&ip)?;
+        let port = match explicit_port {
+            Some(port) => {
+                let port = NonZeroU16::new(port)?;
+                ports.get(&port).copied()?
+            }
+            None if ports.len() == 1 => *ports.first()?,
+            None => return None,
+        };
+        Some(SocketAddr::new(ip, port.get()))
+    }
+}
+
+fn compile_direct_endpoint_ports(slots: &[Arc<ResolvedBackendSlot>]) -> BTreeMap<IpAddr, BTreeSet<NonZeroU16>> {
+    let mut ports_by_ip: BTreeMap<IpAddr, BTreeSet<NonZeroU16>> = BTreeMap::new();
+    for slot in slots {
+        if let Some(socket) = slot.backend.addr.as_inet() {
+            if let Some(port) = NonZeroU16::new(socket.port()) {
+                ports_by_ip.entry(socket.ip()).or_default().insert(port);
+            }
+        }
+    }
+    ports_by_ip
 }
 
 pub enum ServiceSectionOutcome {
@@ -1516,6 +1548,7 @@ fn build_section(
     let ready_backends = Arc::new(ready_slots.iter().map(|slot| Arc::clone(&slot.backend)).collect());
     ServiceSectionOutcome::Resolved(Arc::new(ResolvedServiceSection {
         identity: identity.clone(),
+        direct_endpoint_ports: compile_direct_endpoint_ports(&all_slots),
         all_slots,
         ready_slots,
         selectors: CompiledSelectors::build(ready_backends),
@@ -1704,6 +1737,7 @@ fn materialize_section(
     let ready_backends = Arc::new(ready_slots.iter().map(|slot| Arc::clone(&slot.backend)).collect());
     Some(ResolvedServiceSection {
         identity: section.identity.clone(),
+        direct_endpoint_ports: compile_direct_endpoint_ports(&all_slots),
         all_slots,
         ready_slots,
         selectors: CompiledSelectors::build(ready_backends),
@@ -1952,6 +1986,111 @@ mod tests {
     }
 
     #[test]
+    fn direct_endpoint_mapping_is_section_scoped_and_includes_unready_slots() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let mut backend_service = (*service(Some("service-uid"), IntOrString::Int(8443))).clone();
+        let ports = backend_service.spec.as_mut().unwrap().ports.as_mut().unwrap();
+        ports[0].port = 443;
+        ports.push(ServicePort {
+            name: Some("admin".to_string()),
+            port: 9443,
+            target_port: Some(IntOrString::Int(9000)),
+            ..Default::default()
+        });
+        coordinator.replace_services(&HashMap::from([(
+            "default/backend".to_string(),
+            Arc::new(backend_service),
+        )]));
+        let mut endpoints = (*slice("backend-a", Some("slice-a"), false)).clone();
+        endpoints.ports = Some(slice_ports(&[("http", 8443), ("admin", 9000)]));
+        coordinator.replace_endpoint_slices(&HashMap::from([("default/backend-a".to_string(), Arc::new(endpoints))]));
+        let section = coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(443).unwrap()))
+            .unwrap();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(section.ready_slots.is_empty());
+        assert_eq!(section.direct_endpoint_addr(ip, None), Some(SocketAddr::new(ip, 8443)));
+        assert_eq!(
+            section.direct_endpoint_addr(ip, Some(8443)),
+            Some(SocketAddr::new(ip, 8443))
+        );
+        for port in [0, 443, 9000, 9443] {
+            assert_eq!(section.direct_endpoint_addr(ip, Some(port)), None);
+        }
+        assert_eq!(section.direct_endpoint_addr("10.0.0.2".parse().unwrap(), None), None);
+    }
+
+    #[test]
+    fn direct_endpoint_index_preserves_per_ip_ports_and_captured_generations() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        publish_base(&coordinator);
+        let old_generation = coordinator.load_generation();
+        let key = ServiceSectionKey::Number(NonZeroU16::new(80).unwrap());
+        let old_section = old_generation
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&key)
+            .unwrap();
+        let mut replacement = (*slice("backend-a", Some("slice-a"), true)).clone();
+        replacement.ports = Some(slice_ports(&[("http", 8181)]));
+        let mut sibling = (*slice("backend-b", Some("slice-b"), true)).clone();
+        sibling.endpoints[0].addresses = vec!["10.0.0.2".to_string()];
+        coordinator.replace_endpoint_slices(&HashMap::from([
+            ("default/backend-a".to_string(), Arc::new(replacement)),
+            ("default/backend-b".to_string(), Arc::new(sibling)),
+        ]));
+        let new_section = coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&key)
+            .unwrap();
+        let first: IpAddr = "10.0.0.1".parse().unwrap();
+        let second: IpAddr = "10.0.0.2".parse().unwrap();
+        assert_eq!(
+            old_section.direct_endpoint_addr(first, None),
+            Some(SocketAddr::new(first, 8080))
+        );
+        assert_eq!(old_section.direct_endpoint_addr(second, None), None);
+        assert_eq!(
+            new_section.direct_endpoint_addr(first, None),
+            Some(SocketAddr::new(first, 8181))
+        );
+        assert_eq!(new_section.direct_endpoint_addr(first, Some(8080)), None);
+        assert_eq!(
+            new_section.direct_endpoint_addr(second, None),
+            Some(SocketAddr::new(second, 8080))
+        );
+        assert_eq!(new_section.direct_endpoint_addr(second, Some(8181)), None);
+    }
+
+    #[test]
+    fn direct_endpoint_ipv6_uses_numeric_identity_and_deduplicates_origins() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        publish_base(&coordinator);
+        let mut endpoints = (*slice("backend-a", Some("slice-a"), true)).clone();
+        endpoints.address_type = "IPv6".to_string();
+        endpoints.endpoints[0].addresses = vec!["2001:db8:0:0:0:0:0:1".to_string(), "2001:db8::1".to_string()];
+        coordinator.replace_endpoint_slices(&HashMap::from([("default/backend-a".to_string(), Arc::new(endpoints))]));
+        let section = coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+            .unwrap();
+        let ip: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(section.all_slots.len(), 1);
+        assert_eq!(section.direct_endpoint_addr(ip, None), Some(SocketAddr::new(ip, 8080)));
+        assert_eq!(
+            section.direct_endpoint_addr(ip, Some(8080)),
+            Some(SocketAddr::new(ip, 8080))
+        );
+    }
+
+    #[test]
     fn canonical_aliases_merge_equivalent_origins_and_missing_is_typed_invalid() {
         let coordinator = ServiceDiscoveryCoordinator::new();
         coordinator.replace_services(&HashMap::from([(
@@ -2118,6 +2257,15 @@ mod tests {
             .map(|slot| slot.origin_set[0].serving_port.get())
             .collect();
         assert_eq!(ports, vec![30021, 30022]);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert_eq!(section.direct_endpoint_addr(ip, None), None);
+        for port in [30021, 30022] {
+            assert_eq!(
+                section.direct_endpoint_addr(ip, Some(port)),
+                Some(SocketAddr::new(ip, port))
+            );
+        }
+        assert_eq!(section.direct_endpoint_addr(ip, Some(8080)), None);
     }
 
     #[test]

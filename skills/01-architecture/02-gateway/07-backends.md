@@ -53,6 +53,18 @@ the proven section, not a live ServiceStore scan. Health probes use
 `AvailableServiceProjection::canonical_probe_backends()` (union of Resolved `all_slots`,
 deduped by runtime identity). Session persistence is keyed per section.
 
+DirectEndpoint uses `CompiledBackend.direct_endpoint`, a route-compiled permission containing
+the Service key, checked section key, and TLS policy target. Denied refs and invalid/missing
+Service ports have no permission. One captured discovery generation supplies the section's
+precompiled numeric IP/port index. An explicit endpoint port must match that section; an omitted
+port requires one serving port for the IP. This lookup does not read raw Kubernetes resources,
+scan endpoints, format keys, parse addresses, or take a blocking lock. Direct overrides include
+`all_slots` (including unready endpoints) by explicit product choice for targeted debugging;
+normal selectors retain their existing eligibility rules. The proven section name selects the
+captured BackendTLSPolicy tri-state. The resulting address and policy survive retries, and the
+final peer builder enforces TLS and endpoint address safety. Endpoint-derived addresses must be
+inet sockets; generic explicitly configured Unix upstreams retain their separate contract.
+
 ## Health-check system
 
 ### Component layout

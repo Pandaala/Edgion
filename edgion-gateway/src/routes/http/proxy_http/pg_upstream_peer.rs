@@ -1438,10 +1438,20 @@ fn try_direct_endpoint_peer(
         //   other variants are dispatched to sibling helpers
         _ => unreachable!("caller must dispatch only on ctx.jump == Some(Direct)"),
     };
-    let (addr, use_tls, sni) = (direct.addr, direct.use_tls, direct.sni.clone());
-
-    let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
+    let addr = PingoraSocketAddr::Inet(direct.addr);
+    let policy = direct.tls_policy.clone();
+    let gateway_key = ctx.gateway_info.as_deref().map(|gateway| gateway.gateway_key());
+    let peer = crate::backends::validate_endpoint_backend_addr(&addr, ctx.allow_loopback_upstream)
+        .and_then(|()| {
+            crate::backends::peer_builder::peer_from_backend_tls_lookup(addr, &policy, gateway_key.as_deref())
+        })
+        .map_err(|status| {
+            ctx.record_error(status);
+            PingoraError::explain(ErrorType::ConnectError, "direct endpoint unavailable")
+        })?;
     let result = finish_static_peer(edgion_http, ctx, peer);
+    let (use_tls, sni) = extract_tls_config(&policy);
+    crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, &sni);
 
     // init_backend_context_if_needed left source as None (default path) — tag this
     // request as a DirectEndpoint bypass so access logs/metrics can distinguish it.

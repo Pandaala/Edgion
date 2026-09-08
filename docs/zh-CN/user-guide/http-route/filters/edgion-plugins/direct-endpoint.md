@@ -38,10 +38,10 @@ spec:
 | `extract` | Object | ❌ | 无 | 提取规则 |
 | `extract.regex` | String | ✅ | 无 | 正则表达式 |
 | `extract.group` | Integer | ✅ | 无 | 捕获组序号 |
-| `port` | Integer | ❌ | 无 | 覆盖端口号 |
+| `port` | Integer | ❌ | 无 | 请求值未携带端口时使用的显式端点端口，必须属于 backendRef 的 Service 端口映射 |
 | `onMissing` | String | ❌ | `Fallback` | 值缺失时行为：`Fallback`（回退正常LB）/ `Reject`（拒绝请求）|
 | `onInvalid` | String | ❌ | `Reject` | 值无效时行为：`Reject` / `Fallback` |
-| `inheritTls` | Boolean | ❌ | `true` | 是否继承路由的 TLS 配置 |
+| `inheritTls` | Boolean | ❌ | `true` | 使用授权 Service 端口的有效 BackendTLSPolicy；无效策略拒绝指定端点 |
 
 `dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
 
@@ -117,7 +117,12 @@ requestPlugins:
 
 ## 行为细节
 
-- 指定的 endpoint IP 必须属于当前路由 `backendRefs` 中某个 Service 的 Endpoints 列表
+- 路由必须通过有效的 `backendRefs.port` 授权一个 Service 端口。指定 IP 和实际端点端口必须属于该端口的 EndpointSlice 映射，不能只因为同一 Service 的其他端口存在就通过校验。
+- 端口优先级为：请求值中的 `ip:port`、插件 `port`、backendRef 的 Service 端口映射出的实际端点端口。例如 Service `443 → 8443`，只提供 IP 时会连接 `8443`。显式端口必须符合该映射；未提供端口且同一 IP 对应多个实际端口时拒绝。
+- DirectEndpoint 允许指定已发布的 unready 端点，用于定向调试并覆盖普通负载均衡的资格判定；路由授权和地址安全检查仍然生效。普通负载均衡保留其就绪状态规则。
+- Service 或端口映射缺失、端口非法、指定未授权的同 Service 其他端口时，按 `onInvalid` 处理。`fallback` 放弃指定端点并使用普通负载均衡，绝不拨号到被拒绝的端点。
+- `inheritTls: true` 使用授权 Service 端口的有效 BackendTLSPolicy，复用普通后端 TLS 校验和客户端身份处理。无效策略拒绝指定端点，只有策略不存在时才使用明文；`inheritTls: false` 显式关闭继承。
+- 端点地址和策略在解析指定端点时捕获，并供重试复用。后续请求使用新发布的 Service/EndpointSlice 映射，已捕获的请求可以按原映射完成。
 - 如果 endpoint 不属于任何 backend，视为 `onInvalid` 处理
 - `dye` 默认关闭；默认 `on`（即 `success`）规则只在成功解析出 endpoint 后才会应用，`fallback`/`reject` 规则则应用于对应的 `onMissing`/`onInvalid` 分支——见上方[场景 2：染色请求头](#场景-2染色请求头)
 - `Fallback` 模式下回退到正常的负载均衡选择
