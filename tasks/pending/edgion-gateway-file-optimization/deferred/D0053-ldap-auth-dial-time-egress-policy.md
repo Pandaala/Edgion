@@ -15,4 +15,4 @@ Before the fix, `ldapHost` was passed to ldap3 as an `ldap://` or `ldaps://` URL
 `LdapAuth` now holds a Gateway `EgressResolver`, classifies every candidate at connect time, dials only admitted addresses, and keeps the original hostname URL for LDAPS/StartTLS. URL rewrite and preflight-only DNS were rejected.
 
 ## Integration-test impact
-D0054 remains the standalone cross-process coverage task. Existing frozen LDAP integration files remain unchanged.
+D0054 added standalone cross-process coverage; current evidence and verification limits live in the canonical record above. Existing frozen LDAP integration files remain unchanged.

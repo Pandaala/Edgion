@@ -84,6 +84,18 @@ Base 配置（`EdgionPlugins`）包含所有路由逻辑**和**一个默认 `reg
 |------|------|------|
 | `regions` | Array | 整体替换 region 表（不做合并，整表替换） |
 
+### 区域表校验
+
+Controller 与 Gateway 共享基础表、覆盖表的校验规则：
+
+- `name` 不能仅含空白，且表内唯一。
+- `backendEndpoint` 接受主机名、IPv4 或方括号 IPv6，可带 `1–65535` 的端口，如 `[2001:db8::1]:443`；不接受 URL、空主机或非法端口。未指定端口时，TLS 使用 `443`，非 TLS 使用 `80`。主机名保留大小写和结尾的点；格式校验不替代 DNS 解析后的地址安全检查。
+- `hashRange` 必须满足 `0 <= low <= high < modulo`，所有区域的区间都不能重叠，包括配置了 `failoverTo` 的区域。允许间隙；没有 `hashCalc` 时仍按默认 modulo `1000` 校验表和预计算哈希。
+- `routeRules` 非空时，基础表必须非空，即使指定了 `overrideRef`；只有无路由规则的 no-op 配置允许空基础表。
+- 覆盖层省略 `regions` 时保留基础表，显式 `regions: []` 无效。每个引用插件分别按自身 modulo 判断覆盖表是否有效。
+
+基础配置错误反映在 `Accepted` 状态中，覆盖层解析或生效表错误反映在 `ResolvedRefs` 中。普通资源写入仍采用状态反馈机制。覆盖层缺失、被禁用、类型不符或无效时回退有效基础表；不保留上一次有效覆盖表，也没有基于时间的过期机制。整表校验在配置更新时完成。
+
 ---
 
 ## 快速开始
@@ -240,7 +252,7 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 须与配置一�
 在任意 `RegionDef` 中添加 `failoverTo`，将该 region 的流量静态重定向到另一个 region。可在 base `regions`
 表或 `RegionRouteOverride` overlay 中设置。典型用途：将某 region 标记为下线，流量自动重定向。
 
-限制：目标必须是有效的 region 名；不支持链式重定向；不支持自引用或循环（运行时静默忽略，access log 中记录 `err: failover to invalid`）。
+目标必须存在于同一表中，禁止自引用和循环。允许无环链，但运行时只执行一跳：`a → b → c` 中选中 `a` 的请求转到 `b`，选中 `b` 的请求转到 `c`。非法表会在配置处理阶段被识别；专用故障转移 API 对非法候选表返回 `422`，不保存该修改。
 
 ## 注意事项
 

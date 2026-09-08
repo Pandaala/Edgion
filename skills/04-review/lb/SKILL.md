@@ -18,6 +18,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Service degrade selection Counter ownership and lifecycle](regression-guards/degrade-selection-counter-ownership.md)
+- [Service selection captures one live runtime snapshot](regression-guards/service-runtime-snapshot-selection.md)
 
 - [lb-F004 — consistent-hash walk charges budget per distinct backend, not per ring slot](regression-guards/consistent-hash-duplicate-node-budget.md)
 - [ConsistentHashRing::select Per-Request HashSet Allocation](regression-guards/consistent-hash-ring-seenset-no-heap.md)

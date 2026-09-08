@@ -91,8 +91,10 @@ Re-open this decision only if:
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
 - Retry-budget window rotation is covered by
   [retry-budget epoch coherence](retry-budget-epoch-coherence.md).
-- LB runtime-handle capture remains out of scope. Degrade metric lifecycle is
-  covered by [selection Counter ownership](../../lb/regression-guards/degrade-selection-counter-ownership.md).
+- Live health/outlier state is intentionally separate from the policy generation
+  and uses the [Service runtime selection snapshot](../../lb/regression-guards/service-runtime-snapshot-selection.md).
+  Degrade metric lifecycle is covered by
+  [selection Counter ownership](../../lb/regression-guards/degrade-selection-counter-ownership.md).
 
 ## Resolution references
 

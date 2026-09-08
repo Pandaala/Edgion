@@ -4,11 +4,12 @@
 //!
 //! At conf change time (low frequency):
 //!   ConfHandler receives `Arc<EdgionConfigData>` → builds a new Snapshot
-//!   (raw + the compiled IpList index) and swaps it in atomically.
+//!   (raw + the compiled IpList index + region-table proofs) and swaps it atomically.
 //!
 //! At request time (high frequency):
 //!   IpList consumers load a precompiled matcher. Selector and RegionRoute
-//!   consumers load the raw entry and type-guard `ConfigEntry` dynamically.
+//!   consumers load the raw entry and type-guard `ConfigEntry` dynamically;
+//!   RegionRoute reads its matching validation proof in that same snapshot.
 
 use arc_swap::ArcSwap;
 use smallvec::SmallVec;
@@ -18,7 +19,9 @@ use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, EdgionConfigDataRef};
+use edgion_resources::resources::edgion_config_data::{
+    ConfigEntry, EdgionConfigData, EdgionConfigDataRef, RegionTableValidation,
+};
 
 static GLOBAL_EDGION_CONFIG_DATA_STORE: LazyLock<Arc<EdgionConfigDataStore>> =
     LazyLock::new(|| Arc::new(EdgionConfigDataStore::new()));
@@ -77,11 +80,13 @@ type IpListMatcherMap = HashMap<String, Arc<IpRadixMatcher>>;
 
 /// Typed indexes bundled with the raw map so they can be swapped atomically.
 ///
-/// Only `IpList` is indexed: its live data-plane consumers need a precompiled
-/// matcher. `Selector` and `RegionRouteOverride` consumers read and type-guard
-/// the raw snapshot. Controller-expanded variants need no Gateway index.
+/// `IpList` needs a precompiled matcher. RegionRoute needs only a compact proof,
+/// not a duplicate table. Selector uses the raw snapshot. Controller-expanded
+/// variants need no Gateway index.
 struct TypedIndexes {
     ip_list: IpListMatcherMap,
+    /// Validation proof only; region data stays in the matching raw resource.
+    region_tables: HashMap<String, RegionTableValidation>,
 }
 
 /// Atomic view of the store: raw map + derived typed indexes published together.
@@ -143,6 +148,7 @@ impl EdgionConfigDataStore {
                 raw: HashMap::new(),
                 indexes: TypedIndexes {
                     ip_list: HashMap::new(),
+                    region_tables: HashMap::new(),
                 },
             }),
         }
@@ -172,10 +178,29 @@ impl EdgionConfigDataStore {
     }
 
     /// Look up a raw `EdgionConfigData` entry by "namespace/name" key.
-    /// Used by live Selector and RegionRoute consumers to perform their type guard.
+    /// Used by live Selector consumers; RegionRoute uses the paired proof getter.
     pub fn get_raw_by_key(&self, key: &str) -> Option<Arc<EdgionConfigData>> {
         let snap = self.snapshot.load();
         snap.raw.get(key).cloned()
+    }
+
+    /// Read an overlay and its validation proof from exactly one generation.
+    /// A missing proof for a present `regions` table means that table is invalid.
+    pub fn get_region_route_by_key(&self, key: &str) -> Option<(Arc<EdgionConfigData>, Option<RegionTableValidation>)> {
+        let snap = self.snapshot.load();
+        snap.raw
+            .get(key)
+            .map(|raw| (Arc::clone(raw), snap.indexes.region_tables.get(key).copied()))
+    }
+
+    fn validate_region_table(data: &EdgionConfigData) -> Option<RegionTableValidation> {
+        if !data.spec.enable {
+            return None;
+        }
+        let ConfigEntry::RegionRouteOverride(overlay) = &data.spec.data else {
+            return None;
+        };
+        RegionTableValidation::new(overlay.regions.as_deref()?).ok()
     }
 
     // ── Index rebuild ───────────────────────────────────────────────────────
@@ -183,6 +208,7 @@ impl EdgionConfigDataStore {
     /// Build all typed indexes from a raw map during a full-set publication.
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
         let mut ip_list = IpListMatcherMap::new();
+        let mut region_tables = HashMap::new();
 
         for (key, ed) in raw {
             match &ed.spec.data {
@@ -203,8 +229,9 @@ impl EdgionConfigDataStore {
                     // plugin reads it via `get_raw_by_key` and type-guards inline.
                 }
                 ConfigEntry::RegionRouteOverride(_) => {
-                    // RegionRoute reads and type-guards this variant directly from
-                    // the raw snapshot, so no duplicate typed value is needed.
+                    if let Some(proof) = Self::validate_region_table(ed) {
+                        region_tables.insert(key.clone(), proof);
+                    }
                 }
                 ConfigEntry::Misc(_) => {
                     // Misc is an opaque escape hatch; no typed index is built for it.
@@ -216,7 +243,7 @@ impl EdgionConfigDataStore {
             }
         }
 
-        TypedIndexes { ip_list }
+        TypedIndexes { ip_list, region_tables }
     }
 
     /// Compare the wire-visible value of two resources. Object field ordering is
@@ -280,6 +307,7 @@ impl EdgionConfigDataStore {
     ) {
         let previous = raw.insert(key.clone(), Arc::clone(&value));
         let previous_ip_list = indexes.ip_list.remove(&key);
+        indexes.region_tables.remove(&key);
 
         match &value.spec.data {
             ConfigEntry::IpList(_) => {
@@ -297,10 +325,14 @@ impl EdgionConfigDataStore {
                     indexes.ip_list.insert(key, matcher);
                 }
             }
+            ConfigEntry::RegionRouteOverride(_) => {
+                if let Some(proof) = Self::validate_region_table(&value) {
+                    indexes.region_tables.insert(key, proof);
+                }
+            }
             ConfigEntry::KeyList(_)
             | ConfigEntry::RequestAccessUrlAllowList(_)
             | ConfigEntry::Selector(_)
-            | ConfigEntry::RegionRouteOverride(_)
             | ConfigEntry::Misc(_)
             | ConfigEntry::ProxyProtocolTrust(_) => {}
         }
@@ -317,12 +349,14 @@ impl EdgionConfigDataStore {
         let mut raw = current.raw.clone();
         let mut indexes = TypedIndexes {
             ip_list: current.indexes.ip_list.clone(),
+            region_tables: current.indexes.region_tables.clone(),
         };
         let mut changed = false;
 
         for key in remove {
             changed |= raw.remove(key).is_some();
             indexes.ip_list.remove(key);
+            indexes.region_tables.remove(key);
         }
 
         // Add wins over update for a defensive conflicting batch. A compressed
@@ -410,6 +444,93 @@ mod stats_tests {
     use edgion_resources::resources::edgion_config_data::{
         EdgionConfigDataSpec, IpGroup, IpListData, KeyGroup, RegionRouteOverride, Selector,
     };
+
+    #[test]
+    fn region_validation_proofs_follow_full_partial_and_removed_generations() {
+        use edgion_resources::resources::edgion_plugins::RegionDef;
+        fn table(high: u16) -> Arc<EdgionConfigData> {
+            let mut data = region_route_resource("proof", None);
+            if let ConfigEntry::RegionRouteOverride(overlay) = &mut Arc::make_mut(&mut data).spec.data {
+                overlay.regions = Some(vec![RegionDef {
+                    name: "region".to_string(),
+                    hash_range: [0, high],
+                    backend_endpoint: "backend:80".to_string(),
+                    tls: false,
+                    failover_to: None,
+                }]);
+            }
+            data
+        }
+        let store = EdgionConfigDataStore::new();
+        let first = table(9);
+        store.full_set(&HashMap::from([("ns/proof".to_string(), first)]));
+        let held = store.get_region_route_by_key("ns/proof").unwrap();
+        assert!(held.1.unwrap().accepts_modulo(10));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([("ns/proof".to_string(), table(19))]),
+            HashSet::new(),
+        );
+        let next = store.get_region_route_by_key("ns/proof").unwrap();
+        assert!(!Arc::ptr_eq(&held.0, &next.0));
+        assert!(!next.1.unwrap().accepts_modulo(10));
+        assert!(next.1.unwrap().accepts_modulo(20));
+        assert!(
+            held.1.unwrap().accepts_modulo(10),
+            "old generation remains internally consistent"
+        );
+
+        let invalid = table(u16::MAX);
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([("ns/proof".to_string(), invalid)]),
+            HashSet::new(),
+        );
+        assert!(
+            store.get_region_route_by_key("ns/proof").unwrap().1.is_none(),
+            "invalid update removes old proof"
+        );
+        store.partial_update(
+            HashMap::from([("ns/proof".to_string(), table(29))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        assert!(store
+            .get_region_route_by_key("ns/proof")
+            .unwrap()
+            .1
+            .unwrap()
+            .accepts_modulo(30));
+        let mut disabled = table(29);
+        Arc::make_mut(&mut disabled).spec.enable = false;
+        for replacement in [
+            disabled,
+            misc_resource("proof", serde_json::json!({})),
+            region_route_resource("proof", None),
+        ] {
+            store.partial_update(
+                HashMap::new(),
+                HashMap::from([("ns/proof".to_string(), replacement)]),
+                HashSet::new(),
+            );
+            assert!(store.get_region_route_by_key("ns/proof").unwrap().1.is_none());
+            store.partial_update(
+                HashMap::new(),
+                HashMap::from([("ns/proof".to_string(), table(29))]),
+                HashSet::new(),
+            );
+            assert!(store
+                .get_region_route_by_key("ns/proof")
+                .unwrap()
+                .1
+                .unwrap()
+                .accepts_modulo(30));
+        }
+        store.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["ns/proof".to_string()]));
+        assert!(store.get_region_route_by_key("ns/proof").is_none());
+        assert!(!store.snapshot.load().indexes.region_tables.contains_key("ns/proof"));
+    }
 
     fn ip_list_resource(name: &str, enable: bool, description: Option<&str>, cidr: &str) -> Arc<EdgionConfigData> {
         let spec = EdgionConfigDataSpec {

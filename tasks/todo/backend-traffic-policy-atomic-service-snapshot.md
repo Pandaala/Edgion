@@ -57,7 +57,7 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 - Full and equivalent partial updates publish the same policy and index state.
 - Retarget and removal clear old reverse-index entries and all derived side effects.
 - Reconciliation complexity is proportional to changed policies, their old/new targets, and candidate policies for those targets rather than all policies for every target.
-- Retry accounting for one Service attempt uses the captured budget generation required by `tasks/todo/retry-budget-generation-and-window-coherence.md`.
+- Retry accounting for one Service attempt uses the captured budget generation documented in [retry-budget epoch coherence](../../skills/04-review/backends/regression-guards/retry-budget-epoch-coherence.md).
 - Workspace check, Clippy, and repository guards pass.
 
 ## Related guidance

@@ -27,10 +27,32 @@ use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_config_data::{
-    apply_override, merge_region_route_override, validate_regions, ConfigEntry, OverlaySignal,
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData};
+use edgion_resources::resources::edgion_plugins::{
+    HashAlgorithm, PluginValidation, RegionDef, RegionRouteConfig, RouteRule,
 };
-use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
+
+/// Own the overlay generation while borrowing its table; never clone a table
+/// just to inspect it on the request path.
+struct EffectiveRegions<'a> {
+    base: &'a [RegionDef],
+    overlay: Option<Arc<EdgionConfigData>>,
+}
+
+impl std::ops::Deref for EffectiveRegions<'_> {
+    type Target = [RegionDef];
+
+    fn deref(&self) -> &Self::Target {
+        if let Some(resource) = &self.overlay {
+            if let ConfigEntry::RegionRouteOverride(overlay) = &resource.spec.data {
+                if let Some(regions) = &overlay.regions {
+                    return regions;
+                }
+            }
+        }
+        self.base
+    }
+}
 
 // ── Hash helpers ──────────────────────────────────────────────────────────────
 
@@ -70,6 +92,7 @@ pub struct RegionRoute {
     /// Optional EdgionConfigData store key ("namespace/name") for a `RegionRouteOverride`.
     /// `None` means no overlay is configured; base regions are used directly.
     override_key: Option<String>,
+    init_error: Option<&'static str>,
 }
 
 impl RegionRoute {
@@ -89,6 +112,13 @@ impl RegionRoute {
 
         Box::new(Self {
             name: "RegionRoute".to_string(),
+            init_error: ep_config.validation_error().map(|_| {
+                if ep_config.effective_modulo() < 2 {
+                    "hash_modulo_invalid"
+                } else {
+                    "region_table_invalid"
+                }
+            }),
             base: Arc::new(ep_config.clone()),
             override_key,
         })
@@ -99,69 +129,52 @@ impl RegionRoute {
     /// Control flow:
     /// 1. **No overlay configured** (`override_key` is `None`) → return base regions directly.
     /// 2. **Envelope kill-switch** (`spec.enable == false`) → emit `overlay_disabled`, return base.
-    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `ConfigEntry` variants.
-    /// 4. **`apply_override`** merges overlay onto base (whole-replace if `regions` is `Some`).
-    /// 5. **Post-merge validation** (H2) → `validate_regions` on the merged result; on failure
-    ///    emit `overlay_invalid` and return base.
+    /// 3. Type-guard the raw entry and read its config-time validation proof from
+    ///    the same immutable snapshot.
+    /// 4. Check only the consumer's modulo; invalid overlays return base.
+    /// 5. Hold the valid overlay generation for whole-table replacement.
     ///
     /// All non-`Applied` paths emit a Prometheus counter; no `tracing::warn!/error!`.
-    fn compute_effective_regions(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> Vec<RegionDef> {
-        let Some(ref key) = self.override_key else {
-            // No overlay configured — base regions used as-is.
-            return self.base.regions.clone();
+    fn compute_effective_regions(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> EffectiveRegions<'_> {
+        let base = EffectiveRegions {
+            base: &self.base.regions,
+            overlay: None,
         };
-
+        let Some(ref key) = self.override_key else {
+            return base;
+        };
         let store = get_global_edgion_config_data_store();
-        let raw_ed = store.get_raw_by_key(key);
-
-        // H1 — Envelope kill-switch: spec.enable=false means the operator has disabled
-        // this EdgionConfigData entirely. Treat as no overlay: use base, emit overlay_disabled.
-        if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
-            log.push_fmt("overlay_disabled (key={}), using base", la![sensitive(key)]);
-            record_region_route_overlay_event("overlay_disabled");
-            session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
-            return self.base.regions.clone();
-        }
-
-        let overlay_entry = raw_ed.as_deref().map(|ed| &ed.spec.data);
-
-        let (effective, signal) = apply_override(
-            self.base.regions.clone(),
-            overlay_entry,
-            // D6 type guard: only accept `RegionRouteOverride` variant.
-            |entry: &ConfigEntry| match entry {
-                ConfigEntry::RegionRouteOverride(o) => Some(o),
-                _ => None,
-            },
-            // Merge: whole-replace `regions` if Some; keep base otherwise.
-            merge_region_route_override,
-        );
-
-        match signal {
-            OverlaySignal::Absent => {
+        let signal = match store.get_region_route_by_key(key) {
+            None => {
                 log.push_fmt("overlay_missing (key={}), using base", la![sensitive(key)]);
-                record_region_route_overlay_event("overlay_missing");
-                session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
+                "overlay_missing"
             }
-            OverlaySignal::TypeMismatch => {
-                log.push_fmt("overlay_type_mismatch (key={}), using base", la![sensitive(key)]);
-                record_region_route_overlay_event("overlay_type_mismatch");
-                session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
+            Some((resource, _)) if !resource.spec.enable => {
+                log.push_fmt("overlay_disabled (key={}), using base", la![sensitive(key)]);
+                "overlay_disabled"
             }
-            OverlaySignal::Applied => {
-                // H2 — Validate the merged effective region table. Guards against malformed
-                // overlays that slipped past controller validation (race / fed_sync /
-                // disabled controller validation).
-                if validate_regions(&effective).is_err() {
+            Some((resource, proof)) => {
+                if let ConfigEntry::RegionRouteOverride(overlay) = &resource.spec.data {
+                    if overlay.regions.is_none() {
+                        return base;
+                    }
+                    if proof.is_some_and(|proof| proof.accepts_modulo(self.base.effective_modulo())) {
+                        return EffectiveRegions {
+                            base: &self.base.regions,
+                            overlay: Some(resource),
+                        };
+                    }
                     log.push_fmt("overlay_invalid (key={}), using base", la![sensitive(key)]);
-                    record_region_route_overlay_event("overlay_invalid");
-                    session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
-                    return self.base.regions.clone();
+                    "overlay_invalid"
+                } else {
+                    log.push_fmt("overlay_type_mismatch (key={}), using base", la![sensitive(key)]);
+                    "overlay_type_mismatch"
                 }
             }
-        }
-
-        effective
+        };
+        record_region_route_overlay_event(signal);
+        session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
+        base
     }
 
     // ── Key extraction ────────────────────────────────────────────────────────
@@ -250,7 +263,10 @@ impl RegionRoute {
             return PluginRunningResult::GoodNext;
         }
 
-        let (host, port) = region.parse_endpoint();
+        let Ok((host, port)) = region.parse_endpoint() else {
+            log.push_err("region_endpoint_invalid");
+            return PluginRunningResult::GoodNext;
+        };
 
         // SNI: strip port from the incoming Host header (IPv6-bracket-safe).
         let raw_host = session.header_str("Host").unwrap_or_default();
@@ -384,6 +400,10 @@ impl RequestFilter for RegionRoute {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        if let Some(error) = self.init_error {
+            log.push_err(error);
+            return PluginRunningResult::GoodNext;
+        }
         // Short-circuit: nothing configured at all.
         if self.base.route_rules.is_empty() && self.base.regions.is_empty() {
             log.push("no_region_route_config, pass");
@@ -538,6 +558,80 @@ mod tests {
         assert!(config.override_ref.is_none());
     }
 
+    #[tokio::test]
+    async fn constructor_checks_invalid_base_before_any_request_side_effect() {
+        let config = RegionRouteConfig {
+            route_rules: vec![RouteRule::RouteByHashRange],
+            regions: vec![make_region("bad", 0, 999, "bad:invalid")],
+            ..Default::default()
+        };
+        let plugin = RegionRoute::create(&config, "default");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("RegionRoute");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert_eq!(log.render_for_test(), "err: region_table_invalid");
+    }
+
+    #[test]
+    fn overlay_updates_use_generation_proofs_and_consumer_modulo() {
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, RegionRouteOverride};
+        let key = "unit-test-ns/rr-generation-validation";
+        let store = get_global_edgion_config_data_store();
+        let plugin = RegionRoute {
+            name: "RegionRoute".to_string(),
+            init_error: None,
+            base: Arc::new(RegionRouteConfig {
+                regions: vec![make_region("base", 0, 999, "base")],
+                ..Default::default()
+            }),
+            override_key: Some(key.to_string()),
+        };
+        let mut resource = EdgionConfigData::new(
+            "rr-generation-validation",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                unknown_fields: Vec::new(),
+                data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
+                    enable: Some(false),
+                    active: None,
+                    regions: Some(vec![make_region("overlay", 0, 999, "overlay")]),
+                }),
+            },
+        );
+        resource.metadata.namespace = Some("unit-test-ns".to_string());
+        store.insert_raw_for_test(key, Arc::new(resource.clone()));
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new("RegionRoute");
+        let held = plugin.compute_effective_regions(&mut session, &mut log);
+        assert_eq!(held[0].name, "overlay", "variant enable is inert");
+        if let ConfigEntry::RegionRouteOverride(overlay) = &mut resource.spec.data {
+            overlay.regions.as_mut().unwrap()[0].hash_range = [0, 1500];
+        }
+        store.insert_raw_for_test(key, Arc::new(resource.clone()));
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
+            .times(1)
+            .return_const(());
+        assert_eq!(plugin.compute_effective_regions(&mut session, &mut log)[0].name, "base");
+        assert_eq!(
+            held[0].hash_range,
+            [0, 999],
+            "held table cannot observe later publication"
+        );
+        session.checkpoint();
+        if let ConfigEntry::RegionRouteOverride(overlay) = &mut resource.spec.data {
+            overlay.regions = None;
+        }
+        store.insert_raw_for_test(key, Arc::new(resource));
+        assert_eq!(plugin.compute_effective_regions(&mut session, &mut log)[0].name, "base");
+    }
+
     /// When no override_key is set, `compute_effective_regions` returns the base regions.
     #[test]
     fn base_regions_used_when_no_override_ref() {
@@ -551,6 +645,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             override_key: None,
         };
@@ -575,6 +670,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             // Key that is not present in the global store in this unit test.
             override_key: Some("unit-test-ns/rr-override-absent-key".to_string()),
@@ -640,11 +736,7 @@ mod tests {
                 regions: vec![make_region("region-a", 0, 1, "region-a:80")],
                 ..RegionRouteConfig::default()
             };
-            let plugin = RegionRoute {
-                name: "RegionRoute".to_string(),
-                base: Arc::new(config),
-                override_key: None,
-            };
+            let plugin = RegionRoute::create(&config, "default");
             // No expectations: an extraction, write-back, or jump would fail the test.
             let mut session = MockPluginSession::new();
             let mut log = PluginLog::new("RegionRoute");
@@ -712,8 +804,15 @@ mod tests {
             },
             RegionDef {
                 name: "backup".to_string(),
-                hash_range: [500, 999],
+                hash_range: [500, 749],
                 backend_endpoint: "h2:80".to_string(),
+                tls: false,
+                failover_to: Some("last".to_string()),
+            },
+            RegionDef {
+                name: "last".to_string(),
+                hash_range: [750, 999],
+                backend_endpoint: "h3:80".to_string(),
                 tls: false,
                 failover_to: None,
             },
@@ -796,6 +895,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             override_key: Some(test_key.to_string()),
         };
@@ -857,6 +957,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             override_key: Some(test_key.to_string()),
         };
@@ -891,6 +992,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             override_key: None,
         };
@@ -931,6 +1033,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             override_key: None,
         };
@@ -961,6 +1064,7 @@ mod tests {
         };
         let plugin = RegionRoute {
             name: "RegionRoute".to_string(),
+            init_error: None,
             base: Arc::new(config),
             override_key: None,
         };

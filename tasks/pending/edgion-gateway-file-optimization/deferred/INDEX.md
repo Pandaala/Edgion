@@ -22,7 +22,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0016 — Define Redis pool health and safe connection logging | needs-discussion | [campaign finding](D0016-redis-pool-health-logging.md) |
 | D0017 — Add successful Redis TLS integration coverage | needs-implementation | [campaign finding](D0017-redis-tls-integration-coverage.md) |
 | D0018 — Make disabled outbound TLS inert before publication | needs-investigation | [campaign finding](D0018-disabled-tls-publication-readiness.md) |
-| D0019 — Make Webhook sliding windows time-coherent | needs-discussion | [campaign finding](D0019-webhook-sliding-window-time-coherence.md) |
+| D0019 — Make Webhook sliding windows time-coherent | resolved | [window coherence](../../../../skills/04-review/concurrency/regression-guards/sliding-window-check-then-increment.md) |
 | D0020 — Refresh the shared LinkSys lifecycle documentation | needs-implementation | [campaign finding](D0020-link-sys-lifecycle-webhook-doc.md) |
 | D0021 — Make partial LinkSys provider replacement authoritative | needs-discussion | [campaign finding](D0021-link-sys-cross-provider-partial-replacement.md) |
 | D0022 — Refresh the LinkSys documentation set | needs-implementation | [campaign finding](D0022-refresh-link-sys-documentation-set.md) |
@@ -35,7 +35,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
 | D0030 — Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
 | D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/intentional-design/edgionplugins-lkg-identity-coverage-not-standalone.md) |
-| D0032 — Add BackendTLSPolicy-aware AllEndpointStatus probes | needs-discussion | [campaign finding](D0032-all-endpoint-status-backend-tls-policy.md) |
 | D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | D0034 — Fail closed on denied L7 named jumps | resolved | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
 | D0035 — Add borrowed Authorization header access | needs-discussion | [campaign finding](D0035-auth-borrowed-authorization-header.md) |
@@ -55,7 +54,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0051 — Align JWE resolved-credential failure policy | needs-discussion | [campaign finding](D0051-jwe-resolved-credential-auth-failure.md) |
 | D0052 — Canonicalize auth claim-to-header projection | needs-discussion | [campaign finding](D0052-auth-claim-header-projection-plan.md) |
 | D0053 — Enforce LDAP dial-time egress policy | resolved | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
-| D0054 — Add LDAP egress and TLS integration coverage | pending | [campaign finding](D0054-ldap-auth-egress-integration-coverage.md) |
 | D0055 — Use clone-cheap immutable local response bodies | needs-discussion | [campaign finding](D0055-clone-cheap-local-response-bodies.md) |
 | D0056 — Enforce OpenID Connect dial-time egress policy | resolved | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
 | D0057 — Add OpenID Connect egress integration coverage | pending | [campaign finding](D0057-openid-connect-egress-integration-coverage.md) |
@@ -66,7 +64,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0062 — Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | resolved | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | D0063 — Validate rate-limit response header names canonically | needs-implementation | [campaign finding](D0063-rate-limit-response-header-validation.md) |
 | D0064 — Validate RealIp header names canonically | needs-implementation | [campaign finding](D0064-real-ip-header-name-validation.md) |
-| D0065 — Define complete RegionRoute table validation | needs-discussion | [campaign finding](D0065-region-route-effective-table-validation.md) |
 | D0066 — Bound RequestMirror concurrency and buffering | needs-discussion | [campaign finding](D0066-request-mirror-capacity-bounds.md) |
 | D0067 — Isolate RequestMirror unit tests from the network | needs-implementation | [campaign finding](D0067-request-mirror-unit-test-network-isolation.md) |
 | D0068 — Unify response-header mutation policy | needs-discussion | [campaign finding](D0068-response-header-mutation-policy.md) |
@@ -103,10 +100,9 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Fail closed on denied L4 backend references | completed | [review rule](../../../../skills/04-review/routing/regression-guards/l4-backend-ref-denied-fail-closed.md) |
 | Denied backendRef HTTP/gRPC parity and grant hot-reload | pending | [task](../../../todo/denied-backend-ref-parity-and-grant-hot-reload.md) |
 | Keep the load-balancer degrade-mode gauge current across lifecycle exits | pending | [task](../../../todo/lb-degrade-mode-metric-lifecycle.md) |
-| Capture Service runtime health state once per load-balancer selection | pending | [task](../../../todo/lb-selection-service-runtime-state-capture.md) |
+| Capture Service runtime health state once per load-balancer selection | completed | [review rule](../../../../skills/04-review/lb/regression-guards/service-runtime-snapshot-selection.md) |
 | Run mTLS whitelist verification once for the leaf certificate | completed | [review rule](../../../../skills/04-review/tls/regression-guards/mtls-leaf-only-whitelist-verification.md) |
 | Define typed mTLS allowed SAN semantics | pending | [task](../../../todo/mtls-typed-allowed-san-semantics.md) |
-| Make retry-budget generations and window rotation coherent | pending | [task](../../../todo/retry-budget-generation-and-window-coherence.md) |
 | SSE window strict residency and continuity | pending | [task](../../../todo/sse-window-strict-residency-and-continuity.md) |
 | Retain TLS last-known-good only for the same resource identity | pending | [task](../../../todo/tls-last-known-good-resource-identity.md) |
 | TLS `SslCtx` owned handoff and exactly-once audit | pending | [task](../../../todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md) |
@@ -118,7 +114,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
 | Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
 | Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
-| Add BackendTLSPolicy-aware AllEndpointStatus probes | pending | [task](../../../todo/add-all-endpoint-status-backend-tls-policy-support/add-all-endpoint-status-backend-tls-policy-support.md) |
 | Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
 | Fail closed on denied L7 named jumps | completed | [review rule](../../../../skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md) |
 | Add denied named-jump integration coverage | pending | [task](../../../todo/add-denied-named-jump-integration-coverage.md) |
@@ -139,7 +134,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Align JWE resolved-credential failure policy | pending | [task](../../../todo/align-jwe-resolved-credential-failure-policy.md) |
 | Canonicalize auth claim-to-header projection | pending | [task](../../../todo/canonicalize-auth-claim-header-projection.md) |
 | Enforce LDAP dial-time egress policy | completed | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
-| Add LDAP egress and TLS integration coverage | pending | [task](../../../todo/add-ldap-auth-egress-integration-coverage.md) |
 | Use clone-cheap immutable local response bodies | pending | [task](../../../todo/use-clone-cheap-local-response-bodies.md) |
 | Enforce OpenID Connect dial-time egress policy | completed | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
 | Add OpenID Connect egress integration coverage | pending | [task](../../../todo/add-openid-connect-egress-integration-coverage.md) |
@@ -150,7 +144,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | completed | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
-| Define complete RegionRoute table validation | pending | [task](../../../todo/define-region-route-effective-table-validation.md) |
+| Verify RegionRoute validation across hot reload and management APIs | pending | [task](../../../todo/region-route-validation-integration.md) |
 | Bound RequestMirror concurrency and buffering | pending | [task](../../../todo/bound-request-mirror-concurrency-and-buffering.md) |
 | Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |

@@ -5,6 +5,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::resources::edgion_plugins::plugin_configs::RegionDef;
 
@@ -23,7 +24,8 @@ use crate::resources::edgion_plugins::plugin_configs::RegionDef;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionRouteOverride {
-    /// Override the kill-switch. When `Some(false)`, the plugin passes through (no routing).
+    /// Reserved and currently inert. Use the envelope `spec.enable` to disable
+    /// the overlay and fall back to the base table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable: Option<bool>,
 
@@ -42,8 +44,8 @@ impl RegionRouteOverride {
     ///
     /// Called by the controller at EdgionConfigData ingest time (via `validate_pre_parse`).
     /// Delegates to [`validate_regions`] when `regions: Some` so controller and gateway
-    /// share the exact same rule set (empty list, empty name, empty endpoint, reversed
-    /// hash range, duplicate name).
+    /// share endpoint, name, range, overlap and failover-graph rules. Modulo
+    /// compatibility is checked separately for each referring plugin.
     pub fn validate_and_init(&self) -> Result<(), String> {
         if let Some(regions) = &self.regions {
             validate_regions(regions).map_err(|e| format!("RegionRouteOverride: {}", e))?;
@@ -66,40 +68,122 @@ pub fn merge_region_route_override(base_regions: Vec<RegionDef>, overlay: &Regio
 
 /// Validate a slice of [`RegionDef`] for use as an effective region table.
 ///
-/// Checks applied:
-/// - At least one region (non-empty).
-/// - Each region has a non-empty `name`.
-/// - Each region has a non-empty `backendEndpoint` (validated via `parse_endpoint`).
-/// - Each region's `hashRange` is valid: `low <= high`.
-/// - No duplicate `name` values across regions.
-///
-/// Called by the gateway after applying an overlay to guard against malformed overlays
-/// that slipped past controller validation (race / fed_sync / disabled controller
-/// validation). Shareable with controller-side effective-config validation.
+/// Standalone checks are independent of any consumer's modulo. Use
+/// `RegionRouteConfig::validate_effective_regions` when the consumer is known.
 pub fn validate_regions(regions: &[RegionDef]) -> Result<(), String> {
-    if regions.is_empty() {
-        return Err("effective region table is empty".to_string());
+    RegionTableValidation::new(regions).map(|_| ())
+}
+
+/// Proof summary for one immutable, standalone-valid region table.
+///
+/// Construct at configuration time. Only the maximum hash endpoint is needed
+/// to check a consumer's modulo, so request-time validation is constant work.
+/// Keep this summary with the exact table generation it describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionTableValidation {
+    max_hash: u16,
+}
+
+impl RegionTableValidation {
+    /// Validate names, endpoints, disjoint closed ranges and an acyclic failover
+    /// graph in O(n log n) time and O(n) memory, without recursion or I/O.
+    pub fn new(regions: &[RegionDef]) -> Result<Self, String> {
+        if regions.is_empty() {
+            return Err("effective region table is empty".to_string());
+        }
+        let mut names = HashMap::with_capacity(regions.len());
+        let mut ranges = Vec::with_capacity(regions.len());
+        for (index, r) in regions.iter().enumerate() {
+            if r.name.trim().is_empty() {
+                return Err("region has empty name".to_string());
+            }
+            if names.insert(r.name.as_str(), index).is_some() {
+                return Err(format!("duplicate region name: '{}'", r.name));
+            }
+            r.parse_endpoint()
+                .map_err(|e| format!("region '{}': backendEndpoint: {e}", r.name))?;
+            if r.hash_range[0] > r.hash_range[1] {
+                return Err(format!(
+                    "region '{}': hashRange [{}, {}] is invalid (low > high)",
+                    r.name, r.hash_range[0], r.hash_range[1]
+                ));
+            }
+            // u16::MAX cannot belong to any supported u16 modulo domain.
+            if r.hash_range[1] == u16::MAX {
+                return Err(format!(
+                    "region '{}': hashRange upper bound must be less than 65535",
+                    r.name
+                ));
+            }
+            ranges.push(r.hash_range);
+        }
+        ranges.sort_unstable();
+        if ranges.windows(2).any(|pair| pair[1][0] <= pair[0][1]) {
+            return Err("region hashRange intervals must not overlap (endpoints are inclusive)".to_string());
+        }
+
+        let mut targets = Vec::with_capacity(regions.len());
+        for r in regions {
+            let target = match r.failover_to.as_deref() {
+                None => None,
+                Some(name) if name == r.name => {
+                    return Err(format!("region '{}': failoverTo cannot reference itself", r.name))
+                }
+                Some(name) => Some(
+                    *names
+                        .get(name)
+                        .ok_or_else(|| format!("region '{}': failoverTo target '{}' does not exist", r.name, name))?,
+                ),
+            };
+            targets.push(target);
+        }
+        // 0 = unseen, 1 = this walk, 2 = complete. Iterative walks keep a long
+        // operator-authored chain from consuming the call stack.
+        let mut state = vec![0u8; regions.len()];
+        for start in 0..regions.len() {
+            let mut current = Some(start);
+            while let Some(index) = current {
+                match state[index] {
+                    1 => return Err("region failoverTo graph must not contain a cycle".to_string()),
+                    2 => break,
+                    _ => {
+                        state[index] = 1;
+                        current = targets[index];
+                    }
+                }
+            }
+            current = Some(start);
+            while let Some(index) = current {
+                if state[index] != 1 {
+                    break;
+                }
+                state[index] = 2;
+                current = targets[index];
+            }
+        }
+        Ok(Self {
+            max_hash: ranges.last().expect("a non-empty region table has a range")[1],
+        })
     }
-    let mut seen_names = std::collections::HashSet::new();
-    for r in regions {
-        if r.name.is_empty() {
-            return Err("region has empty name".to_string());
+
+    /// The only consumer-dependent table check. This does not traverse regions.
+    pub fn accepts_modulo(self, modulo: u16) -> bool {
+        modulo >= 2 && self.max_hash < modulo
+    }
+
+    /// Operator-facing error form of the constant-time consumer check.
+    pub fn validate_modulo(self, modulo: u16) -> Result<(), String> {
+        if modulo < 2 {
+            return Err("hashCalc.modulo must be at least 2".to_string());
         }
-        if !seen_names.insert(r.name.as_str()) {
-            return Err(format!("duplicate region name: '{}'", r.name));
-        }
-        let (host, _) = r.parse_endpoint();
-        if host.is_empty() {
-            return Err(format!("region '{}': backendEndpoint is empty", r.name));
-        }
-        if r.hash_range[0] > r.hash_range[1] {
+        if self.max_hash >= modulo {
             return Err(format!(
-                "region '{}': hashRange [{}, {}] is invalid (low > high)",
-                r.name, r.hash_range[0], r.hash_range[1]
+                "region hashRange upper bound {} must be less than modulo {modulo}",
+                self.max_hash
             ));
         }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -114,6 +198,72 @@ mod tests {
             tls: false,
             failover_to: None,
         }
+    }
+
+    #[test]
+    fn table_bounds_are_inclusive_disjoint_and_consumer_specific() {
+        let first = make_region("first", 0, 10, "first:80");
+        let overlap = make_region("second", 10, 20, "second:80");
+        assert!(validate_regions(&[first.clone(), overlap])
+            .unwrap_err()
+            .contains("overlap"));
+        let gap = make_region("second", 12, 20, "second:80");
+        let proof = RegionTableValidation::new(&[gap, first]).unwrap();
+        assert!(!proof.accepts_modulo(20));
+        assert!(proof.accepts_modulo(21));
+        assert!(proof.validate_modulo(20).unwrap_err().contains("modulo 20"));
+        assert!(!proof.accepts_modulo(0));
+        assert!(!proof.accepts_modulo(1));
+        assert!(validate_regions(&[make_region("last", 65534, 65534, "last")]).is_ok());
+        assert!(validate_regions(&[make_region("last", 65535, 65535, "last")]).is_err());
+    }
+
+    #[test]
+    fn failover_graph_rejects_dangling_self_and_cycles_but_allows_chains() {
+        let mut regions = vec![
+            make_region("a", 0, 9, "a"),
+            make_region("b", 10, 19, "b"),
+            make_region("c", 20, 29, "c"),
+        ];
+        regions[0].failover_to = Some("a".to_string());
+        assert!(validate_regions(&regions).unwrap_err().contains("itself"));
+        regions[0].failover_to = Some("missing".to_string());
+        assert!(validate_regions(&regions).unwrap_err().contains("does not exist"));
+        regions[0].failover_to = Some("b".to_string());
+        regions[1].failover_to = Some("c".to_string());
+        assert!(validate_regions(&regions).is_ok());
+        regions[2].failover_to = Some("a".to_string());
+        assert!(validate_regions(&regions).unwrap_err().contains("cycle"));
+        regions[2].failover_to = Some("b".to_string());
+        assert!(validate_regions(&regions).unwrap_err().contains("cycle"));
+        regions[2].failover_to = None;
+        regions[0].failover_to = Some("c".to_string());
+        assert!(validate_regions(&regions).is_ok(), "converging walks are not cycles");
+    }
+
+    #[test]
+    fn long_failover_walk_is_iterative() {
+        let mut regions: Vec<_> = (0..4000)
+            .map(|slot| make_region(&format!("r{slot}"), slot, slot, "backend"))
+            .collect();
+        for (index, region) in regions.iter_mut().enumerate().take(3999) {
+            region.failover_to = Some(format!("r{}", index + 1));
+        }
+        assert!(validate_regions(&regions).is_ok());
+        regions[3999].failover_to = Some("r0".to_string());
+        assert!(validate_regions(&regions).unwrap_err().contains("cycle"));
+    }
+
+    #[test]
+    fn absent_overlay_table_inherits_but_empty_replacement_is_invalid() {
+        let mut overlay = RegionRouteOverride {
+            enable: None,
+            active: None,
+            regions: None,
+        };
+        assert!(overlay.validate_and_init().is_ok());
+        overlay.regions = Some(Vec::new());
+        assert!(overlay.validate_and_init().is_err());
     }
 
     #[test]

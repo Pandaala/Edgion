@@ -1,16 +1,20 @@
 # D0019 — Make Webhook Sliding Windows Time-Coherent
 
 ## Meta
-- Status: needs-discussion
+- Status: resolved
 - Severity: medium
 - Discovered in: B0053, Webhook runtime rate limiting
 - Category: correctness
 
-## Evidence
-`SlidingWindowCounter` rotates only one previous bucket after an arbitrarily long idle period, so traffic older than two windows can still influence the next decision. Its epoch wall-clock source can also move backward independently of elapsed runtime.
+## Original evidence
+`SlidingWindowCounter` previously rotated only one previous bucket after an arbitrarily long idle period, so traffic older than two windows could still influence the next decision. Its epoch wall-clock source could also move backward independently of elapsed runtime.
 
-## Why deferred
-Correcting the behavior requires a deliberate time-source and interpolation contract shared with any future outbound limiter primitive; it is separate from the backend retry-budget generation task.
+## Owning fix
+The overlapping time-source and idle-expiry claim was fixed by
+`webhook-sliding-window-epoch-coherence`. The user approved monotonic fixed-grid
+windows and one atomic epoch/count/admission state for the existing shared
+outbound limiter. No new cross-consumer limiter abstraction is needed.
 
-## Candidate next step
-Define monotonic elapsed-window semantics, clear expired history after multiple idle windows, and add deterministic clock-driven tests before unifying only consumers with equivalent policies.
+The reusable evidence and verification belong to the
+[outbound window coherence rule](../../../../skills/04-review/concurrency/regression-guards/sliding-window-check-then-increment.md).
+Independent review and required project checks passed on 2026-09-07.

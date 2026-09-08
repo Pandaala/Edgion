@@ -9,12 +9,14 @@
 //! whole-replace the `regions` at request time (fail-to-base on any overlay error).
 
 use std::collections::HashMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::common::{KeyGet, KeySet};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
+use crate::resources::edgion_config_data::RegionTableValidation;
 
 /// RegionRoute plugin: flat base configuration.
 ///
@@ -180,21 +182,71 @@ fn default_modulo() -> u16 {
 impl RegionDef {
     /// Parse `backend_endpoint` into `(host, port)`.
     ///
-    /// Handles plain "host", "host:port". IPv6 addresses in brackets (e.g. "[::1]:8080")
-    /// are not a typical use case here but handled gracefully.
-    pub fn parse_endpoint(&self) -> (&str, u16) {
+    /// Accepts DNS names, IPv4, and bracketed IPv6, with an optional port in
+    /// 1..=65535. IPv6 brackets are removed for the canonical DNS/IP resolver.
+    /// DNS spelling (including a terminal root dot) is preserved. No DNS or
+    /// address-safety decision is made here; dial-time checks remain mandatory.
+    pub fn parse_endpoint(&self) -> Result<(&str, u16), &'static str> {
         let default_port = if self.tls { 443 } else { 80 };
-        if let Some(pos) = self.backend_endpoint.rfind(':') {
-            let host = &self.backend_endpoint[..pos];
-            if let Ok(port) = self.backend_endpoint[pos + 1..].parse::<u16>() {
-                return (host, port);
+        let endpoint = self.backend_endpoint.as_str();
+        let (host, port) = if let Some(rest) = endpoint.strip_prefix('[') {
+            let (host, suffix) = rest.split_once(']').ok_or("IPv6 endpoint needs closing bracket")?;
+            host.parse::<Ipv6Addr>().map_err(|_| "invalid IPv6 endpoint")?;
+            let port = if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix.strip_prefix(':').ok_or("unexpected text after IPv6 bracket")?)
+            };
+            (host, port)
+        } else {
+            let (host, port) = endpoint.split_once(':').map_or((endpoint, None), |(h, p)| (h, Some(p)));
+            let dns_name = host.strip_suffix('.').unwrap_or(host);
+            if dns_name.is_empty()
+                || dns_name.len() > 253
+                || !dns_name.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && label.as_bytes()[0].is_ascii_alphanumeric()
+                        && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                        && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+            {
+                return Err("endpoint must contain a DNS name, IPv4, or bracketed IPv6");
             }
-        }
-        (&self.backend_endpoint, default_port)
+            // Numeric dotted addresses must be canonical IPv4, not ambiguous
+            // abbreviated, octal, or out-of-range DNS-like spellings.
+            if dns_name.bytes().all(|b| b.is_ascii_digit() || b == b'.') && dns_name.parse::<Ipv4Addr>().is_err() {
+                return Err("invalid IPv4 endpoint");
+            }
+            (host, port)
+        };
+        let port = match port {
+            None => default_port,
+            Some(raw) => {
+                if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err("endpoint port must be an integer in 1..=65535");
+                }
+                raw.parse::<u16>()
+                    .ok()
+                    .filter(|p| *p != 0)
+                    .ok_or("endpoint port must be an integer in 1..=65535")?
+            }
+        };
+        Ok((host, port))
     }
 }
 
 impl RegionRouteConfig {
+    /// Hash domain used by both computed and precomputed hash routing.
+    pub fn effective_modulo(&self) -> u16 {
+        self.hash_calc.as_ref().map_or(default_modulo(), |calc| calc.modulo)
+    }
+
+    /// Check a non-empty candidate table against this consumer's hash domain.
+    pub fn validate_effective_regions(&self, regions: &[RegionDef]) -> Result<(), String> {
+        RegionTableValidation::new(regions)?.validate_modulo(self.effective_modulo())
+    }
+
     /// Validate config. Called in preparse.
     pub fn validate(&mut self) {
         // Validation is read-only and exposed through `PluginValidation`.
@@ -209,9 +261,10 @@ impl PluginValidation for RegionRouteConfig {
             return Some("hashCalc.modulo must be at least 2".to_string());
         }
 
-        // Complete routing-table validation is handled separately from this
-        // field-level arithmetic invariant.
-        None
+        if self.regions.is_empty() && self.route_rules.is_empty() {
+            return None;
+        }
+        self.validate_effective_regions(&self.regions).err()
     }
 }
 
@@ -219,6 +272,78 @@ impl PluginValidation for RegionRouteConfig {
 mod validation_trait_tests {
     use super::*;
     use crate::resources::edgion_plugins::PluginValidation;
+
+    fn region(endpoint: &str) -> RegionDef {
+        RegionDef {
+            name: "region".to_string(),
+            hash_range: [0, 999],
+            backend_endpoint: endpoint.to_string(),
+            tls: false,
+            failover_to: None,
+        }
+    }
+
+    #[test]
+    fn endpoint_grammar_and_default_ports() {
+        for (endpoint, expected) in [
+            ("backend", ("backend", 80)),
+            ("Backend.EXAMPLE.", ("Backend.EXAMPLE.", 80)),
+            ("192.0.2.1:65535", ("192.0.2.1", 65535)),
+            ("[2001:db8::1]", ("2001:db8::1", 80)),
+            ("[::ffff:127.0.0.1]:8080", ("::ffff:127.0.0.1", 8080)),
+        ] {
+            assert_eq!(region(endpoint).parse_endpoint(), Ok(expected), "{endpoint}");
+        }
+        let mut tls = region("backend");
+        tls.tls = true;
+        assert_eq!(tls.parse_endpoint(), Ok(("backend", 443)));
+        for endpoint in [
+            "",
+            " ",
+            "http://backend",
+            "backend/path",
+            "user@backend",
+            "backend?x",
+            "backend#x",
+            "backend:",
+            "backend:abc",
+            "backend:0",
+            "backend:65536",
+            "backend:+80",
+            "backend:80:90",
+            "-bad",
+            "bad-",
+            "a..b",
+            "a_b",
+            "[::1",
+            "[bad]:80",
+            "[::1]suffix",
+            "::1",
+            "127.1",
+            "999.1.1.1",
+        ] {
+            assert!(region(endpoint).parse_endpoint().is_err(), "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn base_table_cannot_depend_on_an_overlay_for_safety() {
+        let mut config = RegionRouteConfig::default();
+        assert!(config.validation_error().is_none());
+        config.route_rules = vec![RouteRule::RouteByHashRange];
+        assert!(config.validation_error().unwrap().contains("empty"));
+        config.override_ref = Some(serde_json::from_str(r#"{"name":"overlay"}"#).unwrap());
+        assert!(config.validation_error().unwrap().contains("empty"));
+        config.regions = vec![region("backend")];
+        assert!(config.validation_error().is_none());
+        config.regions[0].hash_range = [0, 1000];
+        assert!(config.validation_error().unwrap().contains("modulo 1000"));
+        config.route_rules.clear();
+        assert!(
+            config.validation_error().is_some(),
+            "a non-empty inert table still must be structurally valid"
+        );
+    }
 
     #[test]
     fn validation_error_rejects_modulo_below_two_without_prior_validate() {

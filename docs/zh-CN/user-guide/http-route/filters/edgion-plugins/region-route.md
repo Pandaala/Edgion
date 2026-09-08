@@ -106,7 +106,9 @@ spec:
 |------|------|--------|------|
 | `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback]`——RegionRoute 没有 `reject` 能力，见下文）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带最终区域名（`failoverTo` 重定向之后的区域）。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
 
-除共享的 `dye` 结构外，插件还会校验 `hashCalc.modulo` 至少为 `2`。`overrideRef` 能否解析由 Controller 检查，并反映在 `EdgionPlugins` 资源的 `ResolvedRefs` status condition 上；区域表本身则在 Gateway 应用覆盖层时校验。
+Controller 与 Gateway 使用相同的区域表校验规则。基础配置错误反映在 `EdgionPlugins` 的 `Accepted` 状态中；覆盖层解析或生效表校验失败反映在 `ResolvedRefs` 中，并回退到有效基础表。普通资源写入仍采用状态反馈机制，并非所有错误都会在写入时被拒绝。
+
+`routeRules` 非空时，基础 `regions` 必须非空，即使设置了 `overrideRef`。只有 `routeRules: []` 时才允许空基础表，此时插件为 no-op；非空表仍需通过校验。
 
 ### 路由规则
 
@@ -126,9 +128,11 @@ spec:
 |------|------|--------|------|
 | `name` | String | — | 集群标识（用于直接区域匹配和故障转移）。必须非空且在表内唯一 |
 | `hashRange` | `[Integer, Integer]` | — | 闭区间哈希范围 `[low, high]`；须满足 `0 ≤ low ≤ high < modulo` |
-| `backendEndpoint` | String | — | 目标端点 `host` 或 `host:port`。仅更改上游 IP；原始 SNI 和请求头保留不变 |
+| `backendEndpoint` | String | — | 主机名、IPv4 或方括号 IPv6，可带端口，如 `api.example.com:8443`、`10.0.0.1:8080`、`[2001:db8::1]:443`。不接受 URL；端口必须为 `1–65535`。原始 SNI 和请求头保留不变 |
 | `tls` | Boolean | `true` | 上游连接是否使用 TLS（`true` 时端口默认 `443`，`false` 时默认 `80`） |
 | `failoverTo` | String | 无 | 将该集群的流量重定向到指定集群；必须是同一列表中的有效集群，且不能指向自身 |
+
+名称不能仅含空白。所有区域的闭区间必须互不重叠，包括配置了 `failoverTo` 的区域；允许间隙，哈希落入间隙时透传到正常上游。未配置 `hashCalc` 时，区域表和预计算哈希仍按默认 modulo `1000` 校验。主机名保留原始大小写和结尾的点；端点格式校验不替代 DNS 解析后的地址安全检查。
 
 ### 哈希计算
 
@@ -158,10 +162,10 @@ spec:
       # 所有字段均为可选；省略的字段保持基础配置的值
       regions:            # 存在时，对基础区域表做整表替换（不做元素级合并）
         - name: us-east
-          hashRange: [0, 999]
+          hashRange: [0, 499]
           backendEndpoint: api.us-east.example.com
         - name: eu-west
-          hashRange: [0, 0]
+          hashRange: [500, 999]
           backendEndpoint: api.eu-west.example.com
           failoverTo: us-east
 ```
@@ -169,6 +173,8 @@ spec:
 | 覆盖层字段 | 作用 |
 |------------|------|
 | `regions` | 对基础区域表做**整表替换**。不存在元素级合并——你提供的表就是最终生效的表 |
+
+省略 `regions` 保留基础表；显式设置 `regions: []` 无效。覆盖表遵守与基础表相同的名称、端点、区间和故障转移规则，并分别按每个引用插件的 modulo 校验，因此同一覆盖表可能对一个插件有效、对另一个插件无效。
 
 `regions` 是唯一有实际作用的字段。`RegionRouteOverride` 类型还声明了 `enable` 与 `active`，但 Gateway 目前两者都不消费——设置它们不产生任何效果。若要让某个覆盖层停止生效，请设置 `EdgionConfigData` 的**信封级**开关 `spec.enable: false`（而不是 `spec.data.config.enable`）；此时插件回退到基础 `regions`，见下文。
 
@@ -183,7 +189,9 @@ spec:
 | 被引用的 `EdgionConfigData` 的 `spec.enable: false` | `overlay_disabled` |
 | 被引用的 `EdgionConfigData` 不存在 | `overlay_missing` |
 | 资源存在但 `spec.data.type` 不是 `RegionRouteOverride` | `overlay_type_mismatch` |
-| 合并后的区域表校验失败（为空、name 或 endpoint 为空、`hashRange` 首尾颠倒、name 重复） | `overlay_invalid` |
+| 覆盖表校验失败（空表、名称或端点非法、区间颠倒/重叠/超出当前 modulo、故障转移目标非法或成环） | `overlay_invalid` |
+
+覆盖表在配置更新时完成整表校验；请求使用当前发布的结果，并检查当前插件的 modulo。删除或更新为无效覆盖表后，下一次读取该配置的请求回退到基础表，不保留上一次有效覆盖表，也没有基于时间的过期机制。
 
 ---
 
@@ -232,6 +240,8 @@ spec:
 
 - **静态**：直接写在 `EdgionPlugins` 基础 `regions` 的某个区域上。
 - **动态**：为插件配置 `overrideRef`，把 `failoverTo` 写入 `RegionRouteOverride` EdgionConfigData。这正是 Center 做多集群故障转移所走的路径，下一个请求即生效，无需改动 `EdgionPlugins`。
+
+目标必须存在，禁止自引用和循环。允许无环链，但每次只执行一跳：配置 `a → b → c` 时，原本选中 `a` 的请求转到 `b`，原本选中 `b` 的请求转到 `c`。专用故障转移 API 会在写入前校验候选表；表非法时返回 `422`，不保存该修改。
 
 ---
 

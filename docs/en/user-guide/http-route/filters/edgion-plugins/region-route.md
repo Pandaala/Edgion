@@ -106,7 +106,9 @@ spec:
 |-----------|------|---------|-------------|
 | `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback]` — RegionRoute has no `reject` capability, see below). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the final region name (post-`failoverTo`) on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
 
-The plugin validates that `hashCalc.modulo` is at least `2`, in addition to the shared `dye` shape. Whether `overrideRef` resolves is checked by the Controller and surfaced on the `EdgionPlugins` resource's `ResolvedRefs` status condition; the region table itself is validated by the Gateway when the overlay is applied.
+Controller and Gateway use the same region-table validation rules. Invalid base configuration is reflected in the `EdgionPlugins` `Accepted` condition; overlay resolution or effective-table validation failures are reflected in `ResolvedRefs` and fall back to the valid base table. Generic resource writes retain status-based validation feedback; not every invalid write is rejected at ingestion.
+
+When `routeRules` is non-empty, base `regions` must be non-empty, even with `overrideRef`. An empty base table is allowed only with `routeRules: []`, which makes the plugin a no-op; any supplied non-empty table must still pass validation.
 
 ### Route rules
 
@@ -126,9 +128,11 @@ Each region (cluster) in `regions` defines:
 |-------|------|---------|-------------|
 | `name` | String | — | Cluster identifier (used in direct-region matching and failover). Must be non-empty and unique within the table |
 | `hashRange` | `[Integer, Integer]` | — | Closed hash interval `[low, high]`; must satisfy `0 ≤ low ≤ high < modulo` |
-| `backendEndpoint` | String | — | Target endpoint `host` or `host:port`. Only the upstream IP changes; the original SNI and request headers are preserved |
+| `backendEndpoint` | String | — | Hostname, IPv4, or bracketed IPv6 with an optional port, such as `api.example.com:8443`, `10.0.0.1:8080`, or `[2001:db8::1]:443`. URLs are invalid; ports must be `1–65535`. Original SNI and request headers are preserved |
 | `tls` | Boolean | `true` | Whether the upstream connection uses TLS (port defaults to `443` when `true`, `80` when `false`) |
 | `failoverTo` | String | none | Redirect traffic for this cluster to the named cluster; must be a valid cluster in the same list and cannot be itself |
+
+Names cannot be whitespace-only. All closed intervals must be disjoint, including regions with `failoverTo`; gaps are allowed and hashes in a gap pass through to the normal upstream. Without `hashCalc`, table bounds and pre-computed hashes still use the default modulo `1000`. Hostnames retain their original case and trailing dot; endpoint syntax validation does not replace post-DNS address safety checks.
 
 ### Hash computation
 
@@ -158,10 +162,10 @@ spec:
       # every field is optional; an omitted field keeps the base value
       regions:            # when present, WHOLE-REPLACES the base table (no element merge)
         - name: us-east
-          hashRange: [0, 999]
+          hashRange: [0, 499]
           backendEndpoint: api.us-east.example.com
         - name: eu-west
-          hashRange: [0, 0]
+          hashRange: [500, 999]
           backendEndpoint: api.eu-west.example.com
           failoverTo: us-east
 ```
@@ -169,6 +173,8 @@ spec:
 | Overlay field | Effect |
 |---------------|--------|
 | `regions` | **Whole-replaces** the base region table. There is no element-wise merge — the table you supply is the table in effect |
+
+Omitting `regions` keeps the base table; an explicit `regions: []` is invalid. Overlay tables obey the same name, endpoint, range, and failover rules as base tables and are checked against each referring plugin's modulo. A shared overlay may therefore be valid for one plugin and invalid for another.
 
 `regions` is the only field with an effect. The `RegionRouteOverride` type also declares `enable` and `active`, but the Gateway consumes neither today — setting them changes nothing. To take an overlay out of service, set the **envelope** switch `spec.enable: false` on the `EdgionConfigData` (not `spec.data.config.enable`); the plugin then falls back to the base `regions`, as described below.
 
@@ -183,7 +189,9 @@ The overlay is resolved on every request. All four failure paths fall back to th
 | Referenced `EdgionConfigData` has `spec.enable: false` | `overlay_disabled` |
 | Referenced `EdgionConfigData` does not exist | `overlay_missing` |
 | It exists but `spec.data.type` is not `RegionRouteOverride` | `overlay_type_mismatch` |
-| The merged region table fails validation (empty, empty name or endpoint, reversed `hashRange`, duplicate name) | `overlay_invalid` |
+| The overlay table fails validation (empty table, invalid names or endpoints, reversed/overlapping/out-of-modulo ranges, invalid failover targets or cycles) | `overlay_invalid` |
+
+Complete table validation happens on configuration updates; requests use the current published result and check the consuming plugin's modulo. After deletion or an invalid update, the next request observing that configuration uses the base table. There is no retained last-good overlay or time-based expiry mechanism.
 
 ---
 
@@ -232,6 +240,8 @@ Two ways to drive it:
 
 - **Statically**, on a region in the `EdgionPlugins` base `regions`.
 - **Dynamically**, by giving the plugin an `overrideRef` and writing `failoverTo` into the `RegionRouteOverride` EdgionConfigData. This is the path Center uses for multi-cluster failover, and it takes effect on the next request with no `EdgionPlugins` edit.
+
+Targets must exist; self-references and cycles are invalid. Acyclic chains are allowed, but execution follows only one hop: with `a → b → c`, a request initially selecting `a` goes to `b`, while one initially selecting `b` goes to `c`. The dedicated failover API validates the candidate table before writing; an invalid table returns `422` without persisting the change.
 
 ---
 

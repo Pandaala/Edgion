@@ -871,7 +871,8 @@ fn classify_pull_secret_ref(
 
 /// Check each RegionRoute plugin's `overrideRef` against the EdgionConfigData store.
 /// Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
-/// or one `EdgionConfigDataNotFound` error per missing or wrong-type reference.
+/// or one missing/type/content error per unusable reference. Content validation
+/// includes this consumer's modulo and does not invalidate its accepted base.
 /// Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
 pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
@@ -880,6 +881,9 @@ pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Re
     };
     let mut errors = Vec::new();
     for entry in plugins {
+        if !entry.is_enabled() || entry.policy_action.is_some() {
+            continue;
+        }
         if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
             if let Some(ref override_ref) = config.override_ref {
                 let override_ns = override_ref.namespace.as_deref().unwrap_or(ns);
@@ -895,10 +899,27 @@ pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Re
                         .runtime()
                         .edgion_config_data_store
                         .get(Some(override_ns), &override_ref.name);
-                    let resolved = target
-                        .as_ref()
-                        .is_some_and(|t| matches!(&t.spec.data, ConfigEntry::RegionRouteOverride(_)));
-                    if !resolved {
+                    let overlay = target.as_ref().and_then(|target| match &target.spec.data {
+                        ConfigEntry::RegionRouteOverride(overlay) => Some((target.spec.enable, overlay)),
+                        _ => None,
+                    });
+                    if let Some((enabled, overlay)) = overlay {
+                        let error = if !enabled {
+                            Some("RegionRouteOverride is disabled; using base regions".to_string())
+                        } else {
+                            overlay
+                                .regions
+                                .as_deref()
+                                .and_then(|regions| config.validate_effective_regions(regions).err())
+                        };
+                        if let Some(detail) = error {
+                            errors.push(ResolvedRefsError::EdgionConfigDataInvalid {
+                                namespace: override_ns.to_string(),
+                                name: override_ref.name.clone(),
+                                detail,
+                            });
+                        }
+                    } else {
                         errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
                             namespace: override_ns.to_string(),
                             name: override_ref.name.clone(),
@@ -2278,6 +2299,125 @@ profiles:
             }
             other => panic!("expected EdgionConfigDataNotFound, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_region_route_invalid_overlay_keeps_base_accepted_and_recovers() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{HashCalcConfig, RegionDef};
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let base = RegionDef {
+            name: "base".to_string(),
+            hash_range: [0, 99],
+            backend_endpoint: "base.example.test".to_string(),
+            tls: true,
+            failover_to: None,
+        };
+        let mut ep = EdgionPlugins::new("region-consumer", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
+            RegionRouteConfig {
+                regions: vec![base.clone()],
+                hash_calc: Some(HashCalcConfig {
+                    modulo: 100,
+                    algorithm: Default::default(),
+                    write_back: Vec::new(),
+                }),
+                override_ref: Some(EdgionConfigDataRef {
+                    name: "overlay".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ))]);
+        // An overlay can be structurally valid yet exceed this consumer's
+        // domain. Later replacement must clear its previous reference error.
+        for (range, expected_status) in [([0, 999], "False"), ([0, 99], "True")] {
+            let mut region = base.clone();
+            region.hash_range = range;
+            let overlay = build_edgion_config_data(
+                "default",
+                "overlay",
+                EdgionConfigDataSpec {
+                    enable: true,
+                    active: None,
+                    visibility: Default::default(),
+                    unknown_fields: Vec::new(),
+                    data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
+                        regions: Some(vec![region]),
+                        enable: None,
+                        active: None,
+                    }),
+                },
+            );
+            runtime
+                .edgion_config_data_store
+                .replace_all(HashMap::from([("default/overlay".to_string(), overlay)]));
+            EdgionPluginsHandler.update_status(&mut ep, &ctx, &[]);
+            let conditions = &ep.status.as_ref().unwrap().conditions;
+            assert_eq!(
+                conditions.iter().find(|c| c.type_ == "Accepted").unwrap().status,
+                "True"
+            );
+            let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+            assert_eq!(resolved.status, expected_status);
+            if expected_status == "False" {
+                assert_eq!(resolved.reason, "InvalidEdgionConfigDataRef");
+                assert!(resolved.message.contains("default/overlay"));
+                assert!(resolved.message.contains("modulo"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_region_route_disabled_overlay_and_disabled_consumer() {
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ep = EdgionPlugins::new("region-consumer", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
+            RegionRouteConfig {
+                override_ref: Some(EdgionConfigDataRef {
+                    name: "overlay".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ))]);
+        for (envelope_enable, variant_enable) in [(false, None), (true, Some(false))] {
+            let overlay = build_edgion_config_data(
+                "default",
+                "overlay",
+                EdgionConfigDataSpec {
+                    enable: envelope_enable,
+                    active: None,
+                    visibility: Default::default(),
+                    unknown_fields: Vec::new(),
+                    data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
+                        enable: variant_enable,
+                        active: None,
+                        regions: None,
+                    }),
+                },
+            );
+            runtime
+                .edgion_config_data_store
+                .replace_all(HashMap::from([("default/overlay".to_string(), overlay)]));
+            let errors = super::resolve_override_refs(&ep, &ctx);
+            if envelope_enable {
+                assert!(errors.is_empty(), "variant enable remains inert");
+            } else {
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].reason(), "InvalidEdgionConfigDataRef");
+                assert!(errors[0].message().contains("disabled"));
+            }
+        }
+        runtime.edgion_config_data_store.replace_all(HashMap::new());
+        ep.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+        assert!(super::resolve_override_refs(&ep, &ctx).is_empty());
+        let entry = &mut ep.spec.request_plugins.as_mut().unwrap()[0];
+        entry.enable = true;
+        entry.policy_action = Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass);
+        assert!(super::resolve_override_refs(&ep, &ctx).is_empty());
     }
 
     // ── Canary + activeProfileRef resolution tests ──────────────────────────

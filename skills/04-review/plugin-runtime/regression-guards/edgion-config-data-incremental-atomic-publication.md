@@ -43,10 +43,13 @@ Do not infer that every `EdgionConfigDataRef` needs a Gateway typed index.
   configuration time and looked up dynamically by request and stream IP
   restriction consumers. Deny and allow keys are resolved from the same captured
   handle and preserve their configured order.
-- Region-route overlay consumers read and type-guard the live raw snapshot. The
-  former `RegionRouteOverride` typed index and public getter had no production
-  caller and were removed; cloning an unused duplicate would not improve the
-  request path.
+- Region-route overlay consumers borrow the table from the live raw resource.
+  `TypedIndexes.region_tables` stores only a compact `RegionTableValidation`
+  proof for each standalone-valid table, not a cloned `RegionRouteOverride`.
+  `get_region_route_by_key` returns the raw resource and proof from one snapshot;
+  the consumer then checks its modulo without repeating whole-table validation.
+  The former duplicate-overlay index had no production caller and was removed;
+  that historical removal does not prohibit useful configuration-time proofs.
 
 Controller reverse-reference tracking and dependent requeues are complementary:
 they refresh referring resource status and resolved configuration, but do not
@@ -73,8 +76,11 @@ equality:
   ordered CIDR strings. `IpGroup.description`, resource metadata, `active`, and
   `visibility` do not affect `build_grouped_matcher_partial` and do not trigger a
   recompile or repeated warning.
-- RegionRouteOverride and Selector changes need no derived rebuild; publishing the
-  changed raw resource is sufficient for their live consumers.
+- Selector changes need no derived rebuild. RegionRouteOverride table changes
+  rebuild the compact validation proof at publication time. The raw table and
+  proof remain atomic; invalid, disabled, or different-type generations must not
+  retain a previous proof. See the
+  [effective-table validation boundary](../../routing/regression-guards/region-route-effective-table-validation.md).
 
 Serialization failure is treated conservatively as changed. Variant transitions
 remove the possible IpList matcher entry before installing the new variant,
@@ -139,3 +145,6 @@ reference becomes a data-plane-live reference.
   2026-09-07.
 - `D0048` / campaign batch `B0123` — fixed multi-lookup authorization tearing by
   introducing decision-scoped snapshot capture, 2026-09-08.
+- `D0065` — extends RegionRoute publication with configuration-time validation
+  proofs; the historical claim that overlays need no derived work is superseded.
+  Verification for this extension is tracked in the linked routing rule.

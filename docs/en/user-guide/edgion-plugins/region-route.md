@@ -88,6 +88,18 @@ All fields are optional — only the fields present in the overlay replace the b
 |-----------|------|-------------|
 | `regions` | Array | Complete replacement of the region table (whole-replace, no merge) |
 
+### Region-table validation
+
+Controller and Gateway share base and overlay table validation rules:
+
+- `name` must not be whitespace-only and must be unique within the table.
+- `backendEndpoint` accepts a hostname, IPv4, or bracketed IPv6 with an optional port in `1–65535`, such as `[2001:db8::1]:443`. URLs, empty hosts, and invalid ports are rejected. Omitted ports default to `443` for TLS and `80` otherwise. Hostnames retain their case and trailing dot; syntax validation does not replace post-DNS address safety checks.
+- `hashRange` must satisfy `0 <= low <= high < modulo`, and all intervals must be disjoint, including regions with `failoverTo`. Gaps are allowed; without `hashCalc`, table bounds and pre-computed hashes still use the default modulo `1000`.
+- Non-empty `routeRules` require a non-empty base table, even with `overrideRef`; an empty base table is allowed only for a no-op configuration with no route rules.
+- Omitting overlay `regions` keeps the base table; explicit `regions: []` is invalid. Each referring plugin checks the overlay against its own modulo.
+
+Invalid base configuration is reflected in `Accepted`; overlay resolution or effective-table errors are reflected in `ResolvedRefs`. Generic resource writes retain status-based validation feedback. Missing, disabled, wrong-type, or invalid overlays fall back to the valid base table. There is no retained last-good overlay or time-based expiry mechanism. Complete table validation happens on configuration updates.
+
 ---
 
 ## Quick Start
@@ -248,8 +260,10 @@ Add `failoverTo` to any `RegionDef` to statically redirect traffic away from tha
 the base `regions` table and in a `RegionRouteOverride` overlay. Typical use: mark a region
 out-of-service; all traffic redirects to another region.
 
-Constraints: target must be a valid region name; no chaining; no self-reference or cycles (silently
-ignored with `err: failover to invalid` in access log).
+Targets must exist in the same table; self-references and cycles are invalid. Acyclic chains are allowed,
+but execution follows only one hop: with `a → b → c`, a request selecting `a` goes to `b`, while one selecting
+`b` goes to `c`. Invalid tables are identified during configuration processing; the dedicated failover API
+returns `422` for an invalid candidate table without persisting the change.
 
 ## Notes
 

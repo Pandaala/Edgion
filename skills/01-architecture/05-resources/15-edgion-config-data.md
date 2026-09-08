@@ -66,7 +66,7 @@ and others later) may reference it via a generic `dataRef`.
 1. **Strict replace, never deep-merge.** Field present in overlay → replaces base; collection → whole-table replace.
 2. **Only data is overridable; logic never is.** Override shapes are all-Optional, logic fields physically absent.
 3. **Effective config is observable.** Admin dump shows base+overlay + per-field source.
-4. **Switch unification.** `enable` is the top kill switch; `active` selects a profile. Both overridable.
+4. **Switch unification.** Use the consuming feature's switch contract. RegionRoute consumes only envelope `spec.enable`; its variant `enable` and `active` fields are currently inert.
 5. **Fail-to-base.** Base is the complete safe default. Overlay absent → base. Overlay invalid → base + signal.
 
 > **Security invariant:** fail-to-base means the base must be the conservative/safe value. If the base
@@ -79,7 +79,7 @@ and others later) may reference it via a generic `dataRef`.
   Mismatch → fail-to-base + signal (`overlay_type_mismatch`). Never coerce across types.
 - For each field in `Override` (all `Option`): `Some(v)` → use `v`; `None` → use base value.
 - Collections are replaced **whole** (no element merge).
-- Invalid overlay → controller `Accepted=False` (not pushed to gateway); gateway uses base + emits signal.
+- Invalid RegionRoute overlay → controller `Accepted=False` for standalone table errors; generic ingest still continues through parse/status and conf_sync. The Gateway independently validates and uses base + emits signal. Consumer-specific modulo failures belong to the referring plugin's `ResolvedRefs`.
 
 ### Fail-Behavior Matrix
 
@@ -88,9 +88,9 @@ and others later) may reference it via a generic `dataRef`.
 | No `overrideRef` set | Base used |
 | `overrideRef` set, EdgionConfigData absent | **Base** + `overlay_missing` signal (metric + access log) |
 | EdgionConfigData present, **type mismatch** | **Base** + `overlay_type_mismatch` signal |
-| EdgionConfigData present, invalid (controller) | `Accepted=False`, not pushed; gateway uses **base** |
+| RegionRoute EdgionConfigData present, invalid (controller) | `Accepted=False` for standalone errors; still synced by generic ingest; independent Gateway validation uses **base** |
 | EdgionConfigData present, valid | `base ⊕ overlay` (field-level replace) |
-| `enable=false` effective (envelope `spec.enable` or variant `enable`) | **Base** + `overlay_disabled` signal (envelope kill switch) |
+| RegionRoute envelope `spec.enable=false` | **Base** + `overlay_disabled`; variant `enable`/`active` do not affect RegionRoute |
 
 Signals: gateway uses an access-log `EdgionErrorCode` diagnostic + Prometheus counter. No `tracing::error!` on the data plane.
 
@@ -188,13 +188,15 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 
 ## Gateway-Side Processing
 
-Gateway stores EdgionConfigData in `EdgionConfigDataStore` (ArcSwap + variant-keyed indexes). Overlay resolution is
-performed **at request time** (lock-free ArcSwap load). The gateway does not cache effective configs — it
-re-applies `apply_override` on each request from the current snapshot.
+Gateway stores EdgionConfigData in `EdgionConfigDataStore` (ArcSwap + variant-keyed indexes). Live reference resolution is
+performed **at request time** (lock-free ArcSwap load). RegionRoute borrows the current raw overlay table;
+configuration publication builds a compact `RegionTableValidation` proof in the same snapshot.
+The request checks only that proof's maximum hash bound against its base modulo, without repeating
+full endpoint, interval, or failover-graph validation or copying the region table.
 
 - **Overlay absent or type-mismatch:** base used; metric counter incremented (`overlay_missing` /
   `overlay_type_mismatch` label on the relevant plugin's event counter).
-- **Enable=false:** plugin skipped via the shared `effective_switch` helper.
+- **RegionRoute envelope enable=false:** overlay ignored and base table used; the plugin is not disabled.
 
 ## Ownership
 
@@ -371,6 +373,16 @@ spec:
 
 The RegionRoute plugin in `EdgionPlugins` now carries all routing logic inline (base) with an optional
 `overrideRef` pointing to a `RegionRouteOverride` EdgionConfigData for dynamic region-table updates:
+
+Base and overlay tables share resources-layer validation: nonblank unique names, strict host/port
+syntax, disjoint closed ranges within the consumer modulo, and existing nonself acyclic failover
+targets. Gaps remain pass-through and failover execution remains one hop even for legal chains.
+The default modulo is 1000 without `hashCalc`. Non-empty `routeRules` require a non-empty base,
+regardless of `overrideRef`; only no-rule no-ops may have an empty base. Overlay `regions: None`
+inherits, while an explicit empty replacement is invalid. Missing/disabled/wrong-type/invalid
+overlays use the valid base; there is no TTL or last-good overlay retention. See
+[the RegionRoute regression boundary](../../04-review/routing/regression-guards/region-route-effective-table-validation.md)
+for source evidence, management API alignment, and verification limits.
 
 ```yaml
 # EdgionPlugins base config (git-owned, logic + default regions)

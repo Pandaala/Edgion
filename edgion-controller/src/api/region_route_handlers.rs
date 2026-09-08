@@ -8,7 +8,8 @@
 
 use axum::{extract::State, http::StatusCode, response::Json};
 use edgion_resources::resources::edgion_config_data::validate_regions;
-use edgion_resources::resources::edgion_plugins::plugin_configs::RegionDef;
+use edgion_resources::resources::edgion_plugins::plugin_configs::{RegionDef, RegionRouteConfig};
+use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::ResourceKind;
 use serde::Deserialize;
 use serde_json::Value;
@@ -64,12 +65,23 @@ pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) 
 
         for (entry_index, entry) in entries.iter().enumerate() {
             let enabled = entry.get("enable").and_then(Value::as_bool).unwrap_or(true);
-            if !enabled || entry.get("type").and_then(Value::as_str) != Some("RegionRoute") {
+            if !enabled
+                || entry.get("policyAction").is_some_and(|action| !action.is_null())
+                || entry.get("type").and_then(Value::as_str) != Some("RegionRoute")
+            {
                 continue;
             }
             let Some(config) = entry.get("config") else {
                 continue;
             };
+            let Ok(region_config) = serde_json::from_value::<RegionRouteConfig>(config.clone()) else {
+                continue;
+            };
+            // Match the Gateway compile boundary: an invalid base cannot be
+            // rescued by an overlay and is not an effective routing entry.
+            if region_config.validation_error().is_some() {
+                continue;
+            }
 
             let base_regions = config
                 .get("regions")
@@ -84,7 +96,8 @@ pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) 
             let override_ref = config
                 .get("overrideRef")
                 .and_then(|value| parse_override_ref(value, namespace));
-            let (regions, override_applied) = apply_region_override(&base_regions, override_ref.as_ref(), &config_data);
+            let (regions, override_applied) =
+                apply_region_override(&region_config, &base_regions, override_ref.as_ref(), &config_data);
             let usages = collect_route_usages(namespace, plugin_name, &http_routes, &grpc_routes);
 
             data.push(serde_json::json!({
@@ -229,7 +242,8 @@ pub async fn cluster_edgion_config_data_failover(
     {
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
         Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(_e) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(FailoverError::InvalidTable(_)) => Err(StatusCode::UNPROCESSABLE_ENTITY),
+        Err(FailoverError::Storage(_)) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -252,7 +266,12 @@ fn parse_override_ref(value: &Value, default_namespace: &str) -> Option<Value> {
     Some(serde_json::json!({ "namespace": namespace, "name": name, "permitted": permitted }))
 }
 
-fn apply_region_override(base_regions: &Value, override_ref: Option<&Value>, resources: &[Value]) -> (Value, bool) {
+fn apply_region_override(
+    config: &RegionRouteConfig,
+    base_regions: &Value,
+    override_ref: Option<&Value>,
+    resources: &[Value],
+) -> (Value, bool) {
     let Some(reference) = override_ref else {
         return (base_regions.clone(), false);
     };
@@ -282,7 +301,7 @@ fn apply_region_override(base_regions: &Value, override_ref: Option<&Value>, res
     let Ok(regions) = serde_json::from_value::<Vec<RegionDef>>(regions_value) else {
         return (base_regions.clone(), false);
     };
-    if validate_regions(&regions).is_err() {
+    if config.validate_effective_regions(&regions).is_err() {
         return (base_regions.clone(), false);
     }
     match serde_json::to_value(regions) {
@@ -299,7 +318,7 @@ async fn patch_edgion_config_data_failover(
     plugin_type: &str,
     region_name: &str,
     failover_to: &str,
-) -> Result<bool, String> {
+) -> Result<bool, FailoverError> {
     use crate::conf_mgr::conf_center::traits::ConfWriterError;
     use edgion_resources::ResourceKind;
 
@@ -326,6 +345,9 @@ async fn patch_edgion_config_data_failover(
             .map(str::to_string);
 
         let patch_result = patch_failover_resource(&mut resource, plugin_type, region_name, failover_to);
+        if patch_result != FailoverPatch::Missing {
+            validate_failover_resource(&resource).map_err(FailoverError::InvalidTable)?;
+        }
         match patch_result {
             FailoverPatch::Missing => return Ok(false),
             // A concurrent writer may already have established the requested
@@ -365,11 +387,38 @@ async fn patch_edgion_config_data_failover(
                     "RegionRouteOverride changed concurrently; retrying failover update"
                 );
             }
-            Err(error) => return Err(format!("update_one failed: {error}")),
+            Err(error) => return Err(FailoverError::Storage(format!("update_one failed: {error}"))),
         }
     }
 
-    Err("RegionRouteOverride update retries exhausted".to_string())
+    Err(FailoverError::Storage(
+        "RegionRouteOverride update retries exhausted".to_string(),
+    ))
+}
+
+#[derive(Debug, thiserror::Error)]
+enum FailoverError {
+    #[error("invalid region table: {0}")]
+    InvalidTable(String),
+    #[error("{0}")]
+    Storage(String),
+}
+
+impl From<String> for FailoverError {
+    fn from(value: String) -> Self {
+        Self::Storage(value)
+    }
+}
+
+/// The dedicated failover command validates the complete proposed table, even
+/// for an idempotent request. Generic resource ingest remains advisory.
+fn validate_failover_resource(resource: &Value) -> Result<(), String> {
+    let value = resource
+        .pointer("/spec/data/config/regions")
+        .ok_or_else(|| "RegionRouteOverride regions are missing".to_string())?;
+    let regions: Vec<RegionDef> =
+        serde_json::from_value(value.clone()).map_err(|error| format!("invalid regions: {error}"))?;
+    validate_regions(&regions)
 }
 
 /// Assign a newly allocated `metadata.resourceVersion` to a resource that is
@@ -502,7 +551,10 @@ mod failover_version_tests {
                 "visibility": "Namespace",
                 "data": {
                     "type": "RegionRouteOverride",
-                    "config": { "regions": [{ "name": "east" }] }
+                    "config": { "regions": [
+                        { "name": "east", "hashRange": [0, 499], "backendEndpoint": "east.example.test" },
+                        { "name": "west", "hashRange": [500, 999], "backendEndpoint": "west.example.test" }
+                    ] }
                 }
             }
         })
@@ -565,6 +617,63 @@ mod failover_version_tests {
                 .await
                 .expect("failover must succeed regardless of the seeded version value");
         assert!(applied);
+    }
+
+    #[tokio::test]
+    async fn failover_rejects_self_dangling_and_cyclic_targets_without_writing() {
+        for target in ["east", "missing", "west"] {
+            let (state, _tmp) = make_fs_state().await;
+            let mut seed: Value = serde_json::from_str(&override_body("42")).unwrap();
+            if target == "west" {
+                seed["spec"]["data"]["config"]["regions"][1]["failoverTo"] = Value::String("east".into());
+            }
+            state
+                .conf_center()
+                .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
+                .await
+                .unwrap();
+            let result = cluster_edgion_config_data_failover(
+                State(state.clone()),
+                Json(EdgionConfigDataFailoverRequest {
+                    namespace: "default".into(),
+                    name: "override".into(),
+                    region_name: "east".into(),
+                    failover_to: target.into(),
+                }),
+            )
+            .await;
+            assert_eq!(result.unwrap_err(), StatusCode::UNPROCESSABLE_ENTITY, "target={target}");
+            let stored = state
+                .conf_center()
+                .get_one("EdgionConfigData", Some("default"), "override")
+                .await
+                .unwrap();
+            let stored: Value = serde_yaml::from_str(&stored).unwrap();
+            assert_eq!(stored["metadata"]["resourceVersion"], "42");
+            assert_eq!(stored["spec"]["data"], seed["spec"]["data"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn failover_rejects_malformed_complete_table_even_when_already_applied() {
+        for (field, value) in [
+            ("backendEndpoint", serde_json::json!("east.example.test:abc")),
+            ("hashRange", serde_json::json!([400, 999])),
+        ] {
+            let (state, _tmp) = make_fs_state().await;
+            let mut seed: Value = serde_json::from_str(&override_body("42")).unwrap();
+            seed["spec"]["data"]["config"]["regions"][0][field] = value;
+            state
+                .conf_center()
+                .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
+                .await
+                .unwrap();
+            // Clearing an already absent failover must not approve a broken table.
+            let result =
+                patch_edgion_config_data_failover(&state, "default", "override", "RegionRouteOverride", "east", "")
+                    .await;
+            assert!(matches!(result, Err(FailoverError::InvalidTable(_))), "field={field}");
+        }
     }
 }
 
@@ -792,20 +901,30 @@ mod tests {
         )
         .expect("structured reference");
         assert_eq!(reference["namespace"], "operations");
-        let base = serde_json::json!([{"name": "base"}]);
+        let base = serde_json::json!([{
+            "name": "base", "hashRange": [0, 999], "backendEndpoint": "base.example.test"
+        }]);
+        let config = RegionRouteConfig {
+            regions: serde_json::from_value(base.clone()).unwrap(),
+            ..Default::default()
+        };
         let resources = vec![serde_json::json!({
             "metadata": {"namespace": "operations", "name": "region-overlay"},
             "spec": {"enable": true, "data": {"type": "RegionRouteOverride", "config": {
                 "regions": [{
                     "name": "effective",
-                    "hashRange": [0, 999],
+                    "hashRange": [0, 499],
                     "backendEndpoint": "effective.example.test:443",
                     "tls": true,
                     "failoverTo": "backup"
+                }, {
+                    "name": "backup",
+                    "hashRange": [500, 999],
+                    "backendEndpoint": "backup.example.test"
                 }]
             }}}
         })];
-        let (regions, applied) = apply_region_override(&base, Some(&reference), &resources);
+        let (regions, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
         assert!(applied);
         assert_eq!(regions[0]["name"], "effective");
         assert_eq!(regions[0]["failoverTo"], "backup");
@@ -835,8 +954,67 @@ mod tests {
                 }]
             }}}
         })];
-        let (regions, applied) = apply_region_override(&base, Some(&reference), &resources);
+        let config = RegionRouteConfig {
+            regions: serde_json::from_value(base.clone()).unwrap(),
+            ..Default::default()
+        };
+        let (regions, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
         assert!(!applied);
         assert_eq!(regions, base);
+    }
+
+    #[test]
+    fn region_override_is_validated_for_each_consumers_modulo() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::HashCalcConfig;
+
+        let reference = serde_json::json!({"namespace": "default", "name": "overlay"});
+        let base = serde_json::json!([
+            {"name": "base", "hashRange": [0, 99], "backendEndpoint": "base.example.test"}
+        ]);
+        let resources = vec![serde_json::json!({
+            "metadata": {"namespace": "default", "name": "overlay"},
+            "spec": {"data": {"type": "RegionRouteOverride", "config": {"regions": [
+                {"name": "overlay", "hashRange": [0, 999], "backendEndpoint": "overlay.example.test"}
+            ]}}}
+        })];
+        for (modulo, expected_applied) in [(100, false), (1000, true)] {
+            let config = RegionRouteConfig {
+                regions: serde_json::from_value(base.clone()).unwrap(),
+                hash_calc: Some(HashCalcConfig {
+                    modulo,
+                    algorithm: Default::default(),
+                    write_back: Vec::new(),
+                }),
+                ..Default::default()
+            };
+            let (effective, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
+            assert_eq!(applied, expected_applied);
+            assert_eq!(effective[0]["name"], if expected_applied { "overlay" } else { "base" });
+        }
+    }
+
+    #[test]
+    fn disabled_and_absent_region_overrides_inherit_base() {
+        let reference = serde_json::json!({"namespace": "default", "name": "overlay"});
+        let base = serde_json::json!([
+            {"name": "base", "hashRange": [0, 999], "backendEndpoint": "base.example.test"}
+        ]);
+        let config = RegionRouteConfig {
+            regions: serde_json::from_value(base.clone()).unwrap(),
+            ..Default::default()
+        };
+        for overlay in [
+            serde_json::json!({}),
+            serde_json::json!({"regions": null}),
+            serde_json::json!({"regions": []}),
+        ] {
+            let resources = vec![serde_json::json!({
+                "metadata": {"namespace": "default", "name": "overlay"},
+                "spec": {"data": {"type": "RegionRouteOverride", "config": overlay}}
+            })];
+            let (effective, applied) = apply_region_override(&config, &base, Some(&reference), &resources);
+            assert!(!applied);
+            assert_eq!(effective, base);
+        }
     }
 }

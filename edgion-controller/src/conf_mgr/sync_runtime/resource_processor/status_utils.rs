@@ -256,6 +256,13 @@ pub enum ResolvedRefsError {
         name: String,
         expected_type: String,
     },
+    /// A present ConfigData target cannot be used by this consumer. The
+    /// consumer's valid base remains accepted when an overlay falls back.
+    EdgionConfigDataInvalid {
+        namespace: String,
+        name: String,
+        detail: String,
+    },
     /// Edgion extension · The Secret exists but is missing one or more required
     /// `data` keys (e.g. `password` for basic-auth, `tls.key` for TLS certs).
     MissingKeys { keys: Vec<&'static str> },
@@ -308,7 +315,9 @@ impl ResolvedRefsError {
             Self::LinkSysNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
-            Self::EdgionConfigDataNotFound { .. } => condition_reasons::INVALID_EDGION_CONFIG_DATA_REF,
+            Self::EdgionConfigDataNotFound { .. } | Self::EdgionConfigDataInvalid { .. } => {
+                condition_reasons::INVALID_EDGION_CONFIG_DATA_REF
+            }
             Self::MissingKeys { .. } | Self::SecretMatchKeyMissing { .. } => condition_reasons::MISSING_KEYS,
             Self::DecodeError { .. } | Self::SecretMatchValueInvalid { .. } => condition_reasons::DECODE_ERROR,
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
@@ -357,6 +366,13 @@ impl ResolvedRefsError {
             }
             Self::MissingKeys { keys } => {
                 format!("Secret is missing required data keys: {}", keys.join(", "))
+            }
+            Self::EdgionConfigDataInvalid {
+                namespace,
+                name,
+                detail,
+            } => {
+                format!("EdgionConfigData '{namespace}/{name}' is unusable: {detail}")
             }
             Self::SecretMatchKeyMissing { namespace, name, key } => {
                 format!("Secret '{namespace}/{name}' is missing required data key '{key}'")
@@ -551,7 +567,7 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             ResolvedRefsError::RefNotPermitted { .. } => 1,
             ResolvedRefsError::CertContentInvalid { .. } => 2,
             ResolvedRefsError::InvalidSecretType { .. } => 3,
-            ResolvedRefsError::EdgionConfigDataNotFound { .. } => 4,
+            ResolvedRefsError::EdgionConfigDataNotFound { .. } | ResolvedRefsError::EdgionConfigDataInvalid { .. } => 4,
             ResolvedRefsError::BackendNotFound { .. } => 5,
             ResolvedRefsError::EdgionBackendNotFound { .. } => 5,
             ResolvedRefsError::LinkSysNotFound { .. } => 5,
@@ -672,6 +688,26 @@ mod tests {
         let cond = resolved_refs_condition(&[], Some(1));
         assert_eq!(cond.status, "True");
         assert_eq!(cond.reason, "ResolvedRefs");
+    }
+
+    #[test]
+    fn region_route_invalid_overlay_uses_existing_reference_reason_and_priority() {
+        let errors = vec![
+            ResolvedRefsError::SecretNotFound {
+                namespace: "default".into(),
+                name: "secret".into(),
+            },
+            ResolvedRefsError::EdgionConfigDataInvalid {
+                namespace: "default".into(),
+                name: "overlay".into(),
+                detail: "region hash range exceeds consumer modulo".into(),
+            },
+        ];
+        let condition = resolved_refs_condition(&errors, Some(1));
+        assert_eq!(condition.status, "False");
+        assert_eq!(condition.reason, "InvalidEdgionConfigDataRef");
+        assert!(condition.message.contains("default/overlay"));
+        assert!(condition.message.contains("exceeds consumer modulo"));
     }
 
     #[test]

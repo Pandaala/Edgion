@@ -28,7 +28,7 @@ pub use ip_group::IpGroup;
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
-pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride};
+pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride, RegionTableValidation};
 pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
 

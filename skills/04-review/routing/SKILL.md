@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [RegionRoute base, overlay, and effective-table validation](regression-guards/region-route-effective-table-validation.md)
 - [route-10 — 1xx informational responses pollute response-filter state (status, CB, ht) — FIXED](regression-guards/1xx-response-filter-state-pollution.md)
 - [Delegated ExtensionRefs remain local to the declaring route](regression-guards/delegated-extensionref-remains-child-local.md)
 - [Delegated Child `PathPrefix /` Inherits the Scope Prefix — FIXED](regression-guards/delegation-root-prefix-inherits-scope.md)
