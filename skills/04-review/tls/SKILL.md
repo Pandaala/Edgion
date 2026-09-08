@@ -25,6 +25,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Gateway backend client identity does not select TLS](regression-guards/backend-client-identity-tls-selection.md)
 - [Backend TLS connection-pool trust and identity isolation](regression-guards/backend-tls-pool-isolation.md)
 - [EdgionTls incremental and atomic publication](regression-guards/edgion-tls-incremental-atomic-publication.md)
 - [tls-08 — Backend (upstream) TLS CA bundle loads every PEM block + fail-closed](regression-guards/backend-ca-bundle-multi-pem.md)
