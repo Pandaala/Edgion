@@ -13,9 +13,7 @@ pub use http::{
     GlobalHttpRouteManagers, HttpRouteRuleUnit,
 };
 
-pub use grpc::{
-    create_grpc_route_handler, get_global_grpc_route_manager, get_global_grpc_route_managers, GlobalGrpcRouteManagers,
-};
+pub use grpc::{create_grpc_route_handler, get_global_grpc_route_managers, GlobalGrpcRouteManagers};
 pub use tcp::{create_tcp_route_handler, get_global_tcp_route_managers, EdgionTcpProxy, GlobalTcpRouteManagers};
 pub use tls::{
     create_tls_route_handler, get_global_tls_route_managers, EdgionTlsTcpProxy, GlobalTlsRouteManagers, TlsRouteManager,

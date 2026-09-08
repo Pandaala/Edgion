@@ -1,6 +1,6 @@
 ---
 name: http-route-manager-legacy-alias-removed
-description: Use when reviewing HTTP route-manager naming findings; covers the removed RouteManager/get_global_route_manager legacy aliases and the still-open gRPC counterpart.
+description: Use when reviewing route-manager naming findings; covers the removed HTTP and gRPC legacy accessors and aliases.
 status: fixed
 finding_id: gw-http-match-03
 closed: 2026-07-27
@@ -61,12 +61,11 @@ the rename cannot silently change behavior. Both names resolved to the same
   families (TCP/UDP/TLS/HTTP/gRPC); collapsing HTTP to a distinct short name
   re-introduces the asymmetry from the other direction.
 
-## Re-evaluation Triggers
+## gRPC Follow-up
 
-- The gRPC twin `GrpcRouteManager` (`routes/grpc/`) still carries the identical
-  pattern; it was out of scope for this unit (review unit G04 / the `X12`
-  `x-residue` sweep). Removing it is the same mechanical change and is still
-  open.
+The equivalent singular gRPC accessor has also been removed. The canonical
+gRPC name is `get_global_grpc_route_managers()` at every definition, re-export,
+and call site.
 
 ## Reference Cases
 

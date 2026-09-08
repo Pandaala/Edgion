@@ -18,7 +18,7 @@ types to ensure architectural alignment.
 |-----------|-----|-----|-----|------|------|
 | **Global manager** | `GlobalTcpRouteManagers` | `GlobalUdpRouteManagers` | `GlobalTlsRouteManagers` | `GlobalHttpRouteManagers` | `GlobalGrpcRouteManagers` |
 | **Global singleton** | `OnceLock` | `OnceLock` | `OnceLock` | `OnceLock` | `OnceLock` |
-| **Legacy alias** | — | — | — | — (removed, gw-http-match-03) | `GrpcRouteManager` |
+| **Legacy alias** | — | — | — | — (removed, gw-http-match-03) | — (removed) |
 | **Per-listener manager** | `TcpPortRouteManager` | `UdpPortRouteManager` | `TlsRouteManager` | `HttpPortRouteManager` | `GrpcPortRouteManager` |
 | **Route table snapshot** | `TcpRouteTable` | `UdpRouteTable` | `TlsRouteTable` | `DomainRouteRules` | `DomainGrpcRouteRules` |
 | **Lock-free read** | `ArcSwap` | `ArcSwap` | `ArcSwap` | `ArcSwap` | `ArcSwap` |

@@ -181,7 +181,7 @@
 | `edgion-gateway/src/ai/terminal.rs` | `ai-core` | source | pending | — |
 | `edgion-gateway/src/ai/usage.rs` | `ai-core` | source | pending | — |
 | `edgion-gateway/src/api/admin_auth.rs` | `api` | source | pending | — |
-| `edgion-gateway/src/api/mod.rs` | `api` | source | pending | — |
+| `edgion-gateway/src/api/mod.rs` | `api` | source | changed | B0168: use canonical plural gRPC route-manager getter |
 | `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | changed | `B0033`: concurrent winner permits now prove RAII release to zero without leaking handles |
 | `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | examined-no-change | `B0033`: minimal production RAII wrapper retained |
 | `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | removed | `B0034` completed before external commit `8cbbed6c` removed the file |
@@ -591,8 +591,8 @@
 | `edgion-gateway/src/routes/grpc/integration.rs` | `routes-shared` | source | changed | B0165 review retained the facade; B0167 borrows precompiled backend policy identity |
 | `edgion-gateway/src/routes/grpc/match_engine.rs` | `routes-shared` | source | changed | B0166: correct regex service/method character precedence |
 | `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | changed | B0167: precompile and borrow backend policy target identity |
-| `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | analysis-ready | B0168: remove legacy singular gRPC manager alias |
-| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | analysis-ready | B0169: retained-manager clearing and inner ArcSwap candidate |
+| `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager alias |
+| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 retained-manager/ArcSwap change remains analysis-ready |
 | `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | pending | — |
@@ -630,7 +630,7 @@
 | `edgion-gateway/src/routes/l4_duplex.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/l4_partial_update.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/l4_rebuild.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/mod.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager re-export |
 | `edgion-gateway/src/routes/tcp/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tcp/edgion_tcp.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tcp/mod.rs` | `routes-shared` | source | pending | — |

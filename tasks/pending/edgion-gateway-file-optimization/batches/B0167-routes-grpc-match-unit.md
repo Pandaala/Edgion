@@ -23,4 +23,4 @@
 - Tests: backend-handle tests passed 7/7 and the full gRPC route subset passed 38/38. Coverage includes every supported/unsupported group-kind and namespace form, denial/delegation, repeated pointer identity, allocation-free projection, and retained old-generation identity after replacement.
 - Review: fresh independent final reviewer `b0167_final_review` re-read the two-file diff and policy/TLS/session/retry rules, confirmed borrow lifetime and exact behavioral equivalence, and returned LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification: `cargo fmt --all`; focused tests 7/7 and gRPC tests 38/38; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,113-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `11843ea1`; never pushed by the campaign.
