@@ -19,4 +19,4 @@
 - Follow-ups:
   - `tasks/todo/refresh-connected-upstream-lb-lifecycle-documentation.md`
   - `tasks/todo/add-streaming-conn-est-access-log-integration.md`
-- Commit: pending; never push.
+- Commit: `1603baee`; never pushed by the campaign.

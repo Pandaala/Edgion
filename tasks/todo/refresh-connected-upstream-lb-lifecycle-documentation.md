@@ -19,6 +19,7 @@ Update Pingora lifecycle architecture to describe the current attempt-owned load
 - Replace stale LeastConn-only and `runtime_state::increment()` wording with `lb::commit_attempt` and `LbCommitGuard` ownership.
 - Describe retry transition, cancellation, terminal cleanup, and idempotent commit behavior.
 - Keep connection establishment timing distinct from EWMA latency sampling at the final response-header stage.
+- State that Phase 1 initializes the gRPC-Web bridge before Pingora's module request-header filter, and move protocol detection/request-info extraction to the later `request_filter` phase.
 - Verify HTTP and gRPC consumers against current code before editing the documentation.
 
 ## Scope
