@@ -35,4 +35,4 @@ Independent plan review approved this plan without a Must Fix. Independent final
 - Implementation: the final hook now checks both canonical and attempt-local `Connection` fields before materializing a deferred credential, rejects malformed or nominated values with `CredentialConnectionConflict`, preserves expiry-only `CredentialExpired`, and maps all local preparation failures to one static explicitly non-retryable HTTP 500. Credential-free requests avoid credential clock and application work.
 - Tests: target 13/13, diagnostic 2/2, and full proxy-http 261/261.
 - Gates: `cargo fmt --all`, locked workspace check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path checks passed.
-- Commit: pending; never push.
+- Commit: `12ec874a`; never pushed by the campaign.

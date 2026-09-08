@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::EdgionHttpProxy;
@@ -328,26 +329,67 @@ fn run_read_only_body_plugins(
     end_of_stream: bool,
 ) -> Option<Duration> {
     let mut max_delay: Option<Duration> = None;
-    if let Some(route_unit) = ctx.route_unit.clone() {
-        max_delay = route_unit
-            .plugin_runtime
-            .run_upstream_response_body_plugins(session, ctx, body, end_of_stream);
+    if let Some(runtime) = prefer_plugin_runtime(
+        ctx.grpc_route_unit
+            .as_ref()
+            .map(|unit| Arc::clone(&unit.plugin_runtime)),
+        || ctx.route_unit.as_ref().map(|unit| Arc::clone(&unit.plugin_runtime)),
+    ) {
+        run_and_merge_read_only_body_runtime(&mut max_delay, runtime.as_ref(), session, ctx, body, end_of_stream);
+    }
+    if let Some(runtime) = prefer_plugin_runtime(
+        ctx.selected_grpc_backend
+            .as_ref()
+            .map(crate::routes::grpc::SelectedGrpcBackend::plugin_runtime),
+        || {
+            ctx.selected_backend
+                .as_ref()
+                .map(crate::backends::SelectedHttpBackend::plugin_runtime)
+        },
+    ) {
+        run_and_merge_read_only_body_runtime(&mut max_delay, runtime.as_ref(), session, ctx, body, end_of_stream);
     }
     if let Some(plugins) = ctx.resolved_gateway_plugins() {
         for runtime in plugins.iter() {
-            if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
-                max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
-            }
+            run_and_merge_read_only_body_runtime(&mut max_delay, runtime, session, ctx, body, end_of_stream);
         }
     }
     if let Some(plugins) = ctx.resolved_global_plugins() {
         for runtime in plugins.iter() {
-            if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
-                max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
-            }
+            run_and_merge_read_only_body_runtime(&mut max_delay, runtime, session, ctx, body, end_of_stream);
         }
     }
     max_delay
+}
+
+#[inline]
+fn prefer_plugin_runtime(
+    preferred: Option<Arc<crate::plugins::runtime::PluginRuntime>>,
+    fallback: impl FnOnce() -> Option<Arc<crate::plugins::runtime::PluginRuntime>>,
+) -> Option<Arc<crate::plugins::runtime::PluginRuntime>> {
+    preferred.or_else(fallback)
+}
+
+#[inline]
+fn run_and_merge_read_only_body_runtime(
+    max_delay: &mut Option<Duration>,
+    runtime: &crate::plugins::runtime::PluginRuntime,
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    body: &Option<bytes::Bytes>,
+    end_of_stream: bool,
+) {
+    merge_max_delay(
+        max_delay,
+        runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream),
+    );
+}
+
+#[inline]
+fn merge_max_delay(max_delay: &mut Option<Duration>, delay: Option<Duration>) {
+    if let Some(delay) = delay {
+        *max_delay = Some(max_delay.map_or(delay, |current| current.max(delay)));
+    }
 }
 
 /// Stamp TTFT only when a non-empty response-body chunk actually arrived.
@@ -381,9 +423,18 @@ mod tests {
     use crate::plugins::runtime::traits::streaming_response_processor::{
         StreamingResponseEvent, StreamingResponseProcessor,
     };
+    use crate::plugins::runtime::PluginRuntime;
+    use crate::routes::grpc::{GrpcBackendHandle, GrpcRouteRuleUnit, SelectedGrpcBackend};
+    use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+    use crate::{MatchInfo, Rsc};
     use async_trait::async_trait;
     use bytes::Bytes;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    use edgion_resources::{
+        GRPCBackendRef, GRPCRoute, GRPCRouteRule, HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule, ResourceMeta,
+    };
     use parking_lot::Mutex;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
 
@@ -443,6 +494,200 @@ mod tests {
             .then_some(())
             .expect("client must not have closed before sending the request");
         session
+    }
+
+    fn bandwidth_runtime(rate: &str) -> PluginRuntime {
+        use edgion_resources::resources::edgion_plugins::{
+            BandwidthLimitConfig, EdgionPlugin, UpstreamResponseBodyFilterEntry,
+        };
+
+        let mut runtime = PluginRuntime::new();
+        let entry = UpstreamResponseBodyFilterEntry::new(EdgionPlugin::BandwidthLimit(BandwidthLimitConfig {
+            rate: rate.to_string(),
+            rate_bytes_per_second: None,
+        }));
+        assert!(runtime
+            .add_from_upstream_response_body_filters(&[entry], "default")
+            .is_empty());
+        runtime
+    }
+
+    fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
+        let matched = HTTPRouteMatch {
+            path: None,
+            headers: None,
+            query_params: None,
+            method: None,
+        };
+        Arc::new(HttpRouteRuleUnit {
+            resource_key: "default/http".to_string(),
+            matched_info: MatchInfo {
+                rsc: Rsc::new("HTTPRoute", "default", "http"),
+                rule_id: 0,
+                match_id: 0,
+                sv: 0,
+                m: matched,
+                labels_meta: None,
+                annotations_meta: None,
+            },
+            rule: Arc::new(HTTPRouteRule {
+                name: None,
+                resolved_terminal_route_uid: None,
+                resolved_terminal_rule_identity: None,
+                matches: None,
+                filters: None,
+                backend_refs: None,
+                timeouts: None,
+                retry: None,
+                session_persistence: None,
+                parsed_timeouts: None,
+                parsed_retry: None,
+                parsed_forward_raw_path: None,
+                parsed_allow_non_idempotent_retry: None,
+                parsed_mirror_tuning: None,
+            }),
+            route: None,
+            path_regex: None,
+            parent_refs: None,
+            compiled_header_regexes: Vec::new(),
+            compiled_query_regexes: Vec::new(),
+            has_query_matchers: false,
+            specificity: MatchSpecificity {
+                has_method: false,
+                header_count: 0,
+                query_count: 0,
+                creation_ts_ms: 0,
+                route_key: "default/http".to_string(),
+                rule_index: 0,
+                match_index: 0,
+            },
+            metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+            plugin_runtime: runtime,
+            backends: Arc::new(Vec::new()),
+            backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        })
+    }
+
+    fn grpc_rule() -> GRPCRouteRule {
+        GRPCRouteRule {
+            name: None,
+            matches: None,
+            filters: None,
+            backend_refs: None,
+            timeouts: None,
+            retry: None,
+            session_persistence: None,
+            parsed_timeouts: None,
+            parsed_retry: None,
+            parsed_allow_non_idempotent_retry: None,
+        }
+    }
+
+    fn grpc_route_unit(runtime: Arc<PluginRuntime>) -> Arc<GrpcRouteRuleUnit> {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "namespace": "default", "name": "grpc" },
+            "spec": {
+                "parentRefs": [{ "name": "gateway", "kind": "Gateway" }],
+                "rules": [{}]
+            }
+        });
+        let mut route: GRPCRoute = serde_json::from_value(json).unwrap();
+        route.pre_parse();
+        let manager = crate::routes::grpc::GlobalGrpcRouteManagers::new();
+        manager.full_set(&HashMap::from([("default/grpc".to_string(), Arc::new(route))]));
+        let mut unit = manager
+            .route_units_cache
+            .lock()
+            .get("default/grpc")
+            .and_then(|units| units.first())
+            .expect("minimal GRPCRoute must compile one unit")
+            .as_ref()
+            .clone();
+        unit.plugin_runtime = runtime;
+        Arc::new(unit)
+    }
+
+    fn backend_ref(name: &str) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: name.to_string(),
+            namespace: None,
+            port: Some(80),
+            weight: None,
+            group: None,
+            kind: None,
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    fn selected_http_backend(runtime: Arc<PluginRuntime>) -> crate::backends::SelectedHttpBackend {
+        let compiled = crate::routes::http::match_unit::CompiledBackend::compile(
+            backend_ref("http-backend"),
+            "default",
+            0,
+            runtime,
+        );
+        let logical = crate::backends::LogicalBackendHandle::new(Arc::new(vec![compiled]), 0).unwrap();
+        crate::backends::SelectedHttpBackend::Invalid(logical)
+    }
+
+    fn selected_grpc_backend(runtime: Arc<PluginRuntime>) -> SelectedGrpcBackend {
+        let mut rule = grpc_rule();
+        rule.backend_refs = Some(vec![GRPCBackendRef {
+            name: "grpc-backend".to_string(),
+            namespace: None,
+            port: Some(80),
+            weight: None,
+            group: None,
+            kind: None,
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }]);
+        let mut compiled = GrpcRouteRuleUnit::compile_grpc_rule(&rule, "default").backends;
+        Arc::get_mut(&mut compiled).unwrap()[0].plugin_runtime = runtime;
+        let logical = GrpcBackendHandle::new(compiled, 0).unwrap();
+        SelectedGrpcBackend::new(logical, crate::backends::policy::BackendTlsPolicyLookup::Absent)
+    }
+
+    async fn read_only_delay(ctx: &mut EdgionHttpContext) -> Option<Duration> {
+        let body = Some(Bytes::from(vec![b'x'; 1024]));
+        let mut session = test_session().await;
+        run_read_only_body_plugins(&mut session, ctx, &body, false)
+    }
+
+    #[tokio::test]
+    async fn grpc_route_preempts_http_route_and_http_route_is_the_fallback() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.route_unit = Some(http_route_unit(Arc::new(bandwidth_runtime("2048"))));
+        assert_eq!(read_only_delay(&mut ctx).await, Some(Duration::from_millis(500)));
+
+        ctx.grpc_route_unit = Some(grpc_route_unit(Arc::new(bandwidth_runtime("1024"))));
+        assert_eq!(read_only_delay(&mut ctx).await, Some(Duration::from_secs(1)));
+    }
+
+    #[tokio::test]
+    async fn grpc_backend_preempts_http_backend_and_http_backend_is_the_fallback() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.selected_backend = Some(selected_http_backend(Arc::new(bandwidth_runtime("2048"))));
+        assert_eq!(read_only_delay(&mut ctx).await, Some(Duration::from_millis(500)));
+
+        ctx.selected_grpc_backend = Some(selected_grpc_backend(Arc::new(bandwidth_runtime("1024"))));
+        assert_eq!(read_only_delay(&mut ctx).await, Some(Duration::from_secs(1)));
+    }
+
+    #[tokio::test]
+    async fn route_backend_gateway_and_global_delays_merge_to_the_maximum() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.route_unit = Some(http_route_unit(Arc::new(bandwidth_runtime("8192"))));
+        ctx.selected_backend = Some(selected_http_backend(Arc::new(bandwidth_runtime("4096"))));
+        ctx.install_resolved_gateway_plugins(vec![Arc::new(bandwidth_runtime("1024"))]);
+        ctx.install_resolved_global_plugins(vec![Arc::new(bandwidth_runtime("2048"))]);
+
+        assert_eq!(read_only_delay(&mut ctx).await, Some(Duration::from_secs(1)));
     }
 
     struct Uppercase;
