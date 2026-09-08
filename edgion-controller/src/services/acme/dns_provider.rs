@@ -3,6 +3,7 @@
 //! Provides a trait for DNS-01 challenge validation by creating/removing
 //! TXT records at `_acme-challenge.<domain>`.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::Duration;
 
@@ -129,38 +130,115 @@ fn check_alidns_response(body: &serde_json::Value, ctx: &'static str) -> Result<
     Ok(())
 }
 
-/// Validate the complete lookup before deleting anything, then attempt every
-/// returned record. Retain only the first normalized failure for the service's
-/// non-fatal cleanup warning. The caller's operation timeout bounds the loop.
-async fn cleanup_alidns_records<F, Fut>(response: reqwest::Response, mut delete_record: F) -> Result<()>
+const ALIDNS_CLEANUP_PAGE_SIZE: u64 = 100;
+const MAX_ALIDNS_CLEANUP_PAGES: u64 = 100;
+const MAX_ALIDNS_CLEANUP_RECORDS: u64 = 4096;
+const MAX_ALIDNS_CLEANUP_ID_BYTES: usize = 256 * 1024;
+
+/// Finish the bounded lookup before deleting anything: deletion must not shift
+/// records between pages. External edits are not snapshot-isolated by AliDNS;
+/// reject detectable changes rather than claiming a complete selection.
+async fn cleanup_alidns_records<L, LFut, F, Fut>(
+    rr: &str,
+    value: &str,
+    mut list_records: L,
+    mut delete_record: F,
+) -> Result<()>
 where
+    L: FnMut(u64) -> LFut,
+    LFut: Future<Output = reqwest::Result<reqwest::Response>>,
     F: FnMut(&str) -> Fut,
     Fut: Future<Output = reqwest::Result<reqwest::Response>>,
 {
-    let body = read_json_limited(response, "AliDNS describe-records").await?;
-    check_alidns_response(&body, "AliDNS describe-records")?;
-    let records = body["DomainRecords"]["Record"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid record list"))?;
-    let record_ids = records
-        .iter()
-        .map(|record| {
-            record["RecordId"]
+    let mut page = 1u64;
+    let mut metadata = None;
+    let mut seen_ids = HashSet::new();
+    let mut record_ids = Vec::new();
+    let mut id_bytes = 0usize;
+    loop {
+        if page > MAX_ALIDNS_CLEANUP_PAGES {
+            anyhow::bail!("AliDNS describe-records pagination limit exceeded");
+        }
+        let response = list_records(page)
+            .await
+            .map_err(|error| dns_transport_error(error, "AliDNS describe-records"))?;
+        let body = read_json_limited(response, "AliDNS describe-records").await?;
+        check_alidns_response(&body, "AliDNS describe-records")?;
+        let records = body["DomainRecords"]["Record"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid record list"))?;
+        let number = |key: &str| {
+            body[key]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid pagination"))
+        };
+        let total = number("TotalCount")?;
+        let size = number("PageSize")?;
+        if number("PageNumber")? != page || size == 0 || size > ALIDNS_CLEANUP_PAGE_SIZE {
+            anyhow::bail!("AliDNS describe-records invalid pagination");
+        }
+        if total > MAX_ALIDNS_CLEANUP_RECORDS {
+            anyhow::bail!("AliDNS describe-records record limit exceeded");
+        }
+        if metadata.is_some_and(|previous| previous != (total, size)) {
+            anyhow::bail!("AliDNS describe-records pagination changed");
+        }
+        metadata = Some((total, size));
+        let offset = page
+            .checked_sub(1)
+            .and_then(|n| n.checked_mul(size))
+            .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid pagination"))?;
+        let remaining = total
+            .checked_sub(offset)
+            .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid pagination"))?;
+        if records.len() as u64 != remaining.min(size) {
+            anyhow::bail!("AliDNS describe-records incomplete page");
+        }
+        for record in records {
+            let id = record["RecordId"]
                 .as_str()
                 .filter(|id| !id.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid record ID"))
-        })
-        .collect::<Result<Vec<_>>>()?;
+                .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid record ID"))?;
+            // Count both retained copies for selected records against the byte cap.
+            let field = |key: &str| {
+                record[key]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid record fields"))
+            };
+            let record_rr = field("RR")?;
+            let record_type = field("Type")?;
+            let record_value = field("Value")?;
+            let owned =
+                record_rr.eq_ignore_ascii_case(rr) && record_type.eq_ignore_ascii_case("TXT") && record_value == value;
+            id_bytes = id_bytes
+                .checked_add(id.len())
+                .and_then(|n| n.checked_add(if owned { id.len() } else { 0 }))
+                .filter(|n| *n <= MAX_ALIDNS_CLEANUP_ID_BYTES)
+                .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records record ID byte limit exceeded"))?;
+            if !seen_ids.insert(id.to_owned()) {
+                anyhow::bail!("AliDNS describe-records repeated record ID");
+            }
+            if owned {
+                record_ids.push(id.to_owned());
+            }
+        }
+        if remaining <= size {
+            break;
+        }
+        page = page
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("AliDNS describe-records invalid pagination"))?;
+    }
 
     let mut first_error = None;
     for record_id in record_ids {
         let result = async {
-            let response = delete_record(record_id)
+            let response = delete_record(&record_id)
                 .await
                 .map_err(|error| dns_transport_error(error, "AliDNS delete-record"))?;
             let body = read_json_limited(response, "AliDNS delete-record").await?;
             check_alidns_response(&body, "AliDNS delete-record")?;
-            if body["RecordId"].as_str() != Some(record_id) {
+            if body["RecordId"].as_str() != Some(record_id.as_str()) {
                 anyhow::bail!("AliDNS delete-record invalid record ID");
             }
             Ok(())
@@ -509,41 +587,39 @@ impl DnsProvider for AlidnsDnsProvider {
         Ok(())
     }
 
-    async fn remove_txt_record(&self, domain: &str, _value: &str) -> Result<()> {
+    async fn remove_txt_record(&self, domain: &str, value: &str) -> Result<()> {
         let root_domain = extract_root_domain(domain);
         let rr = build_acme_rr(domain, &root_domain);
 
-        // First, find the record
-        let mut params = vec![
-            ("Action".to_string(), "DescribeDomainRecords".to_string()),
-            ("DomainName".to_string(), root_domain),
-            ("RRKeyWord".to_string(), rr),
-            ("TypeKeyWord".to_string(), "TXT".to_string()),
-        ];
+        cleanup_alidns_records(
+            &rr,
+            value,
+            |page| {
+                let mut params = vec![
+                    ("Action".to_string(), "DescribeDomainRecords".to_string()),
+                    ("DomainName".to_string(), root_domain.clone()),
+                    ("RRKeyWord".to_string(), rr.clone()),
+                    ("TypeKeyWord".to_string(), "TXT".to_string()),
+                    ("PageNumber".to_string(), page.to_string()),
+                    ("PageSize".to_string(), ALIDNS_CLEANUP_PAGE_SIZE.to_string()),
+                ];
+                self.sign_request(&mut params);
+                self.client.get("https://alidns.aliyuncs.com/").query(&params).send()
+            },
+            |record_id| {
+                tracing::info!(provider = "alidns", domain = domain, "Removing DNS TXT record");
 
-        self.sign_request(&mut params);
-
-        let resp = self
-            .client
-            .get("https://alidns.aliyuncs.com/")
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| dns_transport_error(e, "AliDNS describe-records"))?;
-
-        cleanup_alidns_records(resp, |record_id| {
-            tracing::info!(provider = "alidns", domain = domain, "Removing DNS TXT record");
-
-            let mut delete_params = vec![
-                ("Action".to_string(), "DeleteDomainRecord".to_string()),
-                ("RecordId".to_string(), record_id.to_string()),
-            ];
-            self.sign_request(&mut delete_params);
-            self.client
-                .get("https://alidns.aliyuncs.com/")
-                .query(&delete_params)
-                .send()
-        })
+                let mut delete_params = vec![
+                    ("Action".to_string(), "DeleteDomainRecord".to_string()),
+                    ("RecordId".to_string(), record_id.to_string()),
+                ];
+                self.sign_request(&mut delete_params);
+                self.client
+                    .get("https://alidns.aliyuncs.com/")
+                    .query(&delete_params)
+                    .send()
+            },
+        )
         .await
     }
 }
@@ -703,12 +779,251 @@ mod tests {
         assert!(!serialized.contains(IDENTITY_CANARY));
     }
 
+    async fn cleanup_alidns_single_page<F, Fut>(response: reqwest::Response, delete_record: F) -> Result<()>
+    where
+        F: FnMut(&str) -> Fut,
+        Fut: Future<Output = reqwest::Result<reqwest::Response>>,
+    {
+        let mut response = Some(response);
+        cleanup_alidns_records(
+            "_acme-challenge",
+            "digest",
+            |page| {
+                assert_eq!(page, 1);
+                std::future::ready(Ok(response.take().expect("one lookup")))
+            },
+            delete_record,
+        )
+        .await
+    }
+
     fn alidns_records(ids: &[&str]) -> reqwest::Response {
-        let records: Vec<_> = ids.iter().map(|id| serde_json::json!({"RecordId": id})).collect();
+        let records: Vec<_> = ids
+            .iter()
+            .map(|id| serde_json::json!({"RecordId": id, "RR": "_acme-challenge", "Type": "TXT", "Value": "digest"}))
+            .collect();
         response(
             200,
-            serde_json::json!({"DomainRecords": {"Record": records}}).to_string(),
+            serde_json::json!({"TotalCount": ids.len(), "PageSize": 100, "PageNumber": 1, "DomainRecords": {"Record": records}}).to_string(),
         )
+    }
+
+    fn cleanup_record(id: &str, rr: &str, kind: &str, value: &str) -> serde_json::Value {
+        serde_json::json!({"RecordId": id, "RR": rr, "Type": kind, "Value": value})
+    }
+
+    fn cleanup_page(page: u64, size: u64, total: u64, records: Vec<serde_json::Value>) -> serde_json::Value {
+        serde_json::json!({"PageNumber": page, "PageSize": size, "TotalCount": total,
+            "DomainRecords": {"Record": records}})
+    }
+
+    #[tokio::test]
+    async fn alidns_cleanup_selects_exact_ownership_before_any_deletion() {
+        let records = std::cell::RefCell::new(vec![
+            cleanup_record("near-rr", "_acme-challenge.sub", "TXT", "digest"),
+            cleanup_record("other-value", "_acme-challenge", "TXT", "Digest"),
+            cleanup_record("first", "_ACME-CHALLENGE", "txt", "digest"),
+            cleanup_record("other-type", "_acme-challenge", "CNAME", "digest"),
+            cleanup_record("second", "_acme-challenge", "TXT", "digest"),
+        ]);
+        let pages = std::cell::RefCell::new(Vec::new());
+        let mut deleted = Vec::new();
+        cleanup_alidns_records(
+            "_acme-challenge",
+            "digest",
+            |page| {
+                pages.borrow_mut().push(page);
+                let records = records.borrow();
+                let entries = records
+                    .iter()
+                    .skip(((page - 1) * 2) as usize)
+                    .take(2)
+                    .cloned()
+                    .collect();
+                std::future::ready(Ok(response(
+                    200,
+                    cleanup_page(page, 2, records.len() as u64, entries).to_string(),
+                )))
+            },
+            |id| {
+                assert_eq!(*pages.borrow(), [1, 2, 3], "finish listing before deleting");
+                records.borrow_mut().retain(|record| record["RecordId"] != id);
+                deleted.push(id.to_owned());
+                std::future::ready(Ok(response(200, serde_json::json!({"RecordId": id}).to_string())))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted, ["first", "second"]);
+        assert_eq!(records.borrow().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn alidns_cleanup_rejects_bad_pagination_and_fields_without_deletion() {
+        let valid = cleanup_page(
+            1,
+            1,
+            1,
+            vec![cleanup_record("first", "_acme-challenge", "TXT", "digest")],
+        );
+        let mut cases = Vec::new();
+        for key in ["PageNumber", "PageSize", "TotalCount"] {
+            for invalid in [
+                serde_json::Value::Null,
+                serde_json::json!(-1),
+                serde_json::json!(1.5),
+                serde_json::json!(SECRET_CANARY),
+            ] {
+                let mut body = valid.clone();
+                body[key] = invalid;
+                cases.push((body, "invalid pagination"));
+            }
+            let mut body = valid.clone();
+            body.as_object_mut().unwrap().remove(key);
+            cases.push((body, "invalid pagination"));
+        }
+        for (key, value, error) in [
+            ("PageNumber", 0, "invalid pagination"),
+            ("PageNumber", u64::MAX, "invalid pagination"),
+            ("PageSize", 0, "invalid pagination"),
+            ("PageSize", u64::MAX, "invalid pagination"),
+            ("TotalCount", u64::MAX, "record limit exceeded"),
+            ("TotalCount", MAX_ALIDNS_CLEANUP_RECORDS + 1, "record limit exceeded"),
+            ("TotalCount", 0, "incomplete page"),
+        ] {
+            let mut body = valid.clone();
+            body[key] = serde_json::json!(value);
+            cases.push((body, error));
+        }
+        cases.push((cleanup_page(1, 1, 1, vec![]), "incomplete page"));
+        for key in ["RR", "Type", "Value"] {
+            for invalid in [serde_json::Value::Null, serde_json::json!(123)] {
+                let mut body = valid.clone();
+                body["DomainRecords"]["Record"][0][key] = invalid;
+                cases.push((body, "invalid record fields"));
+            }
+        }
+        for (body, expected) in cases {
+            let error = cleanup_alidns_single_page(
+                response(200, body.to_string()),
+                |_| -> std::future::Ready<reqwest::Result<reqwest::Response>> {
+                    panic!("invalid lookup must not delete");
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_safe_error(error, &format!("AliDNS describe-records {expected}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn alidns_cleanup_rejects_changed_repeated_and_failed_later_pages() {
+        let first = cleanup_page(
+            1,
+            1,
+            2,
+            vec![cleanup_record("first", "_acme-challenge", "TXT", "digest")],
+        );
+        let second = cleanup_page(
+            2,
+            1,
+            2,
+            vec![cleanup_record("second", "_acme-challenge", "TXT", "digest")],
+        );
+        let mut cases = vec![
+            (first.clone(), "invalid pagination"),
+            (cleanup_page(2, 1, 2, vec![]), "incomplete page"),
+            (
+                cleanup_page(2, 1, 2, vec![cleanup_record("first", "other", "TXT", "other")]),
+                "repeated record ID",
+            ),
+        ];
+        for (key, value) in [("TotalCount", 3), ("PageSize", 2)] {
+            let mut changed = second.clone();
+            changed[key] = serde_json::json!(value);
+            cases.push((changed, "pagination changed"));
+        }
+        let mut responses: Vec<_> = cases
+            .into_iter()
+            .map(|(body, error)| (response(200, body.to_string()), error.to_owned()))
+            .collect();
+        responses.extend(alidns_response_failures());
+        for (later, expected) in responses {
+            let mut responses = vec![response(200, first.to_string()), later].into_iter();
+            let error = cleanup_alidns_records(
+                "_acme-challenge",
+                "digest",
+                |_| std::future::ready(Ok(responses.next().expect("two pages only"))),
+                |_| -> std::future::Ready<reqwest::Result<reqwest::Response>> {
+                    panic!("later lookup failure must prevent all deletion");
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_safe_error(error, &format!("AliDNS describe-records {expected}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn alidns_cleanup_enforces_page_record_and_retained_byte_limits() {
+        for total in [
+            MAX_ALIDNS_CLEANUP_PAGES,
+            MAX_ALIDNS_CLEANUP_PAGES + 1,
+            MAX_ALIDNS_CLEANUP_RECORDS,
+        ] {
+            let size = if total == MAX_ALIDNS_CLEANUP_RECORDS {
+                ALIDNS_CLEANUP_PAGE_SIZE
+            } else {
+                1
+            };
+            let mut looked_up = 0;
+            let mut deleted = 0;
+            let result = cleanup_alidns_records(
+                "_acme-challenge",
+                "digest",
+                |page| {
+                    looked_up += 1;
+                    let start = (page - 1) * size;
+                    let records = (start..total.min(start + size))
+                        .map(|n| cleanup_record(&n.to_string(), "_acme-challenge", "TXT", "digest"))
+                        .collect();
+                    std::future::ready(Ok(response(200, cleanup_page(page, size, total, records).to_string())))
+                },
+                |id| {
+                    deleted += 1;
+                    std::future::ready(Ok(response(200, serde_json::json!({"RecordId": id}).to_string())))
+                },
+            )
+            .await;
+            if total == MAX_ALIDNS_CLEANUP_PAGES + 1 {
+                assert_safe_error(result.unwrap_err(), "AliDNS describe-records pagination limit exceeded");
+                assert_eq!(looked_up, MAX_ALIDNS_CLEANUP_PAGES);
+                assert_eq!(deleted, 0);
+            } else {
+                result.unwrap();
+                assert_eq!(deleted, total);
+            }
+        }
+        for extra in [0, 1] {
+            let id = "x".repeat(MAX_ALIDNS_CLEANUP_ID_BYTES / 2 + extra);
+            let body = cleanup_page(1, 100, 1, vec![cleanup_record(&id, "_acme-challenge", "TXT", "digest")]);
+            let mut deleted = 0;
+            let result = cleanup_alidns_single_page(response(200, body.to_string()), |id| {
+                deleted += 1;
+                std::future::ready(Ok(response(200, serde_json::json!({"RecordId": id}).to_string())))
+            })
+            .await;
+            if extra == 0 {
+                result.unwrap();
+                assert_eq!(deleted, 1);
+            } else {
+                assert_safe_error(
+                    result.unwrap_err(),
+                    "AliDNS describe-records record ID byte limit exceeded",
+                );
+                assert_eq!(deleted, 0);
+            }
+        }
     }
 
     fn alidns_response_failures() -> Vec<(reqwest::Response, String)> {
@@ -769,11 +1084,12 @@ mod tests {
     #[tokio::test]
     async fn alidns_cleanup_rejects_failed_lookup_before_deletion() {
         for (lookup, expected) in alidns_response_failures() {
-            let error = cleanup_alidns_records(lookup, |_| -> std::future::Ready<reqwest::Result<reqwest::Response>> {
-                panic!("a rejected lookup must not delete records")
-            })
-            .await
-            .unwrap_err();
+            let error =
+                cleanup_alidns_single_page(lookup, |_| -> std::future::Ready<reqwest::Result<reqwest::Response>> {
+                    panic!("a rejected lookup must not delete records")
+                })
+                .await
+                .unwrap_err();
             assert_safe_error(error, &format!("AliDNS describe-records {expected}"));
         }
     }
@@ -787,7 +1103,7 @@ mod tests {
             r#"{"DomainRecords":{"Record":null}}"#,
             r#"{"DomainRecords":{"Record":{}}}"#,
         ] {
-            let error = cleanup_alidns_records(response(200, body), |_| std::future::ready(Ok(response(200, ""))))
+            let error = cleanup_alidns_single_page(response(200, body), |_| std::future::ready(Ok(response(200, ""))))
                 .await
                 .unwrap_err();
             assert_safe_error(error, "AliDNS describe-records invalid record list");
@@ -798,9 +1114,9 @@ mod tests {
             serde_json::json!({"RecordId": 123}),
             serde_json::json!({"RecordId": ""}),
         ] {
-            let body = serde_json::json!({"DomainRecords": {"Record": [{"RecordId": "first"}, invalid]}});
+            let body = serde_json::json!({"TotalCount": 2, "PageSize": 100, "PageNumber": 1, "DomainRecords": {"Record": [{"RecordId": "first", "RR": "_acme-challenge", "Type": "TXT", "Value": "digest"}, invalid]}});
             let mut calls = 0;
-            let error = cleanup_alidns_records(response(200, body.to_string()), |_| {
+            let error = cleanup_alidns_single_page(response(200, body.to_string()), |_| {
                 calls += 1;
                 std::future::ready(Ok(response(200, r#"{"RecordId":"first"}"#)))
             })
@@ -815,7 +1131,7 @@ mod tests {
     async fn alidns_cleanup_accepts_empty_and_multiple_records_at_body_limit() {
         for ids in [vec![], vec!["first", "second"]] {
             let mut calls = Vec::new();
-            cleanup_alidns_records(alidns_records(&ids), |id| {
+            cleanup_alidns_single_page(alidns_records(&ids), |id| {
                 calls.push(id.to_string());
                 let mut body = serde_json::json!({"RecordId": id}).to_string();
                 // JSON trailing whitespace is valid at the exact byte limit.
@@ -845,7 +1161,7 @@ mod tests {
         for (failed, expected) in failures {
             let mut failed = Some(failed);
             let mut calls = Vec::new();
-            let error = cleanup_alidns_records(alidns_records(&["first", "second"]), |id| {
+            let error = cleanup_alidns_single_page(alidns_records(&["first", "second"]), |id| {
                 calls.push(id.to_string());
                 std::future::ready(Ok(failed
                     .take()
@@ -861,7 +1177,7 @@ mod tests {
     #[tokio::test]
     async fn alidns_cleanup_keeps_first_error_and_continues_after_transport_failure() {
         let mut calls = Vec::new();
-        let error = cleanup_alidns_records(alidns_records(&["first", "second", "third"]), |id| {
+        let error = cleanup_alidns_single_page(alidns_records(&["first", "second", "third"]), |id| {
             calls.push(id.to_string());
             let result = match id {
                 "first" => reqwest::Client::new()

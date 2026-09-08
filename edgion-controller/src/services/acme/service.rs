@@ -857,7 +857,8 @@ async fn execute_dns01_flow(
     // Phase 3: Wait for DNS propagation before notifying ACME server.
     // Poll the zone's authoritative nameservers for the challenge TXT records
     // and activate as soon as every record is visible; `propagation_timeout`
-    // is a true upper bound. On expiry with a record definitively observed
+    // is checked between rounds; an in-flight round may exceed it.
+    // On expiry with a record definitively observed
     // missing, fail into the retry/backoff path (activating anyway would burn
     // an ACME validation attempt); if the check never completed at all (e.g.
     // firewalled DNS egress), degrade to the legacy fixed wait: WARN and

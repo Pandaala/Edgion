@@ -353,6 +353,16 @@ continues with later records within the existing cleanup timeout and reports the
 first error through the Controller's non-fatal cleanup warning. If a warning
 appears, check the provider console for leftover TXT records.
 
+AliDNS removes only TXT records whose relative name matches the challenge name
+(case-insensitively) and whose value exactly matches the challenge digest. Other
+values at the same name and similar names are preserved. Cleanup finishes its
+paginated lookup before deleting, so its own deletions cannot shift later pages.
+Lookup is limited to 100 pages, 4,096 candidates, and 256 KiB of retained record-ID
+strings, within the existing 120-second operation deadline. Invalid, repeated,
+changing, or excessive results abort lookup before deletion and produce a
+non-fatal cleanup warning. External DNS edits are not snapshot-isolated; inspect
+the provider console if records change concurrently or cleanup reports a warning.
+
 1. **HTTP-01 fails** — confirm the domain resolves to the Gateway and its HTTP port (typically 80) is reachable from the internet. The Gateway must receive the published token via List-Watch and answer `/.well-known/acme-challenge/<token>`.
 2. **DNS-01 times out** — increase `propagationTimeout` (a generous value is cheap: the poll loop exits as soon as the records are visible); verify the `credentialRef` Secret keys are correct and the provider API is reachable. A "propagation not confirmed" failure means the zone's authoritative nameservers still did not serve the TXT record at the deadline.
 3. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.

@@ -61,7 +61,7 @@ delete business failures keep their local warning behavior; service-level cleanu
 remains best-effort and non-fatal. AliDNS cleanup now validates lookup and delete
 responses through this same diagnostic boundary; see the separate
 [cleanup response guard](dns-cleanup-response-validation.md) for response shape
-checks, continuation behavior, and remaining record-selection work.
+checks, continuation behavior, and record-selection/pagination bounds.
 
 ## Verification and re-evaluation
 

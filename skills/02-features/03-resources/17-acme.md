@@ -38,6 +38,7 @@ spec:
     #   name: cloudflare-api-token
     #   namespace: default
     # propagationTimeout: 120s
+    # propagationCheckInterval: 5s
 
   renewal:
     renewBefore: 720h                                          # Renew this far before expiration (720h = 30 days)
@@ -96,7 +97,22 @@ spec:
 |-------|------|---------|-------------|
 | `provider` | `String` | — | DNS provider: `cloudflare` / `alidns` |
 | `credentialRef` | `SecretObjectReference` | — | API credentials Secret |
-| `propagationTimeout` | `String` | `"120s"` | Fixed DNS propagation wait before validation is requested (GEP-2257 duration) |
+| `propagationTimeout` | `String` | `"120s"` | DNS propagation polling timeout (GEP-2257 duration; runtime minimum `10s`). Evaluated between check rounds, not a fixed wait or a hard wall-clock cutoff |
+| `propagationCheckInterval` | `String` | `"5s"` | Wait between propagation check rounds (GEP-2257 duration; runtime minimum `1s`). The last wait is shortened to the remaining timeout |
+
+After creating the challenge TXT records, the Controller polls the zone's
+authoritative nameservers; recursive resolution is used only to discover those
+servers. Validation starts as soon as every record has been confirmed visible.
+At timeout, if any remaining record was definitively observed missing and never
+subsequently confirmed present, the Controller performs best-effort TXT cleanup
+and fails into the `failBackoff` retry path. If all remaining records were only
+ever unverifiable, it logs a warning and proceeds optimistically after the full
+timeout. An in-flight check round is not interrupted, so the wait may exceed the
+configured timeout.
+
+See the [ACME operations guide](../../../docs/en/ops-guide/gateway/tls/acme.md)
+and [propagation review knowledge](../../04-review/acme/regression-guards/acme-propagation-check-interval-removed.md)
+for operational guidance and the verified polling boundaries.
 
 ### renewal — Renewal Configuration
 

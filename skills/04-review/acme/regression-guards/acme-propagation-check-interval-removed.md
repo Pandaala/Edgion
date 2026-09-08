@@ -29,7 +29,8 @@ the zone's authoritative nameservers (recursive resolution is used only to
 discover the authoritative set — the converged cert-manager/lego design) at
 `propagationCheckInterval` cadence (default `5s`, floor 1s) and activates the
 challenges as soon as every TXT record is visible. `propagationTimeout`
-(default `120s`, floor 10s) is a true upper bound. On expiry:
+(default `120s`, floor 10s) is evaluated between rounds, not a hard wall-clock
+cutoff (see rationale 6). On expiry:
 
 - a record **definitively observed missing** on a responding authoritative
   nameserver → best-effort TXT cleanup, then hard fail into the existing
@@ -153,3 +154,29 @@ regression.
 
 - `acme-dns01-propagation-check-interval-dead-knob` — 2026-07-20.
 - `acme-dns01-propagation-polling` — 2026-07-20.
+
+## Schema reference alignment
+
+`acme-dns01-schema-reference-alignment` is a docs-only correction: the
+[schema reference](../../../02-features/03-resources/17-acme.md) still described
+a fixed wait and omitted `propagationCheckInterval` after polling was introduced.
+The reference now documents both fields, defaults, runtime floors, early
+completion, and the two timeout outcomes. The interval is a wait between rounds,
+shortened to the remaining timeout for the last wait.
+
+Current source inspection checked `AcmeChallenge::Dns01` and its serde defaults,
+`execute_dns01_flow` duration floors and outcome handling, and `poll_propagation`
+round/deadline logic. A pending record's earlier `NotFound` observation remains
+decisive even if later probes are unreachable; a `Found` record is removed from
+the pending set. The former "true upper bound" wording above was inconsistent
+with rationale 6 and has been corrected, along with the matching Phase 3 comment
+in `service.rs`. Runtime behavior is unchanged; the
+historical test results above are not fresh verification of this documentation
+change. Recheck the schema reference whenever these fields, defaults, floors,
+or polling outcomes change.
+
+Verification for this docs-only correction: `cargo fmt --all`,
+`cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets`
+(passed with warnings in unchanged Rust code), and the agent-doc, SSA-force,
+metrics-inventory, and Pingora-source-policy guards passed. Existing propagation
+unit tests were inspected, not rerun; no runtime behavior or test was changed.
