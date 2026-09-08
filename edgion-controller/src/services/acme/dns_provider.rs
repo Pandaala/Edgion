@@ -130,6 +130,15 @@ fn check_alidns_response(body: &serde_json::Value, ctx: &'static str) -> Result<
     Ok(())
 }
 
+fn cloudflare_zone_id(body: &serde_json::Value) -> Result<String> {
+    body["result"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|zone| zone["id"].as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("Cloudflare list-zones zone not found"))
+}
+
 const ALIDNS_CLEANUP_PAGE_SIZE: u64 = 100;
 const MAX_ALIDNS_CLEANUP_PAGES: u64 = 100;
 const MAX_ALIDNS_CLEANUP_RECORDS: u64 = 4096;
@@ -360,12 +369,7 @@ impl CloudflareDnsProvider {
 
         check_cloudflare_response(&body, "Cloudflare list-zones")?;
 
-        body["result"]
-            .as_array()
-            .and_then(|arr| arr.first())
-            .and_then(|zone| zone["id"].as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Zone not found for domain: {}", root_domain))
+        cloudflare_zone_id(&body)
     }
 
     /// Find existing TXT record ID
@@ -400,12 +404,7 @@ impl DnsProvider for CloudflareDnsProvider {
         let zone_id = self.get_zone_id(domain).await?;
         let record_name = format!("_acme-challenge.{}", domain);
 
-        tracing::info!(
-            provider = "cloudflare",
-            domain = domain,
-            record = %record_name,
-            "Creating DNS TXT record for ACME challenge"
-        );
+        tracing::info!(provider = "cloudflare", "Creating DNS TXT record for ACME challenge");
 
         let resp = self
             .client
@@ -428,11 +427,7 @@ impl DnsProvider for CloudflareDnsProvider {
 
         check_cloudflare_response(&body, "Cloudflare create-record")?;
 
-        tracing::info!(
-            provider = "cloudflare",
-            domain = domain,
-            "DNS TXT record created successfully"
-        );
+        tracing::info!(provider = "cloudflare", "DNS TXT record created successfully");
 
         Ok(())
     }
@@ -442,7 +437,7 @@ impl DnsProvider for CloudflareDnsProvider {
         let record_name = format!("_acme-challenge.{}", domain);
 
         if let Some(record_id) = self.find_txt_record(&zone_id, &record_name).await? {
-            tracing::info!(provider = "cloudflare", domain = domain, "Removing DNS TXT record");
+            tracing::info!(provider = "cloudflare", "Removing DNS TXT record");
 
             let resp = self
                 .client
@@ -460,7 +455,6 @@ impl DnsProvider for CloudflareDnsProvider {
             if let Err(error) = check_cloudflare_response(&body, "Cloudflare delete-record") {
                 tracing::warn!(
                     provider = "cloudflare",
-                    domain = domain,
                     error = %error,
                     "Failed to remove TXT record"
                 );
@@ -547,13 +541,7 @@ impl DnsProvider for AlidnsDnsProvider {
         // For regular domains like "sub.example.com", the RR is "_acme-challenge.sub"
         let rr = build_acme_rr(domain, &root_domain);
 
-        tracing::info!(
-            provider = "alidns",
-            domain = domain,
-            rr = %rr,
-            root_domain = %root_domain,
-            "Creating DNS TXT record for ACME challenge"
-        );
+        tracing::info!(provider = "alidns", "Creating DNS TXT record for ACME challenge");
 
         let mut params = vec![
             ("Action".to_string(), "AddDomainRecord".to_string()),
@@ -578,11 +566,7 @@ impl DnsProvider for AlidnsDnsProvider {
 
         check_alidns_response(&body, "AliDNS add-record")?;
 
-        tracing::info!(
-            provider = "alidns",
-            domain = domain,
-            "DNS TXT record created successfully"
-        );
+        tracing::info!(provider = "alidns", "DNS TXT record created successfully");
 
         Ok(())
     }
@@ -607,7 +591,7 @@ impl DnsProvider for AlidnsDnsProvider {
                 self.client.get("https://alidns.aliyuncs.com/").query(&params).send()
             },
             |record_id| {
-                tracing::info!(provider = "alidns", domain = domain, "Removing DNS TXT record");
+                tracing::info!(provider = "alidns", "Removing DNS TXT record");
 
                 let mut delete_params = vec![
                     ("Action".to_string(), "DeleteDomainRecord".to_string()),
@@ -707,11 +691,7 @@ impl DnsProvider for PebbleChalltestDnsProvider {
 
         check_http_status(&resp, "challtestsrv /set-txt")?;
 
-        tracing::debug!(
-            domain = domain,
-            fqdn = %fqdn,
-            "challtestsrv: TXT record set"
-        );
+        tracing::debug!("challtestsrv: TXT record set");
         Ok(())
     }
 
@@ -730,11 +710,7 @@ impl DnsProvider for PebbleChalltestDnsProvider {
 
         check_http_status(&resp, "challtestsrv /clear-txt")?;
 
-        tracing::debug!(
-            domain = domain,
-            fqdn = %fqdn,
-            "challtestsrv: TXT record cleared"
-        );
+        tracing::debug!("challtestsrv: TXT record cleared");
         Ok(())
     }
 }
@@ -768,7 +744,7 @@ mod tests {
             assert!(!text.contains(IDENTITY_CANARY), "{text}");
         }
         assert_eq!(error.chain().count(), 1);
-        let contextual = error.context("Failed to create DNS TXT record for example.com");
+        let contextual = error.context("Failed to create DNS TXT record");
         let status = edgion_resources::EdgionAcmeStatus {
             last_failure_reason: Some(format!("{contextual:#}")),
             ..Default::default()
@@ -1343,6 +1319,24 @@ mod tests {
             dns_transport_error(error, "AliDNS delete-record"),
             "AliDNS delete-record request failed",
         );
+    }
+
+    #[test]
+    fn cloudflare_missing_zone_discards_response_identity() {
+        for result in [
+            serde_json::json!([]),
+            serde_json::json!([{"name": IDENTITY_CANARY}]),
+            serde_json::json!([{"id": {"value": SECRET_CANARY}}]),
+            serde_json::Value::Null,
+        ] {
+            let body = serde_json::json!({"success": true, "result": result});
+            assert_safe_error(
+                cloudflare_zone_id(&body).unwrap_err(),
+                "Cloudflare list-zones zone not found",
+            );
+        }
+        let body = serde_json::json!({"result": [{"id": "first-zone"}, {"id": "second-zone"}]});
+        assert_eq!(cloudflare_zone_id(&body).unwrap(), "first-zone");
     }
 
     #[test]

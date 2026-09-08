@@ -342,8 +342,10 @@ If the ACME service is not running on the contacted replica (for example one tha
 DNS provider failures in Controller logs and `status.lastFailureReason` report
 the provider operation and a fixed error category. HTTP failures include a numeric
 status; Cloudflare API rejections may include one numeric error code. Provider
-messages, response bodies, record IDs, and signed request URLs are omitted to
-protect credentials and identity data. Use the provider console for additional
+messages, response bodies, record IDs, signed request URLs, domains, and derived
+TXT record names are omitted from DNS provider diagnostics to protect credentials
+and identity data. Cleanup warnings identify records by their zero-based index
+within the current cleanup batch. Use the provider console for additional
 diagnostics. DNS record cleanup failures remain non-fatal to certificate issuance.
 
 AliDNS cleanup checks the HTTP status and business response of the record lookup

@@ -341,7 +341,8 @@ curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<
 
 Controller 日志和 `status.lastFailureReason` 中的 DNS 提供方错误只显示操作名称和固定错误类别。
 HTTP 失败包含数字状态码；Cloudflare API 拒绝请求时可能包含一个数字错误码。
-为保护凭据和身份信息，不输出提供方消息、响应正文、记录 ID 或签名请求 URL。
+为保护凭据和身份信息，DNS 提供方诊断不输出提供方消息、响应正文、记录 ID、签名请求 URL、域名或派生的 TXT 记录名。
+清理警告通过当前清理批次内从 0 开始的记录序号标识记录。
 需要更多诊断信息时，请查看提供方控制台。DNS 记录清理失败仍不会导致证书签发失败。
 
 AliDNS 清理会检查记录查询和每次删除的 HTTP 状态及业务响应。拒绝、格式异常或超过

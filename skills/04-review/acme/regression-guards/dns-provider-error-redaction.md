@@ -14,7 +14,11 @@ Provider operation names and error categories are static. HTTP status is numeric
 Cloudflare business rejection diagnostics retain at most the first error's code,
 only when it is a JSON integer fitting `u16`. Arbitrary `errors`, `Code`, `Message`,
 response bodies, record IDs, signed URLs, and dependency error chains are not
-diagnostic fields. Configured certificate domains remain locating context.
+diagnostic fields. DNS provider diagnostics also omit configured/challenge
+domains and derived TXT names. Creation context and timeout errors contain only
+the operation and deadline; cleanup warnings use a zero-based index within the
+current cleanup batch. The DNS-01 startup log retains the configured domain count
+instead of the domain list.
 
 `CloudflareDnsProvider.api_token` and `AlidnsDnsProvider.access_key_id` /
 `access_key_secret` still authenticate the same calls. Their storage, request
@@ -22,6 +26,12 @@ signing, DNS propagation polling, and issuance/retry scheduling are unchanged.
 `EdgionAcmeStatus.last_failure_reason` still receives alternate Display of the
 flow error; normalization drops the unsafe source chain at the provider boundary.
 This correction does not claim redaction of every unrelated ACME-client error.
+
+The domain/digest values remain unchanged in `PendingDnsChallenge` and in the
+service's `created_records` pairs: omission applies only to diagnostics, never
+to DNS requests or propagation comparisons. Certificate-authority order and
+authorization errors in `acme_client.rs` are a separate boundary; this page does
+not claim domain-free diagnostics across the entire ACME protocol.
 
 ## Rationale and evidence
 
@@ -47,6 +57,15 @@ bounded memory but did not sanitize data.
 wrapping an unsafe source in fixed anyhow context would still leak through status
 or Debug. JSON and streaming-read errors are also replaced, not wrapped. HTTP
 rejections are diagnosed from status alone without polling their response body.
+
+Revalidation of the still-open task found that the original response/error-chain
+fix was present, but its no-unmasked-domain acceptance criterion was not met.
+The previous conclusion allowing configured domains as locating context was too
+broad for this task. `cloudflare_zone_id` now reports a fixed missing-zone error;
+`create_dns_txt_record` owns the unchanged per-record timeout with static context.
+Provider create/delete logs and service cleanup warnings no longer emit domain
+or derived-name fields. This completes the diagnostic boundary rather than
+reclassifying the original defect as a false positive.
 
 ## Alternatives and limits
 
@@ -84,6 +103,26 @@ successful/malformed JSON, HTTP rejection without
 body reads, exact/excess body limits, unsafe transport/source chains, status
 serialization, and real cleanup warning formatting/continuation. No live
 Cloudflare/AliDNS call or Kubernetes deployment is claimed by these tests.
+
+Current verification for the domain-diagnostic correction:
+
+- `cargo test -p edgion-controller --lib services::acme::`: 41 passed. The three
+  new tests cover missing-zone response identity, creation failure/timeout status
+  text, and cleanup timeout logging/continuation. The existing cleanup failure
+  test now also rejects domain text and checks record indices.
+- `cargo fmt --all`, `git diff --check`, and
+  `cargo check --workspace --all-targets`: passed.
+- `cargo clippy --workspace --all-targets`: passed with warnings in unchanged
+  code. No warning references `dns_provider.rs`; the three `manual_let_else`
+  warnings in `service.rs` concern the unchanged renewal eligibility checks.
+- `validate_agent_docs.py`, `check_ssa_force.py`, `check_metrics_inventory.py`,
+  `check_pingora_source_policy.py`, and `check_gateway_no_tracing.py` under
+  `cicd/checks/`: passed.
+- Independent read-only implementation and knowledge review: LGTM.
+
+Paused-time tests verify the existing 120-second operation deadline without
+network access. Existing integration tests were unchanged; no full-workspace
+test run or live DNS provider validation was performed for this correction.
 
 Re-evaluate whenever a provider, output field, error wrapper, or diagnostic sink
 changes. Audit all create, lookup, and removal branches, including success-path

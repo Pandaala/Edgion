@@ -816,7 +816,7 @@ async fn execute_dns01_flow(
     tracing::info!(
         component = "acme_service",
         name = %name,
-        domains = ?acme.spec.domains,
+        domain_count = acme.spec.domains.len(),
         provider = %provider,
         "Starting DNS-01 challenge flow"
     );
@@ -838,19 +838,7 @@ async fn execute_dns01_flow(
     // into the existing retry/backoff path.
     let mut created_records: Vec<(String, String)> = Vec::new();
     for challenge in &pending {
-        tokio::time::timeout(
-            DNS_OP_TIMEOUT,
-            dns_provider.create_txt_record(&challenge.domain, &challenge.digest),
-        )
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Timed out after {}s creating DNS TXT record for {}",
-                DNS_OP_TIMEOUT.as_secs(),
-                challenge.domain
-            )
-        })?
-        .context(format!("Failed to create DNS TXT record for {}", challenge.domain))?;
+        create_dns_txt_record(dns_provider.as_ref(), &challenge.domain, &challenge.digest).await?;
         created_records.push((challenge.domain.clone(), challenge.digest.clone()));
     }
 
@@ -941,17 +929,26 @@ async fn execute_dns01_flow(
     cert_result.context("Failed to complete DNS-01 ACME order")
 }
 
+/// Keep the creation deadline and diagnostic context independent of the domain
+/// and digest, including when the provider never returns an error of its own.
+async fn create_dns_txt_record(dns_provider: &dyn DnsProvider, domain: &str, value: &str) -> Result<()> {
+    tokio::time::timeout(DNS_OP_TIMEOUT, dns_provider.create_txt_record(domain, value))
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out after {}s creating DNS TXT record", DNS_OP_TIMEOUT.as_secs()))?
+        .context("Failed to create DNS TXT record")
+}
+
 /// Best-effort, non-fatal removal of challenge TXT records. Each removal is
 /// bounded by the controller-level timeout so a hung provider call cannot
 /// keep the ACME flow task alive after the order has otherwise finished.
 async fn cleanup_txt_records(dns_provider: &dyn DnsProvider, created_records: &[(String, String)]) {
-    for (domain, value) in created_records {
+    for (record_index, (domain, value)) in created_records.iter().enumerate() {
         match tokio::time::timeout(DNS_OP_TIMEOUT, dns_provider.remove_txt_record(domain, value)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 tracing::warn!(
                     component = "acme_service",
-                    domain = %domain,
+                    record_index,
                     error = %e,
                     "Failed to remove DNS TXT record (non-fatal)"
                 );
@@ -959,7 +956,7 @@ async fn cleanup_txt_records(dns_provider: &dyn DnsProvider, created_records: &[
             Err(_) => {
                 tracing::warn!(
                     component = "acme_service",
-                    domain = %domain,
+                    record_index,
                     timeout_secs = DNS_OP_TIMEOUT.as_secs(),
                     "Timed out removing DNS TXT record (non-fatal)"
                 );
@@ -1421,6 +1418,119 @@ mod tests {
         assert_eq!(output.matches("challtestsrv /clear-txt request failed").count(), 2);
         assert!(!output.contains("DNS_SECRET_CANARY"));
         assert!(!output.contains("DNS_IDENTITY_CANARY"));
+        assert!(!output.contains("example.com"));
+        assert!(output.contains("record_index=0"));
+        assert!(output.contains("record_index=1"));
+    }
+
+    struct DnsOperationProbe {
+        hang: bool,
+        calls: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DnsProvider for DnsOperationProbe {
+        async fn create_txt_record(&self, domain: &str, value: &str) -> Result<()> {
+            self.calls.lock().push((domain.to_owned(), value.to_owned()));
+            if self.hang {
+                std::future::pending().await
+            } else {
+                // Request-builder failure exercises the real provider mapping
+                // without DNS resolution or any network connection.
+                super::super::dns_provider::PebbleChalltestDnsProvider::new("invalid://DNS_ENDPOINT_CANARY".to_owned())
+                    .create_txt_record(domain, value)
+                    .await
+            }
+        }
+
+        async fn remove_txt_record(&self, domain: &str, value: &str) -> Result<()> {
+            let first = {
+                let mut calls = self.calls.lock();
+                calls.push((domain.to_owned(), value.to_owned()));
+                calls.len() == 1
+            };
+            if first {
+                std::future::pending().await
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dns_creation_failure_and_timeout_keep_status_free_of_domain_and_digest() {
+        let domain = "private.DNS_DOMAIN_CANARY.test";
+        let digest = "DNS_DIGEST_CANARY";
+        for hang in [false, true] {
+            let provider = DnsOperationProbe {
+                hang,
+                calls: Mutex::new(Vec::new()),
+            };
+            let started = tokio::time::Instant::now();
+            let error = create_dns_txt_record(&provider, domain, digest).await.unwrap_err();
+            assert_eq!(*provider.calls.lock(), [(domain.to_owned(), digest.to_owned())]);
+            let expected = if hang {
+                assert_eq!(started.elapsed(), DNS_OP_TIMEOUT);
+                format!("Timed out after {}s creating DNS TXT record", DNS_OP_TIMEOUT.as_secs())
+            } else {
+                "Failed to create DNS TXT record: challtestsrv /set-txt request failed".to_owned()
+            };
+            assert_eq!(format!("{error:#}"), expected);
+            let status = EdgionAcmeStatus {
+                last_failure_reason: Some(format!("{error:#}")),
+                ..Default::default()
+            };
+            for rendered in [
+                format!("{error}"),
+                format!("{error:?}"),
+                serde_json::to_string(&status).unwrap(),
+            ] {
+                for canary in [domain, digest, "DNS_ENDPOINT_CANARY"] {
+                    assert!(!rendered.contains(canary), "{rendered}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dns_cleanup_timeout_hides_domain_and_continues() {
+        use tracing::instrument::WithSubscriber;
+
+        let provider = DnsOperationProbe {
+            hang: true,
+            calls: Mutex::new(Vec::new()),
+        };
+        let records = [
+            (
+                "first.DNS_DOMAIN_CANARY.test".to_owned(),
+                "DNS_DIGEST_CANARY".to_owned(),
+            ),
+            (
+                "second.DNS_DOMAIN_CANARY.test".to_owned(),
+                "DNS_DIGEST_CANARY".to_owned(),
+            ),
+        ];
+        let logs = DnsLogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .without_time()
+            .with_ansi(false)
+            .finish();
+        let started = tokio::time::Instant::now();
+        cleanup_txt_records(&provider, &records)
+            .with_subscriber(subscriber)
+            .await;
+        assert_eq!(started.elapsed(), DNS_OP_TIMEOUT);
+        assert_eq!(*provider.calls.lock(), records);
+        let output = String::from_utf8(logs.0.lock().clone()).unwrap();
+        assert_eq!(
+            output.matches("Timed out removing DNS TXT record (non-fatal)").count(),
+            1
+        );
+        assert!(output.contains("record_index=0"));
+        assert!(output.contains(&format!("timeout_secs={}", DNS_OP_TIMEOUT.as_secs())));
+        assert!(!output.contains("DNS_DOMAIN_CANARY"));
+        assert!(!output.contains("DNS_DIGEST_CANARY"));
     }
 
     fn empty_acme_list() -> Response<Body> {
