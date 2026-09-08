@@ -5,7 +5,7 @@ use crate::EdgionHttpContext;
 #[inline]
 pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {
     let mut ctx = EdgionHttpContext::new();
-    ctx.request_info.listener_port = edgion_http.listener.port as u16;
+    ctx.request_info.listener_port = edgion_http.listener_port;
     ctx.allow_loopback_upstream = edgion_http
         .edgion_gateway_config
         .spec

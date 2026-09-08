@@ -10,14 +10,13 @@ use pingora_proxy::{
     UpstreamResponseBodyEvent,
 };
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use crate::observe::AccessLogger;
 use crate::routes::grpc::GrpcPortRouteManager;
 use crate::routes::http::routes_mgr::HttpPortRouteManager;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::EdgionHttpContext;
-use edgion_resources::{EdgionGatewayConfig, Listener, ListenerKey};
+use edgion_resources::{EdgionGatewayConfig, ListenerKey};
 
 // Sub-modules
 pub mod content_type;
@@ -56,13 +55,11 @@ pub use preflight_handler::PreflightHandler;
 
 /// HTTP proxy service for Gateway HTTP/HTTPS listeners.
 pub struct EdgionHttpProxy {
-    pub gateway_class_name: Option<String>,
+    pub listener_port: u16,
 
-    pub listener: Listener,
+    pub is_https_listener: bool,
 
     pub listener_key: ListenerKey,
-
-    pub server_start_time: SystemTime,
 
     pub server_header_opts: ServerHeaderOpts,
 
@@ -385,13 +382,5 @@ impl ProxyHttp for EdgionHttpProxy {
             ctx,
         )
         .await
-    }
-
-    fn allow_spawning_subrequest(&self, _session: &Session, ctx: &Self::CTX) -> bool
-    where
-        Self::CTX: Send + Sync,
-    {
-        // Allow subrequests only when a plugin opts in (e.g. the Mirror plugin).
-        ctx.get_ctx_var("_enable_subrequest") == Some("true")
     }
 }

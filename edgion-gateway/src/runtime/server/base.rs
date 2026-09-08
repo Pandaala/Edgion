@@ -145,7 +145,6 @@ impl GatewayBase {
                 );
 
                 // Prepare gateway metadata
-                let gateway_class_name_clone = gateway_class.metadata.name.clone();
                 let gateway_namespace = gateway.metadata.namespace.clone();
                 let gateway_name = gateway.name_any();
 
@@ -199,7 +198,6 @@ impl GatewayBase {
                     );
 
                     let context = listener_builder::ListenerContext {
-                        gateway_class_name: gateway_class_name_clone.clone(),
                         gateway_namespace: gateway_namespace.clone(),
                         gateway_name: gateway_name.clone(),
                         gateway_key: gateway.key_name(),

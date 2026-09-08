@@ -79,6 +79,13 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 | `fail_to_connect` | `pg_fail_to_connect.rs` | Connect-failure handling |
 | `error_while_proxy` | `pg_error_while_proxy.rs` | Errors during proxy |
 
+The proxy retains only the listener facts needed on the request path: the
+listener port and whether the listener was constructed as HTTPS. It does not
+retain the full `Listener` resource or unused GatewayClass/start-time metadata.
+Application-controlled Pingora subrequest spawning stays at the upstream
+default of disabled. Pingora's internal cache subrequests and RequestMirror's
+separate bounded outbound request path are unaffected by that setting.
+
 ## Redirect handling
 
 `EdgionHttpRedirectProxy` is a lightweight `ProxyHttp` implementation that handles HTTP→HTTPS redirects:

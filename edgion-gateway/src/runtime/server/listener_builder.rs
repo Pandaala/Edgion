@@ -17,7 +17,6 @@ use pingora_core::server::Server;
 use pingora_core::services::listening::Service;
 use pingora_proxy::{http_proxy_service, ProxyServiceBuilder};
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::net::UdpSocket;
 
 use crate::observe::AccessLogger;
@@ -38,7 +37,6 @@ use tokio_util::sync::CancellationToken;
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
 pub struct ListenerContext {
-    pub gateway_class_name: Option<String>,
     pub gateway_namespace: Option<String>,
     pub gateway_name: String,
     pub gateway_key: String,
@@ -231,10 +229,9 @@ pub fn add_http_listener(
     let grpc_route_manager =
         crate::routes::grpc::get_global_grpc_route_managers().get_or_create_listener_manager(&context.listener_key);
     let edgion_http = EdgionHttpProxy {
-        gateway_class_name: context.gateway_class_name.clone(),
-        listener: context.listener.clone(),
+        listener_port: context.listener.port as u16,
+        is_https_listener: enable_tls,
         listener_key: context.listener_key.clone(),
-        server_start_time: SystemTime::now(),
         server_header_opts: {
             let mut opts = ServerHeaderOpts::default();
             if !enable_tls {

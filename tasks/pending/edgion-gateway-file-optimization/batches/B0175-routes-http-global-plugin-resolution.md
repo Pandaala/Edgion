@@ -21,4 +21,4 @@
 - Final review: a fresh independent reviewer traced publication, lookup timing, runtime context pinning, plugin order/failure behavior, WAF selection, and all later consumers; verdict LGTM with no Must Fix or Should Fix. The wider coherent-generation task remains correctly separate.
 - Testing: resolver tests passed 8/8, request-filter tests 13/13, and the complete HTTP route suite 345/345. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed. Existing integrations remain frozen and sufficient.
 - Deferred: coherent per-request PluginStore generation capture requires a wider snapshot API and lifecycle decision; track it in `tasks/todo/http-plugin-store-request-generation-snapshot.md`.
-- Commit: pending; never push.
+- Commit: `6df7f67f`; never pushed by the campaign.

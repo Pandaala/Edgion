@@ -602,7 +602,7 @@
 | `edgion-gateway/src/routes/http/mod.rs` | `routes-shared` | source | changed | B0171: restrict the match engine to crate visibility |
 | `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | examined-no-change | B0174: retain zero-allocation protocol/media-type classification |
 | `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` | `routes-shared` | source | changed | B0175: borrow the canonical plugin store and isolate resolver tests |
-| `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | changed | B0176: retain only derived listener facts and default-disabled subrequests |
 | `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_connected_to_upstream.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs` | `routes-shared` | source | pending | — |
@@ -611,10 +611,10 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | changed | `B0055`: borrowed live method and canonical normalized path without per-request String allocation; response-processor finalization retained |
-| `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a` |
+| `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a`; B0176 support: consume derived listener port |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | changed | B0175: avoid singleton Arc cloning at plugin-resolution sites |
+| `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | changed | B0175: avoid singleton Arc cloning at plugin-resolution sites; B0176 support: consume derived HTTPS fact |
 | `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_response_head.rs` | `routes-shared` | source | pending | `f31d0169`: response-head Hold/Release/Replace integration and final-writer claim; analyze with Guardrail and the ProxyHttp response lifecycle |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | `routes-shared` | source | pending | — |
@@ -658,9 +658,9 @@
 | `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | pending | — |
 | `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | pending | — |
-| `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | changed | B0176: remove the now-unconsumed GatewayClass clone chain |
 | `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | pending | — |
-| `edgion-gateway/src/runtime/server/listener_builder.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/server/listener_builder.rs` | `runtime` | source | changed | B0176: derive minimal immutable listener facts at construction |
 | `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | pending | Added by external commit `8cbbed6c`; full audit pending |
 | `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | pending | — |

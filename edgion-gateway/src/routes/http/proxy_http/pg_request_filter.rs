@@ -47,7 +47,7 @@ pub async fn request_filter(
     // If SNI matched listener A but Host should be served by a different listener → 421.
     // Enabled by global requireSniHostMatch OR per-Gateway annotation edgion.io/require-sni-host-match.
     // Only applies to Gateway TLS (tls_matched_listener is None for HTTP/EdgionTls).
-    if edgion_http.listener.protocol.eq_ignore_ascii_case("HTTPS") {
+    if edgion_http.is_https_listener {
         if let Some((sni_listener_name, gateway_key)) = ctx.request_info.gateway_tls_match() {
             if let Some(gw_listeners) = gateway_index.get_gateway(gateway_key) {
                 if let Some(sni_entry) = gw_listeners.get(sni_listener_name) {
