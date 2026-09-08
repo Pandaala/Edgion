@@ -108,10 +108,6 @@ impl ExtProcResponseProcessor {
 
 #[async_trait]
 impl StreamingResponseProcessor for ExtProcResponseProcessor {
-    fn name(&self) -> &str {
-        "ExtProc"
-    }
-
     fn changes_body_length(&self) -> bool {
         true
     }

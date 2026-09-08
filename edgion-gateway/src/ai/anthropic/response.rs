@@ -676,10 +676,6 @@ impl AnthropicResponseProcessor {
 
 #[async_trait]
 impl StreamingResponseProcessor for AnthropicResponseProcessor {
-    fn name(&self) -> &str {
-        "anthropic_response_translation"
-    }
-
     fn on_response_header(&mut self, response: &mut ResponseHeader) {
         self.normalize_header(response);
     }

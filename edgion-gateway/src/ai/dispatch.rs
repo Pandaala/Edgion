@@ -766,10 +766,6 @@ struct AiAttemptResponseProcessor {
 
 #[async_trait]
 impl StreamingResponseProcessor for AiAttemptResponseProcessor {
-    fn name(&self) -> &str {
-        "AiAttemptResponse"
-    }
-
     fn on_response_header(&mut self, response: &mut ResponseHeader) {
         for processor in &mut self.processors {
             processor.on_response_header(response);
@@ -1563,9 +1559,6 @@ mod tests {
         struct Terminator;
         #[async_trait]
         impl StreamingResponseProcessor for Terminator {
-            fn name(&self) -> &str {
-                "terminator"
-            }
             async fn on_chunk(
                 &mut self,
                 _chunk: &mut Option<Bytes>,
@@ -1583,9 +1576,6 @@ mod tests {
         }
         #[async_trait]
         impl StreamingResponseProcessor for MarkRan {
-            fn name(&self) -> &str {
-                "mark-ran"
-            }
             async fn on_chunk(
                 &mut self,
                 _chunk: &mut Option<Bytes>,

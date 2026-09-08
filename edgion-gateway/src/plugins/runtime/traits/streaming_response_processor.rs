@@ -1,7 +1,8 @@
 //! Writable, async per-chunk processors for upstream response streams.
 //!
-//! This is the AI-gateway streaming pipeline contract (spec:
-//! `docs/superpowers/specs/2026-08-03-ai-gateway-phase1-design.md`). It is
+//! This is the AI-gateway streaming pipeline contract. See the current Gateway
+//! overview (`skills/01-architecture/02-gateway/00-overview.md`) and Pingora
+//! lifecycle (`skills/01-architecture/02-gateway/02-pingora-lifecycle.md`). It is
 //! deliberately NOT an operator-facing EdgionPlugins stage: request-stage
 //! plugins that need to observe or transform the response stream push a
 //! processor through `EdgionHttpContext::push_response_stream_processor`, and the proxy's
@@ -15,8 +16,9 @@
 //! Contract:
 //! - Async, per transport chunk, writable: a processor may replace, drop, or
 //!   extend the current chunk in place. It must NOT accumulate unbounded
-//!   state across chunks (see `crate::sse::SseDecoder` for the bounded
-//!   framing substrate).
+//!   state across chunks. `crate::sse::SseDecoder` owns bounded SSE framing;
+//!   semantic hold-and-release must use `crate::sse::window::RawWindow` under
+//!   its independent hard bounds.
 //! - The pipeline runs whenever processors are installed, regardless of
 //!   `ResponseStreamKind` — classification tells a processor HOW to interpret
 //!   chunks, not WHETHER it runs.
@@ -68,9 +70,6 @@ impl StreamingResponseEvent {
 
 #[async_trait]
 pub trait StreamingResponseProcessor: Send + Sync {
-    /// Processor name for diagnostics (never logged per chunk).
-    fn name(&self) -> &str;
-
     /// Called once for the final upstream response after retry arbitration and
     /// before operator response plugins. Implementations may normalize status
     /// and headers and retain a bounded body-processing mode.

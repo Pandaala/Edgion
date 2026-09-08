@@ -757,10 +757,6 @@ impl GuardrailResponseProcessor {
 
 #[async_trait]
 impl StreamingResponseProcessor for GuardrailResponseProcessor {
-    fn name(&self) -> &str {
-        "guardrail"
-    }
-
     fn changes_body_length(&self) -> bool {
         true
     }

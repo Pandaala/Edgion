@@ -221,10 +221,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for BodyMarker {
-        fn name(&self) -> &str {
-            "body-marker"
-        }
-
         async fn on_chunk(
             &mut self,
             _chunk: &mut Option<bytes::Bytes>,

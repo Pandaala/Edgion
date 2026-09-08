@@ -848,10 +848,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for ProviderHeaderReset {
-        fn name(&self) -> &str {
-            "provider-header-reset"
-        }
-
         fn on_response_header(&mut self, response: &mut ResponseHeader) {
             response.remove_header("server");
             response.remove_header("strict-transport-security");

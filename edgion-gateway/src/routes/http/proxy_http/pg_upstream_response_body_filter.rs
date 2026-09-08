@@ -448,9 +448,6 @@ mod tests {
     struct Uppercase;
     #[async_trait]
     impl StreamingResponseProcessor for Uppercase {
-        fn name(&self) -> &str {
-            "uppercase"
-        }
         async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
@@ -471,10 +468,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for TypedTerminalRecorder {
-        fn name(&self) -> &str {
-            "typed-terminal-recorder"
-        }
-
         async fn on_event(
             &mut self,
             _chunk: &mut Option<Bytes>,
@@ -528,9 +521,6 @@ mod tests {
     struct DropChunk;
     #[async_trait]
     impl StreamingResponseProcessor for DropChunk {
-        fn name(&self) -> &str {
-            "drop"
-        }
         async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
@@ -546,9 +536,6 @@ mod tests {
     struct DropSseChunk;
     #[async_trait]
     impl StreamingResponseProcessor for DropSseChunk {
-        fn name(&self) -> &str {
-            "drop-sse"
-        }
         async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
@@ -566,10 +553,6 @@ mod tests {
     struct HeaderMutator;
     #[async_trait]
     impl StreamingResponseProcessor for HeaderMutator {
-        fn name(&self) -> &str {
-            "header-mutator"
-        }
-
         fn on_response_header(&mut self, response: &mut ResponseHeader) {
             response.set_status(http::StatusCode::SERVICE_UNAVAILABLE).unwrap();
             response.insert_header("content-type", "application/json").unwrap();
@@ -593,9 +576,6 @@ mod tests {
     struct Injector;
     #[async_trait]
     impl StreamingResponseProcessor for Injector {
-        fn name(&self) -> &str {
-            "injector"
-        }
         fn changes_body_length(&self) -> bool {
             true
         }
@@ -618,9 +598,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for SeesOnlyBody {
-        fn name(&self) -> &str {
-            "sees-only-body"
-        }
         async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
@@ -638,9 +615,6 @@ mod tests {
     struct Terminator;
     #[async_trait]
     impl StreamingResponseProcessor for Terminator {
-        fn name(&self) -> &str {
-            "terminator"
-        }
         async fn on_chunk(
             &mut self,
             _chunk: &mut Option<Bytes>,
@@ -659,9 +633,6 @@ mod tests {
     }
     #[async_trait]
     impl StreamingResponseProcessor for MarkRan {
-        fn name(&self) -> &str {
-            "mark-ran"
-        }
         async fn on_chunk(
             &mut self,
             _chunk: &mut Option<Bytes>,
@@ -695,10 +666,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for ClaimWithoutTerminate {
-        fn name(&self) -> &str {
-            "claim-without-terminate"
-        }
-
         async fn on_chunk(
             &mut self,
             chunk: &mut Option<Bytes>,
@@ -718,10 +685,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for PendingLifecycle {
-        fn name(&self) -> &str {
-            "pending-lifecycle"
-        }
-
         fn release_inflight(&mut self) {
             *self.released.lock() += 1;
         }
@@ -740,10 +703,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for LifecycleMarker {
-        fn name(&self) -> &str {
-            "lifecycle-marker"
-        }
-
         fn on_terminal_preempted(&mut self, _winner: ResponseTerminalCause) {
             self.counts.lock().preempted += 1;
         }
@@ -769,10 +728,6 @@ mod tests {
 
     #[async_trait]
     impl StreamingResponseProcessor for OrderMarker {
-        fn name(&self) -> &str {
-            self.label
-        }
-
         async fn on_chunk(
             &mut self,
             _chunk: &mut Option<Bytes>,

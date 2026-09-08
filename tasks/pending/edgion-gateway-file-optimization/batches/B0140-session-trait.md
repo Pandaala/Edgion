@@ -20,4 +20,4 @@
 - Implementation: corrected only the body-operation documentation to distinguish bounded shared request capture, selected-operation unavailability, downstream capture timeout, storage failure, permanently streaming main responses and the fail-loud defensive response-body seam. API and runtime bytes are unchanged.
 - Review: `b0135_final_review` independently approved with no Must Fix or Should Fix. It traced the production adapter's request storage, timeout/error mappings, unanimous bodyless proof, response streaming and existing adapter tests, and confirmed all URI/header/TLS/IP/mock/failure/log/observability behavior is unchanged.
 - Verification: exact one-file documentation diff; `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and 3,090-file frozen integration guards passed; Clippy retained only existing warnings.
-- Commit: pending local batch commit; never push.
+- Commit: `1c61ce87`; local only, never pushed by the campaign.

@@ -1446,10 +1446,6 @@ use legacy_usage_observer::{approximate_openai_output_units, observe_openai_stre
 
 #[async_trait]
 impl StreamingResponseProcessor for UsageExtractionProcessor {
-    fn name(&self) -> &str {
-        "ai-usage"
-    }
-
     /// Terminating on over-quota shortens the body, and injecting an error
     /// event lengthens it. Either way the upstream `content-length` cannot
     /// stand, so it must be stripped at the response-header boundaries.
