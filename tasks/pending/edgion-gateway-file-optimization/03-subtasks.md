@@ -603,7 +603,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | examined-no-change | B0174: retain zero-allocation protocol/media-type classification |
 | `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` | `routes-shared` | source | changed | B0175: borrow the canonical plugin store and isolate resolver tests |
 | `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | changed | B0176: retain only derived listener facts and default-disabled subrequests |
-| `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs` | `routes-shared` | source | changed | B0177: preserve finite nonzero subsecond keepalive bounds |
 | `edgion-gateway/src/routes/http/proxy_http/pg_connected_to_upstream.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/proxy_http/pg_error_while_proxy.rs` | `routes-shared` | source | pending | — |
