@@ -32,4 +32,4 @@
 - Implementation: every staged local reply now passes through one final-writer claim helper before keepalive or downstream writes. Rejected invalid statuses and existing-writer conflicts return a static, explicitly nonretryable `HTTPStatus(500)` control-flow error; an existing committed response remains authoritative. Disabled compression and SSE now return level zero before framing-header scans.
 - Review: the first fresh final review found that an existing writer bypassed pending-reply consumption in the real control flow. The corrected implementation always consumes and validates the pending reply and adds two live H1 response-filter tests. Re-review returned LGTM with no remaining Must Fix or Should Fix item.
 - Verification: target tests passed 13/13 and the complete proxy-http suite passed 249/249. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards passed.
-- Commit: pending; never push.
+- Commit: `848e96e9`; never pushed by the campaign.

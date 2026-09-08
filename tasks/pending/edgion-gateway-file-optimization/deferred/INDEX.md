@@ -179,3 +179,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Avoid Wasm response in-flight cache-key allocation | pending | [task](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md) |
 | Unify terminal local-reply status validation | pending | [task](../../../todo/unify-terminal-local-reply-status-validation.md) |
 | Add native WAF response-stage invalid-status integration coverage | pending | [task](../../../todo/add-native-waf-response-invalid-status-integration.md) |
+| Unify response Content-Encoding classification | pending | [task](../../../todo/unify-response-content-encoding-classification.md) |
