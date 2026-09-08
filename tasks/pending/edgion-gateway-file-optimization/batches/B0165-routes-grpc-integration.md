@@ -17,4 +17,4 @@
 - Deferred: none.
 - Review: `b0164_final_review` independently re-read the complete target and production call chains through matching, persistence, backend plugins, TLS/policy capture, retries, B0164 timeout rewriting, response metrics and access logging. It confirmed every rejected candidate and returned LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification: the full gRPC route module tests passed 32/32; `cargo fmt --all`; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,107-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `55772d15`; never pushed by the campaign.

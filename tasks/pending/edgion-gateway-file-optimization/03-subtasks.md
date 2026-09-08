@@ -589,7 +589,7 @@
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | changed | B0163: share immutable rule-level metric handles across match units |
 | `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | `routes-shared` | source | changed | B0164: round encoded coarser timeout units upward |
 | `edgion-gateway/src/routes/grpc/integration.rs` | `routes-shared` | source | examined-no-change | B0165: integration facade and routing/backend lifecycle retained |
-| `edgion-gateway/src/routes/grpc/match_engine.rs` | `routes-shared` | source | analysis-ready | B0166: correct regex precedence after B0164/B0165 |
+| `edgion-gateway/src/routes/grpc/match_engine.rs` | `routes-shared` | source | changed | B0166: correct regex service/method character precedence |
 | `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | pending | — |

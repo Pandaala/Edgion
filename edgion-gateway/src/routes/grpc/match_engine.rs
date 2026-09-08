@@ -20,7 +20,8 @@ use std::sync::Arc;
 ///   6. Regex service only (method not specified)
 ///   7. Catch-all (neither service nor method specified)
 ///
-/// Within regex tiers, routes are sorted by pattern length (longest first).
+/// Within regex tiers, routes are sorted lexicographically by service pattern
+/// length, then method pattern length, using Unicode character counts.
 pub struct GrpcMatchEngine {
     /// Exact match: service -> method -> routes (nested for zero-alloc &str lookup)
     exact_routes: HashMap<String, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>,
@@ -34,7 +35,7 @@ pub struct GrpcMatchEngine {
     /// Regex service + Exact method, sorted by service pattern length desc
     regex_service_exact_method: Vec<Arc<GrpcRouteRuleUnit>>,
 
-    /// Regex service + Regex method, sorted by combined pattern length desc
+    /// Regex service + Regex method, sorted by service then method pattern length desc
     regex_service_regex_method: Vec<Arc<GrpcRouteRuleUnit>>,
 
     /// Regex service only (method not specified), sorted by service pattern length desc
@@ -127,34 +128,32 @@ impl GrpcMatchEngine {
             }
         }
 
-        // Sort regex routes by pattern length descending (longer = more specific = higher priority),
-        // with specificity tie-breaking per Gateway API spec.
-        let sort_by_pattern_len = |routes: &mut Vec<Arc<GrpcRouteRuleUnit>>,
-                                   service_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize,
-                                   method_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize| {
-            routes.sort_by(|a, b| {
-                let len_a = service_len(a) + method_len(a);
-                let len_b = service_len(b) + method_len(b);
-                let len_cmp = len_b.cmp(&len_a);
-                if len_cmp != std::cmp::Ordering::Equal {
-                    return len_cmp;
-                }
-                a.specificity.cmp_precedence(&b.specificity)
-            });
-        };
+        // Sort regex routes lexicographically by service then method pattern
+        // character count, with specificity tie-breaking per Gateway API spec.
+        let sort_by_pattern_precedence =
+            |routes: &mut Vec<Arc<GrpcRouteRuleUnit>>,
+             service_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize,
+             method_len: fn(&Arc<GrpcRouteRuleUnit>) -> usize| {
+                routes.sort_by(|a, b| {
+                    service_len(b)
+                        .cmp(&service_len(a))
+                        .then_with(|| method_len(b).cmp(&method_len(a)))
+                        .then_with(|| a.specificity.cmp_precedence(&b.specificity))
+                });
+            };
 
         let service_regex_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
             r.matched_info
                 .compiled_service_regex
                 .as_ref()
-                .map(|re| re.as_str().len())
+                .map(|re| re.as_str().chars().count())
                 .unwrap_or(0)
         };
         let method_regex_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
             r.matched_info
                 .compiled_method_regex
                 .as_ref()
-                .map(|re| re.as_str().len())
+                .map(|re| re.as_str().chars().count())
                 .unwrap_or(0)
         };
         let service_exact_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
@@ -163,7 +162,7 @@ impl GrpcMatchEngine {
                 .method
                 .as_ref()
                 .and_then(|m| m.service.as_ref())
-                .map(|s| s.len())
+                .map(|s| s.chars().count())
                 .unwrap_or(0)
         };
         let method_exact_len = |r: &Arc<GrpcRouteRuleUnit>| -> usize {
@@ -172,13 +171,13 @@ impl GrpcMatchEngine {
                 .method
                 .as_ref()
                 .and_then(|m| m.method.as_ref())
-                .map(|s| s.len())
+                .map(|s| s.chars().count())
                 .unwrap_or(0)
         };
 
-        sort_by_pattern_len(&mut exact_service_regex_method, service_exact_len, method_regex_len);
-        sort_by_pattern_len(&mut regex_service_exact_method, service_regex_len, method_exact_len);
-        sort_by_pattern_len(&mut regex_service_regex_method, service_regex_len, method_regex_len);
+        sort_by_pattern_precedence(&mut exact_service_regex_method, service_exact_len, method_regex_len);
+        sort_by_pattern_precedence(&mut regex_service_exact_method, service_regex_len, method_exact_len);
+        sort_by_pattern_precedence(&mut regex_service_regex_method, service_regex_len, method_regex_len);
         regex_service_only.sort_by(|a, b| {
             let len_a = service_regex_len(a);
             let len_b = service_regex_len(b);
@@ -607,28 +606,176 @@ mod tests {
                 other => panic!("unknown expected_bucket: {}", other),
             }
         }
+    }
 
-        // --- Part b: Sort by pattern length ---
-        // Two-route engine; longest combined pattern must come first.
-        let short = make_route(
-            Some("a"),
-            Some("b.*"),
+    #[test]
+    fn test_grpc_regex_sort_prefers_service_length_before_method_length() {
+        let longer_service = make_route(
+            Some("service.*"),
+            Some("x"),
             Some(GRPCMethodMatchType::RegularExpression),
-            "short",
+            "longer-service",
         );
-        let long = make_route(
-            Some("a"),
-            Some("very-long-pattern-.*"),
+        let longer_method = make_route(
+            Some("s.*"),
+            Some("an-extremely-long-method-pattern.*"),
             Some(GRPCMethodMatchType::RegularExpression),
-            "long",
+            "longer-method",
         );
 
-        let engine = GrpcMatchEngine::new(vec![short, long]);
-        // Both service and method compiled as regex → regex_service_regex_method
-        assert_eq!(engine.regex_service_regex_method.len(), 2);
-        // Longest combined pattern first
-        assert_eq!(engine.regex_service_regex_method[0].matched_info.rsc.name, "long");
-        assert_eq!(engine.regex_service_regex_method[1].matched_info.rsc.name, "short");
+        let engine = GrpcMatchEngine::new(vec![longer_method, longer_service]);
+        let order: Vec<_> = engine
+            .regex_service_regex_method
+            .iter()
+            .map(|route| route.resource_key.as_str())
+            .collect();
+        assert_eq!(order, ["default/longer-service", "default/longer-method"]);
+    }
+
+    #[test]
+    fn test_grpc_regex_sort_uses_method_length_when_service_lengths_are_equal() {
+        let shorter_method = make_route(
+            Some("service.*"),
+            Some("x"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "shorter-method",
+        );
+        let longer_method = make_route(
+            Some("service.*"),
+            Some("method.*"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "longer-method",
+        );
+
+        let engine = GrpcMatchEngine::new(vec![shorter_method, longer_method]);
+        let order: Vec<_> = engine
+            .regex_service_regex_method
+            .iter()
+            .map(|route| route.resource_key.as_str())
+            .collect();
+        assert_eq!(order, ["default/longer-method", "default/shorter-method"]);
+    }
+
+    #[test]
+    fn test_grpc_regex_sort_counts_unicode_characters_not_utf8_bytes() {
+        // Both patterns match "svc". `€*svc` is five characters but seven bytes,
+        // while `^svc.?` is six characters and six bytes.
+        let longer_in_bytes = make_route(
+            Some("€*svc"),
+            Some("method"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "longer-in-bytes",
+        );
+        let longer_in_characters = make_route(
+            Some("^svc.?"),
+            Some("method"),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "longer-in-characters",
+        );
+
+        let engine = GrpcMatchEngine::new(vec![longer_in_bytes, longer_in_characters]);
+        let order: Vec<_> = engine
+            .regex_service_regex_method
+            .iter()
+            .map(|route| route.resource_key.as_str())
+            .collect();
+        assert_eq!(order, ["default/longer-in-characters", "default/longer-in-bytes"]);
+    }
+
+    #[test]
+    fn test_grpc_regex_sort_falls_back_to_specificity() {
+        fn with_specificity(
+            mut route: Arc<GrpcRouteRuleUnit>,
+            header_count: u16,
+            route_key: &str,
+            rule_index: u32,
+            match_index: u32,
+        ) -> Arc<GrpcRouteRuleUnit> {
+            let specificity = &mut Arc::get_mut(&mut route).unwrap().specificity;
+            specificity.header_count = header_count;
+            specificity.route_key = route_key.to_string();
+            specificity.rule_index = rule_index;
+            specificity.match_index = match_index;
+            route
+        }
+
+        let later_match = with_specificity(
+            make_route(
+                Some("svc.*"),
+                Some("method.*"),
+                Some(GRPCMethodMatchType::RegularExpression),
+                "later-match",
+            ),
+            1,
+            "default/shared",
+            0,
+            1,
+        );
+        let later_route = with_specificity(
+            make_route(
+                Some("svc.*"),
+                Some("method.*"),
+                Some(GRPCMethodMatchType::RegularExpression),
+                "later-route",
+            ),
+            1,
+            "default/z-route",
+            0,
+            0,
+        );
+        let later_rule = with_specificity(
+            make_route(
+                Some("svc.*"),
+                Some("method.*"),
+                Some(GRPCMethodMatchType::RegularExpression),
+                "later-rule",
+            ),
+            1,
+            "default/shared",
+            1,
+            0,
+        );
+        let earlier_match = with_specificity(
+            make_route(
+                Some("svc.*"),
+                Some("method.*"),
+                Some(GRPCMethodMatchType::RegularExpression),
+                "earlier-match",
+            ),
+            1,
+            "default/shared",
+            0,
+            0,
+        );
+        let more_headers = with_specificity(
+            make_route(
+                Some("svc.*"),
+                Some("method.*"),
+                Some(GRPCMethodMatchType::RegularExpression),
+                "more-headers",
+            ),
+            2,
+            "default/zz-route",
+            9,
+            9,
+        );
+
+        let engine = GrpcMatchEngine::new(vec![later_match, later_route, later_rule, earlier_match, more_headers]);
+        let order: Vec<_> = engine
+            .regex_service_regex_method
+            .iter()
+            .map(|route| route.resource_key.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "default/more-headers",
+                "default/earlier-match",
+                "default/later-match",
+                "default/later-rule",
+                "default/later-route",
+            ]
+        );
     }
 
     #[test]
