@@ -23,4 +23,4 @@
 - Decision: examined-no-change. Interim 100/102/103 isolation, terminal 101/final attempt bookkeeping, EWMA/outlier settlement, status retry, provider normalization, persistence/header mutation, response-plugin onion, request-body view release, and the B0186/B0190 handoffs remain coherent.
 - Independent review: approved with no Must Fix or Should Fix and found no new deferred or integration gap.
 - Verification: focused target tests 11/11; `cargo fmt --all`, locked workspace check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path checks passed.
-- Commit: pending; never push.
+- Commit: `5d5379b0`; never pushed by the campaign.

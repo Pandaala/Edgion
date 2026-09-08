@@ -5,6 +5,16 @@ use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::plugins::runtime::{PluginLog, UpstreamTrailerResult};
 use crate::EdgionHttpContext;
 
+#[inline]
+fn trailer_processing_error() -> Box<pingora_core::Error> {
+    let mut error = pingora_core::Error::explain(
+        pingora_core::ErrorType::HTTPStatus(500),
+        "edgion response trailer processing failed",
+    );
+    error.set_retry(false);
+    error
+}
+
 /// Dispatch the request-owned trailer companion vector serially.
 ///
 /// `trailers=None` is a real no-trailers terminal observation, never a
@@ -16,10 +26,7 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     mut trailers: Option<&mut HeaderMap>,
 ) -> pingora_core::Result<()> {
     if !ctx.response_processors_frozen() {
-        return Err(pingora_core::Error::explain(
-            pingora_core::ErrorType::InternalError,
-            "response trailer callback arrived before processor freeze",
-        ));
+        return Err(trailer_processing_error());
     }
     let claimed = ctx.claim_upstream_response_trailers(trailers.is_some());
     if !claimed {
@@ -30,10 +37,7 @@ pub(crate) async fn dispatch_upstream_response_trailers(
         return Ok(());
     };
     let Some(mut lease) = driver.trailer_lease().await else {
-        return Err(pingora_core::Error::explain(
-            pingora_core::ErrorType::InternalError,
-            "response trailer processor group is closed after callback cancellation",
-        ));
+        return Err(trailer_processing_error());
     };
     if lease.companions().is_empty() {
         lease.complete();
@@ -63,10 +67,7 @@ pub(crate) async fn dispatch_upstream_response_trailers(
         }
         ctx.finish_plugin_stage("upstream_response_trailers", logs);
         lease.complete();
-        return Err(pingora_core::Error::explain(
-            pingora_core::ErrorType::InternalError,
-            "upstream response trailer processor failed closed",
-        ));
+        return Err(trailer_processing_error());
     }
 
     ctx.finish_plugin_stage("upstream_response_trailers", logs);
@@ -244,7 +245,8 @@ mod tests {
             .await
             .expect_err("unfrozen trailer callback must fail closed");
 
-        assert!(matches!(error.etype(), pingora_core::ErrorType::InternalError));
+        assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
         assert!(!ctx.response_processors_frozen());
     }
 
@@ -278,11 +280,11 @@ mod tests {
         ));
         let mut trailers = HeaderMap::new();
 
-        assert!(
-            dispatch_upstream_response_trailers(&mut session, &mut ctx, Some(&mut trailers))
-                .await
-                .is_err()
-        );
+        let error = dispatch_upstream_response_trailers(&mut session, &mut ctx, Some(&mut trailers))
+            .await
+            .expect_err("fail-close companion must abort trailer forwarding");
+        assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
         assert_eq!(*order.lock().expect("order lock"), ["first", "failure"]);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(last_preempted.load(Ordering::SeqCst));
@@ -340,6 +342,29 @@ mod tests {
             .is_err());
         drop(future);
         assert!(released.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn closed_trailer_lease_returns_nonretryable_local_status() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.install_upstream_response_trailer(recording(
+            "closed",
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicUsize::new(0)),
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )));
+        ctx.freeze_response_processor_driver();
+        let driver = ctx.response_processor_driver().expect("frozen driver");
+        drop(driver.trailer_lease().await.expect("initial trailer lease"));
+
+        let error = super::dispatch_upstream_response_trailers(&mut session, &mut ctx, None)
+            .await
+            .expect_err("cancelled trailer lease must fail closed");
+
+        assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
     }
 
     #[tokio::test]
