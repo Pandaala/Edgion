@@ -20,4 +20,4 @@
 - Tests: added focused coverage proving same-rule pointer identity, cross-rule non-sharing, preserved rule/match IDs and service/method data, and two-versus-one backend metric slots. The full conf-handler module passed 5/5.
 - Review: fresh independent reviewer `b0163_final_review` re-read the implementation and original rules, verified metric labels, backend slot mapping, route generation lifetime, matching/specificity/order/publication and access-log behavior, and returned LGTM with no Must Fix, Should Fix or deferred finding.
 - Verification: `cargo fmt --all`; focused tests 5/5; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,107-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `d9939375`; never pushed by the campaign.

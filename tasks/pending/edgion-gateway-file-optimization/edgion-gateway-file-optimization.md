@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0162 committed locally as `78cf23d9`; remote changes incorporated through `d8d9d1d0` |
-| Coverage | 544 current Gateway files: 180 changed, 158 examined-no-change, 11 deferred, 195 non-terminal; 3 historical rows are removed |
-| Active batch | none; B0163 passed its commit gate |
-| Analysis queue | four externally added Gateway files are pending; D0074–D0102 retain their separate scopes |
+| Campaign status | in-progress; B0163 committed locally as `d9939375`; remote changes incorporated through `d8d9d1d0` |
+| Coverage | 544 current Gateway files: 181 changed, 158 examined-no-change, 11 deferred, 194 non-terminal; 3 historical rows are removed |
+| Active batch | none; B0164 passed its commit gate |
+| Analysis queue | B0165–B0166 are analysis-ready; four externally added Gateway files are pending; D0074–D0102 retain their separate scopes |
 | Integration freeze | Refreshed through external commit `0170db38`: 3,107 `edgion-tests` files after namespace-watch coverage added two paths and changed one cache-residue fingerprint; no campaign integration-test edit occurred |
 
 ## AI guide summary

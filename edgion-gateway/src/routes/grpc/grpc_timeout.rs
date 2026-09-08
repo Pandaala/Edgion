@@ -14,6 +14,16 @@ use std::time::Duration;
 /// Maximum number of decimal digits permitted in the `TimeoutValue` portion
 /// per the gRPC-over-HTTP/2 spec.
 const MAX_TIMEOUT_DIGITS: usize = 8;
+const MAX_TIMEOUT_VALUE: u128 = 99_999_999;
+
+const TIMEOUT_UNITS: [(u128, char); 6] = [
+    (1, 'n'),
+    (1_000, 'u'),
+    (1_000_000, 'm'),
+    (1_000_000_000, 'S'),
+    (60_000_000_000, 'M'),
+    (3_600_000_000_000, 'H'),
+];
 
 /// Parse a `grpc-timeout` header value into a `Duration`.
 ///
@@ -68,44 +78,26 @@ pub fn parse_grpc_timeout(value: &str) -> Option<Duration> {
 /// Format a `Duration` as a `grpc-timeout` header value.
 ///
 /// Picks the smallest unit that keeps the numeric portion within 8 decimal
-/// digits while preserving precision when possible. Sub-nanosecond
-/// granularity is not representable on the wire and is rounded up to
-/// `1n` so the upstream never receives `0n` (which the spec leaves
-/// implementation-defined).
+/// digits. When a coarser unit is required, the value is rounded up so the
+/// encoded timeout never shortens the remaining deadline. Zero is encoded as
+/// `1n`; values beyond the maximum wire representation saturate at
+/// `99999999H`.
 pub fn format_grpc_timeout(d: Duration) -> String {
     let nanos = d.as_nanos();
     if nanos == 0 {
         return "1n".to_string();
     }
 
-    const MAX: u128 = 99_999_999;
-
-    if nanos <= MAX {
-        return format!("{}n", nanos);
+    for (unit_nanos, suffix) in TIMEOUT_UNITS {
+        // Quotient-plus-remainder avoids the overflow of
+        // `(nanos + unit_nanos - 1) / unit_nanos` near `u128::MAX`.
+        let value = nanos / unit_nanos + u128::from(nanos % unit_nanos != 0);
+        if value <= MAX_TIMEOUT_VALUE {
+            return format!("{value}{suffix}");
+        }
     }
 
-    let micros = d.as_micros();
-    if micros <= MAX {
-        return format!("{}u", micros);
-    }
-
-    let millis = d.as_millis();
-    if millis <= MAX {
-        return format!("{}m", millis);
-    }
-
-    let secs = d.as_secs() as u128;
-    if secs <= MAX {
-        return format!("{}S", secs);
-    }
-
-    let minutes = secs / 60;
-    if minutes <= MAX {
-        return format!("{}M", minutes);
-    }
-
-    let hours = secs / 3_600;
-    format!("{}H", hours.min(MAX))
+    format!("{MAX_TIMEOUT_VALUE}H")
 }
 
 #[cfg(test)]
@@ -190,8 +182,8 @@ mod tests {
         assert_eq!(format_grpc_timeout(Duration::from_secs(100_000)), "100000S");
         // 99_999_999 s → still fits in S.
         assert_eq!(format_grpc_timeout(Duration::from_secs(99_999_999)), "99999999S");
-        // 100_000_000 s → overflow S cap, fall to M (≈ 1_666_666).
-        assert_eq!(format_grpc_timeout(Duration::from_secs(100_000_000)), "1666666M");
+        // 100_000_000 s → overflow S cap, round up in M.
+        assert_eq!(format_grpc_timeout(Duration::from_secs(100_000_000)), "1666667M");
     }
 
     #[test]
@@ -204,5 +196,77 @@ mod tests {
         let original = Duration::from_millis(123);
         let formatted = format_grpc_timeout(original);
         assert_eq!(parse_grpc_timeout(&formatted), Some(original));
+    }
+
+    fn duration_from_nanos(nanos: u128) -> Duration {
+        Duration::new(
+            u64::try_from(nanos / 1_000_000_000).expect("test duration fits u64 seconds"),
+            (nanos % 1_000_000_000) as u32,
+        )
+    }
+
+    fn selected_unit_quantum(encoded: &str) -> Duration {
+        let suffix = encoded.as_bytes().last().copied().expect("non-empty timeout");
+        let nanos = TIMEOUT_UNITS
+            .iter()
+            .find_map(|(nanos, unit)| (*unit as u8 == suffix).then_some(*nanos))
+            .expect("known timeout unit");
+        duration_from_nanos(nanos)
+    }
+
+    #[test]
+    fn format_rounds_up_at_every_unit_transition() {
+        let cases = [
+            (MAX_TIMEOUT_VALUE, "99999999n"),
+            (MAX_TIMEOUT_VALUE + 1, "100000u"),
+            (MAX_TIMEOUT_VALUE * 1_000, "99999999u"),
+            (MAX_TIMEOUT_VALUE * 1_000 + 1, "100000m"),
+            (MAX_TIMEOUT_VALUE * 1_000_000, "99999999m"),
+            (MAX_TIMEOUT_VALUE * 1_000_000 + 1, "100000S"),
+            (MAX_TIMEOUT_VALUE * 1_000_000_000, "99999999S"),
+            (MAX_TIMEOUT_VALUE * 1_000_000_000 + 1, "1666667M"),
+            (MAX_TIMEOUT_VALUE * 60_000_000_000, "99999999M"),
+            (MAX_TIMEOUT_VALUE * 60_000_000_000 + 1, "1666667H"),
+            (MAX_TIMEOUT_VALUE * 3_600_000_000_000, "99999999H"),
+        ];
+
+        for (nanos, expected) in cases {
+            assert_eq!(format_grpc_timeout(duration_from_nanos(nanos)), expected);
+        }
+    }
+
+    #[test]
+    fn formatted_representable_values_never_shorten_the_timeout() {
+        let max_nanos = MAX_TIMEOUT_VALUE * 3_600_000_000_000;
+        let samples = [
+            1,
+            250,
+            MAX_TIMEOUT_VALUE,
+            MAX_TIMEOUT_VALUE + 1,
+            100_000_001,
+            MAX_TIMEOUT_VALUE * 1_000 + 1,
+            MAX_TIMEOUT_VALUE * 1_000_000 + 1,
+            MAX_TIMEOUT_VALUE * 1_000_000_000 + 1,
+            MAX_TIMEOUT_VALUE * 60_000_000_000 + 1,
+            max_nanos,
+        ];
+
+        for nanos in samples {
+            let original = duration_from_nanos(nanos);
+            let encoded = format_grpc_timeout(original);
+            let parsed = parse_grpc_timeout(&encoded).expect("formatter emits valid timeout");
+            let quantum = selected_unit_quantum(&encoded);
+            let overshoot = parsed.checked_sub(original).expect("formatted timeout must not shrink");
+
+            assert!(overshoot < quantum, "{original:?} encoded as {encoded}");
+            assert!(encoded.len() - 1 <= MAX_TIMEOUT_DIGITS);
+        }
+    }
+
+    #[test]
+    fn format_saturates_values_above_the_maximum_wire_timeout() {
+        let just_above_max = duration_from_nanos(MAX_TIMEOUT_VALUE * 3_600_000_000_000 + 1);
+        assert_eq!(format_grpc_timeout(just_above_max), "99999999H");
+        assert_eq!(format_grpc_timeout(Duration::new(u64::MAX, 999_999_999)), "99999999H");
     }
 }
