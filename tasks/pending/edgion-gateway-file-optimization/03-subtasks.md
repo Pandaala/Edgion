@@ -536,10 +536,10 @@
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | changed | B0128: shared element-aware replacement preserving raw query and URI finalization; verified |
 | `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | changed | B0129: bounded formatting/redaction and shared DSL strings; verified |
 | `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | examined-no-change | B0130: compile-time facade retained; independent review and gates passed |
-| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | analysis-ready | B0131; B0121 condition-publication support retained |
+| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | changed | B0131: checked saturating microsecond timing; B0121 condition-publication support retained |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | analysis-ready | B0132 |
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | analysis-ready | B0133 |
-| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | REQ-BODY-CORE-001: canonical empty-body digest consumer / `a408d7fd`; full audit pending |
+| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | analysis-ready | B0134; REQ-BODY-CORE-001 support retained |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | pending | — |
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |
 | `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | pending | Added by external commit `b55375ca`; full audit pending |

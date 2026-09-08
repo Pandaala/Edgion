@@ -25,4 +25,4 @@
 - Freshness: target blob remains identical at current `b71f37f2` plus completed B0128/B0129 worktree changes. Independent review must verify that changed child implementations do not invalidate the namespace-only decision.
 - Review: `b0130_final_review` LGTM, no Must Fix or Should Fix. Independently traced exports/consumers, confirmed the unchanged blob and namespace-only role, and verified B0128/B0129 do not require any facade adjustment.
 - Verification: format, locked workspace check (0.92s), Clippy (0.35s, existing warnings), Gateway build (0.44s), agent-doc/SSA/metrics/Pingora/no-tracing/English-only guards, diff whitespace and frozen integration checks passed. No runtime tests added for a compile-time-only unchanged facade.
-- Commit: pending local commit; never push.
+- Commit: `b6060c7a` (recovery commit); not pushed.

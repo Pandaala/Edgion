@@ -1,7 +1,7 @@
 //! Plugin runtime - manages plugin execution across different stages
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -79,6 +79,11 @@ use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
 };
+
+#[inline]
+fn elapsed_micros(started: Instant) -> u64 {
+    u64::try_from(Instant::now().saturating_duration_since(started).as_micros()).unwrap_or(u64::MAX)
+}
 
 /// Immutable request-election metadata for one logical native WAF.
 #[derive(Clone)]
@@ -1886,7 +1891,7 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost = Some(elapsed_micros(start));
             }
             if !suppress_log {
                 if filter_logs.is_empty() {
@@ -1988,7 +1993,7 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost = Some(elapsed_micros(start));
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
@@ -2095,7 +2100,7 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if let Some(start) = start.filter(|_| plugin_log.refer_to.is_none()) {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost = Some(elapsed_micros(start));
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
@@ -2192,6 +2197,15 @@ mod tests {
     use edgion_resources::EdgionErrorCode;
     use std::sync::Mutex;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn elapsed_micros_saturates_a_future_start_to_zero() {
+        let started = Instant::now()
+            .checked_add(Duration::from_secs(60))
+            .expect("adding one minute to the current instant must remain representable");
+
+        assert_eq!(elapsed_micros(started), 0);
+    }
 
     struct FixedResultFilter(PluginRunningResult);
 

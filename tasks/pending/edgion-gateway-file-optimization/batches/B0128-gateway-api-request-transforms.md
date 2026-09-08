@@ -36,7 +36,7 @@
 - Plan: (1) add the private helper with one result allocation; (2) register its module; (3) delegate redirect path replacement and canonical TLS inference; (4) delegate rewrite path replacement while preserving URI finalization/query; (5) run focused tests and full gates. The approved support cleanup removes six lines only.
 - Review: `b0128_final_review` LGTM. No Must Fix or remaining Should Fix. Its two requested matrix cases now cover a configured trailing-slash prefix and a parameter whose multibyte character straddled the old byte offset.
 - Verification: 10 focused tests passed (TLS facts 1, path helper 1, redirect 7, rewrite 1); the expanded helper matrix passed again. Root format, locked workspace check/Clippy, locked Gateway binary build, agent-doc/SSA/metrics/Pingora/no-tracing/English-only guards, diff whitespace, and frozen-path checks passed. Final check/Clippy refresh after the two test-only additions passed (11.26s/25.62s); Clippy retains existing warnings. Gateway binary build passed in 41.75s.
-- Commit: pending local commit; never push.
+- Commit: `b6060c7a` (recovery commit shared with B0129/B0130 records); not pushed.
 
 ## Verified worktree fingerprints
 

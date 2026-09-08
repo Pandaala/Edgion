@@ -37,7 +37,7 @@
 - Plan review: `b0129_plan_review` APPROVED, no Must Fix or Should Fix. Use the canonical ceiling, preserve unknown-mode Wrap and normal callback cleanup, distinguish allocator capacity rounding from logical byte bounds, and source the large DSL value at runtime with explicit valid limits.
 - Review: `b0129_final_review` LGTM, no Must Fix or Should Fix. It independently verified boundedness, shared redaction dispatch, exact tier transitions, Arc ownership and all coercions, plus exact error variants and high-arity test limits. Allocation evidence is structural/capacity-based, not a profiler measurement.
 - Verification: resources sensitive 13/13, Gateway runtime log 29/29, DSL p3 39/39 passed serially; format and diff checks passed. New fixture wiring/expected-log setup was corrected without production changes. Locked workspace check (16.65s), Clippy (23.94s, existing warnings), Gateway binary build (39.80s), agent-doc/SSA/metrics/Pingora/no-tracing/English-only and frozen-path guards passed.
-- Commit: pending local commit; never push.
+- Commit: `b6060c7a` (recovery commit); not pushed.
 
 ## Verified worktree fingerprints
 
