@@ -24,4 +24,4 @@
 - Deferred tasks: `tasks/todo/delegation-parentref-gateway-name-collision.md` records frozen live HTTP/gRPC collision coverage; `tasks/todo/route-parent-status-canonical-identity.md` records the complete Controller writer/storage/comparison to Gateway publication identity fix, including configured controller ownership and foreign-controller precedence.
 - Review: `b0160_final_review` independently re-read the three-file diff and relevant route/status rules. After requiring the canonical-identity task to cover Gateway publication and configured controller ownership plus correcting lifecycle/defaulting docs, it returned LGTM with no remaining Must Fix or Should Fix.
 - Verification: `cargo fmt --all`; focused tests 34/34; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,107-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `78cf23d9`; never pushed by the campaign.

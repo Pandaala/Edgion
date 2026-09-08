@@ -175,6 +175,12 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
             let rule_plugin_runtime = rule_runtime.plugin_runtime;
             let rule_backends = rule_runtime.backends;
             let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_backends);
+            let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
+                &attached_gateways,
+                route_namespace,
+                route_name,
+                &grpc_backends_from_rule(rule, route_namespace),
+            ));
 
             let effective_matches: &[edgion_resources::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
 
@@ -209,12 +215,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                     route: Some(route.clone()),
                     route_info: route_info.clone(),
                     specificity,
-                    metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-                        &attached_gateways,
-                        route_namespace,
-                        route_name,
-                        &grpc_backends_from_rule(rule, route_namespace),
-                    )),
+                    metric_handles: metric_handles.clone(),
                     plugin_runtime: rule_plugin_runtime.clone(),
                     backend_finder: backend_finder.clone(),
                     backends: rule_backends.clone(),
@@ -245,12 +246,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                         route: Some(route.clone()),
                         route_info: route_info.clone(),
                         specificity,
-                        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-                            &attached_gateways,
-                            route_namespace,
-                            route_name,
-                            &grpc_backends_from_rule(rule, route_namespace),
-                        )),
+                        metric_handles: metric_handles.clone(),
                         plugin_runtime: rule_plugin_runtime.clone(),
                         backend_finder: backend_finder.clone(),
                         backends: rule_backends.clone(),
@@ -451,5 +447,70 @@ mod tests {
             std::sync::Arc::ptr_eq(unit.route.as_ref().expect("unit route"), &route),
             "unit shares the cache Arc"
         );
+    }
+
+    #[test]
+    fn metric_handles_are_shared_within_each_rule_only() {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "namespace": "route-ns", "name": "metric-sharing" },
+            "spec": {
+                "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
+                "rules": [
+                    {
+                        "matches": [
+                            { "method": { "service": "svc.RuleA", "method": "One" } },
+                            { "method": { "service": "svc.RuleA", "method": "Two" } }
+                        ],
+                        "backendRefs": [
+                            { "name": "rule-a-primary", "port": 8080 },
+                            { "name": "rule-a-secondary", "port": 8081 }
+                        ]
+                    },
+                    {
+                        "matches": [{ "method": { "service": "svc.RuleB", "method": "Only" } }],
+                        "backendRefs": [{ "name": "rule-b", "port": 9090 }]
+                    }
+                ]
+            }
+        });
+        let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
+        route.pre_parse();
+
+        let units = parse_route_to_units("route-ns/metric-sharing", &Arc::new(route));
+        assert_eq!(units.len(), 3);
+        assert!(Arc::ptr_eq(&units[0].metric_handles, &units[1].metric_handles));
+        assert!(!Arc::ptr_eq(&units[0].metric_handles, &units[2].metric_handles));
+
+        assert_eq!((units[0].matched_info.rule_id, units[0].matched_info.match_id), (0, 0));
+        assert_eq!((units[1].matched_info.rule_id, units[1].matched_info.match_id), (0, 1));
+        assert_eq!((units[2].matched_info.rule_id, units[2].matched_info.match_id), (1, 0));
+        let matched_methods: Vec<_> = units
+            .iter()
+            .map(|unit| {
+                let method = unit.matched_info.matched.method.as_ref().expect("method match");
+                (method.service.as_deref(), method.method.as_deref())
+            })
+            .collect();
+        assert_eq!(
+            matched_methods,
+            vec![
+                (Some("svc.RuleA"), Some("One")),
+                (Some("svc.RuleA"), Some("Two")),
+                (Some("svc.RuleB"), Some("Only")),
+            ]
+        );
+
+        let first_rule_metrics = units[0]
+            .metric_handles
+            .lookup("route-ns", "test-gw")
+            .expect("first rule gateway metrics");
+        let second_rule_metrics = units[2]
+            .metric_handles
+            .lookup("route-ns", "test-gw")
+            .expect("second rule gateway metrics");
+        assert_eq!(first_rule_metrics.counters.len(), 2);
+        assert_eq!(second_rule_metrics.counters.len(), 1);
     }
 }

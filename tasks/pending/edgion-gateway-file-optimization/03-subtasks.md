@@ -586,7 +586,7 @@
 | `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | changed | REQ-BODY-STORAGE-001 / `ae283e46` |
 | `edgion-gateway/src/response_processor_driver.rs` | `response-processing` | source | examined-no-change | B0161: request-local processor ownership, cancellation leases and finalization retained |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | changed | B0162: filter delegation reverse-lock refs from listener attachment |
-| `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | analysis-ready | B0163: share immutable rule-level metric handles across match units |
+| `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | changed | B0163: share immutable rule-level metric handles across match units |
 | `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/integration.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/grpc/match_engine.rs` | `routes-shared` | source | pending | — |
