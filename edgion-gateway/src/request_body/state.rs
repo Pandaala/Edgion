@@ -178,6 +178,14 @@ impl RequestBodySnapshotReader for EmptySnapshotReader {
         0
     }
 
+    fn memory_bytes_to_isolate(&self) -> Option<usize> {
+        Some(0)
+    }
+
+    fn isolate_memory(&mut self) -> Result<(), BodyReadError> {
+        Ok(())
+    }
+
     async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
         Ok(None)
     }

@@ -70,9 +70,10 @@ layer has no plugin chain to attach a declaration to.
   |------------|---------|---------|
   | `edgion.io/mirror-connect-timeout-ms` | `1000` | Mirror connect timeout (ms) |
   | `edgion.io/mirror-write-timeout-ms` | `1000` | Mirror write timeout (ms) |
-  | `edgion.io/mirror-max-buffered-chunks` | `5` | Max buffered body chunks |
+  | `edgion.io/mirror-max-buffered-chunks` | `5` | Max buffered body chunks, `1..=1024` |
+  | `edgion.io/mirror-max-buffered-bytes` | `1MiB` | Retained body bytes per mirror, `1B..=1GiB` |
   | `edgion.io/mirror-log` | `true` | Emit a dedicated mirror log line |
-  | `edgion.io/mirror-max-concurrent` | `1024` | Max concurrent mirror tasks per process |
+  | `edgion.io/mirror-max-concurrent` | `1024` | Max concurrent tasks per plugin instance, `1..=65536`, subject to the process limit |
   | `edgion.io/mirror-channel-full-timeout-ms` | `0` | Wait for channel space (ms); >1000 clamped |
 
 ### TCPRoute / TLSRoute / UDPRoute

@@ -1919,6 +1919,7 @@ pub struct MirrorConfig {
 pub enum MirrorAbandonReason {
     BodyAbandoned = 1,
     ChannelFull = 2,
+    BufferLimit = 3,
 }
 
 /// Cancellation guard for an in-flight streaming mirror request.
@@ -1963,6 +1964,7 @@ impl MirrorCancellation {
         match reason.load(Ordering::Acquire) {
             1 => Some(MirrorAbandonReason::BodyAbandoned),
             2 => Some(MirrorAbandonReason::ChannelFull),
+            3 => Some(MirrorAbandonReason::BufferLimit),
             _ => None,
         }
     }
@@ -1988,6 +1990,8 @@ pub enum MirrorState {
         /// signal cancellation before `body_tx` can yield a normal EOF.
         cancellation: MirrorCancellation,
         body_tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+        /// Counts outstanding owned chunks until the transport releases them.
+        body_budget: crate::plugins::http::request_mirror::MirrorBodyBudget,
         writer_handle: JoinHandle<()>,
         /// Maximum milliseconds to wait for channel space before abandoning the mirror.
         /// 0 = immediate abandon (zero impact on main request latency, default).

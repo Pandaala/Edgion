@@ -44,12 +44,24 @@ filters:
 |------|------|--------|------|
 | `edgion.io/mirror-connect-timeout-ms` | Integer | `1000` | 镜像请求的连接超时（毫秒） |
 | `edgion.io/mirror-write-timeout-ms` | Integer | `1000` | 镜像请求的写入超时（毫秒） |
-| `edgion.io/mirror-max-buffered-chunks` | Integer | `5` | 镜像时缓冲的最大请求体 chunk 数量 |
+| `edgion.io/mirror-max-buffered-chunks` | Integer | `5` | 单个镜像最多缓冲的请求体块数，范围 `1..=1024` |
+| `edgion.io/mirror-max-buffered-bytes` | String | `1MiB` | 单个镜像最多持有的请求体字节数，范围 `1B..=1GiB` |
 | `edgion.io/mirror-log` | Boolean | `true` | 镜像是否生成独立的 access log 条目 |
-| `edgion.io/mirror-max-concurrent` | Integer | `1024` | 每个网关进程允许同时飞行的最大镜像任务数 |
+| `edgion.io/mirror-max-concurrent` | Integer | `1024` | 每个插件实例的最大并发镜像任务数，范围 `1..=65536`，同时受进程共享上限约束 |
 | `edgion.io/mirror-channel-full-timeout-ms` | Integer | `0` | 镜像通道满时等待队列空间的时长（毫秒）；`0` 表示立即放弃该次镜像（超过 `1000` 的值会被钳制） |
 
 注解值无效时会记录日志，该字段回退到默认值。
+
+Gateway 进程还通过 `request_mirror.max_concurrent`（默认 `1024`）和
+`request_mirror.max_buffered_bytes`（默认 `64MiB`）约束所有镜像实例的总量，
+包括热加载期间并存的新旧实例。在
+[Gateway 配置文件](../../../../ops-guide/configuration/gateway-config.md#request_mirror)中设置，
+重启进程后生效。注解修改则在路由热加载后作用于新请求。预算不足时跳过或取消镜像副本，主请求继续。
+字节限制约束镜像持有的请求体数据，不代表累计上传大小或进程 RSS。
+
+对于已缓存的请求体，已提交快照占用进程字节预算；单镜像字节限制约束尚未释放的流式数据块，
+不限制快照总长度。磁盘快照仍按块读取。操作者可以调高或调低进程预算，调高字节上限意味着允许
+镜像持有更多内存。
 
 ## 示例
 
@@ -96,6 +108,7 @@ metadata:
     edgion.io/mirror-connect-timeout-ms: "1000"
     edgion.io/mirror-write-timeout-ms: "1000"
     edgion.io/mirror-max-buffered-chunks: "5"
+    edgion.io/mirror-max-buffered-bytes: "1MiB"
     edgion.io/mirror-max-concurrent: "1024"
 spec:
   parentRefs:

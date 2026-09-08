@@ -141,6 +141,10 @@ udp_log:
 
 # ─── Global plugin configuration ───
 
+request_mirror:
+  max_concurrent: 1024                   # Process-wide, 1..=65536
+  max_buffered_bytes: 64MiB              # Retained mirror bodies, 1 byte..1GiB
+
 rate_limit:
   default_estimator_slots_k: 64           # CMS default precision (× 64KB memory)
   max_estimator_slots_k: 1024             # CMS maximum precision cap
@@ -427,6 +431,23 @@ LogConfig:
 | `default_estimator_slots_k` | `usize` | `64` | CMS default slot count (×1K), memory ≈ slots_k × 64KB |
 | `max_estimator_slots_k` | `usize` | `1024` | CMS maximum slot cap |
 | `gateway_instance_count` | `u32` | `1` | Gateway instance count (denominator for cluster rate limiting; static fallback when there is no Controller) |
+
+### request_mirror
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_concurrent` | `usize` | `1024` | Total active mirror tasks in this process; valid range `1..=65536`. |
+| `max_buffered_bytes` | byte-size string | `64MiB` | Retained mirror request-body budget; valid range `1` byte through `1GiB`. |
+
+This top-level Gateway YAML block is loaded at startup and requires a restart to
+change. All route/plugin instances, including overlapping hot-reload generations,
+share the budget. Invalid values and unknown keys fail startup; zero never means
+unlimited. CLI merge preserves the file values; there are no dedicated CLI flags
+or environment overrides. Exhaustion skips or cancels the mirror copy while the
+main request continues. This budget does not bound total process RSS, request
+headers, TLS, or connection overhead. Per-mirror tuning remains in HTTPRoute
+`edgion.io/mirror-*` annotations or EdgionPlugins inline configuration; the
+standard Gateway API filter and vendored CRDs are unchanged.
 
 ### Upstream RemoteIp header
 

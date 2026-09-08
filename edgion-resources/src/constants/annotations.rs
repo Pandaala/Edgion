@@ -67,13 +67,15 @@ pub mod edgion {
     /// the gateway clamps values above 1000).
     pub const MIRROR_CHANNEL_FULL_TIMEOUT_MS: &str = "edgion.io/mirror-channel-full-timeout-ms";
     /// Max number of body chunks buffered for the mirror when it is slower
-    /// than the main request (default: 5; 0 is treated as 5 by the gateway).
+    /// than the main request (default: 5; range: 1..=1024).
     pub const MIRROR_MAX_BUFFERED_CHUNKS: &str = "edgion.io/mirror-max-buffered-chunks";
+    /// Maximum retained body bytes per mirror (default: 1MiB; range: 1B..=1GiB).
+    pub const MIRROR_MAX_BUFFERED_BYTES: &str = "edgion.io/mirror-max-buffered-bytes";
     /// Whether the mirror emits a dedicated mirror-log line: "true" / "false"
     /// (default: true).
     pub const MIRROR_LOG: &str = "edgion.io/mirror-log";
-    /// Max concurrent mirror tasks per gateway process (default: 1024;
-    /// 0 is treated as 1024 by the gateway).
+    /// Max concurrent mirror tasks per plugin instance (default: 1024;
+    /// range: 1..=65536), subject to the shared process limit.
     pub const MIRROR_MAX_CONCURRENT: &str = "edgion.io/mirror-max-concurrent";
 
     /// Idle seconds before the first TCP keepalive probe on L4 upstream

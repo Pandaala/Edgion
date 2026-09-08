@@ -1,17 +1,17 @@
 # D0066 — Bound RequestMirror Concurrency and Buffering
 
 ## Meta
-- Status: needs-discussion
+- Status: fixed (2026-09-08)
 - Severity: high
 - Discovered in: B0102, RequestMirror analysis
 - Category: configuration-correctness
-- Canonical task: [`tasks/todo/bound-request-mirror-concurrency-and-buffering.md`](../../../todo/bound-request-mirror-concurrency-and-buffering.md)
+- Resolution: [RequestMirror resource budgets](../../../../skills/04-review/request-mirror/regression-guards/mirror-resource-budgets.md)
 
-## Evidence
-RequestMirror accepts `maxConcurrent` and `maxBufferedChunks` as unconstrained `usize` values. Values above Tokio's supported semaphore range can panic during construction, and an oversized channel capacity can panic or defeat the intended memory bound when a request is armed.
+## Original evidence
+RequestMirror accepted `maxConcurrent` and `maxBufferedChunks` as unconstrained `usize` values. Values above Tokio's supported semaphore range could panic during construction, and an oversized channel capacity could panic or defeat the intended memory bound when a request was armed.
 
-## Why deferred
-One canonical limit must cover HTTPRoute annotation parsing, EdgionPlugins validation, defensive Gateway construction, runtime channel creation, and both documentation sets. Tightening only the request path would retain inconsistent admission and panic behavior.
+## Original deferral
+The fix required a canonical limit across HTTPRoute annotations, EdgionPlugins validation, defensive Gateway construction, and runtime channel creation. The approved follow-up implemented shared validation and configurable process and per-mirror budgets; the linked regression guard owns current behavior and verification.
 
 ## Integration-test impact
-No integration issue is created now. Deterministic resources, Controller/Gateway parity, construction, and channel-boundary tests should cover the future validator; add a separate integration issue only if the approved design changes observable admission behavior that cannot be proved locally.
+Existing integration tests remain frozen. Deterministic configuration, Controller/Gateway parity, construction, ownership, and channel-boundary tests passed. No separate integration gap was identified within this fix.

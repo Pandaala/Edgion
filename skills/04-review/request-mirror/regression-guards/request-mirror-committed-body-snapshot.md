@@ -12,8 +12,11 @@ knowledge_type: regression-guards
 ## Conclusion
 
 When an earlier request plugin has created a canonical `BodyStorageView`,
-RequestMirror clones the current immutable committed bytes into its detached
-task. The mirror never consumes Pingora's upstream replay cursor. With no body
+RequestMirror captures the current immutable committed snapshot using the
+canonical snapshot reader. Before detaching, it reserves process body budget
+and isolates just the snapshot's memory segments into owned send data; disk
+segments remain streamed without whole-body materialization. The mirror never
+consumes Pingora's upstream replay cursor. With no body
 view, RequestMirror retains its original streaming tee behavior.
 
 The mirror response is semantically irrelevant and is dropped after response
@@ -29,7 +32,7 @@ view produces that version without retaining a mutable plugin owner.
 
 **2. Snapshot and replay cursors remain independent**
 
-The detached mirror task owns a `Bytes` snapshot. It never calls replay
+The detached mirror task owns an independent snapshot reader. It never calls replay
 `rewind`, `peek`, or `consume`, so mirror progress, timeout, and failure cannot
 move or block the main upstream cursor. Pingora retries continue to rewind and
 replay their own owner.
@@ -37,13 +40,18 @@ replay their own owner.
 **3. Each outbound hop owns its framing**
 
 The snapshot path removes inherited `Content-Length` and `Transfer-Encoding`.
-`reqwest::Body::from(Bytes)` derives framing from the committed bytes instead
-of forwarding metadata that may describe the downstream V0 body.
+`reqwest::Body::wrap_stream` derives streaming framing instead of forwarding
+metadata that may describe the downstream V0 body. The former full `Bytes`
+materialization was replaced as part of D0066; the committed-version contract
+remains unchanged.
 
 **4. The no-view path stays streaming**
 
 RequestMirror alone does not opt a request into full-body caching. When no
 canonical body view exists, the existing bounded-channel tee remains in use.
+The tee additionally enforces per-mirror and process byte admission. Its owned
+chunks cannot pin arbitrarily large backing allocations through small slices.
+See [mirror resource budgets](mirror-resource-budgets.md) for ownership and limits.
 
 **5. Mirror responses have zero aggregation budget**
 
@@ -83,3 +91,6 @@ Re-open this decision only if:
 ## Resolution references
 
 - `BODY-014` — 2026-07-27.
+- `D0066` / `bound-request-mirror-concurrency-and-buffering` — replaces full
+  snapshot materialization with budgeted snapshot streaming. Verification is
+  recorded in the resource-budget rule, not inferred from BODY-014's history.

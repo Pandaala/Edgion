@@ -49,10 +49,29 @@ spec:
 | `percent` | Integer | none (100%) | Percentage of requests to mirror (0–100). Gateway API v1.5 field name |
 | `connectTimeoutMs` | Integer | `1000` | Connection timeout (ms) |
 | `writeTimeoutMs` | Integer | `1000` | Write timeout (ms) |
-| `maxBufferedChunks` | Integer | `5` | Maximum body chunks buffered when the mirror is slower than the client |
+| `maxBufferedChunks` | Integer | `5` | Maximum buffered body chunks per mirror, `1..=1024` |
+| `maxBufferedBytes` | String | `1MiB` | Maximum retained body bytes per mirror, `1B..=1GiB` |
 | `mirrorLog` | Boolean | `true` | Emit a dedicated mirror line in the access log |
-| `maxConcurrent` | Integer | `1024` | Maximum concurrent mirror tasks per gateway process |
+| `maxConcurrent` | Integer | `1024` | Maximum concurrent tasks per plugin instance, `1..=65536`, subject to the shared process limit |
 | `channelFullTimeoutMs` | Integer | `0` | Max ms to wait for mirror channel space before abandoning the mirror. `0` = abandon immediately (zero impact on the main request) |
+
+Invalid capacities, including zero, are configuration errors in EdgionPlugins.
+The equivalent HTTPRoute annotations log invalid values at configuration loading
+and use the corresponding field defaults.
+
+All instances also share the Gateway process budgets: `request_mirror.max_concurrent`
+(default `1024`) and `request_mirror.max_buffered_bytes` (default `64MiB`). Configure
+them in the [Gateway configuration file](../../../../ops-guide/configuration/gateway-config.md#request_mirror).
+These settings take effect on process restart; route/plugin limits apply to new
+requests after configuration reload. Budget exhaustion skips or cancels the mirror
+copy and the primary request continues. The byte budget covers retained mirror body
+data, not total process RSS or connection/TLS overhead.
+
+For an already buffered request, mirroring reads the committed body snapshot with
+an independent cursor. Its retained memory is charged to the process byte budget;
+`maxBufferedBytes` bounds outstanding streamed chunks, not the snapshot's total
+length. A disk-backed snapshot remains streamed. Operators can raise or lower the
+process budgets; raising the byte limit deliberately permits more retained memory.
 
 ---
 
@@ -120,11 +139,11 @@ requestPlugins:
 
 ## Important Notes
 
-1. Mirroring is asynchronous and does not affect primary request latency or status code
+1. Mirror delivery is asynchronous; runtime overload does not change the primary response status. Copying admitted body data adds bounded work, and an explicitly configured queue wait can add latency
 2. Mirror failures do not cause the primary request to fail
-3. Request body is also mirrored; `maxBufferedChunks` controls buffer size
+3. Request body is also mirrored; `maxBufferedChunks` and `maxBufferedBytes` independently bound retained stream data. These are buffering limits, not cumulative upload size limits
 4. When concurrent mirrors reach `maxConcurrent`, new mirror requests are dropped
-5. `channelFullTimeoutMs: 0` (default) abandons the mirror immediately when the mirror body channel is full, guaranteeing zero impact on the main request; a small positive value (100–500ms) grants a brief back-pressure window before abandoning
+5. `channelFullTimeoutMs: 0` (default) abandons the mirror immediately when its body queue is full; a small positive value (100–500ms) grants a brief back-pressure window before abandoning. Byte-budget admission never waits
 6. If the downstream transport does not reach its real end-of-stream before mirroring stops, Edgion cancels the mirror request rather than letting the mirror target accept a partial upload as complete; the mirror outcome is `body_abandoned`. This covers both the primary upstream stopping body consumption and a later request-stage plugin ending the request before the body pump runs. Only a transport-level end-of-stream on the request headers proves that an empty body is already complete; a `Content-Length: 0` declaration alone does not provide that guarantee on HTTP/2
 
 ---

@@ -1,3 +1,4 @@
+use crate::plugins::http::request_mirror::RequestMirrorGlobalConfig;
 use anyhow::{Context, Result};
 use clap::Args;
 use edgion_resources::rate_limit_config::RateLimitGlobalConfig;
@@ -120,6 +121,11 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default, alias = "rate_limiter")]
     pub rate_limit: RateLimitGlobalConfig,
+
+    /// Startup-only RequestMirror task and retained request-body limits.
+    #[arg(skip)]
+    #[serde(default)]
+    pub request_mirror: RequestMirrorGlobalConfig,
 
     /// Global configuration for the retained LRU implementation
     #[arg(skip)]
@@ -1265,6 +1271,18 @@ mod tests {
         let cfg = EdgionGatewayConfig::default();
         assert_eq!(cfg.admin_listen(), None);
         assert_eq!(cfg.admin_listen_or_default(), "127.0.0.1:12001");
+    }
+
+    #[test]
+    fn request_mirror_process_limits_survive_cli_merge() {
+        let yaml = "request_mirror:\n  max_concurrent: 17\n  max_buffered_bytes: 8MiB\n";
+        let de = serde_yaml::Deserializer::from_str(yaml);
+        let mut file: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
+        EdgionGatewayConfig::merge(&mut file, &EdgionGatewayConfig::default());
+        let resolved = file.request_mirror.resolve().unwrap();
+        assert_eq!(resolved.max_concurrent, 17);
+        assert_eq!(resolved.max_buffered_bytes, 8 * 1024 * 1024);
+        assert!(serde_yaml::from_str::<EdgionGatewayConfig>("request_mirror:\n  max_concurent: 17\n").is_err());
     }
 
     #[test]

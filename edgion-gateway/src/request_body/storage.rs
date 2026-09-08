@@ -168,6 +168,34 @@ where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
+    run_storage_io_retained_with_limiter(limiter, timeout, operation, work)
+        .await
+        .map(|output| output.value)
+}
+
+/// Mirror reads keep the canonical IO permit with their raw output, including
+/// completed output waiting in a JoinHandle. Other consumers release it on return.
+struct StorageIoOutput<T> {
+    value: T,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl<T: AsRef<[u8]>> AsRef<[u8]> for StorageIoOutput<T> {
+    fn as_ref(&self) -> &[u8] {
+        self.value.as_ref()
+    }
+}
+
+async fn run_storage_io_retained_with_limiter<T, F>(
+    limiter: Arc<Semaphore>,
+    timeout: Duration,
+    operation: StorageIoOperation,
+    work: F,
+) -> Result<StorageIoOutput<T>, StorageIoError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
     let deadline = Instant::now() + timeout;
     let permit = match timeout_at(deadline, limiter.acquire_owned()).await {
         Err(_) => {
@@ -187,13 +215,12 @@ where
     let test_hook = STORAGE_IO_TEST_HOOK.try_with(Arc::clone).ok();
     let inflight = StorageIoInFlight::new();
     let mut task = AbortBlockingTask::new(tokio::task::spawn_blocking(move || {
-        let _permit = permit;
         let _inflight = inflight;
         #[cfg(test)]
         if let Some(hook) = test_hook {
             hook(operation);
         }
-        work()
+        work().map(|value| StorageIoOutput { value, _permit: permit })
     }));
 
     let result = match timeout_at(deadline, task.handle_mut()).await {
@@ -1015,6 +1042,7 @@ struct BodySnapshotReader {
     segment_index: usize,
     segment_offset: u64,
     storage_operation_timeout: Duration,
+    retain_read_permit: bool,
 }
 
 impl BodySnapshotReader {
@@ -1024,6 +1052,22 @@ impl BodySnapshotReader {
             segment_index: 0,
             segment_offset: 0,
             storage_operation_timeout,
+            retain_read_permit: false,
+        }
+    }
+
+    fn memory_segment(segment: &Segment) -> Result<Option<&[u8]>, BodyReadError> {
+        match segment {
+            Segment::Inline(bytes) => Ok(Some(bytes.as_ref())),
+            Segment::SourceRange { source, offset, len } => match source.as_ref() {
+                BodySource::Disk { .. } => Ok(None),
+                BodySource::Memory(bytes) => {
+                    let start = usize::try_from(*offset).map_err(|_| BodyReadError::Incomplete)?;
+                    let len = usize::try_from(*len).map_err(|_| BodyReadError::Incomplete)?;
+                    let end = start.checked_add(len).ok_or(BodyReadError::Incomplete)?;
+                    bytes.get(start..end).map(Some).ok_or(BodyReadError::Incomplete)
+                }
+            },
         }
     }
 }
@@ -1032,6 +1076,33 @@ impl BodySnapshotReader {
 impl RequestBodySnapshotReader for BodySnapshotReader {
     fn len(&self) -> u64 {
         self.snapshot.len
+    }
+
+    fn memory_bytes_to_isolate(&self) -> Option<usize> {
+        if self.segment_index != 0 || self.segment_offset != 0 {
+            return None;
+        }
+        self.snapshot.segments.iter().try_fold(0usize, |total, segment| {
+            total.checked_add(Self::memory_segment(segment).ok()?.map_or(0, <[u8]>::len))
+        })
+    }
+
+    fn isolate_memory(&mut self) -> Result<(), BodyReadError> {
+        self.memory_bytes_to_isolate().ok_or(BodyReadError::Incomplete)?;
+        let mut segments = Vec::with_capacity(self.snapshot.segments.len());
+        for segment in &self.snapshot.segments {
+            segments.push(match Self::memory_segment(segment)? {
+                Some(bytes) => {
+                    // Exact owned payload: a small logical slice must not pin
+                    // an arbitrarily large allocation from the main request.
+                    Segment::Inline(Bytes::from(bytes.to_vec().into_boxed_slice()))
+                }
+                None => segment.clone(),
+            });
+        }
+        self.snapshot = Arc::new(BodySnapshot::from_segments(segments).map_err(operation_to_body_error)?);
+        self.retain_read_permit = true;
+        Ok(())
     }
 
     async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError> {
@@ -1052,16 +1123,25 @@ impl RequestBodySnapshotReader for BodySnapshotReader {
                 Segment::SourceRange { source, .. } if matches!(source.as_ref(), BodySource::Disk { .. }) => {
                     let segment = segment.clone();
                     let segment_offset = self.segment_offset;
-                    run_storage_io(
-                        self.storage_operation_timeout,
-                        StorageIoOperation::SnapshotRead,
-                        move || {
-                            read_segment_chunk(&segment, segment_offset, wanted)
-                                .map_err(|error| io::Error::other(error.to_string()))
-                        },
-                    )
-                    .await
-                    .map_err(|_| BodyReadError::StorageFailure)?
+                    let work = move || {
+                        read_segment_chunk(&segment, segment_offset, wanted)
+                            .map_err(|error| io::Error::other(error.to_string()))
+                    };
+                    if self.retain_read_permit {
+                        let output = run_storage_io_retained_with_limiter(
+                            Arc::clone(storage_io_limiter()),
+                            self.storage_operation_timeout,
+                            StorageIoOperation::SnapshotRead,
+                            work,
+                        )
+                        .await
+                        .map_err(|_| BodyReadError::StorageFailure)?;
+                        Bytes::from_owner(output)
+                    } else {
+                        run_storage_io(self.storage_operation_timeout, StorageIoOperation::SnapshotRead, work)
+                            .await
+                            .map_err(|_| BodyReadError::StorageFailure)?
+                    }
                 }
                 _ => read_segment_chunk(segment, self.segment_offset, wanted).map_err(operation_to_body_error)?,
             };
@@ -1844,8 +1924,137 @@ async fn read_disk_body(file: Arc<File>, len: u64, storage_operation_timeout: Du
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mirror_snapshot_read_output_holds_lane_until_last_clone() {
+        let limiter = Arc::new(Semaphore::new(1));
+        let worker_limiter = Arc::clone(&limiter);
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let output = run_storage_io_retained_with_limiter(
+                worker_limiter,
+                Duration::from_secs(1),
+                StorageIoOperation::SnapshotRead,
+                || Ok(Bytes::from(vec![b'x'; SCAN_CHUNK_SIZE])),
+            )
+            .await
+            .unwrap();
+            finished_tx.send(()).unwrap();
+            output
+        });
+        finished_rx.await.unwrap();
+        // The completed output may still be waiting inside the JoinHandle.
+        assert_eq!(limiter.available_permits(), 0);
+        let bytes = Bytes::from_owner(worker.await.unwrap());
+        let transport = bytes.slice(..1);
+        drop(bytes);
+        assert_eq!(limiter.available_permits(), 0);
+        drop(transport);
+        assert_eq!(limiter.available_permits(), 1);
+    }
     use std::future::{poll_fn, Future};
     use std::task::Poll;
+
+    struct SnapshotMemoryOwner {
+        bytes: Box<[u8]>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl AsRef<[u8]> for SnapshotMemoryOwner {
+        fn as_ref(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+
+    impl Drop for SnapshotMemoryOwner {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_isolation_releases_large_source_and_inline_backings() {
+        let source_dropped = Arc::new(AtomicBool::new(false));
+        let inline_dropped = Arc::new(AtomicBool::new(false));
+        let source = Bytes::from_owner(SnapshotMemoryOwner {
+            bytes: vec![b'a'; 1024 * 1024].into_boxed_slice(),
+            dropped: Arc::clone(&source_dropped),
+        });
+        let inline = Bytes::from_owner(SnapshotMemoryOwner {
+            bytes: vec![b'b'; 1024 * 1024].into_boxed_slice(),
+            dropped: Arc::clone(&inline_dropped),
+        });
+        let snapshot = BodySnapshot::from_segments(vec![
+            Segment::SourceRange {
+                source: Arc::new(BodySource::Memory(source)),
+                offset: 500,
+                len: 3,
+            },
+            Segment::Inline(inline.slice(700..704)),
+        ])
+        .unwrap();
+        drop(inline);
+        let mut reader = BodySnapshotReader::new(Arc::new(snapshot), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+        assert_eq!(reader.memory_bytes_to_isolate(), Some(7));
+        assert!(!source_dropped.load(Ordering::Acquire));
+        assert!(!inline_dropped.load(Ordering::Acquire));
+        reader.isolate_memory().unwrap();
+        assert!(source_dropped.load(Ordering::Acquire));
+        assert!(inline_dropped.load(Ordering::Acquire));
+        assert_eq!(reader.len(), 7);
+        assert_eq!(reader.next_chunk().await.unwrap().unwrap(), "aaa");
+        assert_eq!(reader.next_chunk().await.unwrap().unwrap(), "bbbb");
+        assert!(reader.next_chunk().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_isolation_preserves_disk_ranges_without_memory_charge() {
+        let file = Arc::new(tempfile().unwrap());
+        write_all_at(&file, b"disk payload", 0).unwrap();
+        let snapshot = BodySnapshot::from_segments(vec![Segment::SourceRange {
+            source: Arc::new(BodySource::Disk {
+                file: Arc::clone(&file),
+                len: 12,
+            }),
+            offset: 5,
+            len: 7,
+        }])
+        .unwrap();
+        let mut reader = BodySnapshotReader::new(Arc::new(snapshot), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+        assert_eq!(reader.memory_bytes_to_isolate(), Some(0));
+        reader.isolate_memory().unwrap();
+        assert!(reader.snapshot.contains_disk());
+        assert_eq!(reader.next_chunk().await.unwrap().unwrap(), "payload");
+        assert!(reader.next_chunk().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_isolation_preserves_committed_version_and_rejects_late_isolation() {
+        let (mut storage, view) = BodyStorage::new(1024, 4096);
+        storage.write(&Bytes::from_static(b"original")).await.unwrap();
+        storage.finish().await.unwrap();
+        let mut reader = view.snapshot_reader().unwrap();
+        assert_eq!(reader.memory_bytes_to_isolate(), Some(8));
+        reader.isolate_memory().unwrap();
+        view.overwrite_body(Bytes::from_static(b"updated")).unwrap();
+        assert_eq!(reader.next_chunk().await.unwrap().unwrap(), "original");
+        assert_eq!(reader.memory_bytes_to_isolate(), None);
+        assert_eq!(reader.isolate_memory(), Err(BodyReadError::Incomplete));
+        assert!(reader.next_chunk().await.unwrap().is_none());
+    }
+
+    #[test]
+    fn snapshot_isolation_rejects_invalid_memory_range_without_panicking() {
+        let snapshot = BodySnapshot::from_segments(vec![Segment::SourceRange {
+            source: Arc::new(BodySource::Memory(Bytes::from_static(b"x"))),
+            offset: u64::MAX,
+            len: 1,
+        }])
+        .unwrap();
+        let mut reader = BodySnapshotReader::new(Arc::new(snapshot), DEFAULT_STORAGE_OPERATION_TIMEOUT);
+        assert_eq!(reader.memory_bytes_to_isolate(), None);
+        assert_eq!(reader.isolate_memory(), Err(BodyReadError::Incomplete));
+    }
 
     #[tokio::test]
     async fn disk_read_and_join_failures_are_storage_failures() {

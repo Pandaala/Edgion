@@ -39,6 +39,12 @@
 # ============================================================================
 work_dir: "."
 
+# Process-wide RequestMirror safety budgets; changes require a restart.
+# Shared by all routes and plugin generations. Zero does not disable limits.
+request_mirror:
+  max_concurrent: 1024       # 1..65536 active mirror tasks
+  max_buffered_bytes: 64MiB  # 1 byte..1GiB retained mirror bodies; not total RSS
+
 gateway:
   # Controller conf_sync gRPC address.
   # Scheme: https:// when conf_sync_security carries certs (the default, see the

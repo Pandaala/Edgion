@@ -22,7 +22,9 @@ use crate::{MirrorConfig, MirrorState};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::http_route::{HTTPRequestMirrorFilter, MirrorTuning};
 
+use super::budget::{global_budget, MirrorBudget};
 use super::mirror_log::{emit_mirror_log, new_entry};
+use super::MirrorBodyBudget;
 
 pub struct RequestMirrorPlugin {
     config: HTTPRequestMirrorFilter,
@@ -30,6 +32,66 @@ pub struct RequestMirrorPlugin {
     semaphore: Arc<Semaphore>,
     #[cfg(test)]
     writer_events: Option<mpsc::UnboundedSender<arming_tests::WriterEvent>>,
+    budget: Arc<MirrorBudget>,
+    max_buffered_bytes: usize,
+}
+
+struct PreparedSnapshot {
+    // Release memory before returning the admission charge.
+    reader: Box<dyn crate::plugins::runtime::traits::session::RequestBodySnapshotReader>,
+    _memory_permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+fn prepare_snapshot(
+    mut reader: Box<dyn crate::plugins::runtime::traits::session::RequestBodySnapshotReader>,
+    budget: &MirrorBudget,
+) -> Result<PreparedSnapshot, &'static str> {
+    let bytes = reader.memory_bytes_to_isolate().ok_or("mirror snapshot unavailable")?;
+    let permit = budget
+        .try_reserve_snapshot(bytes)
+        .ok_or("mirror skipped buffer limit")?;
+    // Isolation is synchronous: never extend an unaccounted backing allocation
+    // across an await or retain it in the detached task. Disk segments stay on disk.
+    reader.isolate_memory().map_err(|_| "mirror snapshot isolation error")?;
+    Ok(PreparedSnapshot {
+        reader,
+        _memory_permit: permit,
+    })
+}
+
+fn snapshot_stream(
+    body: PreparedSnapshot,
+    budget: MirrorBodyBudget,
+    abandon_reason: Arc<std::sync::atomic::AtomicU8>,
+    bytes_sent: Arc<AtomicU64>,
+    chunks_sent: Arc<AtomicU64>,
+) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    futures::stream::try_unfold(body, move |mut body| {
+        let budget = budget.clone();
+        let abandon_reason = Arc::clone(&abandon_reason);
+        let bytes_sent = Arc::clone(&bytes_sent);
+        let chunks_sent = Arc::clone(&chunks_sent);
+        async move {
+            // The canonical storage lane bounds transient disk-read scratch.
+            // Only retained send payload and isolated snapshot memory belong to
+            // this budget; never materialize an entire disk-backed request.
+            let data = body
+                .reader
+                .next_chunk()
+                .await
+                .map_err(|_| std::io::Error::other("mirror snapshot read failed"))?;
+            let Some(data) = data else {
+                return Ok(None);
+            };
+            let Some(owned) = budget.try_copy(&data) else {
+                abandon_reason.store(MirrorAbandonReason::BufferLimit as u8, Ordering::Release);
+                return Err(std::io::Error::other("mirror body budget exhausted"));
+            };
+            bytes_sent.fetch_add(owned.len() as u64, Ordering::Relaxed);
+            chunks_sent.fetch_add(1, Ordering::Relaxed);
+            Ok(Some((owned, body)))
+        }
+    })
 }
 
 async fn wait_for_send_or_cancel<F>(send_result: F, mut cancel_rx: oneshot::Receiver<()>) -> Option<F::Output>
@@ -54,6 +116,7 @@ fn mirror_abandon_status(reason: &std::sync::atomic::AtomicU8) -> Option<&'stati
     match MirrorCancellation::load_reason(reason) {
         Some(MirrorAbandonReason::ChannelFull) => Some("channel_full"),
         Some(MirrorAbandonReason::BodyAbandoned) => Some("body_abandoned"),
+        Some(MirrorAbandonReason::BufferLimit) => Some("buffer_limit"),
         None => None,
     }
 }
@@ -62,12 +125,7 @@ impl RequestMirrorPlugin {
     pub fn new(config: HTTPRequestMirrorFilter, tuning: MirrorTuning, default_namespace: String) -> Self {
         let mut cfg = config;
         let mut tuning = tuning;
-        if tuning.max_buffered_chunks == 0 {
-            tuning.max_buffered_chunks = 5;
-        }
-        if tuning.max_concurrent == 0 {
-            tuning.max_concurrent = 1024;
-        }
+        let limits = tuning.normalize_limits();
         // Hard cap: channel_full_timeout_ms must not exceed 1000ms.
         // Values above 1s would add unacceptable back-pressure to main request body processing.
         if tuning.channel_full_timeout_ms > 1000 {
@@ -85,6 +143,8 @@ impl RequestMirrorPlugin {
 
         Self {
             semaphore: Arc::new(Semaphore::new(tuning.max_concurrent)),
+            budget: global_budget(),
+            max_buffered_bytes: limits.max_buffered_bytes,
             config: cfg,
             tuning,
             #[cfg(test)]
@@ -226,6 +286,11 @@ impl RequestFilter for RequestMirrorPlugin {
             }
         };
 
+        let Some(process_permit) = self.budget.try_acquire_task() else {
+            log.push("mirror skipped process concurrency");
+            return PluginRunningResult::GoodNext;
+        };
+
         let (target, base_url) = match self.resolve_target(session.ctx().allow_loopback_upstream) {
             Ok(v) => v,
             Err(_e) => {
@@ -252,10 +317,14 @@ impl RequestFilter for RequestMirrorPlugin {
         let has_committed_body = session.ctx().request_body.has_cached_body();
 
         let committed_body = if has_committed_body {
-            match session.read_request_body(None).await {
+            let Ok(reader) = session.request_body_snapshot_reader(false).await else {
+                log.push_err("mirror body snapshot error");
+                return PluginRunningResult::GoodNext;
+            };
+            match prepare_snapshot(reader, &self.budget) {
                 Ok(body) => Some(body),
-                Err(_) => {
-                    log.push_err("mirror body snapshot error");
+                Err(reason) => {
+                    log.push(reason);
                     return PluginRunningResult::GoodNext;
                 }
             }
@@ -267,8 +336,7 @@ impl RequestFilter for RequestMirrorPlugin {
         if committed_body.is_some() {
             // This mirror hop owns framing for the immutable snapshot. The
             // downstream Content-Length may describe V0 rather than the
-            // committed version, and reqwest derives the correct length from
-            // Body::from(Bytes).
+            // committed version. The independent snapshot owns its framing.
             headers.remove(reqwest::header::CONTENT_LENGTH);
             headers.remove(reqwest::header::TRANSFER_ENCODING);
         }
@@ -280,12 +348,14 @@ impl RequestFilter for RequestMirrorPlugin {
             .unwrap_or_else(|| "-".to_string());
 
         let cfg = self.mirror_config();
+        let body_budget = self.budget.body_budget(self.max_buffered_bytes);
         let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(cfg.max_buffered_chunks);
         let (cancellation, cancel_rx) = MirrorCancellation::new();
         let abandon_reason = cancellation.reason_handle();
 
         let channel_full_timeout_ms = self.tuning.channel_full_timeout_ms;
         let uses_committed_snapshot = committed_body.is_some();
+        let snapshot_body_budget = body_budget.clone();
         #[cfg(not(test))]
         let client = get_mirror_http_client().clone();
         #[cfg(test)]
@@ -296,17 +366,14 @@ impl RequestFilter for RequestMirrorPlugin {
 
         let writer_handle = tokio::spawn(async move {
             let _permit = permit;
+            let _process_permit = process_permit;
             let begin = Instant::now();
             let total_timeout = cfg.connect_timeout + cfg.write_timeout;
 
             // Arc<AtomicU64> instead of Rc<Cell<u64>>: tokio::spawn requires Send futures,
             // so Rc is not usable here even though the closure runs in a single task.
-            let bytes_sent = Arc::new(AtomicU64::new(
-                committed_body.as_ref().map_or(0, |body| body.len() as u64),
-            ));
-            let chunks_sent = Arc::new(AtomicU64::new(u64::from(
-                committed_body.as_ref().is_some_and(|body| !body.is_empty()),
-            )));
+            let bytes_sent = Arc::new(AtomicU64::new(0));
+            let chunks_sent = Arc::new(AtomicU64::new(0));
 
             let bytes_ref = bytes_sent.clone();
             let chunks_ref = chunks_sent.clone();
@@ -318,18 +385,23 @@ impl RequestFilter for RequestMirrorPlugin {
                 chunk_result
             });
 
+            let mirror_stream = match committed_body {
+                Some(body) => futures::future::Either::Left(snapshot_stream(
+                    body,
+                    snapshot_body_budget,
+                    Arc::clone(&abandon_reason),
+                    Arc::clone(&bytes_sent),
+                    Arc::clone(&chunks_sent),
+                )),
+                None => futures::future::Either::Right(tracked_stream),
+            };
             #[cfg(not(test))]
             let send = async {
-                let mirror_body = match committed_body {
-                    Some(body) => reqwest::Body::from(body),
-                    None => reqwest::Body::wrap_stream(tracked_stream),
-                };
-                // The response is irrelevant: drop it after headers, without
-                // aggregating its body or retaining the concurrency permit.
+                // Discard the response after headers without aggregating it.
                 client
                     .request(method, &url)
                     .headers(headers)
-                    .body(mirror_body)
+                    .body(reqwest::Body::wrap_stream(mirror_stream))
                     .send()
                     .await
                     .map(drop)
@@ -342,8 +414,8 @@ impl RequestFilter for RequestMirrorPlugin {
                 method,
                 url,
                 headers,
-                committed_body,
-                tracked_stream,
+                uses_committed_snapshot,
+                mirror_stream,
             );
             let send_result = tokio::time::timeout(total_timeout, send);
             let send_result = wait_for_send_or_cancel(send_result, cancel_rx).await;
@@ -420,6 +492,7 @@ impl RequestFilter for RequestMirrorPlugin {
                 writer_handle,
                 cancellation,
                 channel_full_timeout_ms,
+                body_budget,
             }) {
                 // Dropping the rejected armed state cancels its detached writer
                 // as BodyAbandoned; no body tap is installed after policy freeze.
@@ -473,10 +546,19 @@ mod arming_tests {
         method: reqwest::Method,
         url: String,
         headers: HeaderMap,
-        snapshot: Option<Bytes>,
-        mut stream: impl tokio_stream::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+        uses_snapshot: bool,
+        stream: impl tokio_stream::Stream<Item = Result<Bytes, std::io::Error>>,
     ) -> Result<(), reqwest::Error> {
-        let uses_snapshot = snapshot.is_some();
+        tokio::pin!(stream);
+        let snapshot = if uses_snapshot {
+            let mut data = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                data.extend_from_slice(&chunk.unwrap());
+            }
+            Some(Bytes::from(data))
+        } else {
+            None
+        };
         events
             .send(WriterEvent::Prepared {
                 method,
@@ -697,10 +779,10 @@ mod arming_tests {
             ctx,
             &[("content-length", "8"), ("transfer-encoding", "chunked")],
         );
-        let snapshot = view.read_all().await.unwrap();
+        let snapshot = view.snapshot_reader().unwrap();
         session
-            .expect_read_request_body()
-            .withf(|limit| limit.is_none())
+            .expect_request_body_snapshot_reader()
+            .withf(|original| !*original)
             .times(1)
             .return_once(move |_| Ok(snapshot));
         session.expect_set_mirror_state().never();
@@ -873,3 +955,8 @@ mod cancellation_tests {
         assert!(cancel_rx.try_recv().is_ok());
     }
 }
+
+// Budget regression tests for this module live in `tests/plugin_test.rs`.
+#[cfg(test)]
+#[path = "tests/plugin_test.rs"]
+mod budget_tests;

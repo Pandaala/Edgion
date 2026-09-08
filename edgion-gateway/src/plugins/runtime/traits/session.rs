@@ -100,6 +100,25 @@ pub trait RequestBodySnapshotReader: Send {
     /// Exact byte length of this snapshot.
     fn len(&self) -> u64;
 
+    /// Bytes that must be copied to isolate this reader's in-memory segments.
+    ///
+    /// This is the size of the prospective independent payload, not the size
+    /// of the original backing allocations. Callers must reserve this budget
+    /// before calling `isolate_memory` and retain it for the isolated data's
+    /// entire lifetime, including any returned chunks that share its backing.
+    /// `None` means isolation is unsupported or the size cannot be represented.
+    fn memory_bytes_to_isolate(&self) -> Option<usize> {
+        None
+    }
+
+    /// Synchronously detach in-memory segments into independently owned bytes.
+    ///
+    /// Only supported before reading starts. Disk segments remain streamed
+    /// from their existing storage; this never materializes disk-backed data.
+    fn isolate_memory(&mut self) -> Result<(), BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
     /// Read the next raw byte chunk, or `None` after the complete snapshot.
     async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError>;
 }

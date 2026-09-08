@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use super::common::{Condition, ParentReference, RefDenied};
+use super::common::{parse_byte_size, Condition, ParentReference, RefDenied};
 use crate::ListenerKey;
 
 /// HTTPRoute defines HTTP rules for mapping requests to backends
@@ -767,11 +767,15 @@ pub struct MirrorTuning {
     #[serde(default = "default_mirror_max_buffered_chunks")]
     pub max_buffered_chunks: usize,
 
+    /// Maximum bytes retained by one mirror's body stream (default: 1MiB).
+    #[serde(default = "default_mirror_max_buffered_bytes")]
+    pub max_buffered_bytes: String,
+
     /// Whether mirror should emit a dedicated access log line.
     #[serde(default = "default_mirror_log_enabled")]
     pub mirror_log: bool,
 
-    /// Maximum number of concurrent mirror tasks per gateway process.
+    /// Maximum concurrent tasks per plugin instance, subject to the process limit.
     #[serde(default = "default_mirror_max_concurrent")]
     pub max_concurrent: usize,
 
@@ -795,11 +799,86 @@ impl Default for MirrorTuning {
             connect_timeout_ms: default_mirror_connect_timeout_ms(),
             write_timeout_ms: default_mirror_write_timeout_ms(),
             max_buffered_chunks: default_mirror_max_buffered_chunks(),
+            max_buffered_bytes: default_mirror_max_buffered_bytes(),
             mirror_log: default_mirror_log_enabled(),
             max_concurrent: default_mirror_max_concurrent(),
             channel_full_timeout_ms: 0,
         }
     }
+}
+
+/// Validated capacities, resolved once before constructing a mirror runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MirrorLimits {
+    pub max_concurrent: usize,
+    pub max_buffered_chunks: usize,
+    pub max_buffered_bytes: usize,
+}
+
+impl MirrorTuning {
+    pub const MAX_CONCURRENT: usize = 65_536;
+    pub const MAX_BUFFERED_CHUNKS: usize = 1024;
+    // Tokio's semaphore capacity domain is usize::MAX >> 3. Keep this
+    // dependency-independent schema bound safe on 32-bit targets as well.
+    pub const MAX_BUFFERED_BYTES: usize = if (usize::MAX >> 3) < 1024 * 1024 * 1024 {
+        usize::MAX >> 3
+    } else {
+        1024 * 1024 * 1024
+    };
+
+    fn buffered_bytes(&self) -> Option<usize> {
+        let bytes = parse_byte_size(&self.max_buffered_bytes)?;
+        let bytes = usize::try_from(bytes).ok()?;
+        (1..=Self::MAX_BUFFERED_BYTES).contains(&bytes).then_some(bytes)
+    }
+
+    /// Strict validation for the EdgionPlugins configuration entry point.
+    pub fn resolve_limits(&self) -> Result<MirrorLimits, String> {
+        if !(1..=Self::MAX_CONCURRENT).contains(&self.max_concurrent) {
+            return Err(format!("maxConcurrent must be between 1 and {}", Self::MAX_CONCURRENT));
+        }
+        if !(1..=Self::MAX_BUFFERED_CHUNKS).contains(&self.max_buffered_chunks) {
+            return Err(format!(
+                "maxBufferedChunks must be between 1 and {}",
+                Self::MAX_BUFFERED_CHUNKS
+            ));
+        }
+        let max_buffered_bytes = self.buffered_bytes().ok_or_else(|| {
+            format!(
+                "maxBufferedBytes must be a byte size between 1B and {}B",
+                Self::MAX_BUFFERED_BYTES
+            )
+        })?;
+        Ok(MirrorLimits {
+            max_concurrent: self.max_concurrent,
+            max_buffered_chunks: self.max_buffered_chunks,
+            max_buffered_bytes,
+        })
+    }
+
+    /// Replace each invalid capacity independently for annotation fallback and
+    /// defensive runtime construction. Valid operator choices remain intact.
+    pub fn normalize_limits(&mut self) -> MirrorLimits {
+        if !(1..=Self::MAX_CONCURRENT).contains(&self.max_concurrent) {
+            self.max_concurrent = default_mirror_max_concurrent();
+        }
+        if !(1..=Self::MAX_BUFFERED_CHUNKS).contains(&self.max_buffered_chunks) {
+            self.max_buffered_chunks = default_mirror_max_buffered_chunks();
+        }
+        let max_buffered_bytes = self.buffered_bytes().unwrap_or_else(|| {
+            self.max_buffered_bytes = default_mirror_max_buffered_bytes();
+            1024 * 1024
+        });
+        MirrorLimits {
+            max_concurrent: self.max_concurrent,
+            max_buffered_chunks: self.max_buffered_chunks,
+            max_buffered_bytes,
+        }
+    }
+}
+
+fn default_mirror_max_buffered_bytes() -> String {
+    "1MiB".to_string()
 }
 
 fn default_mirror_connect_timeout_ms() -> u64 {

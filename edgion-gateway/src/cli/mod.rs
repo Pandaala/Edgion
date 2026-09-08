@@ -6,6 +6,7 @@ use crate::lb::leastconn::BackendCleaner;
 use crate::observe::access_log::init_access_logger;
 use crate::observe::logs::{init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger};
 use crate::observe::metrics;
+use crate::plugins::http::request_mirror::init_global_budget;
 use crate::runtime::server::proxy_protocol_policy::init_global_proxy_protocol_policy_runtime;
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
@@ -519,6 +520,9 @@ impl EdgionGatewayCli {
         }
 
         // 5. Initialize RateLimit / cache / access-log sensitive global configurations
+        let mirror_limits = config.request_mirror.resolve().map_err(|error| anyhow!(error))?;
+        init_global_budget(&mirror_limits)
+            .map_err(|error| anyhow!("Failed to initialize request_mirror budget: {error}"))?;
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache)
             .map_err(|error| anyhow::anyhow!("Invalid lru_cache configuration: {error}"))?;

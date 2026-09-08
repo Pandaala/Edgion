@@ -115,6 +115,7 @@ impl HTTPRoute {
             edgion::MIRROR_WRITE_TIMEOUT_MS,
             edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS,
             edgion::MIRROR_MAX_BUFFERED_CHUNKS,
+            edgion::MIRROR_MAX_BUFFERED_BYTES,
             edgion::MIRROR_LOG,
             edgion::MIRROR_MAX_CONCURRENT,
         ];
@@ -148,7 +149,7 @@ impl HTTPRoute {
         }
 
         let defaults = MirrorTuning::default();
-        Some(MirrorTuning {
+        let mut tuning = MirrorTuning {
             connect_timeout_ms: parse_or_default!(edgion::MIRROR_CONNECT_TIMEOUT_MS, defaults.connect_timeout_ms, u64),
             write_timeout_ms: parse_or_default!(edgion::MIRROR_WRITE_TIMEOUT_MS, defaults.write_timeout_ms, u64),
             channel_full_timeout_ms: parse_or_default!(
@@ -161,9 +162,23 @@ impl HTTPRoute {
                 defaults.max_buffered_chunks,
                 usize
             ),
+            max_buffered_bytes: annotations
+                .get(edgion::MIRROR_MAX_BUFFERED_BYTES)
+                .cloned()
+                .unwrap_or(defaults.max_buffered_bytes),
             mirror_log: parse_or_default!(edgion::MIRROR_LOG, defaults.mirror_log, bool),
             max_concurrent: parse_or_default!(edgion::MIRROR_MAX_CONCURRENT, defaults.max_concurrent, usize),
-        })
+        };
+        if let Err(error) = tuning.resolve_limits() {
+            tracing::info!(
+                route_namespace = %route_namespace,
+                route_name = %route_name,
+                error = %error,
+                "ignored: invalid mirror capacities, using defaults for invalid fields"
+            );
+            tuning.normalize_limits();
+        }
+        Some(tuning)
     }
 
     /// Parse and pre-process timeout configurations for all rules
@@ -694,6 +709,10 @@ mod tests {
             "8".to_string(),
         );
         anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_MAX_BUFFERED_BYTES),
+            "2MiB".to_string(),
+        );
+        anns.insert(
             e(crate::constants::annotations::edgion::MIRROR_LOG),
             "false".to_string(),
         );
@@ -711,6 +730,7 @@ mod tests {
         assert_eq!(tuning.write_timeout_ms, 300);
         assert_eq!(tuning.channel_full_timeout_ms, 150);
         assert_eq!(tuning.max_buffered_chunks, 8);
+        assert_eq!(tuning.max_buffered_bytes, "2MiB");
         assert!(!tuning.mirror_log);
         assert_eq!(tuning.max_concurrent, 64);
     }
@@ -737,6 +757,48 @@ mod tests {
             .expect("tuning should be parsed");
         assert_eq!(tuning.connect_timeout_ms, MirrorTuning::default().connect_timeout_ms);
         assert_eq!(tuning.max_concurrent, 32);
+    }
+
+    #[test]
+    fn parses_mirror_tuning_capacity_fallback_preserves_valid_fields() {
+        use crate::constants::annotations::edgion;
+        for (key, values) in [
+            (
+                edgion::MIRROR_MAX_CONCURRENT,
+                vec![
+                    "0".to_string(),
+                    "65537".to_string(),
+                    usize::MAX.to_string(),
+                    "184467440737095516160".to_string(),
+                ],
+            ),
+            (
+                edgion::MIRROR_MAX_BUFFERED_CHUNKS,
+                vec!["0".to_string(), "1025".to_string(), usize::MAX.to_string()],
+            ),
+            (
+                edgion::MIRROR_MAX_BUFFERED_BYTES,
+                vec!["0".to_string(), "2GiB".to_string(), "bad-size".to_string()],
+            ),
+        ] {
+            for value in values {
+                let mut route = make_test_http_route();
+                route.metadata.annotations = Some(std::collections::BTreeMap::from([
+                    (key.to_string(), value),
+                    (edgion::MIRROR_WRITE_TIMEOUT_MS.to_string(), "123".to_string()),
+                ]));
+                route.preparse();
+                let tuning = route.spec.rules.as_ref().unwrap()[0]
+                    .parsed_mirror_tuning
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(
+                    tuning.resolve_limits().unwrap(),
+                    MirrorTuning::default().resolve_limits().unwrap()
+                );
+                assert_eq!(tuning.write_timeout_ms, 123);
+            }
+        }
     }
 
     #[test]

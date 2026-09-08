@@ -97,9 +97,10 @@ has been removed.
 | `edgion.io/retry-non-idempotent` | `"true"` / `"false"` | `false` (safe) | Opt-in to retrying non-idempotent methods on the reused-connection retry path. Applies to all rules under this HTTPRoute/GRPCRoute. |
 | `edgion.io/mirror-connect-timeout-ms` | integer string | `1000` | RequestMirror connect timeout (ms). Applies to all RequestMirror filters under this HTTPRoute. |
 | `edgion.io/mirror-write-timeout-ms` | integer string | `1000` | RequestMirror write timeout (ms). |
-| `edgion.io/mirror-max-buffered-chunks` | integer string | `5` | Max body chunks buffered for the mirror (`0` is treated as `5`). |
+| `edgion.io/mirror-max-buffered-chunks` | integer string | `5` | Max body chunks buffered per mirror, `1..=1024`; invalid values use the default. |
+| `edgion.io/mirror-max-buffered-bytes` | byte-size string | `1MiB` | Retained body bytes per mirror, `1B..=1GiB`; invalid values use the default. |
 | `edgion.io/mirror-log` | `"true"` / `"false"` | `true` | Whether the mirror emits a dedicated mirror-log line. |
-| `edgion.io/mirror-max-concurrent` | integer string | `1024` | Max concurrent mirror tasks per gateway process (`0` is treated as `1024`). |
+| `edgion.io/mirror-max-concurrent` | integer string | `1024` | Max concurrent mirror tasks per plugin instance, `1..=65536`, subject to the shared process limit; invalid values use the default. |
 | `edgion.io/mirror-channel-full-timeout-ms` | integer string | `0` | Max ms to wait for mirror channel space before abandoning the mirror; values above `1000` are clamped. |
 
 Notes:

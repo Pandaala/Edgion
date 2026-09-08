@@ -53,44 +53,23 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
     match state {
         MirrorState::Streaming {
             body_tx,
+            body_budget,
             writer_handle,
             cancellation,
             channel_full_timeout_ms,
         } => {
             if let Some(data) = body.as_ref() {
-                match body_tx.try_send(Ok(data.clone())) {
-                    Ok(()) => {
-                        // Chunk sent successfully — fall through to end_of_stream handling.
+                match send_mirror_chunk(&body_tx, &body_budget, data, channel_full_timeout_ms).await {
+                    Ok(()) => {}
+                    Err(MirrorSendError::Abandon(reason)) => {
+                        // Signal cancellation before closing the channel: the delivered
+                        // prefix must never become a successful partial upload.
+                        cancellation.cancel(reason);
+                        drop(writer_handle);
+                        ctx.set_mirror_state(MirrorState::Abandoned);
+                        return;
                     }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        // Channel is full. Decide: immediately abandon or briefly wait.
-                        let sent = if channel_full_timeout_ms > 0 {
-                            // Give the mirror task a short window to drain the channel.
-                            // body_tx.send() takes &self, so body_tx remains owned after await.
-                            let wait = Duration::from_millis(channel_full_timeout_ms);
-                            tokio::time::timeout(wait, body_tx.send(Ok(data.clone())))
-                                .await
-                                .is_ok_and(|r| r.is_ok())
-                        } else {
-                            false // Immediate abandon, no waiting.
-                        };
-
-                        if !sent {
-                            // Mirror is too slow and the wait window (if any) has expired.
-                            // Cancel before dropping body_tx so the mirror backend cannot
-                            // mistake the delivered prefix for a complete chunked body.
-                            cancellation.cancel(MirrorAbandonReason::ChannelFull);
-                            // Drop writer_handle to detach (NOT abort) the task; it will finish
-                            // on its own and emit the "channel_full" outcome.
-                            drop(writer_handle);
-                            ctx.set_mirror_state(MirrorState::Abandoned);
-                            return; // body_tx is dropped here (end of match arm)
-                        }
-
-                        // Successfully sent after waiting — continue streaming below.
-                        // Fall through to end_of_stream handling.
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                    Err(MirrorSendError::Closed) => {
                         // Mirror task already exited (timeout, network error, etc.).
                         // Disarm the guard so it cannot overwrite that task's
                         // already-determined outcome with `body_abandoned`.
@@ -115,6 +94,7 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
             } else {
                 ctx.set_mirror_state(MirrorState::Streaming {
                     body_tx,
+                    body_budget,
                     writer_handle,
                     cancellation,
                     channel_full_timeout_ms,
@@ -125,6 +105,40 @@ async fn mirror_body_tee(body: &mut Option<Bytes>, event: RequestBodyEvent, ctx:
             ctx.set_mirror_state(MirrorState::Abandoned);
         }
     }
+}
+
+enum MirrorSendError {
+    Closed,
+    Abandon(MirrorAbandonReason),
+}
+
+async fn send_mirror_chunk(
+    sender: &mpsc::Sender<Result<Bytes, std::io::Error>>,
+    budget: &crate::plugins::http::request_mirror::MirrorBodyBudget,
+    data: &[u8],
+    timeout_ms: u64,
+) -> Result<(), MirrorSendError> {
+    // Reserve the queue slot first so a full/closed queue never allocates a copy.
+    let slot = match sender.try_reserve() {
+        Ok(slot) => slot,
+        Err(mpsc::error::TrySendError::Closed(_)) => return Err(MirrorSendError::Closed),
+        Err(mpsc::error::TrySendError::Full(_)) if timeout_ms > 0 => {
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), sender.reserve()).await {
+                Ok(Ok(slot)) => slot,
+                Ok(Err(_)) => return Err(MirrorSendError::Closed),
+                Err(_) => return Err(MirrorSendError::Abandon(MirrorAbandonReason::ChannelFull)),
+            }
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            return Err(MirrorSendError::Abandon(MirrorAbandonReason::ChannelFull));
+        }
+    };
+    // Byte-budget admission never waits, even if queue waiting was enabled.
+    let owned = budget
+        .try_copy(data)
+        .ok_or(MirrorSendError::Abandon(MirrorAbandonReason::BufferLimit))?;
+    slot.send(Ok(owned));
+    Ok(())
 }
 
 pub(super) fn abandon_request_mirror(ctx: &mut EdgionHttpContext, reason: MirrorAbandonReason) {
@@ -164,6 +178,7 @@ mod tests {
         (
             MirrorState::Streaming {
                 body_tx,
+                body_budget: crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(1024),
                 writer_handle,
                 cancellation,
                 channel_full_timeout_ms: 0,
@@ -257,5 +272,57 @@ mod tests {
             !ctx.has_mirror_state(),
             "a request with no mirror must not acquire an abandoned mirror sentinel"
         );
+    }
+
+    #[tokio::test]
+    async fn mirror_byte_limit_cancels_only_the_mirror_and_preserves_main_chunk() {
+        let (body_tx, mut body_rx) = mpsc::channel(5);
+        let budget = crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(4);
+        let (cancellation, cancel_rx) = MirrorCancellation::new();
+        let reason = cancellation.reason_handle();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.set_mirror_state(MirrorState::Streaming {
+            body_tx,
+            body_budget: budget.clone(),
+            cancellation,
+            writer_handle: tokio::spawn(async {}),
+            channel_full_timeout_ms: 1000,
+        });
+        let mut body = Some(Bytes::from_static(b"1234"));
+        mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
+        let in_transport = body_rx.recv().await.unwrap().unwrap();
+        assert_eq!(body.as_deref(), Some(&b"1234"[..]));
+        // The queue is empty, but the transport still owns all four bytes.
+        body = Some(Bytes::from_static(b"5"));
+        mirror_body_tee(&mut body, RequestBodyEvent::Complete, &mut ctx).await;
+        assert_eq!(body.as_deref(), Some(&b"5"[..]));
+        assert!(cancel_rx.await.is_ok());
+        assert_eq!(
+            MirrorCancellation::load_reason(&reason),
+            Some(MirrorAbandonReason::BufferLimit)
+        );
+        assert!(matches!(ctx.take_mirror_state(), Some(MirrorState::Abandoned)));
+        assert!(budget.try_copy(b"x").is_none());
+        drop(in_transport);
+        assert!(budget.try_copy(b"1234").is_some());
+    }
+
+    #[tokio::test]
+    async fn mirror_queue_full_does_not_allocate_and_wait_can_drain() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let budget = crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(8);
+        assert!(send_mirror_chunk(&tx, &budget, b"1234", 0).await.is_ok());
+        assert!(matches!(
+            send_mirror_chunk(&tx, &budget, b"5678", 0).await,
+            Err(MirrorSendError::Abandon(MirrorAbandonReason::ChannelFull))
+        ));
+        assert!(budget.try_copy(b"5678").is_some());
+        let send = send_mirror_chunk(&tx, &budget, b"5678", 1000);
+        let drain = async {
+            drop(rx.recv().await.unwrap());
+        };
+        let (sent, ()) = tokio::join!(send, drain);
+        assert!(sent.is_ok());
+        assert_eq!(rx.recv().await.unwrap().unwrap(), "5678");
     }
 }

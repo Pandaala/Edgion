@@ -275,6 +275,26 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 | `"never"` | 不轮转 |
 | `{ Size: 104857600 }` | 按文件大小轮转（字节），默认 100 MB |
 
+### request_mirror
+
+在 Gateway 进程 YAML 中配置顶层区块：
+
+```yaml
+request_mirror:
+  max_concurrent: 1024
+  max_buffered_bytes: 64MiB
+```
+
+`max_concurrent` 限制进程内镜像任务总数，范围为 `1`–`65536`。
+`max_buffered_bytes` 限制镜像持有的请求体数据，范围为 `1` 字节–`1GiB`。
+上述为默认值，两者均可配置，修改后需要重启 Gateway。所有路由和插件实例共享预算，
+包括热加载期间共存的新旧插件实例。预算耗尽时跳过或取消镜像副本，主请求继续处理。
+非法值或未知字段会导致启动失败；零值不表示无限制。这两个字段没有 CLI 或环境变量覆盖入口。
+
+字节预算不是进程 RSS 上限，请求头、TLS 和连接开销另行存在。单个镜像的限制仍通过
+[HTTPRoute 镜像注解](../../user-guide/http-route/filters/gateway-api/request-mirror.md)
+或 EdgionPlugins 内联配置设置，标准 Gateway API 字段保持不变。
+
 ### rate_limit
 
 | 参数 | 类型 | 默认值 | 说明 |

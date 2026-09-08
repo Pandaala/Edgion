@@ -64,7 +64,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0062 — Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | resolved | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | D0063 — Validate rate-limit response header names canonically | needs-implementation | [campaign finding](D0063-rate-limit-response-header-validation.md) |
 | D0064 — Validate RealIp header names canonically | needs-implementation | [campaign finding](D0064-real-ip-header-name-validation.md) |
-| D0066 — Bound RequestMirror concurrency and buffering | needs-discussion | [campaign finding](D0066-request-mirror-capacity-bounds.md) |
+| D0066 — Bound RequestMirror concurrency and buffering | fixed (2026-09-08) | [resolution](../../../../skills/04-review/request-mirror/regression-guards/mirror-resource-budgets.md) |
 | D0067 — Isolate RequestMirror unit tests from the network | needs-implementation | [campaign finding](D0067-request-mirror-unit-test-network-isolation.md) |
 | D0068 — Unify response-header mutation policy | needs-discussion | [campaign finding](D0068-response-header-mutation-policy.md) |
 | D0069 — Correct TraceContext documentation semantics | needs-implementation | [campaign finding](D0069-trace-context-documentation-semantics.md) |
@@ -145,7 +145,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
 | Verify RegionRoute validation across hot reload and management APIs | pending | [task](../../../todo/region-route-validation-integration.md) |
-| Bound RequestMirror concurrency and buffering | pending | [task](../../../todo/bound-request-mirror-concurrency-and-buffering.md) |
 | Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |
 | Correct TraceContext documentation semantics | pending | [task](../../../todo/correct-trace-context-documentation-semantics.md) |

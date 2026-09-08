@@ -340,6 +340,29 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `"never"` | No rotation |
 | `{ Size: 104857600 }` | Rotate by file size (bytes), default 100 MB |
 
+### request_mirror
+
+Configure this top-level block in the Gateway process YAML:
+
+```yaml
+request_mirror:
+  max_concurrent: 1024
+  max_buffered_bytes: 64MiB
+```
+
+`max_concurrent` limits total active mirror tasks (`1`–`65536`).
+`max_buffered_bytes` limits retained mirror request-body data (`1` byte–`1GiB`).
+These are the defaults; both values are configurable and require a Gateway restart.
+All routes and plugin instances share one budget, including old and new plugin
+generations during hot reload. Exhaustion skips or cancels the mirror copy while
+the main request continues. Invalid values and unknown keys fail startup; zero
+does not disable either limit. These fields have no CLI or environment override.
+
+The byte budget is not a total process RSS limit: request headers, TLS and
+connection overhead are separate. Per-mirror limits remain configurable through
+[HTTPRoute mirror annotations](../../user-guide/http-route/filters/gateway-api/request-mirror.md)
+or EdgionPlugins inline configuration; standard Gateway API fields are unchanged.
+
 ### rate_limit
 
 | Parameter | Type | Default | Description |
