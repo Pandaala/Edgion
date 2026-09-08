@@ -14,7 +14,6 @@ use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
-use edgion_resources::resources::common::ParentReference;
 use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -221,10 +220,8 @@ struct RouteUnitCtx<'a> {
     parent_refs: Option<Arc<[ResolvedParentRef]>>,
     creation_ts_ms: i64,
     route_sv: u64,
-    /// Concrete `(gateway_ns, gateway_name)` pairs this route attaches to,
-    /// pre-resolved from `parent_refs` against the accepted status.
-    /// Drives `RouteMetricHandles::build`.
-    attached_gateways: &'a [(String, String)],
+    /// Per-rule metric matrix, built once above hostname/match fan-out.
+    metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
     /// Rule-level compiled plugin runtime, built ONCE per rule and Arc-shared
     /// into every match-item unit (see `HttpRouteRuleUnit::compile_http_rule`).
     plugin_runtime: Arc<PluginRuntime>,
@@ -283,12 +280,7 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
         compiled_query_regexes,
         has_query_matchers,
         specificity,
-        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-            ctx.attached_gateways,
-            ctx.namespace,
-            ctx.name,
-            &http_backends_from_rule(&ctx.rule, ctx.namespace),
-        )),
+        metric_handles: ctx.metric_handles,
     })
 }
 
@@ -326,12 +318,7 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
         compiled_query_regexes,
         has_query_matchers,
         specificity,
-        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
-            ctx.attached_gateways,
-            ctx.namespace,
-            ctx.name,
-            &http_backends_from_rule(&ctx.rule, ctx.namespace),
-        )),
+        metric_handles: ctx.metric_handles,
     }
 }
 
@@ -351,23 +338,27 @@ fn append_match_to_domain(domain_rules: &mut DomainRouteRulesMap, hostname: &str
     }
 }
 
+/// Rule-owned immutable values shared across every hostname/match unit.
+struct SharedHttpRule {
+    rule_id: usize,
+    rule: Arc<HTTPRouteRule>,
+    metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
+}
+
 /// Expand all rules of a single route into `hostname`'s domain bucket.
-#[allow(clippy::too_many_arguments)] // validated route context has 9 interrelated params; grouping would obscure them
+#[allow(clippy::too_many_arguments)] // route-build inputs have distinct lifetimes/ownership; grouping would obscure them
 fn append_route_to_hostname(
     domain_rules: &mut DomainRouteRulesMap,
     hostname: &str,
     validated: &ValidatedHttpRoute<'_>,
     resource_key: &str,
-    // Still needed for `gateways_from_parent_refs` below; the request-time form
-    // is passed separately as `resolved_parent_refs`.
-    parent_refs: &[ParentReference],
     // Resolved once per route by the caller and shared across every hostname
     // bucket, matching how `rule_runtimes` is hoisted.
     resolved_parent_refs: &Arc<[ResolvedParentRef]>,
-    invalid_rule_indices: Option<&Vec<usize>>,
     creation_ts_ms: i64,
     route_sv: u64,
     rule_runtimes: &[HttpRuleRuntime],
+    shared_rules: &[SharedHttpRule],
     route_arc: &Arc<HTTPRoute>,
 ) {
     let default_matches = vec![HTTPRouteMatch {
@@ -380,13 +371,9 @@ fn append_route_to_hostname(
         method: None,
     }];
 
-    let attached_gateways = gateways_from_parent_refs(parent_refs, &validated.namespace);
-
-    for (rule_id, rule) in validated.rules.iter().enumerate() {
-        if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
-            continue;
-        }
-        let rule_arc = Arc::new(rule.clone());
+    for shared_rule in shared_rules {
+        let rule_id = shared_rule.rule_id;
+        let rule = &shared_rule.rule;
         // Compiled runtime is built ONCE per rule (`rule_runtimes[rule_id]`);
         // the LB selector is built once per (rule, hostname) and shared across
         // this rule's match-item units.
@@ -407,11 +394,11 @@ fn append_route_to_hostname(
                     match_id,
                     resource_key,
                     match_item,
-                    rule: rule_arc.clone(),
+                    rule: Arc::clone(rule),
                     parent_refs: Some(Arc::clone(resolved_parent_refs)),
                     creation_ts_ms,
                     route_sv,
-                    attached_gateways: &attached_gateways,
+                    metric_handles: Arc::clone(&shared_rule.metric_handles),
                     plugin_runtime: rule_rt.plugin_runtime.clone(),
                     backend_finder: backend_finder.clone(),
                     backends: rule_rt.backends.clone(),
@@ -479,18 +466,38 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
         } else {
             route.spec.invalid_rule_indices.as_ref()
         };
+        let attached_gateways = gateways_from_parent_refs(&accepted_refs, &validated.namespace);
+        let shared_rules: Vec<SharedHttpRule> = validated
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(rule_id, _)| !invalid_rule_indices.is_some_and(|inv| inv.contains(rule_id)))
+            .map(|(rule_id, rule)| {
+                let rule = Arc::new(rule.clone());
+                let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
+                    &attached_gateways,
+                    &validated.namespace,
+                    &validated.name,
+                    &http_backends_from_rule(&rule, &validated.namespace),
+                ));
+                SharedHttpRule {
+                    rule_id,
+                    rule,
+                    metric_handles,
+                }
+            })
+            .collect();
         for hostname in &get_effective_hostnames(route) {
             append_route_to_hostname(
                 &mut domain_rules,
                 hostname,
                 &validated,
                 &resource_key,
-                &accepted_refs,
                 &resolved_parent_refs,
-                invalid_rule_indices,
                 creation_ts_ms,
                 route_sv,
                 &rule_runtimes,
+                &shared_rules,
                 route,
             );
         }
@@ -1165,6 +1172,94 @@ mod tests {
         assert!(
             Arc::ptr_eq(a_refs, b_refs),
             "one route must resolve its parentRefs once, not once per hostname"
+        );
+    }
+
+    #[test]
+    fn rule_and_metric_handles_share_across_fanout_but_selectors_stay_per_hostname() {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": { "namespace": "route-ns", "name": "shared-rule-state" },
+            "spec": {
+                "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
+                "hostnames": ["a.example.com", "b.example.com"],
+                "rules": [
+                    {
+                        "matches": [
+                            { "path": { "type": "PathPrefix", "value": "/a" } },
+                            { "path": { "type": "PathPrefix", "value": "/b" } }
+                        ],
+                        "backendRefs": [{ "name": "svc-a", "port": 8080 }]
+                    },
+                    {
+                        "matches": [
+                            { "path": { "type": "PathPrefix", "value": "/c" } },
+                            { "path": { "type": "PathPrefix", "value": "/d" } }
+                        ],
+                        "backendRefs": [
+                            { "name": "svc-b", "port": 8080 },
+                            { "name": "svc-c", "port": 8080 }
+                        ]
+                    }
+                ]
+            }
+        });
+        let mut route: HTTPRoute = serde_json::from_value(json).expect("route fixture must deserialize");
+        route.pre_parse();
+
+        let mut data = HashMap::new();
+        data.insert("route-ns/shared-rule-state".to_string(), Arc::new(route));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+        let unit = |hostname: &str, rule_id: usize, match_id: usize| {
+            let (normal, regex) = domain_rules
+                .get(hostname)
+                .unwrap_or_else(|| panic!("{hostname} must have a bucket"));
+            normal
+                .iter()
+                .chain(regex.iter())
+                .find(|unit| unit.matched_info.rule_id == rule_id && unit.matched_info.match_id == match_id)
+                .cloned()
+                .unwrap_or_else(|| panic!("missing rule {rule_id} match {match_id} for {hostname}"))
+        };
+
+        let a00 = unit("a.example.com", 0, 0);
+        let a01 = unit("a.example.com", 0, 1);
+        let b00 = unit("b.example.com", 0, 0);
+        let a10 = unit("a.example.com", 1, 0);
+        let b11 = unit("b.example.com", 1, 1);
+
+        for same_rule in [&a01, &b00] {
+            assert!(Arc::ptr_eq(&a00.rule, &same_rule.rule));
+            assert!(Arc::ptr_eq(&a00.metric_handles, &same_rule.metric_handles));
+        }
+        assert!(Arc::ptr_eq(&a10.rule, &b11.rule));
+        assert!(Arc::ptr_eq(&a10.metric_handles, &b11.metric_handles));
+        assert!(!Arc::ptr_eq(&a00.rule, &a10.rule));
+        assert!(!Arc::ptr_eq(&a00.metric_handles, &a10.metric_handles));
+
+        let rule0_matrix = a00
+            .metric_handles
+            .lookup("route-ns", "test-gateway")
+            .expect("rule 0 gateway matrix must exist");
+        let rule1_matrix = a10
+            .metric_handles
+            .lookup("route-ns", "test-gateway")
+            .expect("rule 1 gateway matrix must exist");
+        assert_eq!(rule0_matrix.counters.len(), 1);
+        assert_eq!(rule1_matrix.counters.len(), 2);
+
+        assert!(
+            Arc::ptr_eq(&a00.backend_finder, &a01.backend_finder),
+            "matches of one rule and hostname must share a selector"
+        );
+        assert!(
+            !Arc::ptr_eq(&a00.backend_finder, &b00.backend_finder),
+            "different hostname buckets must retain independent selector state"
+        );
+        assert!(
+            !Arc::ptr_eq(&a00.backend_finder, &a10.backend_finder),
+            "different rules must retain independent selector state"
         );
     }
 

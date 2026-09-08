@@ -28,4 +28,4 @@
 - Integration gap: `tasks/todo/route-manager-retained-listener-handle-integration.md` records live cross-stream listener deletion/relist coverage; no existing integration file changed.
 - Review: fresh independent final reviewer `b0169_final_review` verified all seven files, retained proxy ownership, removal/recreation concurrency, the outer publication boundary and generic L4 evidence. Verdict: LGTM with no Must Fix or Should Fix.
 - Verification: `cargo fmt --all`; full routes 512/512 and focused suites above; locked workspace all-target check and Clippy; locked Gateway binary build; agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and 3,113-file frozen-path guards passed. Clippy retained only existing warnings.
-- Commit: pending; never push.
+- Commit: `837bb26d`; never pushed by the campaign.

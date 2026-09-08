@@ -593,7 +593,7 @@
 | `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | changed | B0167: precompile and borrow backend policy target identity |
 | `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager alias |
 | `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 clears retained managers and removes the inner ArcSwap |
-| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | changed | B0170: share rule and metric handles across hostname/match expansion |
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | `routes-shared` | source | pending | — |
