@@ -36,4 +36,4 @@ Initial final review found one Must Fix: the first regression tests called only 
 - Implementation: read-only body plugins now run for exactly one request-pinned route runtime and one selected-backend runtime, preferring gRPC over HTTP at each layer, before the existing Gateway and global layers. Every returned delay is merged by maximum.
 - Correction review: real context fixtures now exercise the gRPC and HTTP route/backend branches, both precedence pairs, and four-layer maximum-delay composition. Independent correction review returned LGTM with no remaining Must Fix or Should Fix.
 - Verification: target 27/27 and full proxy-http 264/264; `cargo fmt --all`, locked workspace check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path checks passed.
-- Commit: pending; never push.
+- Commit: `cbd88c5d`; never pushed by the campaign.

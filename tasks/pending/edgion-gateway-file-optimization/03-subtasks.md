@@ -620,7 +620,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | `routes-shared` | source | changed | B0188: write finalized URI before latching and correct DirectEndpoint policy ownership comments |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` | `routes-shared` | source | changed | B0189: guard deferred credentials against Connection nomination and avoid backend attribution for local failures |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs` | `routes-shared` | source | changed | B0190: restore GRPCRoute and selected-backend read-only body-filter dispatch |
-| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` | `routes-shared` | source | analysis-ready | B0191: current final/interim attempt and response-plugin lifecycle retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` | `routes-shared` | source | examined-no-change | B0191: retained final/interim attempt accounting and response-plugin lifecycle |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs` | `routes-shared` | source | analysis-ready | B0192: prevent gateway-owned trailer failures from penalizing the selected backend |
 | `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | pending | — |
