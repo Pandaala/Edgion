@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified; awaiting local commit.
+- Pipeline state: committed locally.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/udp/edgion_udp.rs`.
 - Baseline: `f48fca38`.
@@ -32,4 +32,4 @@
 - Inlined activity/counters and deferred established-send IP formatting; preserved all nine target tests and their runtime behavior. No new socket tests, integration changes or lifecycle-policy changes.
 - Fresh implementer target 9/9, full UDP 34/34 and UDP logs 3/3 passed, along with targeted format/diff and docs (1,265 files).
 - Independent reviewer: `b0212_final_review`; LGTM, no Must Fix or Should Fix at `aec5caf5`, both hashes unchanged. Personally passed UDP 34/34, logs 3/3 and diff; confirmed identical locking/Ordering/activity/error outputs and no target/new Clippy warning. D0120–D0122 remain unchanged residuals.
-- Coordinator routes 605/605, workspace format/check/Clippy, Gateway build, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains 983 Gateway lib-test warnings. Commit pending; no push.
+- Coordinator routes 605/605, workspace format/check/Clippy, Gateway build, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains 983 Gateway lib-test warnings. Commit: `3e28c944`; no push.

@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0211 committed locally as `aec5caf5`; external updates incorporated through `256733d7` |
-| Coverage | 546 current Gateway files: 222 changed, 169 examined-no-change, 12 deferred, 143 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
-| Active batch | B0212 UDP session ownership verified; committing locally. D0119 separately tracks independently diagnosed pre-existing context layout failures. |
-| Analysis queue | B0213 UDP module, B0214 unit knowledge correction and B0215 manager are analysis-ready. D0114 remains a high-severity attachment-projection defect; D0120–D0122 separately track UDP retirement, sender validation and shutdown issues. D0118 defers malformed-input wire coverage. |
+| Campaign status | in-progress; B0212 committed locally as `3e28c944`; external updates incorporated through `256733d7` |
+| Coverage | 546 current Gateway files: 222 changed, 169 examined-no-change, 13 deferred, 142 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
+| Active batch | B0213 UDP module deferral verified; committing locally. D0119 separately tracks independently diagnosed pre-existing context layout failures. |
+| Analysis queue | B0214 unit knowledge correction, B0215 manager and B0216 table are analysis-ready. D0114 remains a high-severity attachment-projection defect; D0120–D0122 separately track UDP retirement, sender validation and shutdown issues. D0118 defers malformed-input wire coverage. |
 | Integration freeze | 3,120 files. External `7534a9bf` README, `bfc2691e` four existing/six added paths, and `264847df` one new test were reconciled individually after byte/mode verification. No campaign integration-test edit occurred. |
 
 ## AI guide summary

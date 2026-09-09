@@ -25,6 +25,7 @@ Align route architecture knowledge with the current request path, where HTTP and
 - Revalidate `edgion-gateway/src/routes/tls/routes_mgr.rs` module comments describing raw-schema caching and full rebuild on every change; B0203 verified compiled units and affected-listener incremental publication. Limit any correction to accurate ownership documentation.
 - B0215 also identified `edgion-gateway/src/routes/udp/routes_mgr.rs` comments describing per-packet loading, raw schema caching and every-change full rebuild. Actual established sessions use their pinned fast path; route-table lookup is for new-session routing, while managers cache compiled units and publish affected listener tables.
 - Reconcile `skills/01-architecture/02-gateway/03-routes/05-udp-route.md` schema-vector/from_routes descriptions and the shared routes index's per-datagram wording with compiled units/from_units and new-session lookup. Do not introduce immediate active-session revocation or new runtime policy.
+- B0216 identified `udp_route_table.rs` header wording that conflates handler compilation with listener-table rebuild. Also reconcile `skills/01-architecture/05-resources/08-udp-route.md`: its introduction and Gateway-side step 4 still describe per-packet route selection, while step 1 describes validation where initialize_route only builds the companion unit. Preserve session policy while correcting ownership descriptions.
 
 ## Scope
 
