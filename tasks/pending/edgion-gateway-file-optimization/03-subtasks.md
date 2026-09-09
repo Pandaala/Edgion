@@ -348,8 +348,8 @@
 | `edgion-gateway/src/plugins/http/common/auth_common.rs` | `plugins-http-common` | source | deferred | B0240: deterministic bounded JWT/OIDC/JWE projection remains owned by expanded D0052; independent approval |
 | `edgion-gateway/src/plugins/http/common/capped_writer.rs` | `plugins-http-common` | source | examined-no-change | B0241: minimal atomic capped writer retained; independent LGTM, four consumer filters 27/27 |
 | `edgion-gateway/src/plugins/http/common/http_client.rs` | `plugins-http-common` | source | changed | B0102: canonical default and dedicated RequestMirror singleton clients |
-| `edgion-gateway/src/plugins/http/common/http_util.rs` | `plugins-http-common` | source | analysis-in-progress | B0242: shared HTTP utility parsing, allocation and caller analysis |
-| `edgion-gateway/src/plugins/http/common/json_request.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/http_util.rs` | `plugins-http-common` | source | examined-no-change | B0242: strict bounded JSON reader retained; dynamic OIDC errors remain owned by existing P1 task; independent LGTM |
+| `edgion-gateway/src/plugins/http/common/json_request.rs` | `plugins-http-common` | source | analysis-in-progress | B0243: shared JSON request construction, bounds and caller analysis |
 | `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | pending | — |

@@ -16,6 +16,8 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
+- B0242: examined the OIDC bounded JSON reader with no code change. Independent LGTM retained early Content-Length rejection and strict streamed decoded-byte checks, which avoid the truncating helper's failure-path prefix copy. Confirmed dynamic reqwest/serde detail remains atomically owned by the existing self-contained P1 OIDC redaction task. Helper 4/4, OIDC 133 passed/8 ignored fixtures and all workspace/guard checks passed. No integration change or issue. Local commit SHA pending; never push.
+
 - B0241: examined the shared capped serialization writer with no code change. Independent LGTM retained checked atomic writes, exact/zero cap behavior, sticky overflow and caller-owned success publication; a finish API or cross-layer writer merge offered only churn/coupling. Writer/FormJsonTransform/ProxyRewrite/AiGuard evaluator tests 27/27 and all workspace/guard checks passed. No integration change or issue. Local commit SHA pending; never push.
 
 - B0240: deferred the shared authentication claim projection redesign to the existing D0052 after independently confirming nondeterministic HashMap/case-insensitive destination ownership across JWT, OIDC and JWE plus array materialization before cap checks. Expanded the single self-contained task with JWE, direct bounded array construction and three-consumer coverage; no runtime or integration change. Commit `3d7001c0`; no push.
