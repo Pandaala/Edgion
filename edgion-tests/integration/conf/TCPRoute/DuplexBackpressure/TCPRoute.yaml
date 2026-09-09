@@ -1,0 +1,13 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: l4-duplex-tcp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: l4-duplex-gateway
+      sectionName: tcp
+  rules:
+    - backendRefs:
+        - name: test-l4-duplex
+          port: 30032

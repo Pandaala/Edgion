@@ -23,6 +23,7 @@ use tracing::{error, info};
 // Transport-shape backends + the transport event recorder. Lives in its own
 // module tree because it is a self-contained protocol harness (raw H1, raw H2,
 // a global event log) rather than another axum endpoint.
+mod l4_duplex;
 #[path = "transport/mod.rs"]
 mod transport;
 
@@ -161,6 +162,14 @@ struct Cli {
     /// TCP server port
     #[arg(long, default_value = "30010")]
     tcp_port: u16,
+
+    /// Controlled L4 duplex fixture plain TCP port
+    #[arg(long)]
+    l4_duplex_port: Option<u16>,
+
+    /// Controlled L4 duplex fixture TLS port (uses cert-file and key-file)
+    #[arg(long)]
+    l4_duplex_tls_port: Option<u16>,
 
     /// UDP server port
     #[arg(long, default_value = "30011")]
@@ -333,6 +342,17 @@ async fn main() -> Result<()> {
     // Start TCP server
     let handle = tokio::spawn(start_tcp_server(cli.tcp_port));
     handles.push(handle);
+
+    if let Some(port) = cli.l4_duplex_port {
+        handles.push(tokio::spawn(l4_duplex::start(port, None)));
+    }
+    if let Some(port) = cli.l4_duplex_tls_port {
+        let identity = (
+            cli.cert_file.clone().context("L4 TLS fixture requires cert-file")?,
+            cli.key_file.clone().context("L4 TLS fixture requires key-file")?,
+        );
+        handles.push(tokio::spawn(l4_duplex::start(port, Some(identity))));
+    }
 
     // Start UDP server
     let handle = tokio::spawn(start_udp_server(cli.udp_port));
@@ -644,6 +664,8 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/transport/reset", get(transport::recorder::transport_reset_handler))
         // GET /transport/dump: everything the recorder holds, for failure dumps
         .route("/transport/dump", get(transport::recorder::transport_dump_handler))
+        .route("/l4-duplex/{id}", get(l4_duplex::observe))
+        .route("/l4-duplex/{id}/{action}", axum::routing::post(l4_duplex::command))
         // --- Retry-sequence endpoints (for retry-on-status integration tests) ---
         .route(
             "/retry-sequence/{test_id}/{status_list}",

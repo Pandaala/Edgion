@@ -19,10 +19,29 @@ This file is used to confirm what the local-integration test backend actually pr
 | HTTPS backend mTLS | `30052` |
 | Raw HTTP/1.1 transport-shape backend | `30030` |
 | Raw HTTP/2 (h2c) transport-shape backend | `30031` |
+| Controlled L4 duplex TCP backend | `30032` |
+| Controlled L4 duplex TLS backend | `30033` |
 
 If you run `test_server` alone, the CLI default only starts the first group of ports; the integration script passes multi-port and optional TLS/auth ports together.
 
 ## HTTP endpoints
+
+### L4 duplex backpressure fixture
+
+`--l4-duplex-port 30032` and `--l4-duplex-tls-port 30033` start bounded,
+explicitly controlled byte-stream fixtures inside the shared test server. The
+TLS listener reuses `--cert-file` and `--key-file`. They serve the canonical
+`TCPRoute/DuplexBackpressure` suite, which exercises TCP, TLS termination, and
+TLS passthrough through the shared gateway. Run with
+`run_integration.sh -r TCPRoute -i DuplexBackpressure`.
+
+`GET /l4-duplex/{id}` exposes active connection write/pulse counters and payload
+verification state. `POST /l4-duplex/{id}/{action}` accepts `pulse`, `drain`,
+`finish`, and `close`; unknown IDs/actions and full command queues fail explicitly.
+The suite validates blocked sends, reverse progress beyond the idle window,
+exact resumed payloads, and correlated idle-close diagnostics. The integration
+runtime config enables the existing `logs/tcp.log` sink for those diagnostics.
+These endpoints are test controls, not Gateway APIs.
 
 ### Basic echo and health check
 

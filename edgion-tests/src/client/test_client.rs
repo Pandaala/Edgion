@@ -1283,6 +1283,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/IdleTimeout" => "TCPRoute/Basic",
+        "TCPRoute/DuplexBackpressure" => "TCPRoute/DuplexBackpressure",
         "TCPRoute/KeepaliveSmoke" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
         "TCPRoute/GlobalConnectionIpRestriction" => "TCPRoute/GlobalConnectionIpRestriction",
@@ -2031,6 +2032,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
+        }
+        "TCPRoute/DuplexBackpressure" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/DuplexBackpressure tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::L4DuplexTestSuite));
         }
         "TCPRoute/GeoRestriction" => {
             if !gateway {
@@ -3132,6 +3140,11 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(framework::with_listener(
                     Box::new(suites::TcpIdleTimeoutTestSuite),
                     "TCPRoute/Basic",
+                    Tcp,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::L4DuplexTestSuite),
+                    "TCPRoute/DuplexBackpressure",
                     Tcp,
                 ));
                 runner.add_suite(framework::with_listener(

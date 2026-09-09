@@ -1,10 +1,10 @@
 # D0110 — L4 Duplex Backpressure Integration
 
-- Status: pending
+- Status: resolved (2026-09-09)
 - Severity: medium
 - Discovered in: B0196 L4 duplex analysis
-- Canonical task: [Add L4 duplex backpressure integration coverage](../../../todo/add-l4-duplex-backpressure-integration.md)
+- Maintained knowledge: [L4 duplex relay regression boundary](../../../../skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md#transport-level-regression-boundary)
 
-Existing TCP/TLS integration coverage exercises small exchanges and idle closure,
-not reverse progress during a stalled directional write or flush. Schedule the
-shared-topology scenarios separately; existing integration files remain frozen.
+The separately authorized `TCPRoute/DuplexBackpressure` suite passed all twelve
+TCP, terminated-TLS, and passthrough-TLS cases. The maintained knowledge page owns
+the implementation, verification evidence, and transport-versus-flush-state limits.

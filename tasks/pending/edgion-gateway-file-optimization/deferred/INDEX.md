@@ -181,7 +181,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add deferred-credential Connection nomination integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md) |
 | Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
 | Add session cookie field integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/session-persistence-token-extraction.md) |
-| Add L4 duplex backpressure integration coverage | pending | [task](../../../todo/add-l4-duplex-backpressure-integration.md) |
+| Add L4 duplex backpressure integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md) |
 | Reconcile TLSRoute version guidance | pending | [task](../../../todo/reconcile-tlsroute-version-guidance.md) |
 | Reconcile route architecture ownership and rebuild documentation | pending | [task](../../../todo/route-architecture-manager-cache-documentation.md) |
 | Pre-resolve L4 listener timeouts | pending | [task](../../../todo/pre-resolve-l4-listener-timeouts.md) |

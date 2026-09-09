@@ -1,5 +1,5 @@
 {
-  "current_max": 31957,
+  "current_max": 31960,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -87,6 +87,13 @@
     "TCPRoute/IdleTimeout": {
       "tcp": 31090,
       "tcp_filtered": 31091
+    },
+    "TCPRoute/DuplexBackpressure": {
+      "tcp": 31958,
+      "tls": 31959
+    },
+    "TCPRoute/DuplexBackpressure/Passthrough": {
+      "tls": 31960
     },
     "UDPRoute/Basic": {
       "udp": 31100

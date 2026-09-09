@@ -1621,6 +1621,7 @@ run_all_tests() {
                     run_test "TCPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i StreamPlugins" || test_failed=true
                     run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
                     run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
+                    run_test "TCPRoute_DuplexBackpressure" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i DuplexBackpressure" || test_failed=true
                     run_test "TCPRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GeoRestriction" || test_failed=true
                     run_test "TCPRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i DeniedBackendRef" || test_failed=true
                 else
@@ -1927,6 +1928,7 @@ run_all_tests() {
         run_test "TCPRoute_KeepaliveSmoke" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i KeepaliveSmoke" || test_failed=true
         run_test "TCPRoute_StreamPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i StreamPlugins" || test_failed=true
         run_test "TCPRoute_IdleTimeout" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i IdleTimeout" || test_failed=true
+        run_test "TCPRoute_DuplexBackpressure" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i DuplexBackpressure" || test_failed=true
         run_test "TCPRoute_GlobalConnectionIpRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
         run_test "TCPRoute_GeoRestriction" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i GeoRestriction" || test_failed=true
         run_test "TCPRoute_DeniedBackendRef" "${EDGION_TEST_CLIENT_BIN} -g -r TCPRoute -i DeniedBackendRef" || test_failed=true

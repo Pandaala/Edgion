@@ -81,10 +81,59 @@ The three earlier `write_all_idle` unit tests are replaced at the relay boundary
 by `relay_completes_when_reader_drains`, the two `blocked_*_expires_without_early_timeout`
 tests, and `partial_writes_reset_idle_and_preserve_payload`.
 
-This is an in-memory relay verification boundary, not a fresh TCP/TLS integration
-run. Transport-level coverage remains deferred in
-`tasks/todo/add-l4-duplex-backpressure-integration.md`. Re-evaluate when stream
-wrappers, readiness/waker behavior, buffer state, or shutdown policy changes.
+The original B0196 verification above used in-memory streams. The
+`add-l4-duplex-backpressure-integration` follow-up adds the shared-topology
+`TCPRoute/DuplexBackpressure` suite, covering TCP, TLS termination, and TLS
+passthrough in both directions. Current execution results are recorded below;
+the historical unit-test results are not fresh integration evidence.
+
+### Transport-level regression boundary
+
+The fixture lives in `edgion-tests/src/server/l4_duplex.rs`; the suite is
+`edgion-tests/src/client/suites/l4_duplex.rs`. Both use the bounded wire helpers
+in `edgion-tests/src/server/l4_duplex_protocol.rs`. The fixture owns its listeners
+inside the ordinary `test_server`, and the scenarios use the canonical shared
+Controller/Gateway topology and standard route resources.
+
+Each stalled sender retains a 16 KiB working buffer while attempting a bounded
+32 MiB position-dependent payload. The receiver explicitly withholds reads.
+The case requires a nonzero, incomplete send count to remain unchanged before
+proceeding; fitting the entire payload in transport buffers fails the test.
+Reverse pulses must cross the gateway throughout a three-second unchanged-send
+window, longer than the configured two-second idle window. Any late TCP window
+update resets that observation window; a ten-second deadline bounds the attempt.
+Explicit drain then verifies
+every byte and the terminal marker. No half-close is used to delimit data.
+
+Separate fully stalled cases require exactly one connection-close record,
+correlated by listener and direct peer port, with TCP `status=IdleTimeout` or
+TLS `err_log="idle timeout"`, followed by byte-stream closure. Only the copied
+integration gateway config enables the existing TCP log sink. The source
+configuration and production relay behavior are unchanged.
+
+The fixture limits connections, command queues, payload size, and exchange
+lifetime; the client requests cleanup even after an exchange failure and checks
+that the fixture registration disappears. Network tests establish end-to-end
+backpressure, not a particular `poll_flush(Pending)` event. Exact flush-state
+and scheduling boundaries remain covered by the in-memory relay tests.
+
+Verification on 2026-09-09: workspace fmt/check/Clippy, agent-doc, SSA-force,
+metrics-inventory, and Pingora-source guards passed; Clippy retains pre-existing
+warnings outside the new files. All 21 test-client capability/registration tests
+passed, and independent code review returned LGTM. The complete canonical command
+`./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r TCPRoute -i DuplexBackpressure`
+passed all 12 cases in 40.42 seconds with zero infrastructure errors and exit 0
+(run `testing_20260909_155048`). This closes the test gap tracked by
+`add-l4-duplex-backpressure-integration` / D0110 without changing the production
+relay or immediate-EOF policy.
+
+The initial network run exposed the short-plateau assumption corrected above.
+Two subsequent attempts were interrupted by competing worktree lifecycle
+operations; those partial runs are not the passing evidence. The separate
+[shared integration lifecycle isolation task](../../../../tasks/todo/isolate-shared-integration-process-lifecycle.md)
+retains that infrastructure issue; the successful exclusive run does not fix it.
+Re-evaluate when stream wrappers, readiness/waker behavior, buffer state,
+transport buffer sizes, idle configuration, or shutdown policy changes.
 
 ## Behavior contract preserved by the helper
 

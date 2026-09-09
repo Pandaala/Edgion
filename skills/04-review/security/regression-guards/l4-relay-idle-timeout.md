@@ -62,8 +62,10 @@ last byte progress, partial-write survival beyond the original window, reverse
 activity during a blocked write/flush, idle reads, and explicit unlimited waits.
 Error and EOF tests distinguish one timeout/error hook call from clean closure.
 These replace the earlier helper-only write tests with relay-level coverage.
-They do not establish transport-level integration behavior; that follow-up is
-`tasks/todo/add-l4-duplex-backpressure-integration.md`.
+They do not establish transport-level integration behavior. The
+`add-l4-duplex-backpressure-integration` follow-up adds a shared-topology suite;
+its current results and network-versus-poll-state limits are maintained in
+[the shared relay regression boundary](../../routing/regression-guards/l4-duplex-relay-centralization.md#transport-level-regression-boundary).
 
 ## Re-evaluation Triggers
 

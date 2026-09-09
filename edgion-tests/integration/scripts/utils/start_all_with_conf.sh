@@ -624,6 +624,8 @@ start_test_server() {
         --grpc-ports "30021,30022,30023" \
         --websocket-port 30005 \
         --tcp-port 30010 \
+        --l4-duplex-port 30032 \
+        --l4-duplex-tls-port 30033 \
         --udp-port 30011 \
         --tcp-pp2-port 30012 \
         --auth-port 30040 \
@@ -1323,6 +1325,14 @@ main() {
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "${CONFIG_DIR}/edgion-gateway.yaml"
     CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
+    # The L4 backpressure suite asserts the canonical TCP close diagnostic.
+    # Enable only the copied integration config, preserving its logs/tcp.log sink.
+    awk '
+        /^tcp_log:/ { in_tcp = 1; print; next }
+        /^[^[:space:]#]/ { in_tcp = 0 }
+        in_tcp && /^  enabled:/ { print "  enabled: true"; next }
+        { print }
+    ' "${GATEWAY_CONFIG}" > "${GATEWAY_CONFIG}.tmp" && mv "${GATEWAY_CONFIG}.tmp" "${GATEWAY_CONFIG}"
     if grep -Eq '^[[:space:]]*metrics:' "${GATEWAY_CONFIG}"; then
         log_error "Integration metrics override requires a Gateway config without an existing metrics section"
         exit 1

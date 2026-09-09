@@ -1,0 +1,20 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-l4-duplex
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: test-l4-duplex
+addressType: IPv4
+ports:
+  - name: tcp-30032
+    port: 30032
+    protocol: TCP
+  - name: tls-30033
+    port: 30033
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
