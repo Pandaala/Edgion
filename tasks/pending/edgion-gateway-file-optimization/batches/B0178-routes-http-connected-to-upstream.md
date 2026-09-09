@@ -18,5 +18,5 @@
 - Verification: `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed.
 - Follow-ups:
   - `tasks/todo/refresh-connected-upstream-lb-lifecycle-documentation.md`
-  - `tasks/todo/add-streaming-conn-est-access-log-integration.md`
+  - Streaming log coverage is maintained in [the connection-established log regression guard](../../../../skills/04-review/observability/regression-guards/streaming-connection-established-log-coverage.md).
 - Commit: `1603baee`; never pushed by the campaign.

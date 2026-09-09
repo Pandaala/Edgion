@@ -8,13 +8,19 @@
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
-use std::time::Instant;
+use std::io::SeekFrom;
+use std::time::{Duration, Instant};
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
+use tokio::time::{sleep, timeout};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, Message},
 };
+use uuid::Uuid;
 
 pub struct WebSocketTestSuite {
     gateway: bool,
@@ -72,6 +78,97 @@ impl WebSocketTestSuite {
                 }
             })
         })
+    }
+
+    fn test_websocket_conn_est_access_log() -> TestCase {
+        TestCase::new(
+            "websocket_conn_est_access_log",
+            "Connection-established access log arrives while the WebSocket remains usable",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let result = async {
+                        // Observe the configured LocalFile output, not the terminal-only
+                        // AccessLogStore. Start at EOF before making this request.
+                        let mut file = File::open(&ctx.access_log_path)
+                            .await
+                            .with_context(|| format!("Open configured access log {}", ctx.access_log_path.display()))?;
+                        file.seek(SeekFrom::End(0)).await.context("Seek access log to EOF")?;
+                        let mut reader = BufReader::new(file).take(1024 * 1024);
+                        let trace_id = format!("ws-conn-est-{}", Uuid::new_v4());
+                        let mut request = ctx.websocket_url().into_client_request()?;
+                        if let Some(ref host) = ctx.http_host {
+                            request.headers_mut().insert("Host", host.parse()?);
+                        }
+                        request.headers_mut().insert("x-trace-id", trace_id.parse()?);
+
+                        let (mut ws, _) = timeout(Duration::from_secs(5), connect_async(request))
+                            .await
+                            .context("WebSocket handshake timed out")?
+                            .context("WebSocket handshake failed")?;
+
+                        let evidence = timeout(Duration::from_secs(10), async {
+                            let mut line = Vec::new();
+                            loop {
+                                ensure!(reader.limit() > 0, "Access-log scan exceeded 1 MiB without conn_est");
+                                let read = reader.read_until(b'\n', &mut line).await.context("Read access log")?;
+                                if read == 0 {
+                                    sleep(Duration::from_millis(20)).await;
+                                    continue;
+                                }
+                                // A writer may expose a partial record. Retain it until
+                                // its newline arrives; the total scan has a hard byte cap.
+                                if !line.ends_with(b"\n") {
+                                    continue;
+                                }
+                                if line.windows(trace_id.len()).any(|part| part == trace_id.as_bytes()) {
+                                    let entry: serde_json::Value =
+                                        serde_json::from_slice(&line).context("Decode this request's access log")?;
+                                    if entry["request_info"]["x-trace-id"].as_str() == Some(trace_id.as_str()) {
+                                        ensure!(
+                                            entry["conn_est"].as_bool() == Some(true),
+                                            "Access log for this open WebSocket is missing conn_est: true"
+                                        );
+                                        ensure!(
+                                            entry["request_info"]["discover_protocol"].as_str() == Some("websocket"),
+                                            "Connection-established log has the wrong protocol"
+                                        );
+                                        break;
+                                    }
+                                }
+                                line.clear();
+                            }
+
+                            // Prove the connection is still usable AFTER seeing the log;
+                            // a record emitted only at teardown cannot satisfy this.
+                            ws.send(Message::Text("conn-est-still-open".into())).await?;
+                            match ws.next().await {
+                                Some(Ok(Message::Text(reply))) if reply == "Echo: conn-est-still-open" => Ok(()),
+                                _ => bail!("WebSocket echo failed after receiving the connection-established log"),
+                            }
+                        })
+                        .await
+                        .context("Timed out waiting for conn_est and a live WebSocket echo");
+
+                        // Always attempt a bounded close, including on assertion failure.
+                        // Dropping the socket also releases it if close fails or times out.
+                        let close = timeout(Duration::from_secs(2), ws.close(None)).await;
+                        drop(ws);
+                        evidence??;
+                        close
+                            .context("WebSocket close timed out")?
+                            .context("WebSocket close failed")?;
+                        Ok::<(), anyhow::Error>(())
+                    }
+                    .await;
+
+                    match result {
+                        Ok(()) => TestResult::passed(start.elapsed()),
+                        Err(error) => TestResult::failed(start.elapsed(), format!("{error:#}")),
+                    }
+                })
+            },
+        )
     }
 
     /// A response-stage plugin denial on a REAL protocol switch must stop the
@@ -147,6 +244,14 @@ impl TestSuite for WebSocketTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         let mut cases = vec![Self::test_websocket_echo()];
         if self.gateway {
+            // Kubernetes test-client Pods do not mount the gateway's LocalFile
+            // output. Local runs must still fail if their configured log is missing.
+            if !matches!(
+                std::env::var("EDGION_TEST_K8S_MODE").as_deref(),
+                Ok("1" | "true" | "TRUE" | "yes" | "YES")
+            ) {
+                cases.push(Self::test_websocket_conn_est_access_log());
+            }
             cases.push(Self::test_websocket_response_stage_deny_blocks_upgrade());
         }
         cases
