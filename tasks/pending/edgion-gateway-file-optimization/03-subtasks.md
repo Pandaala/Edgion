@@ -354,7 +354,7 @@
 | `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | changed | B0245: move sole-attempt requests and use monotonic passive recovery; independent revised-plan/final approval |
 | `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | changed | B0246: fail-closed active-health URL/dial validation and correct passive/active circuit ownership |
 | `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | changed | B0247: saturating TTL publication and elapsed-time DNS cache expiry remove overflow/panic paths |
-| `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | analysis-ready | B0248: minimal coherent facade; no worthwhile visibility or re-export churn |
+| `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | examined-no-change | B0248: refreshed minimal coherent facade retained; independent LGTM rejected visibility/re-export churn |
 | `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | changed | B0246: filter every pinned EndpointSlice address through canonical final-dial validation before rotation |
 | `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | changed | B0107: canonical framing helper reused by Wasm callouts |
 | `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | analysis-ready | B0249: canonical Service-port section resolution required; complex candidate queued |

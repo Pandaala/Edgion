@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: changed; implementation, independent reviews and verification complete, awaiting local commit.
+- Pipeline state: changed; committed locally.
 - Active anchor: `edgion-gateway`.
 - Baseline HEAD: `a9236e7579d09198c4c5315929103cfcfef0d9da`.
 - Target: `edgion-gateway/src/plugins/http/common/outbound/egress.rs`.
@@ -28,4 +28,4 @@
 - Independent plan review approved. Fresh final review returned LGTM with no Must Fix, Should Fix or deferred findings.
 - Verification: common egress 8/8, Gateway egress 2/2, outbound client 30/30, OIDC 133 passed/8 ignored, LDAP 26/26 and ExtProc 102/102 (301 passed total). Workspace format/check/Clippy, Gateway build, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
 - No integration edit or new issue. D0127 remains independent.
-- Commit: pending; never push.
+- Commit: `98b88473`; never pushed.
