@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0204 committed locally as `c70aa9fe`; external updates incorporated through `256733d7` |
-| Coverage | 546 current Gateway files: 217 changed, 167 examined-no-change, 12 deferred, 150 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
-| Active batch | B0205 TLS module deferral verified; committing locally before B0206 promotion |
-| Analysis queue | B0206 passthrough is analysis-ready, proposed ownership cleanup with separate D0116/D0117; B0207 termination proxy analysis is running. D0114 remains a high-severity attachment-projection defect. |
+| Campaign status | in-progress; B0205 committed locally as `62e43e2f`; external updates incorporated through `256733d7` |
+| Coverage | 546 current Gateway files: 218 changed, 167 examined-no-change, 12 deferred, 149 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
+| Active batch | B0206 passthrough ownership verified; committing locally before B0207 promotion |
+| Analysis queue | B0207 termination proxy, B0208 immutable unit and B0209 manager are analysis-ready (three-candidate limit). D0114 remains a high-severity attachment-projection defect; D0116/D0117 remain separate from proxy ownership changes. |
 | Integration freeze | 3,120 files. External `7534a9bf` README, `bfc2691e` four existing/six added paths, and `264847df` one new test were reconciled individually after byte/mode verification. No campaign integration-test edit occurred. |
 
 ## AI guide summary

@@ -5,7 +5,7 @@
 - Baseline commit: `d484e580c8274ce58426c9fe6729e444f505bdaf`
 - Baseline Gateway tracked files: 530
 - Baseline integration-test tree: `ae68dedd863020ddd6d035d7404570716429ecd1`
-- Existing integration-test files may not be modified, renamed, or deleted. Additions only.
+- Existing integration-test files may not be modified, renamed, or deleted. The user's additional constraint defers needed new integration coverage to issues; externally committed updates are reconciled individually, not edited by the campaign.
 - A batch closes only when every row assigned to it leaves `pending` and its total reconciles exactly.
 
 ## Execution waves
@@ -642,10 +642,10 @@
 | `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | `routes-shared` | source | changed | B0203: preserve incoming TLS schema Arcs through full/delta compilation |
 | `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | changed | B0204: borrowed hostname inputs and winner-only published tables; independent LGTM, TLS 48/48 and routes 591/591 |
 | `edgion-gateway/src/routes/tls/mod.rs` | `routes-shared` | source | deferred | B0205: D0115 coordinates Stage-1 fallback removal with frozen fixture migration; independent approval and fail-close 7/7 |
-| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | analysis-ready | B0206: shorten table/ClientHello ownership and borrow endpoint address |
+| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | changed | B0206: released table and initial replay buffer before relay, borrowed endpoint; independent LGTM and routes 595/595 |
 | `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | analysis-ready | B0207: shorten table/digest ownership and borrow backend endpoint |
-| `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | pending | — |
-| `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | analysis-ready | B0208: retain immutable unit, shared selector policy and live plugin lookup |
+| `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | analysis-ready | B0209: retain serialized rebuild, affected-listener cleanup and owned manager handles |
 | `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/udp/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/udp/edgion_udp.rs` | `routes-shared` | source | pending | — |

@@ -57,6 +57,15 @@ beyond `MAX_CLIENT_HELLO_LEN` is naturally relayed by the bidirectional
   coalesced after the ClientHello (notably TLS 1.3 0-RTT EarlyData records)
   reach the backend verbatim.
 
+The caller truncates the owned inspection Vec to `filled` (not `record_end`)
+and moves it into connection setup. After the optional PROXY v2 header,
+`replay_initial_bytes` writes and flushes the entire Vec, accounts for its
+bytes, and explicitly drops it before bidirectional relay. Write/flush failure
+remains terminal without initial-byte accounting. The allocation is not copied
+or shrunk during this transfer; see
+[TLS passthrough connection ownership](../../routing/regression-guards/tls-passthrough-connection-ownership.md)
+for the lifetime guarantee and in-memory verification limits.
+
 Timeout is enforced via `tokio::time::timeout_at(Instant::now() + SNI_READ_DEADLINE, ...)`.
 The absolute (not per-read relative) deadline defeats slowloris-style dribble:
 an attacker feeding one byte at a time cannot push the cumulative wait past

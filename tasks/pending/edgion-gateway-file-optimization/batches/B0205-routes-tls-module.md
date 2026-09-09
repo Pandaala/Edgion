@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified deferred; awaiting local commit.
+- Pipeline state: committed locally; deferred.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/mod.rs`.
 - Baseline: `02bc7699`.
@@ -25,4 +25,4 @@
 
 - Independent reviewer: `b0205_tls_module_review`; Approved, no source change. Personally traced attached fixtures and assertions, compiled empty Stage 2, both callers' terminal gates, retries and exhaustive relay hooks. Deferral preserves the intended future removal requirement without silently changing deny to allow.
 - Coordinator and independent reviewer each passed fresh fail-close tests 7/7. Fresh workspace format/check/Clippy, documentation (1,262 files), SSA (1,467 files), metrics (103), Pingora source, Gateway tracing, English-only and 3,120-file freeze checks passed.
-- No runtime or integration changes. Commit pending; never push.
+- No runtime or integration changes. Commit: `62e43e2f`; never push.
