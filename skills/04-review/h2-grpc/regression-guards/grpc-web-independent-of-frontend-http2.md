@@ -67,6 +67,62 @@ WebSocket upgrade keeps the bridge disabled and the gRPC-Web Content-Type
 unchanged. This is module/filter sequencing coverage, not a claim of HTTP/2
 frame-level or end-to-end integration coverage.
 
+### HTTP/1-only integration coverage
+
+The follow-up `add-grpc-web-http1-only-gateway-integration` extends the existing
+`HTTPRoute/Protocol/GrpcWeb` selection with a second suite on port 31083, resolved
+through its own `ports.json` key. Its Gateway sets
+`edgion.io/enable-http2: "false"`; the original port 31081 listener remains
+H2-enabled. Both HTTPRoutes reach the existing `test-grpc` Service using
+`appProtocol: kubernetes.io/h2c`. Matching Gateway/HTTPRoute fixtures are present
+in the local and Kubernetes configuration trees.
+The Kubernetes Gateway Service also exposes TCP 31083, because the test client
+connects through that Service rather than directly to the Gateway Pod.
+
+Both suites force HTTP/1.1 and reuse the same gRPC-Web framing checks. The unary
+success case requires HTTP 200 over HTTP/1.1, gRPC-Web Content-Type, no
+`grpc-status` response header, exactly one uncompressed data frame followed by
+one `0x80` trailer frame, a decoded `HelloResponse.message` greeting for the sent
+name, and an exact successful `grpc-status` trailer value. The existing
+unrouted-path trailer case also runs on both listeners. Requests have a
+10-second timeout, within the framework's 30-second case deadline. No process
+or resource is created by the suite; the standard runner owns fixture loading
+and topology cleanup.
+
+Run the paired suites with:
+
+```bash
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r HTTPRoute -i Protocol/GrpcWeb
+```
+
+On 2026-09-09 the command above passed all four cases, with zero infrastructure
+errors. The Gateway startup log confirmed that HTTP/2 was disabled for
+`edgion-test/grpcweb-http1-only-gateway` and that port 31083 used plain HTTP.
+The run report (`tmp/integration_testing/testing_20260909_095823/report.log`)
+recorded 17 passed gates/selections and one skipped build; final metrics-label,
+unknown-field, requeue-loop, and cache-residue checks passed. Standard cleanup
+stopped all three test processes. The first attempt stopped before test execution
+because `cache_residue` was absent; rebuilding the required binaries resolved it.
+
+`cargo fmt --all`, `cargo check --workspace --all-targets`,
+`cargo clippy --workspace --all-targets`, agent-doc validation, SSA-force,
+metrics-inventory, and Pingora-source guards passed. Clippy reported warnings in
+existing code; none points into the changed gRPC-Web test code. Local/Kubernetes
+fixture equality, unique port mapping, and focused Kubernetes fixture ownership
+checks passed. The Gateway Service exposes the new port to the Kubernetes test
+client. A live Kubernetes run was not performed.
+
+The extra repository-wide `validate_suite_parity.sh` check failed on unrelated
+pre-existing missing entries, reproduced with the unmodified HEAD test-client
+manifest. They are tracked in
+[the inventory follow-up](../../../../tasks/todo/reconcile-k8s-integration-suite-inventory.md).
+These unary binary-mode cases do not establish grpc-web-text, server-streaming,
+or independent H2 frame-level coverage.
+
+Resolution: `add-grpc-web-http1-only-gateway-integration` (B0183 follow-up), fixed
+by extending the existing suite after separate user authorization to add tests.
+The runtime correction and its historical module-level tests remain unchanged.
+
 ## Re-evaluation triggers
 
 Re-evaluate if Pingora removes its `GrpcWeb` module, changes bridge activation
@@ -80,3 +136,7 @@ operator policy for gRPC-Web availability.
 - `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`
 - Pingora `pingora-core/src/modules/http/grpc_web.rs`
 - Pingora `pingora-proxy/src/lib.rs` request-filter ordering
+- `edgion-tests/src/client/suites/grpc_route/grpc_web.rs`
+- `edgion-tests/integration/conf/HTTPRoute/Protocol/GrpcWeb/`
+- `edgion-tests/k8s/conf/HTTPRoute/Protocol/GrpcWeb/`
+- `edgion-tests/k8s/kubernetes/gateway/service.yaml`

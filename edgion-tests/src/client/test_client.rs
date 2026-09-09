@@ -1907,7 +1907,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: HTTPRoute/Protocol/GrpcWeb tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::GrpcWebTestSuite));
+            runner.add_suite(Box::new(suites::GrpcWebTestSuite::default()));
+            runner.add_suite(Box::new(suites::GrpcWebTestSuite::http1_only()));
         }
         "HTTPRoute/Protocol/H2TrailerMalformed" => {
             if !gateway {

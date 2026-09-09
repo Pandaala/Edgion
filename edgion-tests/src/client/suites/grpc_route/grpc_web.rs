@@ -12,9 +12,9 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use prost::Message;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use super::test::HelloRequest;
+use super::test::{HelloRequest, HelloResponse};
 
 const GRPC_WEB_HOST: &str = "grpcweb.test.example.com";
 
@@ -65,9 +65,25 @@ fn trailer_text(frames: &[GrpcWebFrame]) -> Option<String> {
         .map(|f| String::from_utf8_lossy(&f.payload).to_string())
 }
 
-pub struct GrpcWebTestSuite;
+#[derive(Default)]
+pub struct GrpcWebTestSuite {
+    http1_only: bool,
+}
 
 impl GrpcWebTestSuite {
+    pub fn http1_only() -> Self {
+        Self { http1_only: true }
+    }
+
+    fn client() -> Result<reqwest::Client, reqwest::Error> {
+        reqwest::Client::builder()
+            .http1_only()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+    }
+
     /// Success: a grpc-web SayHello returns a data frame + a 0x80 trailer frame carrying
     /// grpc-status:0.
     fn test_grpc_web_success() -> TestCase {
@@ -84,7 +100,10 @@ impl GrpcWebTestSuite {
                     };
                     let body = frame_grpc_web_request(&req_msg.encode_to_vec());
 
-                    let client = reqwest::Client::new();
+                    let client = match Self::client() {
+                        Ok(client) => client,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("build HTTP/1.1 client: {}", e)),
+                    };
                     let resp = match client
                         .post(&url)
                         .header("host", GRPC_WEB_HOST)
@@ -99,6 +118,15 @@ impl GrpcWebTestSuite {
 
                     if resp.status() != reqwest::StatusCode::OK {
                         return TestResult::failed(start.elapsed(), format!("HTTP status {}", resp.status()));
+                    }
+                    if resp.version() != reqwest::Version::HTTP_11 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("expected HTTP/1.1, got {:?}", resp.version()),
+                        );
+                    }
+                    if resp.headers().get("grpc-status").is_some() {
+                        return TestResult::failed(start.elapsed(), "grpc-status must be body-encoded".to_string());
                     }
                     let ct = resp
                         .headers()
@@ -118,11 +146,37 @@ impl GrpcWebTestSuite {
                         Ok(f) => f,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("frame parse: {}", e)),
                     };
-                    match trailer_text(&frames) {
-                        Some(t) if t.contains("grpc-status:0") => TestResult::passed_with_message(
+                    if frames.len() != 2 || frames[0].flag != 0x00 || frames[1].flag != 0x80 {
+                        return TestResult::failed(
                             start.elapsed(),
-                            format!("trailer: {}", t.replace("\r\n", " ")),
-                        ),
+                            "expected one uncompressed protobuf frame followed by one trailer frame".to_string(),
+                        );
+                    }
+                    let reply = match HelloResponse::decode(frames[0].payload.as_slice()) {
+                        Ok(reply) => reply,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("decode SayHello response: {}", e))
+                        }
+                    };
+                    // test_server may append echoed x-* metadata after the greeting.
+                    if reply.message != "Hello, Edgion!" && !reply.message.starts_with("Hello, Edgion! metadata=(") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("unexpected greeting: {:?}", reply.message),
+                        );
+                    }
+                    match trailer_text(&frames) {
+                        Some(t)
+                            if t.lines().any(|line| {
+                                line.split_once(':')
+                                    .is_some_and(|(key, value)| key == "grpc-status" && value.trim() == "0")
+                            }) =>
+                        {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                format!("trailer: {}", t.replace("\r\n", " ")),
+                            )
+                        }
                         Some(t) => TestResult::failed(
                             start.elapsed(),
                             format!("unexpected trailer: {}", t.replace("\r\n", " ")),
@@ -151,7 +205,10 @@ impl GrpcWebTestSuite {
                     };
                     let body = frame_grpc_web_request(&req_msg.encode_to_vec());
 
-                    let client = reqwest::Client::new();
+                    let client = match Self::client() {
+                        Ok(client) => client,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("build HTTP/1.1 client: {}", e)),
+                    };
                     let resp = match client
                         .post(&url)
                         .header("host", GRPC_WEB_HOST)
@@ -203,7 +260,19 @@ impl GrpcWebTestSuite {
 #[async_trait]
 impl TestSuite for GrpcWebTestSuite {
     fn name(&self) -> &str {
-        "gRPC-web Bridge"
+        if self.http1_only {
+            "gRPC-web Bridge (HTTP/1-only Gateway)"
+        } else {
+            "gRPC-web Bridge"
+        }
+    }
+
+    fn port_key(&self) -> Option<&str> {
+        Some(if self.http1_only {
+            "HTTPRoute/Protocol/GrpcWebHttp1Only"
+        } else {
+            "HTTPRoute/Protocol/GrpcWeb"
+        })
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

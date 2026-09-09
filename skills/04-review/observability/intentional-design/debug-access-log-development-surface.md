@@ -57,9 +57,11 @@ not prove a bound on the complete JSON. No JSON truncation is introduced.
 A compact schema, hard byte cap, enforced development-only gate, and plugin removal
 were considered as the task's alternatives; none is implemented by this closure.
 This decision does not weaken masking, response streaming, binary-owned logging,
-or canonical response-header policy. Separate work remains owned by
-[D0068](../../../../tasks/todo/unify-response-header-mutation-policy.md) and
-[D0087](../../../../tasks/todo/add-debug-access-log-wire-integration-coverage.md).
+or canonical response-header policy. Shared response-header mutation work remains
+owned by [D0068](../../../../tasks/todo/unify-response-header-mutation-policy.md).
+[D0087 wire coverage](../regression-guards/debug-access-log-wire-and-lifecycle.md)
+verifies the masking and lifecycle contract separately; it does not establish
+a response-header byte bound.
 
 ## Verification and re-evaluation
 

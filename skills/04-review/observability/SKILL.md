@@ -32,6 +32,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Debug access-log wire masking and plugin lifecycle coverage](regression-guards/debug-access-log-wire-and-lifecycle.md)
 - [Generic Watch decode failure recovery and safe diagnostics](../conf-sync/regression-guards/watch-decode-error-relist.md)
 - [observe F-003 (access_log) — all-senders-unhealthy path increments the dropped counter](regression-guards/access-log-all-senders-unhealthy-metric.md)
 - [observe F-B01 (access_log) — disabled mode installs a no-op logger instead of leaving OnceLock empty](regression-guards/access-log-disabled-init-noop.md)

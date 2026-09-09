@@ -255,6 +255,10 @@ spec:
     port: 31082
     targetPort: 31082
     protocol: TCP
+  - name: p31083
+    port: 31083
+    targetPort: 31083
+    protocol: TCP
   - name: p31122
     port: 31122
     targetPort: 31122

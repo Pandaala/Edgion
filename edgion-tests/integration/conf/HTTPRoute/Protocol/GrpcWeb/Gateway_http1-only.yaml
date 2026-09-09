@@ -1,0 +1,13 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: grpcweb-http1-only-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/enable-http2: "false"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31083

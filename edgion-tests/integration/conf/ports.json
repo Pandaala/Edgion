@@ -59,6 +59,9 @@
     "HTTPRoute/Protocol/GrpcWeb": {
       "http": 31081
     },
+    "HTTPRoute/Protocol/GrpcWebHttp1Only": {
+      "http": 31083
+    },
     "HTTPRoute/Protocol/H2TrailerMalformed": {
       "http": 31082
     },

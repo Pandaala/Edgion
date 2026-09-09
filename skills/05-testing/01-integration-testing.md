@@ -458,8 +458,16 @@ Only when a **completely different process-level configuration** is needed shoul
 | `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
 | `run_acme_test.sh` | Standalone ACME topology |
 | `test_oidc_egress.sh` | Gateway-startup proxy environment and process-local multi-address DNS injection for both OIDC client branches |
+| `test_debug_access_log_wire.sh` | Replace/Wrap masking is Gateway-startup-global; two serial isolated modes verify response headers and plugin hot reload |
 
 A new standalone script must include a header comment explaining "why the main environment cannot be reused"; otherwise the PR cannot be merged.
+
+Run the debug access-log scenario directly with
+`bash edgion-tests/integration/scripts/integration/test_debug_access_log_wire.sh`.
+It uses prebuilt Controller/Gateway/test_server binaries and generates its own
+fixtures; it is not registered in the frozen existing runners. See the
+[wire/lifecycle coverage contract](../04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md)
+for the build command, timeout options, evidence, and limits.
 
 Center/federation topology tests are maintained in the separate EdgionCenter repository.
 
