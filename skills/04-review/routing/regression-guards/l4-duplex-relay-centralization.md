@@ -1,6 +1,6 @@
 ---
 name: l4-duplex-relay-centralization
-description: Use when reviewing TCP / TLS-terminated / TLS-passthrough proxy changes that touch the bidirectional `select!` relay loop. The skeleton lives in one place — `routes/l4_duplex.rs` — and is parameterized via the `DuplexHooks` trait; do not re-introduce per-route duplicates.
+description: Shared bounded, independently polled TCP and TLS relay; hook ownership, backpressure progress, accounting, flush, and EOF regression boundaries.
 knowledge_type: regression-guards
 ---
 
@@ -14,7 +14,7 @@ knowledge_type: regression-guards
 All L4 (TCP / TLS-terminated / TLS-passthrough) bidirectional relay traffic now
 flows through a single helper:
 
-- `pub(crate) async fn bidirectional_relay(downstream, upstream, hooks)` in
+- `pub(crate) async fn bidirectional_relay(downstream, upstream, hooks, idle_timeout)` in
   `edgion-gateway/src/routes/l4_duplex.rs`
 - Trait `DuplexHooks { record_sent, record_received, on_error }` plugs in the
   per-context bits.
@@ -31,11 +31,9 @@ Concrete hook impls:
   `proxy.rs` (terminate) and `passthrough_proxy.rs`. Writes free-form strings
   into `ctx.err_log`. `DownstreamFlush` produces `"downstream flush err"`.
 
-## Don't re-report
+## Centralization scope
 
-Do not file new findings of the form "TCP and TLS proxies duplicate the same
-`tokio::select!` relay loop / 8 KiB buffer constants / `Ok(0)` break pattern" —
-the duplication was deliberately removed. Each `duplex(...)` method on the
+The historical duplicated relay loops were removed. Each `duplex(...)` method on the
 three proxies is now a one-line dispatch to `bidirectional_relay`. If a fourth
 L4 proxy variant appears, route it through the same helper instead of cloning
 the loop body.
@@ -53,9 +51,40 @@ error categories, timeouts. Cross-check:
   (compiler-enforced via the exhaustive `match`).
 - Idle timeout (landed 2026-06-02, finding fr-l4-02): `bidirectional_relay` takes
   `idle_timeout: Option<Duration>` and is bounded by a single idle clock reset on
-  any byte progress (read or partial write) via `write_all_idle` / `flush_idle`.
+  any byte progress (read or partial write) in either direction.
   `DuplexError::IdleTimeout` maps to `TcpStatus::IdleTimeout` and the TLS
   `"idle timeout"` err_log. Value comes from `resolve_tcp_idle_timeout(spec.tcpTimeout)`.
+
+## Independent progress under backpressure
+
+B0196 found that centralization alone did not provide full-duplex progress:
+the read-select arm awaited its whole write and downstream flush, preventing
+reverse reads while either operation was pending. A peer waiting for an ACK
+before draining its receive window could therefore deadlock the relay until
+idle timeout; disabling idle left the deadlock unbounded.
+
+`RelayDirection::poll_step` retains one bounded buffer and write cursor per
+direction. The single relay future polls both directions on each sweep,
+alternates their ordering, and self-wakes after at most 32 progressing sweeps.
+When both directions are pending, actual I/O or the shared timer supplies the
+wakeup. No spawned pumps, stream-split locks, extra payload queues, or partial
+write cancellation/replay are involved. A pending downstream flush blocks only
+that direction's next read, not client-to-upstream traffic.
+
+Regression tests `blocked_upload_does_not_block_download` and
+`blocked_download_does_not_block_upload` both failed against the prior relay:
+after one write filled its output window, a reverse ACK remained unread.
+The tests use in-memory duplex streams and explicit polling, not network timing.
+Additional relay tests cover executor-driven wakeups, retained bytes across
+partial writes, idle boundaries, all error classes, write-zero, and EOF.
+The three earlier `write_all_idle` unit tests are replaced at the relay boundary
+by `relay_completes_when_reader_drains`, the two `blocked_*_expires_without_early_timeout`
+tests, and `partial_writes_reset_idle_and_preserve_payload`.
+
+This is an in-memory relay verification boundary, not a fresh TCP/TLS integration
+run. Transport-level coverage remains deferred in
+`tasks/todo/add-l4-duplex-backpressure-integration.md`. Re-evaluate when stream
+wrappers, readiness/waker behavior, buffer state, or shutdown policy changes.
 
 ## Behavior contract preserved by the helper
 

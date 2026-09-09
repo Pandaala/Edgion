@@ -183,3 +183,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add deferred-credential Connection nomination integration coverage | pending | [task](../../../todo/add-deferred-credential-connection-nomination-integration.md) |
 | Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
 | Add session cookie field integration coverage | pending | [task](../../../todo/add-session-cookie-field-integration.md) |
+| Add L4 duplex backpressure integration coverage | pending | [task](../../../todo/add-l4-duplex-backpressure-integration.md) |
+| Reconcile TLSRoute version guidance | pending | [task](../../../todo/reconcile-tlsroute-version-guidance.md) |
+| Reconcile route architecture ownership and rebuild documentation | pending | [task](../../../todo/route-architecture-manager-cache-documentation.md) |
