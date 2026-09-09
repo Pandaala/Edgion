@@ -89,7 +89,7 @@ See [coding-standards/01-log-safety.md](../../../03-coding/01-log-safety.md) Iro
 
 ### PluginLog Review
 
-- [ ] Each PluginLog ≤ 40 bytes, ends with `; `
+- [ ] Each PluginLog entry is ≤ 40 bytes and has no legacy trailing `; `
 - [ ] Records only **the final decision** (OK / Deny / Skip / Rate); does not record the process
 - [ ] Does not contain full username / token / JWT claims (should be `u=<prefix>***`)
 - [ ] Does not stuff information that should be `tracing::debug!` into PluginLog
@@ -135,7 +135,7 @@ See [coding-standards/01-log-safety.md](../../../03-coding/01-log-safety.md) Iro
 |------|------|------|
 | `tracing::info!` in ConfHandler | ✅ Reasonable | Config load is not on the request hot path |
 | Per-event `tracing::info!` co-existing with a batch-level `info!` that already logs all keys | ❌ Noisy — downgrade per-event to `debug!` | Fixed in g9b-008: `cache_client/event_dispatch.rs` + `cache_data.rs` — per-item logs inside watch/compress loops are redundant when a batch summary already aggregates the same keys at `info!` level |
-| Plugin only writes `OK; ` without detailed reason | ✅ Reasonable | A normally passing plugin does not need detailed logs |
+| Plugin only writes `OK` without detailed reason | ✅ Reasonable | A normally passing plugin does not need detailed logs |
 | No separate Counter added for each plugin | ✅ Reasonable | Auth/rate-limit results are already reflected in status and access log |
 | Access log field has values only in some scenarios | ✅ Reasonable | Use `skip_serializing_if` |
 | `tracing::debug!` prints body/secret/token | ❌ Zero tolerance | See "Logs must not leak Secrets" iron rule; forbidden even at debug |

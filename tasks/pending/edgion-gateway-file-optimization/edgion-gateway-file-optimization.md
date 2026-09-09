@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at campaign HEAD `6daaa9e8`; B0262 implementation, independent final review, and full verification are complete, with local commit pending. |
-| Coverage | 549 current Gateway files: 244 changed, 185 examined-no-change, 14 deferred, 106 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0262: strengthened DSL context-builtin boundary tests; independent LGTM and full gates passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0263 (`dsl/tests/decision_log_tests.rs`) is analyzing read-only behind B0262; later DSL test files remain serial. D0127–D0137 track confirmed separate work. |
+| Campaign status | in-progress at campaign HEAD `82e00e04`; B0263 corrected implementation, independent final review, and full verification are complete, with local commit pending. |
+| Coverage | 549 current Gateway files: 245 changed, 185 examined-no-change, 14 deferred, 105 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0263: removed legacy DSL decision-entry delimiters; corrected independent LGTM and full gates passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0264 (`dsl/tests/error_policy.rs`) is analyzing read-only behind B0263; later DSL test files remain serial. D0127–D0137 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary

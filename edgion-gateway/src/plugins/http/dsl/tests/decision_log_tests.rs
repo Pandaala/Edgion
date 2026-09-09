@@ -1,9 +1,9 @@
 //! Tests for the final-decision PluginLog entry emitted by `execute_safe`.
 //!
 //! The entry must reflect the actual decision using the project-wide PluginLog
-//! convention (`OK; ` / `Deny <detail>; `), must carry the `; ` suffix, and must
-//! not emit the stale `dsl match` token regardless of outcome. Error-policy
-//! paths emit only the `err: ` entry, never a decision token.
+//! convention (`OK` / `Deny <detail>`), must not carry the legacy `; ` suffix,
+//! and must not emit the stale `dsl match` token regardless of outcome.
+//! Error-policy paths emit only the `err: ` entry, never a decision token.
 
 use super::*;
 use expect_test::expect;
@@ -13,7 +13,7 @@ fn test_decision_log_next_emits_ok() {
     let vm = make_vm("return next()");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    expect!["OK; "].assert_eq(&log.render_for_test());
+    expect!["OK"].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn test_decision_log_implicit_return_emits_ok() {
     let vm = make_vm("let x = 1");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    expect!["OK; "].assert_eq(&log.render_for_test());
+    expect!["OK"].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn test_decision_log_deny_emits_status() {
     let vm = make_vm(r#"return deny(403, "blocked")"#);
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, err_response_body(403, "blocked"));
-    expect!["Deny 403; "].assert_eq(&log.render_for_test());
+    expect!["Deny 403"].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn test_decision_log_terminate_emits_deny_once() {
     let vm = make_vm("return terminate()");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    expect!["Deny terminate; "].assert_eq(&log.render_for_test());
+    expect!["Deny terminate"].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn test_decision_log_grpc_error_emits_deny() {
             message: Some("permission denied".to_string()),
         }
     );
-    expect!["Deny grpc 7; "].assert_eq(&log.render_for_test());
+    expect!["Deny grpc 7"].assert_eq(&log.render_for_test());
 }
 
 #[test]

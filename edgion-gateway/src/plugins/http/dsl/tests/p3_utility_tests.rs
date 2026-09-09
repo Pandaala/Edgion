@@ -475,7 +475,7 @@ fn test_log_fmt_repeated_large_shared_value_remains_bounded() {
         let (result, log) = run_vm_policy_log(&vm, session, &DslErrorPolicy::Deny);
         assert_eq!(result, good_next());
         let json = serde_json::to_value(log).unwrap();
-        assert_eq!(json["log"], serde_json::json!(["later entry", "OK; "]));
+        assert_eq!(json["log"], serde_json::json!(["later entry", "OK"]));
         assert_eq!(json["log_full"], true);
     }
 }

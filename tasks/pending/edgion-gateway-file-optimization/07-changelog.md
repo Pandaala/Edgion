@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0262: added exact `ctx.get` runtime string-limit coverage and corrected a response-phase test that previously overstated request-to-response setup. Independent LGTM; target 7/7, Gateway DSL 331/331, locked workspace check/Clippy, and all repository guards passed. D0135–D0137 separately own the production copy, access-log examples, and a new integration scenario. Local commit pending; no production or integration change; no push.
+- B0263: removed legacy `"; "` suffixes from DSL normal decision entries and aligned exact decision/overflow tests plus maintained observability knowledge with the canonical one-push-per-entry contract. The initial no-change analysis was rejected, reconciled, implemented, and independently approved. Focused/full DSL tests, locked workspace check/Clippy, and all repository guards passed; B0264 owns BodyAccess/panic policy coverage. Local commit pending; no integration change or push.
+
+- B0262: added exact `ctx.get` runtime string-limit coverage and corrected a response-phase test that previously overstated request-to-response setup. Independent LGTM; target 7/7, Gateway DSL 331/331, locked workspace check/Clippy, and all repository guards passed. D0135–D0137 separately own the production copy, access-log examples, and a new integration scenario. Commit `82e00e04`; no production or integration change; no push.
 
 - B0261: corrected while, range-for, and list-for `break` backpatches to execute their matching `LoopEnd`, preventing leaked inner counters from bypassing an enclosing loop's iteration limit. Added a three-form nested-break sandbox regression and maintained security knowledge. Independent LGTM; focused tests, locked workspace check/Clippy, and all repository guards passed. D0134 separately owns structured validation of untrusted hand-crafted bytecode. Commit `6daaa9e8`; no integration change or push.
 
