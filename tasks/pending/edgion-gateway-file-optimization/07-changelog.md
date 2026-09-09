@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0229: borrowed the original Gateway annotation map during listener snapshot rebuild, removing two temporary map constructions; added four projection matrix tests and corrected owning snapshot knowledge. Independent LGTM at `312d10e8`; store 14/14, route 19/19, identity 3/3, DNS 12/12 and workspace/guard checks passed. Existing integration tests unchanged by the batch. Concurrent external commits reconciled in [provenance](external-sync-312d10e8.md). Local commit SHA pending backfill; no push.
+- B0230: examined the runtime store facade with no code change. Independent LGTM confirmed every export and public module has live handler, Admin, route, L4, TLS or test consumers; visibility reshaping has no measurable value. Store 14/14, route 19/19 and full workspace/guard checks passed. No integration change. Local record commit SHA pending backfill; no push.
+
+- B0229: borrowed the original Gateway annotation map during listener snapshot rebuild, removing two temporary map constructions; added four projection matrix tests and corrected owning snapshot knowledge. Independent LGTM at `312d10e8`; store 14/14, route 19/19, identity 3/3, DNS 12/12 and workspace/guard checks passed. Existing integration tests unchanged by the batch. Concurrent external commits reconciled in [provenance](external-sync-312d10e8.md). Commit `6e4af44e`; no push.
 
 - External sync: user-requested remote `7825ef03` merged cleanly as `3775e7e5`; no push. Independent provenance review reconciled exactly two frozen entries, confirmed D0084 closure and reopened only the changed HTTP conf handler. Fresh CORS filters and workspace/guard checks passed; see [reconciliation evidence](external-sync-7825ef03.md). B0229 remains valid at the merged baseline.
 

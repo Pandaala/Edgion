@@ -27,4 +27,4 @@
 - Fresh independent reviewer `b0229_final_review`: LGTM, no Must Fix or Should Fix, revalidated against external `312d10e8`. Reviewed source blob `aa332868b62d1c95e8b4ae3862664c1c8daf4830` and knowledge blob `7595a054fd9d3123a1bb2b8e7f07542b057d030c`; all original invariants and applicable red rules preserved.
 - Fresh tests: listener store 14/14, route matching 19/19, Gateway identity 3/3, canonical common DNS 12/12. Workspace format/check/Clippy, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and reconciled frozen paths passed. Pre-merge or intermediate compilation results are not substituted for this batch's final gates.
 - Concurrent external commits and exact frozen-path provenance: [reconciliation](../external-sync-312d10e8.md). No integration changes by this batch.
-- Outcome: changed. Commit SHA is backfilled after the local commit; never push.
+- Outcome: changed. Commit: `6e4af44e`; never pushed by the campaign.

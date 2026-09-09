@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0229 reviewed and verified, ready to commit. Remote CORS merge and subsequent user ACME/GeoRestriction commits through `312d10e8` reconciled. |
-| Coverage | 547 current Gateway files: 221 changed, 179 examined-no-change, 13 deferred, 134 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
-| Active batch | B0229 listener Gateway store: sole serial commit gate. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0230 store facade is refreshed analysis-ready; B0231 outbound TLS client is analysis-ready with a cross-adapter CA validation defer candidate. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
+| Campaign status | in-progress; B0229 committed as `6e4af44e`; B0230 examined-no-change and ready for its record commit. Remote CORS and subsequent user commits through `312d10e8` reconciled. |
+| Coverage | 547 current Gateway files: 221 changed, 180 examined-no-change, 13 deferred, 133 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
+| Active batch | B0230 runtime store facade: sole serial record commit gate. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0231 outbound TLS client is analysis-ready with a cross-adapter CA validation defer candidate; B0232 Redis limiter scripts is analysis-in-progress. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
 | Integration freeze | 3,120 files. External CORS and subsequent ACME/GeoRestriction changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
