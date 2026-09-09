@@ -62,6 +62,36 @@ Required review boundaries:
   Debug store-stats exposes entries, keys and allocation bytes, including
   allocations still pinned after cache removal.
 
+### Manifest and archive CPU boundary (D0075)
+
+The memory-cache implementation also resolves D0075's previously synchronous
+manifest parsing and gzip/tar extraction. Both manifest/index parse call sites
+and compatibility extraction in `oci/mod.rs::fetch_oci_inner` invoke
+`blocking_stage`. The helper moves the work closure into `spawn_blocking`;
+artifact handles share their immutable allocation rather than copying bodies.
+`vm_manager.rs::load_inner_with_linker` consumes OCI bytes through the same helper
+for digest validation, compatibility analysis, and compilation.
+
+The pipeline permit survives asynchronous cancellation inside the blocking
+closure and beside its output. Abandoned output drops before the permit,
+preventing admission of another pipeline while those buffers are still owned.
+Blocking work returns results; the async runtime owner retains publication,
+single-flight, negative-cache, and last-known-good decisions.
+
+The existing 4 MiB manifest, 64 MiB blob/output/decompressed-stream limits,
+4,096-descriptor/header limits, and archive metadata/path bounds still apply.
+First-index selection and the bounded layer-descriptor scan remain in the
+async owner; neither parses JSON nor inflates archive bytes. No separate
+parser, cache, logging, or metrics mechanism is needed for this offload.
+
+Envoy comparison rechecked on 2026-09-09: in the remote-code path linked above,
+`RemoteDataFetcher::fetch` starts async HTTP; `onSuccess` hashes the response
+inline and passes a string to its callback. `createWasm` separates acquisition
+and code-cache state from VM creation. These inspected functions contain no
+OCI manifest parsing or tar extraction, and do not demonstrate CPU-pool
+offload or zero-copy transfer. They support the acquisition/publication
+separation, not copying their buffer or thread model into Edgion.
+
 ## Alternatives and limits
 
 Disk persistence and its offload/temporary-file/shutdown machinery were
@@ -112,6 +142,20 @@ runner itself was blocked by missing macOS loopback aliases; these were targeted
 tests through the existing startup script/client, not a full runner PASS.
 Private-registry, Always-refresh, and offline-restart scenarios were not run.
 
+D0075 closure verification on 2026-09-09:
+
+- All 214 Wasm library tests passed again, including parser/extractor limits,
+  pipeline cancellation and output-drop ordering, single-flight, and LKG tests.
+- Format, workspace all-target check/Clippy, and the locked Gateway binary
+  build passed. Clippy emitted existing warnings in unchanged code.
+- Agent-doc, SSA-force, metrics-inventory, Pingora source-policy, Gateway
+  no-tracing, English-only, and diff guards passed. All 3,209 files under
+  `edgion-tests` matched a snapshot taken before this closure audit; this does
+  not reconstruct the original B0112 baseline.
+- Independent source and knowledge review returned LGTM. This closure changes
+  only knowledge and task records; no new live integration run or full-workspace
+  test suite was performed.
+
 Re-evaluate if offline restart is required, bytecode becomes unusually large,
 source-specific authorization is required on every cache hit, or the product
 requires a global compiled-runtime memory budget. Do not represent those
@@ -121,5 +165,8 @@ different requirements as already solved by artifact eviction.
 
 - D0074 — originally deferred as disk-I/O offload; changed by explicit user
   decision to bounded memory artifacts and resolved on 2026-09-08.
+- D0075 — manifest parsing and archive CPU offload, discovered in B0112.
+  The D0074 implementation supplies its ownership-preserving blocking
+  boundary; closure review concerns existing behavior, not a new runtime change.
 - Historical `contract-03` disk-purge interval clamp is superseded; see
   [historical evidence](../../cpu-memory/superseded/wasm-oci-purge-interval-zero-clamp.md).

@@ -40,8 +40,9 @@ policy still selects TLS, without a client certificate.
 - `create_tls_peer` selects policy identity before querying the Gateway store.
   Backend consumers in `backends/mod.rs` and the explicit HTTP peer path in
   `routes/http/proxy_http/pg_upstream_peer.rs` use the same lookup-based builder.
-  `extract_tls_config` reports plaintext for `Invalid`, but callers reject
-  invalid policy before use; it is not permission to downgrade a failed policy.
+  `extract_tls_config` reports plaintext for `Invalid`, but peer construction
+  rejects `Invalid` before any connection is attempted; this helper result
+  is not permission to downgrade a failed policy.
 
 ## Alternatives and limits
 
@@ -83,10 +84,25 @@ Fresh verification on 2026-09-08:
 - Agent-doc validation, SSA-force, metrics-inventory, and Pingora-source-policy
   scripts initially passed. A final agent-doc rerun found an unrelated broken
   ACME knowledge link to `tasks/todo/acme-alidns-cleanup-response-validation.md`;
-  closure is pending resolution of that missing target and a passing rerun.
+  closure was deferred pending resolution of that missing target and a passing rerun.
   No full-workspace test run was requested or performed.
 - Independent read-only review returned LGTM for the current source verdict,
   knowledge classification, scope, and evidence boundaries.
+
+Follow-up closure verification on 2026-09-09:
+
+- Current source still selects plaintext before Gateway identity lookup for
+  an absent policy, rejects invalid policies, and prefers policy identity.
+- `cargo test -p edgion-gateway --lib backends::peer_builder:: --locked`
+  passed all 15 tests, including the connection-pool isolation regressions.
+- Agent-doc validation passed; the unrelated documentation blocker above
+  no longer prevents closure. SSA-force, metrics-inventory, and
+  Pingora-source-policy guards also passed.
+- `cargo fmt --all`, workspace all-target `cargo check`, and workspace
+  all-target `cargo clippy` passed. Clippy reported warnings in unchanged
+  code. Independent source and knowledge review returned LGTM.
+- The live integration results above remain historical; this follow-up did
+  not rerun the integration topology or the full-workspace test suite.
 
 The source task's 2026-08-30 test/check record remains historical evidence,
 separate from the fresh results above. This audit changes no runtime behavior,
@@ -101,4 +117,5 @@ publication, identity precedence, or supported TLS backends change.
   P1 correctness defect, task created 2026-08-29 and implementation recorded
   complete 2026-08-30. Audit on 2026-09-08 confirms the defect was already
   fixed, with fresh regression verification and no production change. Final
-  closure remains pending the unrelated agent-doc failure described above.
+  closure verification on 2026-09-09 confirms the unrelated agent-doc blocker
+  is resolved.
