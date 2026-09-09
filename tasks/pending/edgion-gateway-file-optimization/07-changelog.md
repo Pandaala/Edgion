@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0239: examined the externally added AllEndpointStatus transport with no code change. Independent LGTM retained request/endpoint-scoped clients, complementary snapshot/near-dial/pinned-resolver checks, explicit TLS identity defaults, disabled proxy/redirect/pooling, bounded fan-out/body/deadlines and static errors. Focused tests 18/18 and all workspace/guard checks passed. Existing cross-client HTTP/2 header task remains the sole owner; no integration change or new issue. Local commit SHA pending; never push.
+- B0240: deferred the shared authentication claim projection redesign to the existing D0052 after independently confirming nondeterministic HashMap/case-insensitive destination ownership across JWT, OIDC and JWE plus array materialization before cap checks. Expanded the single self-contained task with JWE, direct bounded array construction and three-consumer coverage; no runtime or integration change. Local commit SHA pending; never push.
+
+- B0239: examined the externally added AllEndpointStatus transport with no code change. Independent LGTM retained request/endpoint-scoped clients, complementary snapshot/near-dial/pinned-resolver checks, explicit TLS identity defaults, disabled proxy/redirect/pooling, bounded fan-out/body/deadlines and static errors. Focused tests 18/18 and all workspace/guard checks passed. Existing cross-client HTTP/2 header task remains the sole owner; no integration change or new issue. Commit `9b1340bc`; no push.
 
 - B0238: made decoded bytes authoritative without falsely rejecting escaped JSON strings, bounded fixed-vocabulary discriminator decoding, rejected duplicate live content-part fields that could diverge from downstream last-wins parsing, and avoided decoding the first excess selected span. Corrected the exact missing/duplicate/non-text guide contract. Independent amended-plan approval and final LGTM; spans 15/15, AI Guard 49/49 and all workspace/guard checks passed. Existing integrations unchanged. Commit `f470e758`; no push.
 

@@ -24,4 +24,4 @@
 - Independent reviewer `b0236_ai_guard_plugin_analysis`: LGTM/examined-no-change. It independently verified endpoint/client lifetime, every address-validation phase, TLS identity precedence, pinned resolution, proxy/redirect/pooling policy, time/body/fan-out bounds, static errors, diagnostic response ownership and current test sources.
 - Sharing clients would weaken same-authority endpoint isolation; removing validation would erase queue/dial-time defense-in-depth; ordinary global TLS defaults would incorrectly admit unrelated LinkSys identity. No micro-edit or target-local HTTP/2 header cap clears the value/unification gates.
 - Verification: AllEndpointStatus 18/18; workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed. No source, knowledge, issue or integration edit.
-- Local record commit SHA is backfilled by the next batch; never push.
+- Commit: `9b1340bc`; never pushed by the campaign.
