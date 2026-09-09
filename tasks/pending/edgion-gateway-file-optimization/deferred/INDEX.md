@@ -194,3 +194,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |
 | Add malformed ClientHello passthrough coverage (D0118) | pending | [task](../../../todo/add-malformed-clienthello-passthrough-coverage.md) |
 | Reconcile HTTP context layout expectations (D0119) | pending | [task](../../../todo/reconcile-http-context-layout-expectations.md) |
+| Retire UDP sessions by generation (D0120) | pending | [task](../../../todo/retire-udp-sessions-by-generation.md) |
+| Validate UDP upstream response source (D0121) | pending | [task](../../../todo/validate-udp-upstream-response-source.md) |
+| Wire UDP listener process shutdown (D0122) | pending | [task](../../../todo/wire-udp-listener-process-shutdown.md) |

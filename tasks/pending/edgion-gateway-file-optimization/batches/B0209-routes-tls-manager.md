@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: committed locally; examined-no-change.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/routes_mgr.rs`.
 - Baseline: `62e43e2f`.
@@ -26,4 +26,4 @@
 
 - Original analyst revalidated at `f48fca38`; target and configuration/shared-helper dependencies unchanged. Both proxy helpers preserve manager publication and selected-generation contracts while shortening read guards.
 - Independent reviewer: `b0209_manager_review`; Approved at `f48fca38`, target blob unchanged. Personally verified configuration/Gateway lock ownership, pre-mutation listener union, complete publication, retained-handle clear/sweeps and actual proxy consumption. Fresh independent TLS manager 4/4, all TLS 54/54 and TCP manager 5/5 passed. No production or integration edits.
-- Fresh coordinator TLS manager 4/4, TCP manager 5/5 and all TLS 54/54 passed, along with workspace format/check/Clippy, docs (1,264 files), SSA, metrics, Pingora source, Gateway tracing, English-only and 3,120-file freeze. Commit pending; no push.
+- Fresh coordinator TLS manager 4/4, TCP manager 5/5 and all TLS 54/54 passed, along with workspace format/check/Clippy, docs (1,264 files), SSA, metrics, Pingora source, Gateway tracing, English-only and 3,120-file freeze. Commit: `cb9aaf4b`; no push.

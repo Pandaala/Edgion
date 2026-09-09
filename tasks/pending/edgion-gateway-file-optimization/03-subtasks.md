@@ -646,10 +646,10 @@
 | `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | changed | B0207: released table guard and avoided full TLS metadata copy; independent LGTM, routes 597/597; unrelated context assertions tracked D0119 |
 | `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | examined-no-change | B0208: preserved compiled immutable unit and shared selector/live plugin contracts; independent approval, unit 9/9 and TLS 54/54 |
 | `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | examined-no-change | B0209: serialized rebuild and retained-manager cleanup verified; independent approval, TLS 54/54 |
-| `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | analysis-ready | B0210: enforce nested ClientHello/SNI length boundaries; malformed-input wire coverage deferred |
+| `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | changed | B0210: enforced parent-bounded declared lengths; corrected independent LGTM, parser 16/16 and routes 602/602 |
 | `edgion-gateway/src/routes/udp/conf_handler_impl.rs` | `routes-shared` | source | analysis-ready | B0211: preserve incoming schema Arcs through full/partial compilation |
-| `edgion-gateway/src/routes/udp/edgion_udp.rs` | `routes-shared` | source | analysis-in-progress | B0212: UDP session/socket ownership and bounded lifecycle analysis |
-| `edgion-gateway/src/routes/udp/mod.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/udp/edgion_udp.rs` | `routes-shared` | source | analysis-ready | B0212: inline redundant session Arcs and delay fast-path IP formatting; D0120/D0121 separate |
+| `edgion-gateway/src/routes/udp/mod.rs` | `routes-shared` | source | analysis-ready | B0213: defer process-shutdown ownership wiring via D0122 |
 | `edgion-gateway/src/routes/udp/route_unit.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/udp/routes_mgr.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | pending | — |

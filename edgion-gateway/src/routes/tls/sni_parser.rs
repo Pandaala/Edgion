@@ -88,7 +88,10 @@ pub fn extract_sni(buf: &[u8]) -> Option<String> {
         // Not a ClientHello
         return None;
     }
-    let hello = &handshake[4..];
+    let hello_len = ((handshake[1] as usize) << 16) | ((handshake[2] as usize) << 8) | handshake[3] as usize;
+    // Other handshake messages may follow in this record, but cannot supply
+    // bytes to the first ClientHello's declared body.
+    let hello = handshake.get(4..4 + hello_len)?;
 
     // ClientHello body:
     //   ProtocolVersion(2) + Random(32) = 34 bytes fixed
@@ -124,51 +127,72 @@ pub fn extract_sni(buf: &[u8]) -> Option<String> {
     }
     let extensions_len = u16::from_be_bytes([hello[pos], hello[pos + 1]]) as usize;
     pos += 2;
-    let extensions_end = (pos + extensions_len).min(hello.len());
+    let extensions_end = pos + extensions_len;
+    if extensions_end != hello.len() {
+        return None;
+    }
+    let mut first_sni = None;
 
-    while pos + 4 <= extensions_end {
+    while pos < extensions_end {
+        if pos + 4 > extensions_end {
+            return None;
+        }
         let ext_type = u16::from_be_bytes([hello[pos], hello[pos + 1]]);
         let ext_len = u16::from_be_bytes([hello[pos + 2], hello[pos + 3]]) as usize;
         pos += 4;
+        let data = hello.get(pos..pos + ext_len)?;
 
         if ext_type == 0x0000 {
             // SNI extension: ServerNameList length(2) + entries
-            return parse_sni_extension(&hello[pos..extensions_end.min(pos + ext_len)]);
+            let hostname = parse_sni_extension(data)?;
+            // Keep the existing first-SNI selection, including no host_name.
+            // Still check later containers before publishing that selection.
+            if first_sni.is_none() {
+                first_sni = Some(hostname);
+            }
         }
 
         pos += ext_len;
     }
 
-    None
+    first_sni
+        .flatten()
+        .and_then(|name| std::str::from_utf8(name).ok())
+        .map(str::to_lowercase)
 }
 
-/// Parse the SNI extension payload to extract the hostname.
-fn parse_sni_extension(data: &[u8]) -> Option<String> {
+/// Validate the complete list, retaining the first host_name without allocating.
+/// Outer None is malformed structure; inner None is a list without host_name.
+fn parse_sni_extension(data: &[u8]) -> Option<Option<&[u8]>> {
     if data.len() < 2 {
         return None;
     }
     // ServerNameList: list_length(2) + ServerName*
-    let mut pos = 2; // skip list length
+    let list_len = u16::from_be_bytes([data[0], data[1]]) as usize;
+    if list_len == 0 || list_len + 2 != data.len() {
+        return None;
+    }
+    let mut pos = 2;
+    let mut hostname = None;
 
-    while pos + 3 <= data.len() {
+    while pos < data.len() {
+        if pos + 3 > data.len() {
+            return None;
+        }
         let name_type = data[pos];
         let name_len = u16::from_be_bytes([data[pos + 1], data[pos + 2]]) as usize;
         pos += 3;
+        let name = data.get(pos..pos + name_len)?;
 
-        if name_type == 0x00 {
+        if name_type == 0x00 && hostname.is_none() {
             // host_name
-            if pos + name_len > data.len() {
-                return None;
-            }
-            return std::str::from_utf8(&data[pos..pos + name_len])
-                .ok()
-                .map(|s| s.to_lowercase());
+            hostname = Some(name);
         }
 
         pos += name_len;
     }
 
-    None
+    Some(hostname)
 }
 
 #[cfg(test)]
@@ -230,6 +254,158 @@ mod tests {
     fn test_extract_sni_basic() {
         let buf = build_client_hello("example.com");
         assert_eq!(extract_sni(&buf), Some("example.com".to_string()));
+    }
+
+    // Offsets in build_client_hello's fixed, empty-session-ID fixture.
+    const EXTENSIONS_LEN: usize = 50;
+    const SNI_EXT: usize = 56;
+
+    fn set_u16(buf: &mut [u8], pos: usize, value: usize) {
+        buf[pos..pos + 2].copy_from_slice(&(value as u16).to_be_bytes());
+    }
+
+    fn set_handshake_len(buf: &mut [u8], len: usize) {
+        buf[6..9].copy_from_slice(&(len as u32).to_be_bytes()[1..]);
+    }
+
+    fn replace_extensions(extensions: &[u8]) -> Vec<u8> {
+        let mut buf = build_client_hello("example.com");
+        buf.truncate(EXTENSIONS_LEN + 2);
+        buf.extend_from_slice(extensions);
+        set_u16(&mut buf, EXTENSIONS_LEN, extensions.len());
+        let len = buf.len();
+        set_handshake_len(&mut buf, len - 9);
+        set_u16(&mut buf, 3, len - 5);
+        buf
+    }
+
+    #[test]
+    fn test_nested_declared_length_mismatches() {
+        let original = build_client_hello("example.com");
+        for offset in [EXTENSIONS_LEN, SNI_EXT + 2, SNI_EXT + 4, SNI_EXT + 7] {
+            let len = u16::from_be_bytes([original[offset], original[offset + 1]]) as usize;
+            for declared in [0, len - 1, len + 1, u16::MAX as usize] {
+                let mut buf = original.clone();
+                set_u16(&mut buf, offset, declared);
+                assert_eq!(extract_sni(&buf), None, "offset={offset}, declared={declared}");
+                assert_eq!(
+                    client_hello_record_complete(&buf),
+                    RecordCompleteness::Complete { record_end: buf.len() }
+                );
+            }
+        }
+        for declared in [0, 34, original.len() - 10, original.len() - 8, 0xffffff] {
+            let mut buf = original.clone();
+            set_handshake_len(&mut buf, declared);
+            assert_eq!(extract_sni(&buf), None, "handshake length={declared}");
+        }
+    }
+
+    #[test]
+    fn test_extension_boundaries_before_and_after_sni() {
+        let original = build_client_hello("Example.COM");
+        let sni = &original[SNI_EXT..];
+        let unknown = [0x12, 0x34, 0, 2, 0xaa, 0xbb];
+        for before in [true, false] {
+            let extensions = if before {
+                [unknown.as_slice(), sni].concat()
+            } else {
+                [sni, &unknown].concat()
+            };
+            assert_eq!(
+                extract_sni(&replace_extensions(&extensions)),
+                Some("example.com".into())
+            );
+            for malformed in [&[0x12][..], &[0x12, 0x34], &[0x12, 0x34, 0], &[0x12, 0x34, 0, 2, 0xaa]] {
+                let extensions = if before {
+                    [malformed, sni].concat()
+                } else {
+                    [sni, malformed].concat()
+                };
+                assert_eq!(extract_sni(&replace_extensions(&extensions)), None);
+            }
+        }
+    }
+
+    #[test]
+    fn test_sni_list_validates_entries_after_hostname() {
+        let original = build_client_hello("example.com");
+        for tail in [&[1][..], &[1, 0], &[1, 0, 2, 0xaa]] {
+            let mut sni = original[SNI_EXT..].to_vec();
+            sni.extend_from_slice(tail);
+            let len = sni.len();
+            set_u16(&mut sni, 2, len - 4);
+            set_u16(&mut sni, 4, len - 6);
+            assert_eq!(extract_sni(&replace_extensions(&sni)), None);
+        }
+    }
+
+    #[test]
+    fn test_structural_checks_preserve_name_and_duplicate_selection() {
+        let original = build_client_hello("First.EXAMPLE");
+        let second = build_client_hello("second.example");
+        let first_sni = &original[SNI_EXT..];
+        let second_sni = &second[SNI_EXT..];
+        let tls13_versions = [0, 43, 0, 3, 2, 3, 4];
+        let extensions = [first_sni, &tls13_versions, second_sni].concat();
+        assert_eq!(
+            extract_sni(&replace_extensions(&extensions)),
+            Some("first.example".into())
+        );
+
+        // Unknown names remain skippable, but their lengths must fit the list.
+        let mut sni = first_sni[..6].to_vec();
+        sni.extend_from_slice(&[1, 0, 2, 0xaa, 0xbb]);
+        sni.extend_from_slice(&first_sni[6..]);
+        sni.extend_from_slice(&second_sni[6..]);
+        let len = sni.len();
+        set_u16(&mut sni, 2, len - 4);
+        set_u16(&mut sni, 4, len - 6);
+        assert_eq!(extract_sni(&replace_extensions(&sni)), Some("first.example".into()));
+        set_u16(&mut sni, 7, u16::MAX as usize);
+        assert_eq!(extract_sni(&replace_extensions(&sni)), None);
+
+        // This change does not add hostname-content policy or select a later
+        // SNI extension when the first one has no usable hostname.
+        assert_eq!(extract_sni(&build_client_hello("")), Some(String::new()));
+        let unknown_only = [0, 0, 0, 6, 0, 4, 1, 0, 1, 0xaa];
+        assert_eq!(
+            extract_sni(&replace_extensions(&[&unknown_only, second_sni].concat())),
+            None
+        );
+        let mut invalid_utf8 = first_sni.to_vec();
+        invalid_utf8[9] = 0xff;
+        assert_eq!(
+            extract_sni(&replace_extensions(&[invalid_utf8.as_slice(), second_sni].concat())),
+            None
+        );
+    }
+
+    #[test]
+    fn test_handshake_and_record_payload_isolation() {
+        let original = build_client_hello("example.com");
+        let mut extra_handshake = original.clone();
+        extra_handshake.extend_from_slice(&[2, 0, 0, 1, 0xaa]);
+        let len = extra_handshake.len();
+        set_u16(&mut extra_handshake, 3, len - 5);
+        assert_eq!(extract_sni(&extra_handshake), Some("example.com".into()));
+
+        // Bytes after the first declared handshake cannot supply its extensions.
+        set_handshake_len(&mut extra_handshake, EXTENSIONS_LEN - 9);
+        assert_eq!(extract_sni(&extra_handshake), None);
+
+        let mut early_data = original.clone();
+        early_data.extend_from_slice(&[0x17, 3, 3, 0, 2, 0xaa, 0xbb]);
+        assert_eq!(extract_sni(&early_data), Some("example.com".into()));
+        assert_eq!(
+            client_hello_record_complete(&early_data),
+            RecordCompleteness::Complete {
+                record_end: original.len()
+            }
+        );
+        set_u16(&mut early_data, 3, len + 100);
+        assert_eq!(client_hello_record_complete(&early_data), RecordCompleteness::NeedMore);
+        assert_eq!(extract_sni(&early_data), None);
     }
 
     #[test]

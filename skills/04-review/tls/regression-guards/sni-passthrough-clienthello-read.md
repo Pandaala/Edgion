@@ -47,6 +47,32 @@ beyond `MAX_CLIENT_HELLO_LEN` is naturally relayed by the bidirectional
   observed `Complete`. If the buffer is internally truncated it returns
   `None` defensively rather than clamping (defense in depth).
 
+Outer record completeness does not prove that its nested lengths are valid.
+The parser bounds the first ClientHello by its handshake u24 length, requires
+the extensions vector to occupy the rest of that body, and validates every
+extension header/payload and every SNI list/entry against its parent. It retains
+the first SNI/host_name selection but validates later container boundaries
+before returning it. Unknown extensions and name types remain skippable when
+their declared payload fits. Later handshake bytes in the same record cannot
+supply missing ClientHello bytes. A malformed complete record returns `None`;
+the existing caller closes it without another read or cross-record reassembly.
+
+The nested-length correction (B0210) addresses previously ignored handshake
+and ServerNameList lengths and clamped extension lengths. Before correction,
+the unit fixture with a one-byte-oversized extensions-vector declaration still returned
+`example.com`; it now returns `None`. This is a parser-contract defect, not
+evidence of an out-of-bounds read, authentication bypass, or successful malformed
+TLS handshake. No hostname-character, duplicate-SNI, version, or cipher policy
+is introduced. Normalization and first-selection behavior remain unchanged.
+
+Inline parser matrices cover short/oversized nested lengths, incomplete unknown
+extension headers/payloads before and after SNI, malformed entries after a valid
+hostname, first-selection behavior, valid TLS 1.3 supported_versions bytes,
+post-handshake isolation, trailing EarlyData, and outer `NeedMore`. These are
+in-memory parser checks, not fresh wire-level verification; additional malformed
+passthrough integration coverage remains deferred in
+[the parser wire-coverage task](../../../../tasks/todo/add-malformed-clienthello-passthrough-coverage.md).
+
 `passthrough_proxy.rs::read_client_hello` is the read loop. It returns
 `(record_end, filled)`:
 
