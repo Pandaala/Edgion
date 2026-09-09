@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: changed; implementation, independent reviews and verification complete, awaiting local commit.
+- Pipeline state: changed; committed locally.
 - Active anchor: `edgion-gateway`.
 - Baseline: `8fc76e83`.
 - Target: `edgion-gateway/src/plugins/http/common/outbound/client.rs`.
@@ -41,4 +41,4 @@
 - Independent plan reviewer `b0246_plan_review`: APPROVED. Independent final reviewer `b0246_final_review`: LGTM with no findings after verifying URL parser, IPv4-mapped address, resolver rotation and active/passive state boundaries.
 - Verification: outbound client 30/30, pinned resolver 4/4, shared external HTTP 22/22, ForwardAuth 6/6, AI Guard 49/49, Guardrail 20/20 and Webhook 46/46. Workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
 - No integration edit or new issue. Existing D0005 remains independent.
-- Commit: pending; never push.
+- Commit: `a9236e75`; never pushed.

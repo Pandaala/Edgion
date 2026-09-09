@@ -353,11 +353,11 @@
 | `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | changed | B0244: allocation-free empty/single rate-limit key paths; independent plan/final approval and focused tests passed |
 | `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | changed | B0245: move sole-attempt requests and use monotonic passive recovery; independent revised-plan/final approval |
 | `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | changed | B0246: fail-closed active-health URL/dial validation and correct passive/active circuit ownership |
-| `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | pending | — |
-| `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | changed | B0247: saturating TTL publication and elapsed-time DNS cache expiry remove overflow/panic paths |
+| `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | analysis-ready | B0248: minimal coherent facade; no worthwhile visibility or re-export churn |
 | `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | changed | B0246: filter every pinned EndpointSlice address through canonical final-dial validation before rotation |
 | `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | changed | B0107: canonical framing helper reused by Wasm callouts |
-| `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | analysis-ready | B0249: canonical Service-port section resolution required; complex candidate queued |
 | `edgion-gateway/src/plugins/http/conf_handler_impl.rs` | `plugins-http-framework` | source | changed | B0062 |
 | `edgion-gateway/src/plugins/http/cors/mod.rs` | `plugins-http-cors` | source | examined-no-change | B0068 |
 | `edgion-gateway/src/plugins/http/cors/plugin.rs` | `plugins-http-cors` | source | changed | B0068 |

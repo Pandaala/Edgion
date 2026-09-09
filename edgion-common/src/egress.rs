@@ -115,7 +115,13 @@ pub struct EgressPolicy {
 
 struct CacheEntry {
     addrs: Vec<IpAddr>,
-    expires_at: Instant,
+    inserted_at: Instant,
+}
+
+impl CacheEntry {
+    fn is_fresh(&self, now: Instant, ttl: Duration) -> bool {
+        now.saturating_duration_since(self.inserted_at) < ttl
+    }
 }
 
 struct Inner {
@@ -220,12 +226,12 @@ impl Inner {
     fn cached(&self, host: &str, now: Instant) -> Option<Vec<IpAddr>> {
         let guard = self.cache.read();
         let entry = guard.get(host)?;
-        (entry.expires_at > now).then(|| entry.addrs.clone())
+        entry.is_fresh(now, self.ttl).then(|| entry.addrs.clone())
     }
 
     fn store(&self, host: &str, addrs: Vec<IpAddr>, now: Instant) {
         let mut guard = self.cache.write();
-        guard.retain(|_, entry| entry.expires_at > now);
+        guard.retain(|_, entry| entry.is_fresh(now, self.ttl));
         if guard.len() >= EGRESS_CACHE_MAX_ENTRIES && !guard.contains_key(host) {
             guard.clear();
         }
@@ -233,7 +239,7 @@ impl Inner {
             host.to_string(),
             CacheEntry {
                 addrs,
-                expires_at: now + self.ttl,
+                inserted_at: now,
             },
         );
     }
@@ -373,6 +379,59 @@ mod tests {
             resolver.store(&format!("host-{index}.example.com"), vec![ip("93.184.216.34")], now);
         }
         assert!(resolver.cache_len() <= EGRESS_CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn cache_freshness_is_strict_at_ttl_boundary_and_pruning_matches() {
+        let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_millis(10));
+        let inserted_at = Instant::now();
+        let address = ip("93.184.216.34");
+        resolver.store("old.example.com", vec![address], inserted_at);
+
+        assert_eq!(
+            resolver.cached("old.example.com", inserted_at + Duration::from_millis(9)),
+            Some(vec![address])
+        );
+        let boundary = inserted_at + Duration::from_millis(10);
+        assert_eq!(resolver.cached("old.example.com", boundary), None);
+
+        resolver.store("new.example.com", vec![address], boundary);
+        assert_eq!(resolver.cache_len(), 1);
+        assert_eq!(resolver.cached("old.example.com", boundary), None);
+        assert_eq!(resolver.cached("new.example.com", boundary), Some(vec![address]));
+    }
+
+    #[test]
+    fn zero_ttl_expires_immediately_in_lookup_and_pruning() {
+        let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::ZERO);
+        let now = Instant::now();
+        let address = ip("93.184.216.34");
+        resolver.store("old.example.com", vec![address], now);
+        assert_eq!(resolver.cached("old.example.com", now), None);
+
+        resolver.store("new.example.com", vec![address], now);
+        assert_eq!(resolver.cache_len(), 1);
+        assert_eq!(resolver.cached("old.example.com", now), None);
+        assert_eq!(resolver.cached("new.example.com", now), None);
+    }
+
+    #[test]
+    fn cache_freshness_handles_reversed_samples_and_huge_ttl() {
+        let address = ip("93.184.216.34");
+        let earlier = Instant::now();
+        let later = earlier + Duration::from_millis(10);
+        let resolver = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::from_secs(1));
+        resolver.store("future.example.com", vec![address], later);
+        assert_eq!(resolver.cached("future.example.com", earlier), Some(vec![address]));
+        resolver.store("current.example.com", vec![address], earlier);
+        assert_eq!(resolver.cache_len(), 2);
+
+        let huge = EgressResolver::new(ResolverSpec::System, EgressPolicy::default(), Duration::MAX);
+        huge.store("huge.example.com", vec![address], earlier);
+        assert_eq!(
+            huge.cached("huge.example.com", earlier + Duration::from_secs(1)),
+            Some(vec![address])
+        );
     }
 
     #[tokio::test]

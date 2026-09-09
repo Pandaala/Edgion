@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0246 implementation, independent reviews and verification complete at `ceb13835`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 230 changed, 184 examined-no-change, 15 deferred, 119 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0246 outbound client security and health-ownership repair: commit gate complete for two Gateway files plus one necessary resource support file. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0247 starts with the next pending outbound helper after B0246 commits. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0247 implementation, independent reviews and verification complete at `a9236e75`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 231 changed, 184 examined-no-change, 15 deferred, 118 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0247 overflow-safe outbound DNS TTL storage and expiry: commit gate complete for one Gateway file plus one necessary common support file. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0248 examined-no-change and B0249 complex-change reports are ready at baseline `a9236e75`; each requires current-HEAD refresh before serial promotion. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

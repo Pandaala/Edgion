@@ -23,15 +23,16 @@ pub use edgion_common::egress::{EgressPolicy, EGRESS_CACHE_MAX_ENTRIES};
 static EGRESS_BLOCK_PRIVATE: AtomicBool = AtomicBool::new(false);
 static EGRESS_DNS_TTL_MS: AtomicU64 = AtomicU64::new(5_000);
 
+fn duration_millis_saturating(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// Install Gateway-local egress defaults before outbound clients are built.
 pub fn configure_egress_defaults(block_private: bool, dns_cache_ttl: Duration) {
+    let dns_cache_ttl_ms = duration_millis_saturating(dns_cache_ttl);
     EGRESS_BLOCK_PRIVATE.store(block_private, Ordering::Relaxed);
-    EGRESS_DNS_TTL_MS.store(dns_cache_ttl.as_millis() as u64, Ordering::Relaxed);
-    tracing::info!(
-        block_private,
-        dns_cache_ttl_ms = dns_cache_ttl.as_millis() as u64,
-        "Outbound egress defaults configured"
-    );
+    EGRESS_DNS_TTL_MS.store(dns_cache_ttl_ms, Ordering::Relaxed);
+    tracing::info!(block_private, dns_cache_ttl_ms, "Outbound egress defaults configured");
 }
 
 pub fn default_block_private() -> bool {
@@ -78,6 +79,12 @@ pub(crate) fn filter_resolved_addrs(addrs: Vec<IpAddr>, policy: EgressPolicy, al
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_millis_conversion_preserves_values_and_saturates() {
+        assert_eq!(duration_millis_saturating(Duration::from_millis(30_000)), 30_000);
+        assert_eq!(duration_millis_saturating(Duration::MAX), u64::MAX);
+    }
 
     #[test]
     fn configure_egress_defaults_updates_accessors() {
