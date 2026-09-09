@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0244 implementation, independent reviews and verification complete at `8fc76e83`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 227 changed, 184 examined-no-change, 15 deferred, 122 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0244 HTTP common rate-limit key resolution: commit gate complete for the exact one-file implementation lane. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0245 outbound call and B0246 outbound client security repair are analysis-ready; B0245 promotes first, and B0246 must refresh after its supporting client documentation changes. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0245 implementation, independent reviews and verification complete at `654fe9a1`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 228 changed, 184 examined-no-change, 15 deferred, 121 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0245 outbound call ownership and passive recovery timing: commit gate complete for the exact two-file code scope plus standalone D0128 task. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0246 outbound client security repair remains analysis-ready and must refresh against B0245's changed `client.rs` before promotion. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

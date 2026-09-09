@@ -24,4 +24,4 @@
 - Corrected the `Resolved` documentation for the valid empty key and strengthened the empty-list regression to prove zero `key_get` calls and no miss log.
 - Independent plan reviewer `b0244_plan_review`: APPROVED. Independent final reviewer `b0244_final_review`: LGTM with no findings; confirmed exact bucket bytes, caller opacity and one-file technical scope.
 - Verification: common 11/11, RateLimit-filtered 18/18, RateLimitRedis 14/14 and AI quota 23/23 test executions. Workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
-- Commit: pending; never push.
+- Commit: `654fe9a1`; never pushed by the campaign.

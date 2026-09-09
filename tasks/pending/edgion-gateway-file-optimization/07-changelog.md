@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0244: added zero/single-source fast paths to shared rate-limit key resolution, removing the default one-source request-path vector allocation and String clone while preserving the empty global bucket, injective multi-source bytes, miss policy and exact log tags. Independent plan approval and final LGTM; four focused filters completed 66/66 test executions and all workspace/guard checks passed. No integration change or issue. Local commit SHA pending; never push.
+- B0245: moved the built request directly into default sole-attempt outbound calls and changed passive recovery from wall-clock epoch time to saturating process-monotonic elapsed time while preserving retry cloning, zero-backoff behavior, one-shot CAS and wall-clock HTTP-date Retry-After. Added deterministic ownership and boundary tests; independent revised-plan approval and correction re-review LGTM. Five focused filters passed 155/155 and all workspace/guard checks passed. Existing integrations unchanged; network-backed library unit-test isolation is D0128. Local commit SHA pending; never push.
+
+- B0244: added zero/single-source fast paths to shared rate-limit key resolution, removing the default one-source request-path vector allocation and String clone while preserving the empty global bucket, injective multi-source bytes, miss policy and exact log tags. Independent plan approval and final LGTM; four focused filters completed 66/66 test executions and all workspace/guard checks passed. No integration change or issue. Commit `654fe9a1`; no push.
 
 - B0243: changed shared JSON/form request classification to borrow the canonical HeaderMap directly, removing temporary Content-Type and Content-Encoding vectors and String clones from three configured request paths. Preserved duplicate/raw-byte, MIME/charset and identity-encoding failure semantics; added real-HeaderMap regressions. Independent LGTM; focused tests 34/34 and all workspace/guard checks passed. No integration change or issue. Commit `8fc76e83`; no push.
 

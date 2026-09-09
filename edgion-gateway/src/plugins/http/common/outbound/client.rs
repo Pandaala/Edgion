@@ -54,7 +54,8 @@ pub struct HealthState {
     pub healthy: AtomicBool,
     /// Consecutive passive-failure counter for the passive-health gate.
     pub passive_failures: AtomicU32,
-    /// Epoch-seconds of the last half-open probe admission (passive-only recovery).
+    /// Process-monotonic passive-recovery gate baseline, set when the circuit
+    /// opens and advanced when a half-open probe is admitted.
     pub last_halfopen: AtomicU64,
     /// Current backoff interval in seconds (passive-only recovery).
     pub backoff_sec: AtomicU64,

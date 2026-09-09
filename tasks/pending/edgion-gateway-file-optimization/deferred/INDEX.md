@@ -200,3 +200,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Investigate Gateway TLS collision retention (D0125) | needs-investigation | [task](../../../todo/investigate-gateway-tls-collision-snapshot-retention.md) |
 | Enforce canonical gRPC terminal status headers (D0126) | pending | [task](../../../todo/enforce-canonical-grpc-terminal-status-headers.md) |
 | Reject empty individual outbound CA bundles (D0127) | pending | [task](../../../todo/reject-empty-individual-outbound-ca-bundles.md) |
+| Isolate shared outbound-call library unit tests from network (D0128) | pending | [task](../../../todo/isolate-shared-outbound-call-unit-tests-from-network.md) |

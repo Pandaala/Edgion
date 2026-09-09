@@ -7,7 +7,8 @@
 //! left to the caller.
 
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -145,7 +146,8 @@ pub async fn outbound_call_with_body(
     }
 
     // ── 3. Resolve base URL (with SSRF guard) and build the outbound request ─
-    //    The request is built once and cloned per retry attempt.
+    //    The request is built once, moved into a sole attempt, or cloned for
+    //    each attempt when retries are configured.
     let base = client
         .dial_url()
         .map_err(|e| OutboundCallError::Connect(e.to_string()))?;
@@ -182,7 +184,7 @@ pub async fn outbound_call_with_body(
     // session read failed on a later attempt.
     let effective_timeout = resolve_timeout(client, session);
 
-    let template_req =
+    let mut template_req = Some(
         match client
             .compiled_request
             .build_request(session, path_override, &base, client.resolved_secrets.as_ref())
@@ -214,7 +216,8 @@ pub async fn outbound_call_with_body(
             // request-construction error, not a backend failure, so we do not record
             // a passive health result.
             Err(e) => return Err(OutboundCallError::Connect(e)),
-        };
+        },
+    );
 
     // ── 4. Execute with retry ─────────────────────────────────────────────────
     let max_attempts = 1 + client.retry.as_ref().map_or(0, |r| r.max_retries);
@@ -237,7 +240,7 @@ pub async fn outbound_call_with_body(
             }
         }
 
-        let req = match template_req.try_clone() {
+        let req = match request_for_attempt(&mut template_req, max_attempts) {
             Some(r) => r,
             None => {
                 return Err(OutboundCallError::Connect(
@@ -448,6 +451,19 @@ fn resolve_timeout(client: &ManagedOutboundClient, session: &dyn PluginSession) 
     client.timeout
 }
 
+/// Select the request for one outbound attempt.
+///
+/// A logical call with one attempt transfers ownership directly. Retry-capable
+/// calls retain the template and clone it for every attempt, preserving the
+/// existing rejection of non-replayable request bodies.
+fn request_for_attempt(template_req: &mut Option<reqwest::Request>, max_attempts: u32) -> Option<reqwest::Request> {
+    if max_attempts == 1 {
+        template_req.take()
+    } else {
+        template_req.as_ref()?.try_clone()
+    }
+}
+
 /// Compute a retry delay in milliseconds for `attempt` (1 = first retry).
 ///
 /// `fixed`  → `retry_delay_ms`.
@@ -547,9 +563,8 @@ pub(crate) async fn stream_body_capped(
 
 /// Record a passive health result for the given `HealthState`.
 ///
-/// Mirrors the logic in `webhook/health.rs::record_passive_result` but operates
-/// on [`HealthState`] + an `Option<PassiveHealthCheck>` so it can be used
-/// without a full `WebhookRuntime`.
+/// Success resets the passive circuit. Enough consecutive failures open it and,
+/// when backoff is configured, establish the recovery-window baseline.
 fn record_passive_result(
     health: &HealthState,
     passive: &Option<edgion_resources::resources::common::external_http::PassiveHealthCheck>,
@@ -569,7 +584,7 @@ fn record_passive_result(
             health.healthy.store(false, Ordering::Relaxed);
             if let Some(ref backoff) = cfg.backoff {
                 health.backoff_sec.store(backoff.initial_sec, Ordering::Relaxed);
-                health.last_halfopen.store(now_epoch_secs(), Ordering::Relaxed);
+                health.last_halfopen.store(process_elapsed_secs(), Ordering::Relaxed);
             }
         }
     }
@@ -577,8 +592,8 @@ fn record_passive_result(
 
 /// Check if a half-open probe should be admitted for passive-only recovery.
 ///
-/// Mirrors `webhook/health.rs::should_halfopen_probe` but operates on
-/// [`HealthState`] + `Option<PassiveHealthCheck>`.
+/// Once the current backoff interval elapses, a one-shot CAS admits at most one
+/// caller and advances the recovery-window baseline.
 fn should_halfopen_probe(client: &ManagedOutboundClient) -> bool {
     if client.health.healthy.load(Ordering::Relaxed) {
         return false;
@@ -596,11 +611,11 @@ fn should_halfopen_probe(client: &ManagedOutboundClient) -> bool {
         None => return false,
     };
 
-    let now = now_epoch_secs();
+    let now = process_elapsed_secs();
     let last = client.health.last_halfopen.load(Ordering::Acquire);
     let interval = client.health.backoff_sec.load(Ordering::Relaxed);
 
-    if interval == 0 || now >= last + interval {
+    if halfopen_window_due(now, last, interval) {
         if client
             .health
             .last_halfopen
@@ -618,12 +633,19 @@ fn should_halfopen_probe(client: &ManagedOutboundClient) -> bool {
     false
 }
 
-/// Return the current wall-clock time as seconds since the Unix epoch.
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+/// Whether the passive-only half-open window is ready for one probe.
+fn halfopen_window_due(now: u64, last: u64, interval: u64) -> bool {
+    interval == 0 || now >= last.saturating_add(interval)
+}
+
+// An elapsed value of zero is a valid timestamp, not a sentinel. Disabled
+// backoff is represented by `backoff_sec == 0` in `halfopen_window_due`.
+static PROCESS_MONOTONIC_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+/// Return seconds elapsed from this process's monotonic origin.
+fn process_elapsed_secs() -> u64 {
+    let origin = PROCESS_MONOTONIC_ORIGIN.get_or_init(Instant::now);
+    Instant::now().saturating_duration_since(*origin).as_secs()
 }
 
 // ============================================================
@@ -709,6 +731,57 @@ mod tests {
         s.expect_get_method().return_const(method.to_string());
         s.expect_get_request_path().return_const(path.to_string());
         s
+    }
+
+    fn non_cloneable_request() -> reqwest::Request {
+        let mut request = reqwest::Request::new(
+            reqwest::Method::POST,
+            reqwest::Url::parse("http://example.com/").unwrap(),
+        );
+        let body = futures::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"streaming body")) });
+        *request.body_mut() = Some(reqwest::Body::wrap_stream(body));
+        assert!(request.try_clone().is_none());
+        request
+    }
+
+    #[test]
+    fn sole_attempt_takes_non_cloneable_request() {
+        let mut template = Some(non_cloneable_request());
+
+        assert!(request_for_attempt(&mut template, 1).is_some());
+        assert!(template.is_none());
+    }
+
+    #[test]
+    fn retry_attempt_rejects_non_cloneable_request_without_consuming_template() {
+        let mut template = Some(non_cloneable_request());
+
+        assert!(request_for_attempt(&mut template, 2).is_none());
+        assert!(template.is_some());
+    }
+
+    #[test]
+    fn retry_attempt_clones_replayable_request_without_consuming_template() {
+        let mut request = reqwest::Request::new(
+            reqwest::Method::POST,
+            reqwest::Url::parse("http://example.com/").unwrap(),
+        );
+        *request.body_mut() = Some(Bytes::from_static(b"replayable body").into());
+        let mut template = Some(request);
+
+        assert!(request_for_attempt(&mut template, 2).is_some());
+        assert!(request_for_attempt(&mut template, 2).is_some());
+        assert!(template.is_some());
+    }
+
+    #[test]
+    fn halfopen_window_due_preserves_zero_interval_and_saturates_boundaries() {
+        assert!(halfopen_window_due(4, 5, 0));
+        assert!(!halfopen_window_due(4, 5, 1));
+        assert!(!halfopen_window_due(9, 5, 5));
+        assert!(halfopen_window_due(10, 5, 5));
+        assert!(!halfopen_window_due(u64::MAX - 1, u64::MAX - 2, 10));
+        assert!(halfopen_window_due(u64::MAX, u64::MAX - 2, 10));
     }
 
     // ── TDD tests ─────────────────────────────────────────────────────────────
