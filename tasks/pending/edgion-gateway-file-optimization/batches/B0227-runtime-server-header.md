@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified changed (rustdoc only); awaiting local commit.
+- Pipeline state: terminal; local commit `1456c442`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/server/server_header.rs`.
 - Baseline: `415584d5`.
@@ -27,4 +27,4 @@
 
 - Final reviewer LGTM; no Must Fix/Should Fix. Three-line comment-only scope, standard HeaderName recognition versus separate Pingora title-case table independently verified; executable code/tests unchanged.
 - Four focused filters each passed 1/1: provider-header reset, six fixed HTML responses, exact gRPC queued operations and gRPC-Web canonical trailer. Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed.
-- Logs: `/tmp/edgion-b0227-{provider,html,grpc,grpc-web,check,clippy}.log`. No new issue or integration change. Ledger/changelog updated; commit pending, local only.
+- Logs: `/tmp/edgion-b0227-{provider,html,grpc,grpc-web,check,clippy}.log`. No new issue or integration change. Ledger/changelog updated; commit `1456c442`, local only.

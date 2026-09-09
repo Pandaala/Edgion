@@ -19,14 +19,20 @@ pub struct GatewayStore {
 ```
 
 Operations:
+
 - `add_gateway()` — add (returns an error if the key already exists).
 - `update_gateway()` — update or insert.
 - `remove_gateway()` — remove.
-- `get_gateway()` — query by key.
-- `list_gateways()` — list all.
+- `list_gateways()` — clone all resources into an owned `Vec<Gateway>` snapshot.
+- `count()` — resource count for Admin API store statistics and leak detection.
 - `clear()` — clear.
 
-Global singleton: `get_global_gateway_store()` returns `Arc<RwLock<GatewayStore>>`.
+Global singleton: `get_global_gateway_store()` returns `Arc<RwLock<GatewayStore>>`,
+using `parking_lot::RwLock` for this low-frequency raw configuration map.
+`GatewayHandler` mutates the map and captures the owned Gateway snapshot under the
+write guard, then releases that guard before rebuilding the derived TLS matcher
+and listener information. Request routing reads those derived views, not the raw
+map; Admin API diagnostics read its count.
 
 ## ListenerGatewayInfo Store
 
@@ -53,7 +59,8 @@ Stores using ArcSwap:
 - Each provider's runtime store (Redis / Etcd / ES).
 - `BackendSelector` — backend selector state.
 
-Difference vs RwLock: `GatewayStore` uses `Arc<RwLock<GatewayStore>>` (writes need mutual exclusion), suitable for higher write-frequency scenarios.
+The raw `GatewayStore` uses the scoped `RwLock` ownership described above; it is
+not a high-frequency request lookup store.
 
 ## Error response generation
 

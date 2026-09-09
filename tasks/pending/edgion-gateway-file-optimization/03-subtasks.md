@@ -142,7 +142,7 @@
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
 | `routes-shared` | 66 | 1 | 1 | 0 | pending |
-| `runtime` | 16 | 6 | 6 | 1 | pending |
+| `runtime` | 16 | 6 | 7 | 1 | pending |
 | `services` | 4 | 1 | 3 | 0 | complete |
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
@@ -667,9 +667,9 @@
 | `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | examined-no-change | B0225: independent LGTM; explicit writer/server facade retained; server tests 26/26 |
 | `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | examined-no-change | B0226: independent LGTM; policy 12/12, listener trust 1/1, CLI 2/2; frozen trust lifecycle retained |
 | `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | changed | B0227: corrected three HSTS cost rustdoc lines only; independent LGTM and four response regressions passed |
-| `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | analysis-ready | B0228: retain raw store; correct owning architecture API/frequency/consumer description |
-| `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | pending | — |
-| `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | examined-no-change | B0228: independent LGTM; raw store retained, owning API/frequency/snapshot knowledge corrected |
+| `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | analysis-ready | B0229: borrow original annotation map for projection/DNS; preserve immutable snapshot semantics |
+| `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | analysis-in-progress | B0230: store facade and actual raw/derived consumers/value analysis |
 | `edgion-gateway/src/services/acme/challenge_store.rs` | `services` | source | changed | `B0060`: made the absolute expiry boundary exclusive with deterministic coverage |
 | `edgion-gateway/src/services/acme/conf_handler_impl.rs` | `services` | source | examined-no-change | `B0060`: retained real incremental atomic publication and bounded config logging |
 | `edgion-gateway/src/services/acme/mod.rs` | `services` | source | examined-no-change | `B0060`: retained the minimal live ACME facade and exports |

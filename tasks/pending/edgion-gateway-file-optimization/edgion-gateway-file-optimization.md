@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0226 committed locally as `a63a88ca`; external source updates remain reconciled |
-| Coverage | 547 current Gateway files: 221 changed, 178 examined-no-change, 13 deferred, 135 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
-| Active batch | B0227 server-header rustdoc-only correction independently approved and verified; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0228 raw Gateway store is analysis-ready with a scoped architecture correction and no source change. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
+| Campaign status | in-progress; B0227 committed locally as `1456c442`; external source updates remain reconciled |
+| Coverage | 547 current Gateway files: 221 changed, 179 examined-no-change, 13 deferred, 134 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
+| Active batch | B0228 raw Gateway store owning-document correction independently approved and verified; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0229 listener Gateway store is analysis-ready; B0230 store facade analysis is in progress. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
 | Integration freeze | 3,121 files. External updates through `53d59adb` were reconciled individually after byte/mode verification, most recently two changed files and one new DSL Redis test. No campaign integration-test edit occurred. |
 
 ## AI guide summary
