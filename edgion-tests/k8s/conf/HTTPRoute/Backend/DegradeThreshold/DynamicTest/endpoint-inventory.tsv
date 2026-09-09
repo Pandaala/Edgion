@@ -1,0 +1,4 @@
+# phase	namespace	service	port	expected_count
+absent	edgion-test	service-degrade-dynamic	30001	0
+disabled	edgion-test	service-degrade-dynamic	30001	nonempty
+degraded	edgion-test	service-degrade-dynamic	30001	nonempty

@@ -219,6 +219,28 @@ async fn cleanup_resources(ctx: &ScenarioCtx) -> Result<()> {
             Err(error) => failures.push(format!("delete {resource}: {error}")),
         }
     }
+    if std::env::var("EDGION_TEST_K8S_MODE")
+        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+    {
+        for name in ["aes-tls-dynamic-tls", "aes-tls-dynamic-mtls"] {
+            let mut request = ctx
+                .test_ctx
+                .http_client
+                .delete(format!(
+                    "{}/api/v1/namespaced/Deployment/edgion-test/{name}",
+                    ctx.controller_url.trim_end_matches('/')
+                ))
+                .timeout(Duration::from_secs(5));
+            if let Some(token) = token.as_ref() {
+                request = request.bearer_auth(token.as_str());
+            }
+            match request.send().await {
+                Ok(response) if response.status().is_success() || response.status().as_u16() == 404 => {}
+                Ok(response) => failures.push(format!("delete Deployment/{name}: HTTP {}", response.status())),
+                Err(error) => failures.push(format!("delete Deployment/{name}: {error}")),
+            }
+        }
+    }
     ensure!(failures.is_empty(), "cleanup failed: {}", failures.join("; "));
     Ok(())
 }

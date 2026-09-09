@@ -9,6 +9,8 @@ knowledge_type: regression-guards
 
 # route-05 — Per-try timeout test coverage gaps — FILLED + ONE ACCEPTED SKIP
 
+`HTTPRoute/Backend/InformationalRetry` adds the informational-response boundary: an HTTP/1 origin flushes `100 Continue` on trace attempt 1 and stalls beyond the one-second backend-request timeout; trace attempt 2 returns 200. The raw client, transport recorder, and access log require the exact `100 -> 200` wire sequence, two upstream attempts with ordered 504/200 statuses, `ReadTimedout`, and `BackendRequestTimeoutRetry`.
+
 ## Conclusion
 
 The per-try-timeout deep review (test-adequacy reviewer) listed three coverage

@@ -78,6 +78,10 @@ pub struct TransportEvent {
     pub stream: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
+    /// Trace-scoped request ordinal for behaviors whose result changes between
+    /// attempts carrying the same trace id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_request_ordinal: Option<u32>,
     pub kind: String,
     /// `ReqHeaders`. H2: END_STREAM on HEADERS. H1: neither CL nor TE present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +94,12 @@ pub struct TransportEvent {
     pub method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// `ReqHeaders`: parsed `grpc-timeout`, split so the recorder never stores
+    /// arbitrary request-header text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_timeout_value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_timeout_unit: Option<String>,
     /// `ReqData`: bytes in this chunk. `ReqTrailers`: number of fields.
     /// `RespHead`/`RespDone`: response body bytes actually emitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +140,11 @@ impl TransportEvent {
         self
     }
 
+    pub fn trace_request_ordinal(mut self, ordinal: Option<u32>) -> Self {
+        self.trace_request_ordinal = ordinal;
+        self
+    }
+
     pub fn headers_eos(mut self, v: bool) -> Self {
         self.headers_eos = Some(v);
         self
@@ -152,6 +167,12 @@ impl TransportEvent {
 
     pub fn path(mut self, v: &str) -> Self {
         self.path = Some(v.to_string());
+        self
+    }
+
+    pub fn grpc_timeout(mut self, value: u64, unit: char) -> Self {
+        self.grpc_timeout_value = Some(value);
+        self.grpc_timeout_unit = Some(unit.to_string());
         self
     }
 
@@ -218,6 +239,7 @@ pub struct TransportLog {
     /// cannot be satisfied by an empty log.
     accepted_total: HashMap<String, u64>,
     next_conn: HashMap<String, u32>,
+    trace_requests: HashMap<String, u32>,
     dropped: u64,
 }
 
@@ -230,6 +252,7 @@ impl Default for TransportLog {
             conns: Vec::new(),
             accepted_total: HashMap::new(),
             next_conn: HashMap::new(),
+            trace_requests: HashMap::new(),
             dropped: 0,
         }
     }
@@ -269,6 +292,13 @@ impl TransportLog {
         }
     }
 
+    /// Return the 1-based request ordinal for a trace in the current case.
+    pub fn note_trace_request(&mut self, trace_id: &str) -> u32 {
+        let slot = self.trace_requests.entry(trace_id.to_string()).or_insert(0);
+        *slot += 1;
+        *slot
+    }
+
     /// Associate a trace id with a connection so connection-scoped events stay
     /// correlatable to the request that caused them.
     pub fn bind_trace(&mut self, listener: &str, conn: u32, trace_id: &str) {
@@ -304,6 +334,7 @@ impl TransportLog {
         self.seq = 0;
         self.origin = Instant::now();
         self.events.clear();
+        self.trace_requests.clear();
         self.dropped = 0;
         for c in &mut self.conns {
             c.traces.clear();
@@ -377,6 +408,10 @@ pub fn claim_conn(listener: &str) -> u32 {
 
 pub fn note_request(listener: &str, conn: u32) -> u32 {
     TRANSPORT_LOG.lock().note_request(listener, conn)
+}
+
+pub fn note_trace_request(trace_id: &str) -> u32 {
+    TRANSPORT_LOG.lock().note_trace_request(trace_id)
 }
 
 pub fn bind_trace(listener: &str, conn: u32, trace_id: &str) {

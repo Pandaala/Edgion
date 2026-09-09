@@ -9,6 +9,8 @@ knowledge_type: regression-guards
 
 # route-10 — 1xx informational responses pollute response-filter state (status, CB, ht) — FIXED
 
+The local integration suite `HTTPRoute/Backend/InformationalRetry` exercises the HTTP/1 wire shape that unit tests could not cover: the first upstream attempt flushes `100 Continue` and then exceeds `timeouts.backendRequest`; the configured retry reaches a second 200 attempt. Raw downstream parsing requires exactly one 100 head followed by one intact final 200 response and a closed connection with no trailing bytes. The transport recorder and canonical access log independently require two ordered attempts, first-attempt 504/`ReadTimedout`, and `BackendRequestTimeoutRetry`.
+
 ## Conclusion
 
 For HTTP/1.1 upstreams pingora 0.8 delivers each informational (1xx) header as

@@ -104,6 +104,9 @@ fn parse_head(raw: &str) -> Result<H1Response, String> {
     let status_line = lines.next().ok_or_else(|| "empty response head".to_string())?;
     let mut parts = status_line.splitn(3, ' ');
     let version = parts.next().unwrap_or_default().to_string();
+    if !matches!(version.as_str(), "HTTP/1.0" | "HTTP/1.1") {
+        return Err(format!("unsupported response version in status line: {status_line:?}"));
+    }
     let status = parts
         .next()
         .and_then(|s| s.parse::<u16>().ok())
@@ -114,9 +117,10 @@ fn parse_head(raw: &str) -> Result<H1Response, String> {
         if line.is_empty() {
             continue;
         }
-        if let Some((name, value)) = line.split_once(':') {
-            headers.push((name.trim().to_string(), value.trim().to_string()));
-        }
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| format!("malformed response header line: {line:?}"))?;
+        headers.push((name.trim().to_string(), value.trim().to_string()));
     }
     Ok(H1Response {
         version,
@@ -614,6 +618,8 @@ pub struct TransportEvent {
     #[serde(default)]
     pub trace_id: Option<String>,
     #[serde(default)]
+    pub trace_request_ordinal: Option<u32>,
+    #[serde(default)]
     pub kind: String,
     #[serde(default)]
     pub headers_eos: Option<bool>,
@@ -625,6 +631,10 @@ pub struct TransportEvent {
     pub method: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub grpc_timeout_value: Option<u64>,
+    #[serde(default)]
+    pub grpc_timeout_unit: Option<String>,
     #[serde(default)]
     pub len: Option<usize>,
     #[serde(default)]
@@ -661,6 +671,9 @@ impl fmt::Display for TransportEvent {
         if let Some(t) = &self.trace_id {
             write!(f, " trace={t}")?;
         }
+        if let Some(v) = self.trace_request_ordinal {
+            write!(f, " trace_request={v}")?;
+        }
         if let Some(v) = self.headers_eos {
             write!(f, " headers_eos={v}")?;
         }
@@ -675,6 +688,9 @@ impl fmt::Display for TransportEvent {
         }
         if let Some(v) = &self.path {
             write!(f, " {v}")?;
+        }
+        if let (Some(value), Some(unit)) = (self.grpc_timeout_value, &self.grpc_timeout_unit) {
+            write!(f, " grpc_timeout={value}{unit}")?;
         }
         if let Some(v) = self.len {
             write!(f, " len={v}")?;
@@ -1070,5 +1086,13 @@ mod tests {
         assert_eq!(head.header("x-up-conn"), Some("3"));
         assert!(!head.is_interim());
         assert!(parse_head("HTTP/1.1 100 Continue\r\n").unwrap().is_interim());
+    }
+
+    #[test]
+    fn head_parsing_rejects_invalid_versions_and_header_lines() {
+        assert!(parse_head("HTTP/2 200 OK\r\nContent-Length: 0\r\n").is_err());
+        assert!(parse_head("HTTX/1.1 200 OK\r\nContent-Length: 0\r\n").is_err());
+        assert!(parse_head("HTTP/1.1 200 OK\r\nHTTP/1.1 500 Duplicate\r\n").is_err());
+        assert!(parse_head("HTTP/1.1 200 OK\r\nX-Good: yes\r\nbroken\r\n").is_err());
     }
 }

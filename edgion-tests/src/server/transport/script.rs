@@ -9,6 +9,7 @@
 //   x-up-behavior        which script this request runs (see `Behavior`)
 //   x-up-at-bytes        request-body byte offset at which the action fires
 //   x-up-reset-code      H2 error code for `reset` / `after-response: reset`
+//   x-up-reset-first     reset the first N requests for a trace before gRPC success
 //   x-up-after-response  what the upstream does after a complete response
 //   x-up-delay-ms        delay before the response head is written (cap 10 000)
 //   x-up-status          response status, default 200
@@ -23,6 +24,7 @@ pub const MAX_DELAY_MS: u64 = 10_000;
 pub const MAX_RESP_LEN: usize = 65_536;
 /// Default response body length when `x-up-resp-len` is absent.
 pub const DEFAULT_RESP_LEN: usize = 16;
+pub const MAX_RESET_FIRST: usize = 8;
 
 /// Deliberately malformed HTTP/1 response framings.
 ///
@@ -82,6 +84,11 @@ pub enum Behavior {
     Close,
     /// Respond with a deliberately malformed framing (HTTP/1 only).
     Malformed(Malformed),
+    /// H2-only valid unary `test.TestService/SayHello` response.
+    GrpcSayHello,
+    /// H1 only: emit `100 Continue` and hang on the first trace-keyed request,
+    /// then serve later requests with the ordinary bounded echo response.
+    InformationalThenHangFirst,
 }
 
 impl Behavior {
@@ -94,6 +101,8 @@ impl Behavior {
             Behavior::Reset => "reset",
             Behavior::Close => "close",
             Behavior::Malformed(m) => m.as_str(),
+            Behavior::GrpcSayHello => "grpc-say-hello",
+            Behavior::InformationalThenHangFirst => "informational-then-hang-first",
         }
     }
 
@@ -105,6 +114,8 @@ impl Behavior {
             "half-close" => Behavior::HalfClose,
             "reset" => Behavior::Reset,
             "close" => Behavior::Close,
+            "grpc-say-hello" => Behavior::GrpcSayHello,
+            "informational-then-hang-first" => Behavior::InformationalThenHangFirst,
             "malformed-cl-and-te" => Behavior::Malformed(Malformed::ContentLengthAndChunked),
             "malformed-chunk-size-overstated" => Behavior::Malformed(Malformed::ChunkSizeOverstated),
             "malformed-chunk-size-understated" => Behavior::Malformed(Malformed::ChunkSizeUnderstated),
@@ -161,6 +172,7 @@ pub struct UpScript {
     pub behavior: Behavior,
     pub at_bytes: usize,
     pub reset_code: String,
+    pub reset_first: usize,
     pub after_response: AfterResponse,
     pub delay_ms: u64,
     pub status: u16,
@@ -181,6 +193,7 @@ impl Default for UpScript {
             behavior: Behavior::Echo,
             at_bytes: 0,
             reset_code: "NO_ERROR".to_string(),
+            reset_first: 0,
             after_response: AfterResponse::Linger,
             delay_ms: 0,
             status: 200,
@@ -218,6 +231,12 @@ impl UpScript {
         }
         if let Some(raw) = get("x-up-reset-code") {
             script.reset_code = raw.trim().to_ascii_uppercase();
+        }
+        if let Some(raw) = get("x-up-reset-first") {
+            match raw.trim().parse::<usize>() {
+                Ok(v) => script.reset_first = v.min(MAX_RESET_FIRST),
+                Err(_) => warnings.push(format!("unparsable x-up-reset-first '{}', using 0", raw)),
+            }
         }
         if let Some(raw) = get("x-up-after-response") {
             match AfterResponse::parse(&raw) {
@@ -312,6 +331,8 @@ mod tests {
             "half-close",
             "reset",
             "close",
+            "grpc-say-hello",
+            "informational-then-hang-first",
             "malformed-cl-and-te",
             "malformed-chunk-size-overstated",
             "malformed-chunk-size-understated",
@@ -324,6 +345,18 @@ mod tests {
             let b = Behavior::parse(name).unwrap_or_else(|| panic!("{name} did not parse"));
             assert_eq!(b.as_str(), name);
         }
+    }
+
+    #[test]
+    fn reset_first_parses_and_caps_the_trace_attempt_count() {
+        assert_eq!(script_from(&[("x-up-reset-first", "2")]).reset_first, 2);
+        assert_eq!(script_from(&[("x-up-reset-first", "999")]).reset_first, MAX_RESET_FIRST);
+        let invalid = script_from(&[("x-up-reset-first", "two")]);
+        assert_eq!(invalid.reset_first, 0);
+        assert!(invalid
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("x-up-reset-first")));
     }
 
     #[test]

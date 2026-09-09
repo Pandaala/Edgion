@@ -1,0 +1,22 @@
+# phase	namespace	service	port	expected_count
+absent	edgion-test	aes-tls-dynamic	30001	0
+absent	edgion-test	aes-tls-dynamic	30051	0
+absent	edgion-test	aes-tls-dynamic	30052	0
+valid	edgion-test	aes-tls-dynamic	30051	1
+valid	edgion-test	aes-tls-dynamic	30052	1
+valid	edgion-test	aes-tls-dynamic	30001	0
+rejected	edgion-test	aes-tls-dynamic	30051	1
+rejected	edgion-test	aes-tls-dynamic	30052	1
+rejected	edgion-test	aes-tls-dynamic	30001	0
+tls_only	edgion-test	aes-tls-dynamic	30051	1
+tls_only	edgion-test	aes-tls-dynamic	30052	1
+tls_only	edgion-test	aes-tls-dynamic	30001	0
+invalid	edgion-test	aes-tls-dynamic	30051	1
+invalid	edgion-test	aes-tls-dynamic	30052	1
+invalid	edgion-test	aes-tls-dynamic	30001	0
+plaintext_rejected	edgion-test	aes-tls-dynamic	30001	1
+plaintext_rejected	edgion-test	aes-tls-dynamic	30052	1
+plaintext_rejected	edgion-test	aes-tls-dynamic	30051	0
+plaintext_only	edgion-test	aes-tls-dynamic	30001	1
+plaintext_only	edgion-test	aes-tls-dynamic	30052	1
+plaintext_only	edgion-test	aes-tls-dynamic	30051	0

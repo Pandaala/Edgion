@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-timeout-wire-delay
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: FaultInjection
+      config:
+        delay:
+          ratio: 1.0
+          fixedMs: 300

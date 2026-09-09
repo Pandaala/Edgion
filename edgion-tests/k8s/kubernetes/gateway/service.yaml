@@ -611,3 +611,35 @@ spec:
     port: 31953
     targetPort: 31953
     protocol: TCP
+  - name: p31954
+    port: 31954
+    targetPort: 31954
+    protocol: TCP
+  - name: p31955-udp
+    port: 31955
+    targetPort: 31955
+    protocol: UDP
+  - name: p31956
+    port: 31956
+    targetPort: 31956
+    protocol: TCP
+  - name: p31957
+    port: 31957
+    targetPort: 31957
+    protocol: TCP
+  - name: p31970
+    port: 31970
+    targetPort: 31970
+    protocol: TCP
+  - name: p31971
+    port: 31971
+    targetPort: 31971
+    protocol: TCP
+  - name: p31972
+    port: 31972
+    targetPort: 31972
+    protocol: TCP
+  - name: p31973
+    port: 31973
+    targetPort: 31973
+    protocol: TCP

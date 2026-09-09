@@ -1,0 +1,6 @@
+HTTPRoute/edgion-test/aes-tls-dynamic
+EdgionPlugins/edgion-test/aes-tls-dynamic
+BackendTLSPolicy/edgion-test/aes-tls-dynamic
+EndpointSlice/edgion-test/aes-tls-dynamic-30051
+EndpointSlice/edgion-test/aes-tls-dynamic-30052
+Service/edgion-test/aes-tls-dynamic

@@ -199,3 +199,27 @@ The following directories still contain `127.0.0.1/localhost/fixed admin port` a
   separate from the shared Gateway HTTP suites.
 - Base flow and test framework: [`01-integration-testing.md`](01-integration-testing.md)
 - This document only adds K8s-specific differences, the K8s conf checklist, and suite rework items.
+
+## 10. Canonical inventory parity
+
+`edgion-tests/k8s/scripts/common/validate_suite_parity.sh` compares the local static,
+dynamic, isolated, and final-gate inventories with their executable Kubernetes
+registrations. Run it together with its regression test whenever either runner or
+manifest changes:
+
+```bash
+bash edgion-tests/k8s/scripts/common/validate_suite_parity.sh
+bash edgion-tests/k8s/scripts/common/tests/validate_suite_parity_test.sh
+```
+
+Deliberate scope exceptions live separately in
+`edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv`. Each row must name
+one current canonical case, an approved reason, repository evidence, and a concrete
+re-evaluation trigger. Exceptions do not count as Kubernetes coverage, cannot cover
+final gates, and become errors when their canonical case disappears or gains an
+executable Kubernetes registration.
+
+The raw HTTP/1.1 and HTTP/2 transport listeners are available through the
+selector-owned `edgion-sequence-test-server` Service in Kubernetes. Wire-level retry
+and timeout suites use `transport-recorder.edgion-test.svc.cluster.local`; ports
+30030 and 30031 are not local-stack-only facilities.

@@ -354,6 +354,27 @@ assert_contains "${KUBECTL_LOG}" "INVENTORY:--namespace edgion-default --service
 assert_contains "${KUBECTL_LOG}" "--expected-count 0"
 
 : > "${KUBECTL_LOG}"
+cp "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/endpoint-inventory.tsv" \
+  "${TEMP_DIR}/endpoint-inventory.tsv.saved"
+cat > "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/endpoint-inventory.tsv" <<'EOF'
+initial	edgion-default	spw-a	app	nonempty
+zero_weight	edgion-default	spw-a	30001	nonempty
+final	edgion-default	spw-a	30001	nonempty
+EOF
+if PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
+  DYNAMIC_MANIFEST="${ENDPOINT_DYNAMIC_MANIFEST}" ENDPOINT_INVENTORY="${FAKE_ENDPOINT_INVENTORY}" \
+  FAKE_DYNAMIC_REGISTRY="SpWeighted" SYNC_TIMEOUT_SECONDS=2 SYNC_POLL_INTERVAL_SECONDS=1 \
+  "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario SpWeighted \
+  > "${TEMP_DIR}/named-endpoint-port.log" 2>&1; then
+  fail "named EndpointSlice inventory port was accepted"
+fi
+mv "${TEMP_DIR}/endpoint-inventory.tsv.saved" \
+  "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/endpoint-inventory.tsv"
+assert_contains "${TEMP_DIR}/named-endpoint-port.log" \
+  "endpoint inventory port must be a numeric port for SpWeighted/initial"
+assert_not_contains "${KUBECTL_LOG}" "INVENTORY:"
+
+: > "${KUBECTL_LOG}"
 if PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
   DYNAMIC_MANIFEST="${ENDPOINT_DYNAMIC_MANIFEST}" ENDPOINT_INVENTORY="${FAKE_ENDPOINT_INVENTORY}" \
   FAKE_DYNAMIC_REGISTRY="SpWeighted" FAKE_DYNAMIC_HANG=true \

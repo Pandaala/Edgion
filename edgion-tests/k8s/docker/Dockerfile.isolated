@@ -1,6 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
 ARG RUNTIME_BASE=debian:bookworm-slim
+FROM ${RUNTIME_BASE} AS resolver-builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY edgion-tests/integration/scripts/integration/oidc_egress/resolver_fixture.c /tmp/resolver_fixture.c
+RUN gcc -Wall -Wextra -Werror -shared -fPIC /tmp/resolver_fixture.c -ldl \
+    -o /tmp/oidc_egress_resolver.so
+
 FROM ${RUNTIME_BASE}
 
 ARG BINARY_PATH
@@ -38,6 +47,9 @@ RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
     && ln -s /usr/local/bin/edgion-gateway /workspace/target/debug/edgion-gateway \
     && ln -s /usr/local/bin/edgion-cli /workspace/target/debug/edgion-cli \
     && ln -s /usr/local/bin/test_server /workspace/target/debug/test_server
+
+COPY --from=resolver-builder /tmp/oidc_egress_resolver.so /usr/local/bin/oidc_egress_resolver.so
+RUN ln -s /usr/local/bin/oidc_egress_resolver.so /workspace/target/debug/oidc_egress_resolver.so
 
 RUN --mount=type=bind,source=config/crd,target=/tmp/crd \
     mkdir -p /workspace/config \

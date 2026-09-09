@@ -151,7 +151,7 @@ Two **raw** listeners, deliberately not on the axum router: `axum::serve` builds
 | `--transport-h1-port` | `30030` | hand-written HTTP/1.1 over a tokio `TcpListener` | `edgion-tests/src/server/transport/h1.rs` |
 | `--transport-h2-port` | `30031` | h2c prior knowledge via `h2::server` | `edgion-tests/src/server/transport/h2.rs` |
 
-These are a **local-stack** capability only. They are deliberately not wired into `edgion-tests/k8s/**`: that would need deployment manifests, EndpointSlice IP plumbing and Service objects for two ports whose only consumer is one local suite.
+These are a **local-stack** capability only. They are deliberately not wired into `edgion-tests/k8s/**`: that would need deployment manifests, EndpointSlice IP plumbing and Service objects for ports used only by local transport-focused suites.
 
 ### Steering: `x-up-*` request headers
 
@@ -162,6 +162,7 @@ Set on the original request by the test client; they survive the proxy and are r
 | `x-up-behavior` | see the table below | which script this request runs (default `echo`) |
 | `x-up-at-bytes` | integer, default `0` | request-body byte offset at which the action fires; `0` = immediately after the headers |
 | `x-up-reset-code` | `NO_ERROR`, `CANCEL`, `INTERNAL_ERROR`, `REFUSED_STREAM`, `PROTOCOL_ERROR`, … | HTTP/2 error code; unknown names fall back to `INTERNAL_ERROR` |
+| `x-up-reset-first` | integer, capped at `8` | for `grpc-say-hello`, reset the first N requests carrying the same `x-trace-id`, then return a valid unary gRPC response |
 | `x-up-after-response` | `linger` (default), `close`, `reset`, `goaway` | what the upstream does **after** a complete response |
 | `x-up-delay-ms` | integer, capped at `10000` | delay before the response head is written |
 | `x-up-status` | 3-digit code, default `200` | response status |
@@ -192,6 +193,8 @@ So the expressible script is `x-up-behavior: early-response` + `x-up-drain: fals
 | `half-close` | H1: FIN the write half and keep reading. H2: complete the response, then drop the receive stream with the request body still open |
 | `reset` | H1: real TCP RST (`SO_LINGER(0)` + close). H2: `RST_STREAM` with `x-up-reset-code` |
 | `close` | H1: graceful close with no response. H2: `GOAWAY(NO_ERROR)` |
+| `grpc-say-hello` | H2 only: drain the request and return a valid unary `test.TestService/SayHello` response with `grpc-status: 0` trailers; optionally reset the first trace-keyed requests via `x-up-reset-first` |
+| `informational-then-hang-first` | H1 only: require `x-trace-id`; flush `100 Continue` and wait for cancellation on trace request 1, then return the bounded echo response on later trace requests |
 | `malformed-cl-and-te` | response carries both `Content-Length` and `Transfer-Encoding: chunked`, body written chunked |
 | `malformed-chunk-size-overstated` | chunk-size line claims 8 more bytes than the chunk carries |
 | `malformed-chunk-size-understated` | chunk-size line claims half the bytes the chunk carries |
@@ -216,7 +219,7 @@ The recorder lives on the ordinary HTTP router (port `30001`), so tests reach it
 - `GET /transport/reset` — call at the start of every case
 - `GET /transport/dump` — everything, for failure dumps
 
-Event kinds: `ConnAccepted` · `ReqHeaders` · `ReqData` · `ReqTrailers` · `PeerReset` · `PeerGoaway` · `PeerHalfClose` · `RespHead` · `RespDone` · `ConnClosed`. The `Peer*` kinds are things **the gateway did to the upstream** — that is the entire reason they exist. Exactly one `ReqData` per completed request body carries `end_stream: true`, including a body that was empty by declaration. `ReqTrailers` requires real trailer fields: a bare `0\r\n\r\n`, or a `Trailer:` declaration header alone, does not count.
+Event kinds: `ConnAccepted` · `ReqHeaders` · `ReqData` · `ReqTrailers` · `PeerReset` · `PeerGoaway` · `PeerHalfClose` · `RespHead` · `RespDone` · `ConnClosed`. The `Peer*` kinds are things **the gateway did to the upstream** — that is the entire reason they exist. Exactly one `ReqData` per completed request body carries `end_stream: true`, including a body that was empty by declaration. `ReqTrailers` requires real trailer fields: a bare `0\r\n\r\n`, or a `Trailer:` declaration header alone, does not count. Trace-sequenced behaviors expose `trace_request_ordinal` on their events so retries can be paired with the response each attempt produced. An H2 `ReqHeaders` event may expose `grpc_timeout_value` and `grpc_timeout_unit`; the backend emits them only after validating the gRPC timeout grammar, so the recorder never retains arbitrary header text.
 
 `/transport/query/{trace_id}` returns the trace's own events **plus** every untagged event on each connection that carried that trace, because `ConnAccepted` / `ConnClosed` happen before any trace id exists:
 

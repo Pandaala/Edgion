@@ -1608,6 +1608,7 @@ run_all_tests() {
                     run_test "GRPCRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Delegation" || test_failed=true
                     run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
                     run_test "GRPCRoute_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimit" || test_failed=true
+                    run_test "GRPCRoute_TimeoutRewriteWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TimeoutRewriteWire" || test_failed=true
                     run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
                     run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
                 else
@@ -1878,6 +1879,8 @@ run_all_tests() {
         else
             log_info "Skipping slow test: HTTPRoute_Backend_PerTryTimeout (use --full-test to run)"
         fi
+
+        run_test "HTTPRoute_Backend_InformationalRetry" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/InformationalRetry" || test_failed=true
         run_test "HTTPRoute_Backend_CircuitBreaker" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
         run_test "HTTPRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "HTTPRoute_Backend_H2BackendMtlsPersistence" "${EDGION_TEST_CLIENT_BIN} -g h2-mtls-sp" || test_failed=true
@@ -1918,6 +1921,7 @@ run_all_tests() {
         run_test "GRPCRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Basic" || test_failed=true
         run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
         run_test "GRPCRoute_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimit" || test_failed=true
+        run_test "GRPCRoute_TimeoutRewriteWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TimeoutRewriteWire" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
         run_test "GRPCRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Delegation" || test_failed=true
@@ -2556,10 +2560,13 @@ main() {
     fi
     report_test "Preflight_FileDescriptorLimit" "PASS" "0"
 
-    # The AI provider suites use only 127.0.0.1. Do not require the
-    # macOS-only aliases that belong exclusively to the LB endpoint suites.
-    if [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; then
-        log_info "Skipping LB loopback-alias check for EdgionBackend${G_ITEM:+/${G_ITEM}}"
+    # These explicitly selected suites use only 127.0.0.1. Do not require the
+    # macOS-only aliases that belong to unrelated LB and GeoIP suites.
+    if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; } \
+        || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
+        || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/InformationalRetry" ]; } \
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "Waf" ]; }; then
+        log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then
         log_error "Loopback alias check failed"

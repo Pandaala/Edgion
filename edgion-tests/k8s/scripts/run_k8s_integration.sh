@@ -1415,7 +1415,7 @@ override_suite_test_server_images() {
     return 0
   fi
 
-  local ns
+  local ns deployment
   for ns in edgion-default edgion-test edgion-backend default; do
     if kubectl get deployment lb-multi-test-server -n "${ns}" >/dev/null 2>&1; then
       echo "Override lb-multi-test-server image in ${ns}: ${TEST_SERVER_IMAGE}"
@@ -1429,6 +1429,18 @@ override_suite_test_server_images() {
       kubectl rollout status deployment/lb-multi-test-server -n "${ns}" --timeout=300s
     fi
   done
+  while IFS=$'\t' read -r ns deployment; do
+    [[ -n "${ns}" && -n "${deployment}" ]] || continue
+    echo "Override dynamic test-server image in ${ns}/${deployment}: ${TEST_SERVER_IMAGE}"
+    kubectl set image "deployment/${deployment}" -n "${ns}" test-server="${TEST_SERVER_IMAGE}"
+    if [[ -n "${PULL_POLICY_OVERRIDE}" ]]; then
+      kubectl patch "deployment/${deployment}" -n "${ns}" --type='json' \
+        -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/imagePullPolicy\",\"value\":\"${PULL_POLICY_OVERRIDE}\"}]" \
+        >/dev/null
+    fi
+    kubectl rollout status "deployment/${deployment}" -n "${ns}" --timeout=300s
+  done < <(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true \
+    -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name --no-headers)
 }
 
 restart_secret_dependent_workloads() {
@@ -2200,6 +2212,8 @@ run_all_isolated_scenarios() {
   # suite-parity: isolated geoip_db_states
   # suite-parity: isolated plugin_policy
   # suite-parity: isolated unknown_config_fields
+  # suite-parity: isolated proxy_protocol_policy_lifecycle
+  # suite-parity: isolated oidc_egress
   printf '%s\n' \
     'Isolated|controller_auth' \
     'Isolated|gateway_admin_auth' \
@@ -2377,6 +2391,7 @@ run_all_selected_suites() {
     "HTTPRoute/Backend/HealthCheckTransition|HTTPRoute|Backend/HealthCheckTransition"
     "HTTPRoute/Backend/RetryOnStatus|HTTPRoute|Backend/RetryOnStatus"
     "HTTPRoute/Backend/PerTryTimeout|HTTPRoute|Backend/PerTryTimeout"
+    "HTTPRoute/Backend/InformationalRetry|HTTPRoute|Backend/InformationalRetry"
     "HTTPRoute/Backend/CircuitBreaker|HTTPRoute|Backend/CircuitBreaker"
     "HTTPRoute/Backend/SessionPersistence|HTTPRoute|Backend/SessionPersistence"
     "HTTPRoute/Backend/H2BackendMtlsPersistence|HTTPRoute|Backend/H2BackendMtlsPersistence"
@@ -2408,12 +2423,14 @@ run_all_selected_suites() {
     "GRPCRoute/Backend/SessionPersistenceWeighted|GRPCRoute|Backend/SessionPersistenceWeighted"
     "GRPCRoute/Delegation|GRPCRoute|Delegation"
     "GRPCRoute/UnmatchedRoute|GRPCRoute|UnmatchedRoute"
+    "GRPCRoute/TimeoutRewriteWire|GRPCRoute|TimeoutRewriteWire"
     "TCPRoute/Basic|TCPRoute|Basic"
     "TCPRoute/Basic|TCPRoute|KeepaliveSmoke"
     "TCPRoute/StreamPlugins|TCPRoute|StreamPlugins"
     "TCPRoute/GlobalConnectionIpRestriction|TCPRoute|GlobalConnectionIpRestriction"
     "TCPRoute/IdleTimeout|TCPRoute|IdleTimeout"
     "TCPRoute/GeoRestriction|TCPRoute|GeoRestriction"
+    "TCPRoute/DeniedBackendRef|TCPRoute|DeniedBackendRef"
     "TLSRoute/Basic|TLSRoute|Basic"
     "TLSRoute/ProxyProtocol|TLSRoute|ProxyProtocol"
     "TLSRoute/StreamPlugins|TLSRoute|StreamPlugins"
@@ -2422,8 +2439,10 @@ run_all_selected_suites() {
     "TLSRoute/Passthrough|TLSRoute|Passthrough"
     "TLSRoute/UnknownKindBackend|TLSRoute|UnknownKindBackend"
     "TLSRoute/GeoRestriction|TLSRoute|GeoRestriction"
+    "TLSRoute/DeniedBackendRef|TLSRoute|DeniedBackendRef"
     "UDPRoute/Basic|UDPRoute|Basic"
     "UDPRoute/StreamPlugins|UDPRoute|StreamPlugins"
+    "UDPRoute/DeniedBackendRef|UDPRoute|DeniedBackendRef"
     "Gateway/Security|Gateway|Security"
     "Gateway/RealIP|Gateway|RealIP"
     "Gateway/TLS/BackendTLS|Gateway|TLS/BackendTLS"

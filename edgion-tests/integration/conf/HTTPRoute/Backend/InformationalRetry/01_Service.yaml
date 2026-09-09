@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: informational-retry-h1
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30030
+      targetPort: 30030
+      protocol: TCP

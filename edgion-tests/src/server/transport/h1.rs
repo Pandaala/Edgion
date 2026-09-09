@@ -64,11 +64,14 @@ struct ReqCtx {
     conn: u32,
     stream: u32,
     trace: Option<String>,
+    trace_request_ordinal: Option<u32>,
 }
 
 impl ReqCtx {
     fn event(&self, kind: &str) -> TransportEvent {
-        TransportEvent::new(LISTENER_H1, self.conn, self.stream, kind).trace(self.trace.as_deref())
+        TransportEvent::new(LISTENER_H1, self.conn, self.stream, kind)
+            .trace(self.trace.as_deref())
+            .trace_request_ordinal(self.trace_request_ordinal)
     }
 }
 
@@ -87,6 +90,21 @@ enum PumpStop {
     Ended,
     /// The peer closed or reset before the body was complete.
     PeerClosed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InformationalAttempt {
+    MissingTrace,
+    First,
+    Echo,
+}
+
+fn informational_attempt(trace_request_ordinal: Option<u32>) -> InformationalAttempt {
+    match trace_request_ordinal {
+        None => InformationalAttempt::MissingTrace,
+        Some(1) => InformationalAttempt::First,
+        Some(_) => InformationalAttempt::Echo,
+    }
 }
 
 async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
@@ -111,10 +129,16 @@ async fn handle_conn(tcp: TcpStream, conn: u32) -> Result<(), String> {
         if let Some(trace) = script.trace_id.as_deref() {
             recorder::bind_trace(LISTENER_H1, conn, trace);
         }
+        let trace_request_ordinal = if script.behavior == Behavior::InformationalThenHangFirst {
+            script.trace_id.as_deref().map(recorder::note_trace_request)
+        } else {
+            None
+        };
         let ctx = ReqCtx {
             conn,
             stream,
             trace: script.trace_id.clone(),
+            trace_request_ordinal,
         };
 
         recorder::record(
@@ -209,6 +233,47 @@ async fn run_request(
             let _ = pump_body(io, &mut pump, ctx, &mut state, Some(script.at_bytes)).await?;
             recorder::record(ctx.event(recorder::KIND_RESP_DONE).detail("close: no response written"));
             Ok(ConnOutcome::Close)
+        }
+        Behavior::GrpcSayHello => {
+            recorder::record(
+                ctx.event(recorder::KIND_RESP_DONE)
+                    .detail("grpc-say-hello is available only on the H2 listener"),
+            );
+            Ok(ConnOutcome::Close)
+        }
+        Behavior::InformationalThenHangFirst => {
+            if pump_body(io, &mut pump, ctx, &mut state, None).await? == PumpStop::PeerClosed {
+                return Ok(ConnOutcome::Close);
+            }
+            match informational_attempt(ctx.trace_request_ordinal) {
+                InformationalAttempt::MissingTrace => {
+                    recorder::record(
+                        ctx.event(recorder::KIND_RESP_DONE)
+                            .detail("informational-then-hang-first requires a nonempty x-trace-id"),
+                    );
+                    Ok(ConnOutcome::Close)
+                }
+                InformationalAttempt::First => {
+                    recorder::record(
+                        ctx.event(recorder::KIND_RESP_HEAD)
+                            .status(100)
+                            .framing("informational;no-body")
+                            .behavior(script.behavior.as_str())
+                            .detail("first trace request; hanging after flushed informational head"),
+                    );
+                    io.get_mut()
+                        .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                        .await
+                        .map_err(|e| format!("write informational response: {e}"))?;
+                    io.get_mut()
+                        .flush()
+                        .await
+                        .map_err(|e| format!("flush informational response: {e}"))?;
+                    park_until_peer_closes(io, ctx).await;
+                    Ok(ConnOutcome::Close)
+                }
+                InformationalAttempt::Echo => respond(io, ctx, head, script, &state).await,
+            }
         }
     }
 }
@@ -398,5 +463,18 @@ async fn park_until_peer_closes(io: &mut BufReader<TcpStream>, ctx: &ReqCtx) {
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{informational_attempt, InformationalAttempt};
+
+    #[test]
+    fn informational_retry_requires_a_trace_and_only_hangs_once() {
+        assert_eq!(informational_attempt(None), InformationalAttempt::MissingTrace);
+        assert_eq!(informational_attempt(Some(1)), InformationalAttempt::First);
+        assert_eq!(informational_attempt(Some(2)), InformationalAttempt::Echo);
+        assert_eq!(informational_attempt(Some(9)), InformationalAttempt::Echo);
     }
 }

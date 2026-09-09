@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: tls-denied-ref-passthrough
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: tls-denied-ref-gw
+      namespace: edgion-test
+      sectionName: tls-passthrough
+  hostnames:
+    - "denied-passthrough.sandbox.example.com"
+  rules:
+    - backendRefs:
+        - name: tls-denied-ref-https
+          namespace: edgion-backend
+          port: 30051
+          weight: 100

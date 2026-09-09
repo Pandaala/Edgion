@@ -1,0 +1,31 @@
+# Cross-namespace TLSRoutes without a ReferenceGrant. Terminate and
+# passthrough share one Gateway so both proxy modes hit the same gate.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-denied-ref-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-terminate
+      protocol: TLS
+      port: 31956
+      hostname: "denied-terminate.sandbox.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tls-passthrough
+      protocol: TLS
+      port: 31957
+      hostname: "denied-passthrough.sandbox.example.com"
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: All

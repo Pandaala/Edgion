@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Delegation ParentRefs cannot attach to a same-coordinate Gateway](regression-guards/delegation-parentref-gateway-name-collision.md)
 - [TCP connection snapshot ownership](regression-guards/tcp-connection-snapshot-ownership.md)
 - [TLS passthrough connection ownership](regression-guards/tls-passthrough-connection-ownership.md)
 - [TLS terminated connection ownership](regression-guards/tls-terminated-connection-ownership.md)

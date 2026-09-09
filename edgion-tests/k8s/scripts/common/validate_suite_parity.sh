@@ -9,6 +9,7 @@ LOCAL_RUNNER="${PROJECT_ROOT}/edgion-tests/integration/scripts/integration/run_i
 K8S_RUNNER="${PROJECT_ROOT}/edgion-tests/k8s/scripts/run_k8s_integration.sh"
 DYNAMIC_MANIFEST_SOURCE="${PROJECT_ROOT}/edgion-tests/src/client/test_client.rs"
 K8S_DYNAMIC_MANIFEST="${PROJECT_ROOT}/edgion-tests/k8s/scripts/common/k8s_dynamic_scenarios.tsv"
+SCOPE_EXCEPTIONS="${PROJECT_ROOT}/edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv"
 
 usage() {
   cat <<'EOF'
@@ -21,6 +22,7 @@ Options:
   --k8s-runner PATH               K8s integration runner
   --dynamic-manifest-source PATH  Rust source containing EXPECTED_DYNAMIC_SCENARIO_IDS
   --k8s-dynamic-manifest PATH     Manifest of helper-backed K8s dynamic scenarios
+  --scope-exceptions PATH         Structured deliberate-scope exceptions
   -h, --help                      Show this help
 
 K8s isolated scenarios and final gates may be declared with source-local markers:
@@ -51,6 +53,11 @@ while [ "$#" -gt 0 ]; do
       K8S_DYNAMIC_MANIFEST="$2"
       shift 2
       ;;
+    --scope-exceptions)
+      [ "$#" -ge 2 ] || { echo "ERROR: --scope-exceptions requires a path" >&2; exit 2; }
+      SCOPE_EXCEPTIONS="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -63,7 +70,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-python3 - "$LOCAL_RUNNER" "$K8S_RUNNER" "$DYNAMIC_MANIFEST_SOURCE" "$K8S_DYNAMIC_MANIFEST" <<'PY'
+python3 - "$LOCAL_RUNNER" "$K8S_RUNNER" "$DYNAMIC_MANIFEST_SOURCE" "$K8S_DYNAMIC_MANIFEST" "$SCOPE_EXCEPTIONS" "$PROJECT_ROOT" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -247,6 +254,90 @@ def parse_local_final(text):
     return gates
 
 
+def parse_scope_exceptions(text, project_root, canonical, covered):
+    allowed_reasons = {
+        "host_log_topology": {
+            "path": "edgion-tests/src/client/suites/l4_duplex.rs",
+            "symbol": "LogProbe",
+            "tokens": ("access_log_path", "host"),
+        },
+        "nested_docker_fixture": {
+            "path": "edgion-tests/integration/scripts/integration/ldap_egress/scenario.py",
+            "symbol": "Scenario",
+            "tokens": ("docker", "OpenLDAP"),
+        },
+    }
+    result = {name: set() for name in canonical}
+    seen = set()
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        fields = raw_line.rstrip("\r").split("\t")
+        if len(fields) != 7:
+            raise InventoryError(
+                f"scope exceptions line {line_number}: expected seven tab-separated fields"
+            )
+        category, item_id, reason, evidence_path, symbol, rationale, trigger = fields
+        if category not in {"static", "dynamic", "isolated"}:
+            raise InventoryError(f"scope exceptions line {line_number}: invalid category {category!r}")
+        id_pattern = r"[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z0-9_.-]+)*" if category == "static" else r"[A-Za-z][A-Za-z0-9_]*"
+        if not re.fullmatch(id_pattern, item_id) or any(token in item_id for token in "*?[](){}|\\"):
+            raise InventoryError(f"scope exceptions line {line_number}: invalid literal id {item_id!r}")
+        key = (category, item_id)
+        if key in seen:
+            raise InventoryError(f"scope exceptions line {line_number}: duplicate exception {category}/{item_id}")
+        seen.add(key)
+        if item_id not in canonical[category]:
+            raise InventoryError(f"scope exceptions line {line_number}: noncanonical or stale id {category}/{item_id}")
+        if item_id in covered[category]:
+            raise InventoryError(f"scope exceptions line {line_number}: {category}/{item_id} already has K8s coverage")
+        if reason not in allowed_reasons:
+            raise InventoryError(f"scope exceptions line {line_number}: unknown reason {reason!r}")
+        reason_contract = allowed_reasons[reason]
+        path = Path(evidence_path)
+        if path.is_absolute() or not evidence_path or any(part in {"", ".", ".."} for part in path.parts):
+            raise InventoryError(f"scope exceptions line {line_number}: invalid evidence path {evidence_path!r}")
+        evidence = (project_root / path).resolve()
+        try:
+            evidence.relative_to(project_root.resolve())
+        except ValueError as error:
+            raise InventoryError(f"scope exceptions line {line_number}: evidence escapes repository") from error
+        if not evidence.is_file():
+            raise InventoryError(f"scope exceptions line {line_number}: evidence file is missing: {evidence_path}")
+        if evidence_path != reason_contract["path"]:
+            raise InventoryError(
+                f"scope exceptions line {line_number}: evidence path is outside the approved scope for {reason}"
+            )
+        if not symbol or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:.-]*", symbol):
+            raise InventoryError(f"scope exceptions line {line_number}: invalid evidence symbol")
+        if symbol != reason_contract["symbol"]:
+            raise InventoryError(
+                f"scope exceptions line {line_number}: evidence symbol is outside the approved scope for {reason}"
+            )
+        evidence_text = evidence.read_text(encoding="utf-8")
+        if symbol not in evidence_text or any(token not in evidence_text for token in reason_contract["tokens"]):
+            raise InventoryError(f"scope exceptions line {line_number}: evidence no longer supports {reason}")
+        placeholders = ("todo", "tbd", "n/a", "later", "same as above")
+        if (
+            len(rationale.split()) < 8
+            or any(marker in rationale.lower() for marker in placeholders)
+            or re.search(r"\b(all|every|any)\b.*\b(test|suite|scenario)s?\b", rationale, re.IGNORECASE)
+        ):
+            raise InventoryError(
+                f"scope exceptions line {line_number}: rationale is blank, placeholder, or overbroad"
+            )
+        if (
+            len(trigger.split()) < 8
+            or any(marker in trigger.lower() for marker in placeholders)
+            or not trigger.startswith(("Re-evaluate when ", "Re-evaluate after "))
+        ):
+            raise InventoryError(
+                f"scope exceptions line {line_number}: re-evaluation trigger is invalid or placeholder"
+            )
+        result[category].add(item_id)
+    return result
+
+
 def print_diff(label, canonical, k8s):
     missing = sorted(canonical - k8s)
     extra = sorted(k8s - canonical)
@@ -263,6 +354,8 @@ def main():
     k8s_path, k8s_text = read_source(sys.argv[2], "K8s runner")
     dynamic_path, dynamic_text = read_source(sys.argv[3], "dynamic manifest source")
     k8s_dynamic_path, k8s_dynamic_text = read_source(sys.argv[4], "K8s dynamic manifest")
+    exception_path, exception_text = read_source(sys.argv[5], "scope exceptions")
+    project_root = Path(sys.argv[6])
 
     if "--list-dynamic-scenarios" not in local_text or "run_dynamic_scenarios" not in local_text:
         raise InventoryError("local dynamic inventory: runner no longer enumerates the dynamic registry")
@@ -283,20 +376,27 @@ def main():
     local_final = parse_local_final(local_text)
     k8s_final = set(marker_ids(k8s_text, "final-gate"))
     k8s_final.update(re.findall(r'report_test\s+"Final_([A-Za-z][A-Za-z0-9_]*)"', k8s_text))
+    canonical = {"static": local_static, "dynamic": local_dynamic, "isolated": local_isolated}
+    covered = {"static": k8s_static, "dynamic": k8s_dynamic, "isolated": k8s_isolated}
+    exceptions = parse_scope_exceptions(exception_text, project_root, canonical, covered)
 
     print("Suite parity inventory sources:")
     print(f"  local runner: {local_path}")
     print(f"  K8s runner: {k8s_path}")
     print(f"  dynamic manifest: {dynamic_path}::EXPECTED_DYNAMIC_SCENARIO_IDS")
     print(f"  K8s dynamic manifest: {k8s_dynamic_path}")
+    print(f"  deliberate scope exceptions: {exception_path}")
     print("K8s gate declaration sources:")
     print("  isolated: literal Isolated_ report_test entries or '# suite-parity: isolated <id>'")
     print("  final: literal Final_ report_test entries or '# suite-parity: final-gate <id>'")
 
     has_missing = False
-    has_missing |= print_diff("static", local_static, k8s_static)
-    has_missing |= print_diff("dynamic", local_dynamic, k8s_dynamic)
-    has_missing |= print_diff("isolated", local_isolated, k8s_isolated)
+    for category, values in exceptions.items():
+        for value in sorted(values):
+            print(f"  EXCEPTED {category} {value}")
+    has_missing |= print_diff("static", local_static - exceptions["static"], k8s_static)
+    has_missing |= print_diff("dynamic", local_dynamic - exceptions["dynamic"], k8s_dynamic)
+    has_missing |= print_diff("isolated", local_isolated - exceptions["isolated"], k8s_isolated)
     has_missing |= print_diff("final-gate", local_final, k8s_final)
     if has_missing:
         print("FAIL: K8s integration inventory is missing canonical coverage.")

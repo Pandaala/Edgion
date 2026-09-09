@@ -2554,7 +2554,7 @@ pub struct EdgionHttpContext {
     /// query values always use the frozen entry snapshot.
     parsed_request_caches: ParsedRequestCaches,
 
-    /// Unified upstream-jump slot. The 80-byte target is boxed because only
+    /// Unified upstream-jump slot. The 72-byte target is boxed because only
     /// explicit jump plugins activate it; ordinary routing retains one nullable
     /// pointer. First-write-wins and the target survives upstream retries.
     pub jump: Option<Box<UpstreamJumpTarget>>,
@@ -4496,7 +4496,7 @@ mod jump_tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn jump_target_uses_one_pointer_in_the_base_context() {
-        assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 80);
+        assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 72);
         assert_eq!(std::mem::size_of::<Option<Box<UpstreamJumpTarget>>>(), 8);
     }
 
@@ -4928,7 +4928,7 @@ mod plugin_request_state_tests {
     #[cfg(target_pointer_width = "64")]
     fn plugin_state_layout_keeps_hot_and_sparse_costs_separate() {
         assert_eq!(std::mem::size_of::<PluginExecutionState>(), 168);
-        assert_eq!(std::mem::size_of::<PluginAuxState>(), 232);
+        assert_eq!(std::mem::size_of::<PluginAuxState>(), 248);
         assert_eq!(std::mem::size_of::<Option<Box<PluginAuxState>>>(), 8);
     }
 
@@ -5305,7 +5305,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1112);
+        assert_eq!(std::mem::size_of_val(&ctx), 1120);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

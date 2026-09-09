@@ -1,7 +1,7 @@
 //! Native WAF hot-reload integration phase suites.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const HOST: &str = "waf-dynamic.example.com";
 
@@ -37,6 +37,112 @@ fn request_case(
     })
 }
 
+async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result<(), String> {
+    let url = format!(
+        "http://{}:{}/test/waf-dynamic/invalid-status",
+        ctx.target_host, ctx.http_port
+    );
+    let response = ctx
+        .http_client
+        .get(url)
+        .header("host", HOST)
+        .header("x-waf-version", "v1")
+        .header("x-trace-id", trace)
+        .header("access_log", "test_store")
+        .send()
+        .await;
+    let mut failures = Vec::new();
+    match response {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.text().await {
+                Ok(body) => {
+                    if status != 500 {
+                        failures.push(format!("expected wire status 500, got {status}; body={body:?}"));
+                    }
+                    for upstream_marker in ["Server: 0.0.0.0:30001", "Path: /test/waf-dynamic/invalid-status"] {
+                        if body.contains(upstream_marker) {
+                            failures.push(format!(
+                                "invalid WAF status leaked the upstream response marker {upstream_marker:?}; body={body:?}"
+                            ));
+                        }
+                    }
+                }
+                Err(error) => failures.push(format!("response body failed: {error}")),
+            }
+        }
+        Err(error) => failures.push(format!("request failed: {error}")),
+    }
+
+    match ctx.access_log_client().get_access_log_with_retry(trace, 15, 200).await {
+        Ok(access_log) => {
+            let upstreams = access_log.data["backend_context"]["upstreams"].as_array();
+            if access_log.status_code() != Some(500)
+                || upstreams
+                    .is_none_or(|upstreams| upstreams.len() != 1 || upstreams[0]["status"].as_u64() != Some(200))
+                || access_log.data["waf"]["outcome"].as_str() != Some("blocked")
+                || access_log.data["waf"]["intervention"]["phase"].as_str() != Some("response_headers")
+                || access_log.data["waf"]["intervention"]["rule_id"].as_u64() != Some(1003)
+                || access_log.data["waf"]["intervention"]["status"].as_u64() != Some(100)
+            {
+                failures.push(format!("unexpected access log: {}", access_log.data));
+            }
+        }
+        Err(error) => failures.push(format!("access log missing: {error}")),
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+async fn cleanup_invalid_status_access_log(ctx: &TestContext, trace: &str) -> Result<(), String> {
+    let client = ctx.access_log_client();
+    let mut last_error = None;
+    for attempt in 0..15 {
+        match client.delete_access_log(trace).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if attempt < 14 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+    match last_error {
+        Some(error) => Err(format!("WAF invalid-status access-log cleanup failed: {error}")),
+        None => Ok(()),
+    }
+}
+
+fn invalid_response_status_case() -> TestCase {
+    TestCase::new(
+        "waf_response_invalid_status_fails_closed",
+        "phase-3 WAF status 100 fails closed without forwarding the upstream response",
+        |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let trace = uuid::Uuid::new_v4().to_string();
+                let result = tokio::time::timeout(Duration::from_secs(15), check_invalid_response_status(&ctx, &trace))
+                    .await
+                    .unwrap_or_else(|_| Err("WAF invalid-status assertions exceeded their deadline".to_string()));
+                let cleanup =
+                    tokio::time::timeout(Duration::from_secs(5), cleanup_invalid_status_access_log(&ctx, &trace))
+                        .await
+                        .map_err(|_| "WAF invalid-status access-log cleanup exceeded its deadline".to_string())
+                        .and_then(|result| result);
+                match (result, cleanup) {
+                    (Ok(()), Ok(())) => TestResult::passed(start.elapsed()),
+                    (Err(error), Ok(())) | (Ok(()), Err(error)) => TestResult::failed(start.elapsed(), error),
+                    (Err(error), Err(cleanup)) => TestResult::failed(start.elapsed(), format!("{error}; {cleanup}")),
+                }
+            })
+        },
+    )
+}
+
 macro_rules! phase_suite {
     ($type_name:ident, $suite_name:literal, [$(($name:literal, $description:literal, $version:literal, $body:expr, $status:expr)),+ $(,)?]) => {
         pub struct $type_name;
@@ -53,21 +159,28 @@ macro_rules! phase_suite {
     };
 }
 
-phase_suite!(
-    WafDynamicInitialTestSuite,
-    "Native WAF Dynamic - Initial",
-    [
-        ("waf_initial_v1_allowed", "initial WAF allows v1", "v1", None, 200),
-        ("waf_initial_v2_denied", "initial WAF denies v2", "v2", None, 403),
-        (
-            "waf_initial_body_denied",
-            "initial WAF denies matching request body",
-            "v1",
-            Some("blocked"),
-            406
-        ),
-    ]
-);
+pub struct WafDynamicInitialTestSuite;
+
+impl TestSuite for WafDynamicInitialTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Dynamic - Initial"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            request_case("waf_initial_v1_allowed", "initial WAF allows v1", "v1", None, 200),
+            request_case("waf_initial_v2_denied", "initial WAF denies v2", "v2", None, 403),
+            request_case(
+                "waf_initial_body_denied",
+                "initial WAF denies matching request body",
+                "v1",
+                Some("blocked"),
+                406,
+            ),
+            invalid_response_status_case(),
+        ]
+    }
+}
 
 phase_suite!(
     WafDynamicUpdatedTestSuite,

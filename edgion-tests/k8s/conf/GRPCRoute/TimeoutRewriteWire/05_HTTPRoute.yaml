@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-web-timeout-wire
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-timeout-wire-gateway
+      sectionName: grpc
+  hostnames: ["grpc-web-timeout-wire.example.com"]
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /test.TestService/SayHello
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-timeout-wire-delay
+      backendRefs:
+        - name: grpc-timeout-wire-h2
+          port: 30031

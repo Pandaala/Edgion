@@ -12,6 +12,7 @@ pub mod canary_hot_swap;
 pub mod condition_refs_dynamic;
 pub mod credential_injector_dynamic;
 pub mod csrf_secret_rotation;
+pub mod delegation_parentref_gateway_collision;
 pub mod direct_endpoint_port_resolution;
 pub mod dns_resolution_flap;
 pub mod dsl_dynamic;

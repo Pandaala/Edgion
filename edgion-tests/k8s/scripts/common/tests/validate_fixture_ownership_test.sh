@@ -49,6 +49,22 @@ EOF
   || fail "validator rejected unique resources in a multi-document YAML file"
 assert_contains "${TEMP_DIR}/multi.log" "validation passed: every effective initial object has one fixture owner"
 
+mkdir -p "${TEMP_DIR}/stale-edgion-version/DynamicTest/updates"
+cat > "${TEMP_DIR}/stale-edgion-version/DynamicTest/updates/plugin.yaml" <<'EOF'
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: stale-version
+  namespace: test
+spec: {}
+EOF
+if "${VALIDATOR}" "${TEMP_DIR}/stale-edgion-version" \
+  >"${TEMP_DIR}/stale-edgion-version.log" 2>&1; then
+  fail "validator accepted an unserved Edgion CRD version in an excluded dynamic update"
+fi
+assert_contains "${TEMP_DIR}/stale-edgion-version.log" \
+  "apiVersion edgion.io/v1alpha1 is not served for EdgionPlugins; expected edgion.io/v1"
+
 mkdir -p "${TEMP_DIR}/duplicate-key"
 cat > "${TEMP_DIR}/duplicate-key/missing-separator.yaml" <<'EOF'
 apiVersion: v1
@@ -280,5 +296,50 @@ if "${VALIDATOR}" --include-bootstrap "${EXCLUDED_ROOT}" >"${TEMP_DIR}/include-b
   fail "--include-bootstrap did not expose the conflicting bootstrap fixture"
 fi
 assert_contains "${TEMP_DIR}/include-bootstrap.log" "00-namespace.yaml#doc=1"
+
+COLLISION_ROOT="${TEMP_DIR}/parentref-collision"
+mkdir -p \
+  "${COLLISION_ROOT}/HTTPRoute/Delegation/ParentRefGatewayCollision/bootstrap" \
+  "${COLLISION_ROOT}/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/initial" \
+  "${COLLISION_ROOT}/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/updates"
+cat > "${COLLISION_ROOT}/HTTPRoute/Delegation/ParentRefGatewayCollision/bootstrap/Gateway.yaml" <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: parentref-collision-http
+  namespace: test
+spec:
+  gatewayClassName: test
+EOF
+cat > "${COLLISION_ROOT}/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/initial/HTTPRoute.yaml" <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: parentref-collision-http
+  namespace: test
+spec:
+  parentRefs:
+    - name: parentref-collision-http
+EOF
+cat > "${COLLISION_ROOT}/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/updates/HTTPRoute.yaml" <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: parentref-collision-http
+  namespace: test
+spec:
+  parentRefs:
+    - name: updated-parent
+EOF
+
+"${VALIDATOR}" --fail-on-identical "${COLLISION_ROOT}" >"${TEMP_DIR}/parentref-collision.log" 2>&1 \
+  || fail "validator rejected a bootstrap Gateway plus nested DynamicTest initial route"
+assert_contains "${TEMP_DIR}/parentref-collision.log" "scanned 2 effective YAML file(s); excluded 1 file(s)"
+if "${VALIDATOR}" --include-dynamic-updates "${COLLISION_ROOT}" \
+  >"${TEMP_DIR}/parentref-collision-updates.log" 2>&1; then
+  fail "nested ParentRef collision update was treated as effective initial configuration"
+fi
+assert_contains "${TEMP_DIR}/parentref-collision-updates.log" \
+  "ParentRefGatewayCollision/DynamicTest/updates/HTTPRoute.yaml#doc=1"
 
 echo "OK: fixture ownership validator regression tests passed"

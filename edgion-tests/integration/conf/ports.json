@@ -1,5 +1,5 @@
 {
-  "current_max": 31960,
+  "current_max": 31973,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -40,6 +40,9 @@
     },
     "HTTPRoute/Backend/PerTryTimeout": {
       "http": 31391
+    },
+    "HTTPRoute/Backend/InformationalRetry": {
+      "http": 31973
     },
     "HTTPRoute/Filters/Redirect": {
       "http": 31040
@@ -326,6 +329,12 @@
     "GRPCRoute/Delegation/DynamicTest": {
       "grpc": 31935
     },
+    "HTTPRoute/Delegation/ParentRefGatewayCollision": {
+      "http": 31970
+    },
+    "GRPCRoute/Delegation/ParentRefGatewayCollision": {
+      "grpc": 31971
+    },
     "EdgionBackendTrafficPolicy/UpstreamAuthority": {
       "http": 31936
     },
@@ -378,6 +387,9 @@
     },
     "UDPRoute/DeniedBackendRef": {
       "udp": 31955
+    },
+    "GRPCRoute/TimeoutRewriteWire": {
+      "grpc": 31972
     },
     "TLSRoute/DeniedBackendRef": {
       "tls": 31956

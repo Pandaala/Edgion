@@ -21,6 +21,8 @@ static INIT: Once = Once::new();
 static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
+    "DelegationParentRefGatewayCollisionHttp",
+    "DelegationParentRefGatewayCollisionGrpc",
     "RequestMirrorReferenceGrant",
     "ServiceDegradeThreshold",
     "DirectEndpointPortResolution",
@@ -1108,6 +1110,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
             "retry-on-status" | "retryonstatus" => "HTTPRoute/Backend/RetryOnStatus".to_string(),
             "per-try-timeout" | "pertrytimeout" => "HTTPRoute/Backend/PerTryTimeout".to_string(),
+            "informational-retry" | "informationalretry" => "HTTPRoute/Backend/InformationalRetry".to_string(),
             "circuit-breaker" | "circuitbreaker" => "HTTPRoute/Backend/CircuitBreaker".to_string(),
             "health-check" | "healthcheck" => "HTTPRoute/Backend/HealthCheck".to_string(),
             "grpc-health-check" | "grpchealthcheck" => "HTTPRoute/Backend/GrpcHealthCheck".to_string(),
@@ -1122,6 +1125,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-rate-limit" | "grpcratelimit" => "GRPCRoute/RateLimit".to_string(),
+            "grpc-timeout-wire" | "grpctimeoutwire" => "GRPCRoute/TimeoutRewriteWire".to_string(),
             "grpc-sp" | "grpcsp" => "GRPCRoute/Backend/SessionPersistence".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
             "tcp" => "TCPRoute/Basic".to_string(),
@@ -1246,6 +1250,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
         "HTTPRoute/Backend/RetryOnStatus" => "HTTPRoute/Backend/RetryOnStatus",
         "HTTPRoute/Backend/PerTryTimeout" => "HTTPRoute/Backend/PerTryTimeout",
+        "HTTPRoute/Backend/InformationalRetry" => "HTTPRoute/Backend/InformationalRetry",
         "HTTPRoute/Backend/CircuitBreaker" => "HTTPRoute/Backend/CircuitBreaker",
         "HTTPRoute/Backend/HealthCheck" => "HTTPRoute/Backend/HealthCheck",
         "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
@@ -1277,6 +1282,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Match" => "GRPCRoute/Match",
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         "GRPCRoute/RateLimit" => "GRPCRoute/RateLimit",
+        "GRPCRoute/TimeoutRewriteWire" => "GRPCRoute/TimeoutRewriteWire",
         "GRPCRoute/TLS" => "EdgionTls/grpctls",
         "GRPCRoute/Backend/SessionPersistence" => "GRPCRoute/Backend/SessionPersistence",
         "GRPCRoute/Backend/SessionPersistenceWeighted" => "GRPCRoute/Backend/SessionPersistenceWeighted",
@@ -1459,6 +1465,12 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "GatewayDynamic" => Some(("Gateway/Dynamic", PortKind::Http)),
         "RouteDelegationDynamic" => Some(("HTTPRoute/Delegation/DynamicTest", PortKind::Http)),
         "GrpcRouteDelegationDynamic" => Some(("GRPCRoute/Delegation/DynamicTest", PortKind::Grpc)),
+        "DelegationParentRefGatewayCollisionHttp" => {
+            Some(("HTTPRoute/Delegation/ParentRefGatewayCollision", PortKind::Http))
+        }
+        "DelegationParentRefGatewayCollisionGrpc" => {
+            Some(("GRPCRoute/Delegation/ParentRefGatewayCollision", PortKind::Grpc))
+        }
         "ObservedGenHighFreq" => Some(("Status/ObservedGeneration/HighFrequency", PortKind::Http)),
         "BtlspRefFlap" => Some(("Status/BackendTLSPolicy/RefFlap", PortKind::Http)),
         "SpBackendChange" => Some(("HTTPRoute/Backend/SessionPersistenceBackendChange", PortKind::Http)),
@@ -1621,6 +1633,11 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 Http,
             ));
             runner.add_suite(framework::with_listener(
+                Box::new(suites::InformationalRetryTestSuite),
+                "HTTPRoute/Backend/InformationalRetry",
+                Http,
+            ));
+            runner.add_suite(framework::with_listener(
                 Box::new(suites::CircuitBreakerTestSuite),
                 "HTTPRoute/Backend/CircuitBreaker",
                 Http,
@@ -1705,6 +1722,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::PerTryTimeoutTestSuite));
+        }
+        "HTTPRoute/Backend/InformationalRetry" => {
+            if !gateway {
+                eprintln!("Error: InformationalRetry tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::InformationalRetryTestSuite));
         }
         "HTTPRoute/Backend/CircuitBreaker" => {
             if !gateway {
@@ -1986,6 +2010,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GrpcRateLimitTestSuite));
+        }
+        "GRPCRoute/TimeoutRewriteWire" => {
+            if !gateway {
+                eprintln!("Error: GRPCRoute/TimeoutRewriteWire tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcTimeoutRewriteWireTestSuite));
         }
         "GRPCRoute/Backend/SessionPersistence" => {
             if !gateway {
@@ -3250,6 +3281,11 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(framework::with_listener(
                     Box::new(suites::PerTryTimeoutTestSuite),
                     "HTTPRoute/Backend/PerTryTimeout",
+                    Http,
+                ));
+                runner.add_suite(framework::with_listener(
+                    Box::new(suites::InformationalRetryTestSuite),
+                    "HTTPRoute/Backend/InformationalRetry",
                     Http,
                 ));
                 runner.add_suite(framework::with_listener(

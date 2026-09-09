@@ -230,6 +230,31 @@ if [[ -z "${POD}" ]]; then
       | tail -n 1
   )"
 fi
+
+DIRECT_ENDPOINT_IP="127.0.0.1"
+REGION_BACKEND_IP="127.0.0.1"
+needs_endpoint_discovery=false
+for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
+  case "${scenario_id}" in
+    DirectEndpointPortResolution|RegionRouteValidation) needs_endpoint_discovery=true ;;
+  esac
+done
+if [[ "${needs_endpoint_discovery}" == "true" ]]; then
+  DIRECT_ENDPOINT_IP="$(
+    kubectl get pods -n edgion-test -l app=edgion-test-server \
+      --field-selector=status.phase=Running -o json \
+      | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.podIP != null) | .status.podIP] | sort | first // empty'
+  )"
+  if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
+    echo "ERROR: no live edgion-test-server Pod IP is available for dynamic endpoint assertions" >&2
+    exit 1
+  fi
+  REGION_BACKEND_IP="$(kubectl get service edgion-test-server -n edgion-test -o jsonpath='{.spec.clusterIP}')"
+  if [[ -z "${REGION_BACKEND_IP}" || "${REGION_BACKEND_IP}" == "None" ]]; then
+    echo "ERROR: edgion-test-server has no stable ClusterIP for RegionRoute validation" >&2
+    exit 1
+  fi
+fi
 if [[ -z "${POD}" ]]; then
   echo "ERROR: cannot find a running test-client pod in namespace ${NAMESPACE}" >&2
   exit 1
@@ -431,6 +456,7 @@ delete_reset_absent_resources() {
 
 restore_scenario_initial() {
   local scenario_id="$1"
+  local reset_source rendered_reset
 
   load_scenario_metadata "${scenario_id}" || return 1
   echo "Restoring initial K8s fixtures for ${scenario_id}"
@@ -438,12 +464,24 @@ restore_scenario_initial() {
     echo "ERROR: failed to delete reset-absent resources for ${scenario_id}" >&2
     return 1
   fi
+  reset_source="${CONF_ROOT}/${SCENARIO_CONF_PATH}/${SCENARIO_RESET_PATH}"
+  rendered_reset="${reset_source}"
+  if [[ "${scenario_id}" == "RegionRouteValidation" ]]; then
+    rendered_reset="$(mktemp -d /tmp/edgion-k8s-dynamic-reset.XXXXXX)"
+    cp -R "${reset_source}/." "${rendered_reset}/"
+    while IFS= read -r fixture; do
+      sed -i.bak "s/__EDGION_TEST_REGION_BACKEND_IP__/${REGION_BACKEND_IP}/g" "${fixture}"
+      rm -f "${fixture}.bak"
+    done < <(find "${rendered_reset}" -type f \( -name '*.yaml' -o -name '*.yml' \))
+  fi
   if ! kubectl apply --server-side --force-conflicts \
     --field-manager=edgion-k8s-dynamic-reset --recursive \
-    -f "${CONF_ROOT}/${SCENARIO_CONF_PATH}/${SCENARIO_RESET_PATH}"; then
+    -f "${rendered_reset}"; then
+    [[ "${rendered_reset}" == "${reset_source}" ]] || rm -rf "${rendered_reset}"
     echo "ERROR: failed to restore initial K8s fixtures for ${scenario_id}" >&2
     return 1
   fi
+  [[ "${rendered_reset}" == "${reset_source}" ]] || rm -rf "${rendered_reset}"
   wait_for_gateway_resource_version "${scenario_id}"
 }
 
@@ -479,6 +517,16 @@ run_phase_endpoint_inventory() {
     if [[ -z "${endpoint_namespace}" || -z "${service}" || -z "${port}" \
       || -z "${expected_count}" || -n "${extra}" ]]; then
       echo "ERROR: invalid endpoint inventory row for ${scenario_id}/${phase}" >&2
+      return 1
+    fi
+    case "${port}" in
+      ''|*[!0-9]*)
+        echo "ERROR: endpoint inventory port must be a numeric port for ${scenario_id}/${phase}" >&2
+        return 1
+        ;;
+    esac
+    if (( 10#${port} < 1 || 10#${port} > 65535 )); then
+      echo "ERROR: endpoint inventory port is outside 1-65535 for ${scenario_id}/${phase}" >&2
       return 1
     fi
     case "${row_phase}:${endpoint_namespace}:${service}:${port}" in
@@ -553,6 +601,9 @@ run_scenario_with_phase_barriers() {
     EDGION_TEST_GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
     EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
     EDGION_TEST_K8S_MODE=true \
+    EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
+    EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
+    EDGION_TEST_MIRROR_SERVER_HOST="edgion-test-server.edgion-test.svc.cluster.local" \
     EDGION_TEST_K8S_PHASE_BARRIER=true \
     EDGION_TEST_K8S_PHASE_ACK_TIMEOUT_SECONDS="${PHASE_EXEC_TIMEOUT_SECONDS}" \
     sh -c '
@@ -775,6 +826,10 @@ COPYFILE_DISABLE=1 tar --no-xattrs --exclude='._*' --exclude='__MACOSX' \
   -C "${CONF_ROOT}" -cf - . | kubectl exec -i -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
   tar -xf - -C "${REMOTE_CONF_ROOT}"
 
+kubectl exec -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
+  sh -c 'find "$1" -type f \( -name "*.yaml" -o -name "*.yml" \) -exec sed -i "s/__EDGION_TEST_REGION_BACKEND_IP__/$2/g" {} +' \
+  sh "${REMOTE_CONF_ROOT}" "${REGION_BACKEND_IP}"
+
 metadata_entries="$(
   kubectl exec -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
     find "${REMOTE_CONF_ROOT}" \( -name '._*' -o -name '__MACOSX' \) -print
@@ -815,6 +870,9 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
       EDGION_TEST_GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
       EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
       EDGION_TEST_K8S_MODE=true \
+      EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
+      EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
+      EDGION_TEST_MIRROR_SERVER_HOST="edgion-test-server.edgion-test.svc.cluster.local" \
       sh -c 'cd "$1" && exec "$2" -g --target-host "$3" --dynamic-scenario "$4"' \
       sh "${REMOTE_ROOT}" "${TEST_CLIENT_BIN_PATH}" "${TARGET_HOST}" "${scenario_id}"; then
       :

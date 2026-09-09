@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: parentref-collision-grpc
+  namespace: edgion-test
+  generation: 1
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: parentref-collision-grpc
+      namespace: edgion-test
+  hostnames:
+    - parent.parentref-collision-grpc.test
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: parentref-collision-grpc-child
+          namespace: edgion-test

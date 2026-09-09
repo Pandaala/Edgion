@@ -66,5 +66,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Origin finding: `tasks/review-envoy/route-02-no-per-try-timeout.md`, promoted to `tasks/todo/route-02-per-try-timeout.md`, closed 2026-06-10.
+- Integration: `HTTPRoute/Backend/InformationalRetry` requires a relayed HTTP/1 100 response to preserve the configured backend-request timeout retry, then validates the ordered 504/200 attempts and `BackendRequestTimeoutRetry` through the canonical access log.
 - Spec: `docs/superpowers/specs/2026-06-10-per-try-timeout-design.md`
 - Docs: `docs/en/user-guide/http-route/resilience/retry.md` (per-try section)

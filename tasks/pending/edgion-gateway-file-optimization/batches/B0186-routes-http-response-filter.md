@@ -33,3 +33,8 @@
 - Review: the first fresh final review found that an existing writer bypassed pending-reply consumption in the real control flow. The corrected implementation always consumes and validates the pending reply and adds two live H1 response-filter tests. Re-review returned LGTM with no remaining Must Fix or Should Fix item.
 - Verification: target tests passed 13/13 and the complete proxy-http suite passed 249/249. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and frozen-path guards passed.
 - Commit: `848e96e9`; never pushed by the campaign.
+
+## Follow-up closure
+
+- D0104 is resolved by the `WafDynamic` wire regression recorded in
+  `skills/04-review/http-body/regression-guards/response-stage-denial-must-terminate.md`.

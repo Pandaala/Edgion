@@ -14,6 +14,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use h2::server as h2s;
+use prost::Message;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -21,6 +22,23 @@ use tracing::{debug, error, info};
 
 use super::recorder::{self, TransportEvent, LISTENER_H2};
 use super::script::{AfterResponse, Behavior, UpScript};
+
+fn parse_grpc_timeout(raw: &http::HeaderValue) -> Option<(u64, char)> {
+    let bytes = raw.as_bytes();
+    if !(2..=9).contains(&bytes.len()) {
+        return None;
+    }
+    let (&unit, digits) = bytes.split_last()?;
+    if !matches!(unit, b'H' | b'M' | b'S' | b'm' | b'u' | b'n')
+        || digits.is_empty()
+        || digits.len() > 8
+        || !digits.iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    let value = std::str::from_utf8(digits).ok()?.parse().ok()?;
+    Some((value, unit as char))
+}
 
 /// How long a `hang` script parks before releasing the stream.
 const HANG_PARK: Duration = Duration::from_secs(120);
@@ -292,15 +310,18 @@ async fn handle_stream(
     // framing (END_STREAM on HEADERS is always false).
     let headers_eos = req.body().is_end_stream();
 
-    recorder::record(
-        ctx.event(recorder::KIND_REQ_HEADERS)
-            .headers_eos(headers_eos)
-            .content_length(content_length)
-            .transfer_encoding(transfer_encoding)
-            .method(&method)
-            .path(&path)
-            .behavior(script.behavior.as_str()),
-    );
+    let mut headers_event = ctx
+        .event(recorder::KIND_REQ_HEADERS)
+        .headers_eos(headers_eos)
+        .content_length(content_length)
+        .transfer_encoding(transfer_encoding)
+        .method(&method)
+        .path(&path)
+        .behavior(script.behavior.as_str());
+    if let Some((value, unit)) = req.headers().get("grpc-timeout").and_then(parse_grpc_timeout) {
+        headers_event = headers_event.grpc_timeout(value, unit);
+    }
+    recorder::record(headers_event);
 
     let mut body = req.into_body();
     let mut state = BodyState::default();
@@ -320,6 +341,34 @@ async fn handle_stream(
                 &handles,
             )
             .await;
+        }
+        Behavior::GrpcSayHello => {
+            if pump_body(&mut body, &ctx, &mut state, None).await == PumpStop::PeerReset {
+                return;
+            }
+            let ordinal = script
+                .trace_id
+                .as_deref()
+                .map(recorder::note_trace_request)
+                .unwrap_or(1);
+            if ordinal <= script.reset_first as u32 {
+                let reason = parse_reason(&script.reset_code);
+                recorder::record(
+                    ctx.event(recorder::KIND_RESP_DONE)
+                        .code(&reason_name(reason))
+                        .detail(&format!("scripted reset {ordinal}/{}", script.reset_first)),
+                );
+                respond.send_reset(reason);
+                return;
+            }
+            respond_grpc_say_hello(&mut respond, &ctx, &script).await;
+        }
+        Behavior::InformationalThenHangFirst => {
+            recorder::record(
+                ctx.event(recorder::KIND_RESP_DONE)
+                    .detail("informational-then-hang-first is available only on the H1 listener"),
+            );
+            respond.send_reset(h2::Reason::PROTOCOL_ERROR);
         }
         Behavior::EarlyResponse => {
             let stop = pump_body(&mut body, &ctx, &mut state, Some(script.at_bytes)).await;
@@ -390,6 +439,68 @@ async fn handle_stream(
             let _ = handles.goaway.send(h2::Reason::NO_ERROR).await;
         }
     }
+}
+
+async fn respond_grpc_say_hello(respond: &mut h2s::SendResponse<Bytes>, ctx: &ReqCtx, script: &UpScript) {
+    let message = crate::test::HelloResponse {
+        message: "Hello, TimeoutWire!".to_string(),
+        server_addr: "0.0.0.0:30031".to_string(),
+    }
+    .encode_to_vec();
+    let mut framed = Vec::with_capacity(5 + message.len());
+    framed.push(0);
+    framed.extend_from_slice(&(message.len() as u32).to_be_bytes());
+    framed.extend_from_slice(&message);
+
+    let response = match http::Response::builder()
+        .status(200)
+        .header("content-type", "application/grpc")
+        .body(())
+    {
+        Ok(response) => response,
+        Err(e) => {
+            recorder::record(
+                ctx.event(recorder::KIND_RESP_HEAD)
+                    .detail(&format!("build failed: {e}")),
+            );
+            respond.send_reset(h2::Reason::INTERNAL_ERROR);
+            return;
+        }
+    };
+    recorder::record(
+        ctx.event(recorder::KIND_RESP_HEAD)
+            .status(200)
+            .framing("grpc-data+trailers")
+            .len(framed.len())
+            .behavior(script.behavior.as_str()),
+    );
+    let mut send = match respond.send_response(response, false) {
+        Ok(send) => send,
+        Err(e) => {
+            recorder::record(
+                ctx.event(recorder::KIND_PEER_RESET)
+                    .detail(&format!("send_response failed: {e}")),
+            );
+            return;
+        }
+    };
+    if let Err(e) = send.send_data(Bytes::from(framed.clone()), false) {
+        recorder::record(
+            ctx.event(recorder::KIND_PEER_RESET)
+                .detail(&format!("send_data failed: {e}")),
+        );
+        return;
+    }
+    let mut trailers = http::HeaderMap::new();
+    trailers.insert("grpc-status", http::HeaderValue::from_static("0"));
+    if let Err(e) = send.send_trailers(trailers) {
+        recorder::record(
+            ctx.event(recorder::KIND_PEER_RESET)
+                .detail(&format!("send_trailers failed: {e}")),
+        );
+        return;
+    }
+    recorder::record(ctx.event(recorder::KIND_RESP_DONE).len(framed.len()));
 }
 
 async fn pump_body(body: &mut h2::RecvStream, ctx: &ReqCtx, state: &mut BodyState, target: Option<usize>) -> PumpStop {

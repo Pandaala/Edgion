@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: udp-denied-ref
+  namespace: edgion-backend
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: udp-30011
+      port: 30011
+      protocol: UDP
+      targetPort: 30011
+  type: ClusterIP

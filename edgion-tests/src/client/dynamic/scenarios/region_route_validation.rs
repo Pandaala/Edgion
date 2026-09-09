@@ -36,7 +36,21 @@ enum Phase {
 
 fn region(name: &str, low: u16, high: u16, port: u16) -> Value {
     json!({"name": name, "hashRange": [low, high],
-        "backendEndpoint": format!("127.0.0.1:{port}"), "tls": false})
+        "backendEndpoint": format!("{}:{port}", backend_ip()), "tls": false})
+}
+
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+}
+
+fn backend_ip() -> String {
+    if k8s_mode() {
+        std::env::var("EDGION_TEST_REGION_BACKEND_IP")
+            .expect("Kubernetes RegionRoute backend IP must be discovered by the harness")
+    } else {
+        "127.0.0.1".to_string()
+    }
 }
 
 fn base_regions() -> Value {
@@ -61,7 +75,7 @@ impl Phase {
             Self::Overlap => regions[1]["hashRange"] = json!([29, 59]),
             Self::SmallModulo => regions[2]["hashRange"] = json!([60, 999]),
             Self::BothModulos => regions[2]["hashRange"] = json!([60, 1000]),
-            Self::MalformedEndpoint => regions[2]["backendEndpoint"] = json!("127.0.0.1:bad"),
+            Self::MalformedEndpoint => regions[2]["backendEndpoint"] = json!(format!("{}:bad", backend_ip())),
             Self::SelfTarget => regions[0]["failoverTo"] = json!("a"),
             Self::MissingTarget => regions[0]["failoverTo"] = json!("missing"),
             Self::Cycle => {
@@ -385,6 +399,13 @@ async fn check_traffic(ctx: &TestContext, name: &str, phase: Phase, small: bool)
             body.contains("Server: 0.0.0.0:30001"),
             "base response did not reach the shared backend"
         );
+    } else if k8s_mode() {
+        ensure!(status == 200, "{name}: selected cluster Service returned {status}");
+        let port = if target == "a" { 30001 } else { 30002 };
+        ensure!(
+            response.text().await?.contains(&format!("Server: 0.0.0.0:{port}")),
+            "selected cluster Service reached the wrong listener"
+        );
     } else {
         // Preserve the production post-resolution loopback guard. The access log proves
         // the selected target; an error status alone cannot distinguish a stale overlay.
@@ -415,12 +436,19 @@ async fn check_traffic(ctx: &TestContext, name: &str, phase: Phase, small: bool)
         ensure!(log.contains("local_region, pass"), "base was not selected: {log}");
     } else {
         let port = if target == "a" { 30001 } else { 30002 };
+        if k8s_mode() {
+            ensure!(
+                entry.status_code() == Some(200),
+                "cluster Service selection did not succeed"
+            );
+        } else {
+            ensure!(
+                entry.has_diagnostic("error", "BackendLocalhostNotAllowed"),
+                "remote selection did not preserve the loopback security rejection"
+            );
+        }
         ensure!(
-            entry.has_diagnostic("error", "BackendLocalhostNotAllowed"),
-            "remote selection did not preserve the loopback security rejection"
-        );
-        ensure!(
-            log.contains(&format!("→{target} 127.0.0.1:{port}")),
+            log.contains(&format!("→{target} {}:{port}", backend_ip())),
             "wrong final target: {log}"
         );
     }
@@ -534,7 +562,13 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
         .apply_yaml(&serde_yaml::to_string(&initial)?)
         .await
         .map_err(anyhow::Error::msg)?;
-    ctx.apply_dir("initial").await?;
+    if k8s_mode() {
+        let consumers = tokio::fs::read_to_string(ctx.resolve("initial/consumers.yaml")).await?;
+        let consumers = consumers.replace("127.0.0.1", &backend_ip());
+        ctx.test_ctx.apply_yaml(&consumers).await.map_err(anyhow::Error::msg)?;
+    } else {
+        ctx.apply_dir("initial").await?;
+    }
     ctx.wait_phase(SCENARIO, "initial", TIMEOUT).await?;
     let mut consumer_specs = Vec::new();
     for name in CONSUMERS {

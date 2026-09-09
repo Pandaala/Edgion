@@ -1,0 +1,132 @@
+# D0065: two fixed consumers share one hot-swappable table; the third base is invalid.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rrv-small
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        myRegion: base
+        hashKeyGet:
+          - type: header
+            name: X-Region-Hash
+        hashCalc:
+          modulo: 100
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByHashRange
+        regions:
+          - name: base
+            hashRange: [0, 99]
+            backendEndpoint: "__EDGION_TEST_REGION_BACKEND_IP__:30001"
+            tls: false
+        overrideRef:
+          name: rrv-overlay
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rrv-small
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      sectionName: http
+  hostnames:
+    - rrv-small.example.com
+  rules:
+    - backendRefs:
+        - name: test-http
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rrv-small
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rrv-large
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        myRegion: base
+        hashKeyGet:
+          - type: header
+            name: X-Region-Hash
+        hashCalc:
+          modulo: 1000
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByHashRange
+        regions:
+          - name: base
+            hashRange: [0, 99]
+            backendEndpoint: "__EDGION_TEST_REGION_BACKEND_IP__:30001"
+            tls: false
+        overrideRef:
+          name: rrv-overlay
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rrv-large
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      sectionName: http
+  hostnames:
+    - rrv-large.example.com
+  rules:
+    - backendRefs:
+        - name: test-http
+          port: 30001
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rrv-large
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rrv-bad
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        myRegion: base
+        hashKeyGet:
+          - type: header
+            name: X-Region-Hash
+        hashCalc:
+          modulo: 100
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByHashRange
+        regions:
+          - name: base
+            hashRange: [0, 100]
+            backendEndpoint: "__EDGION_TEST_REGION_BACKEND_IP__:30001"
+            tls: false
+        overrideRef:
+          name: rrv-overlay
+

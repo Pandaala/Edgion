@@ -1,0 +1,7 @@
+# phase	namespace	service	port	expected_count
+absent	edgion-default	mirror-grant-dynamic	30001	0
+denied	edgion-default	mirror-grant-dynamic	30001	1
+native-allowed	edgion-backend	mirror-grant-dynamic	30002	1
+allowed	edgion-backend	mirror-grant-dynamic	30002	1
+invalid-allowed	edgion-backend	mirror-grant-dynamic	30002	1
+invalid-denied	edgion-default	mirror-grant-dynamic	30001	1

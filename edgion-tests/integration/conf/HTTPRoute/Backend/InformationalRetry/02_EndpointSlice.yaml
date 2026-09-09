@@ -1,0 +1,15 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: informational-retry-h1
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: informational-retry-h1
+addressType: IPv4
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+ports:
+  - port: 30030
+    protocol: TCP

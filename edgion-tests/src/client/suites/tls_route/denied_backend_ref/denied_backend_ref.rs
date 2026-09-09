@@ -1,7 +1,8 @@
 // TLSRoute DeniedBackendRef suite: cross-namespace Service backendRefs
 // without a ReferenceGrant must fail closed in both proxy modes.
 //
-// Against edgion-tests/integration/conf/TLSRoute/DeniedBackendRef/:
+// Against edgion-tests/k8s/conf/TLSRoute/DeniedBackendRef/, both Routes in
+// edgion-default reference Services in edgion-backend:
 // - 31956 (tls terminate): handshake with the gateway, then no upstream echo
 // - 31957 (tls passthrough): ClientHello is not forwarded to the HTTPS backend
 //
@@ -9,6 +10,7 @@
 // echoes and passthrough completes a backend handshake.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers;
 use crate::suites::tls_route::basic::basic::make_tls_connector;
 use async_trait::async_trait;
 use rustls::pki_types::ServerName;
@@ -20,6 +22,35 @@ const PASSTHROUGH_PORT: u16 = 31957;
 
 pub struct TlsDeniedBackendRefTestSuite;
 
+async fn assert_attached_and_denied(ctx: &TestContext, name: &str) -> Result<(), String> {
+    helpers::wait_resource_status(
+        ctx,
+        "TLSRoute",
+        "edgion-default",
+        name,
+        Duration::from_secs(10),
+        |route| {
+            route["status"]["parents"].as_array().is_some_and(|parents| {
+                parents.iter().any(|parent| {
+                    let conditions = parent["conditions"].as_array();
+                    conditions.is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|condition| condition["type"] == "Accepted" && condition["status"] == "True")
+                            && conditions.iter().any(|condition| {
+                                condition["type"] == "ResolvedRefs"
+                                    && condition["status"] == "False"
+                                    && condition["reason"] == "RefNotPermitted"
+                            })
+                    })
+                })
+            })
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
 impl TlsDeniedBackendRefTestSuite {
     fn test_terminate_denied_ref_fail_closed() -> TestCase {
         TestCase::new(
@@ -28,6 +59,12 @@ impl TlsDeniedBackendRefTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if let Err(error) = assert_attached_and_denied(&ctx, "tls-denied-ref-terminate").await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("route attachment precondition failed: {error}"),
+                        );
+                    }
                     let addr = format!("{}:{}", ctx.target_host, ctx.tcp_port);
                     let connector = make_tls_connector();
                     let sni = ServerName::try_from("denied-terminate.sandbox.example.com").unwrap();
@@ -78,6 +115,12 @@ impl TlsDeniedBackendRefTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if let Err(error) = assert_attached_and_denied(&ctx, "tls-denied-ref-passthrough").await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("route attachment precondition failed: {error}"),
+                        );
+                    }
                     let addr = format!("{}:{}", ctx.target_host, PASSTHROUGH_PORT);
                     let connector = make_tls_connector();
                     let sni = ServerName::try_from("denied-passthrough.sandbox.example.com").unwrap();

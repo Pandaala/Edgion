@@ -5,3 +5,5 @@ fips_policy	edgion-tests/integration/scripts/integration/test_fips_policy.sh	300
 geoip_db_states	edgion-tests/integration/scripts/integration/test_geoip_db_states.sh	600
 plugin_policy	edgion-tests/integration/scripts/integration/test_plugin_policy.sh	480
 unknown_config_fields	edgion-tests/integration/scripts/integration/test_unknown_config_fields.sh	360
+proxy_protocol_policy_lifecycle	edgion-tests/integration/scripts/integration/test_proxy_protocol_policy_lifecycle.sh	480
+oidc_egress	edgion-tests/integration/scripts/integration/test_oidc_egress.sh	600

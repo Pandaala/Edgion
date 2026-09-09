@@ -27,3 +27,10 @@ SpWeighted	HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest	initial	http
 TcpEspReload	TCPRoute/StreamPlugins/DynamicTest	initial	edgionstreamplugins.edgion.io	edgionstreamplugins	edgion-test	tcp-sp-reload-esp
 TlsLastKnownGood	EdgionTls/LastKnownGood	initial	edgiontls.edgion.io	edgiontls	edgion-test	lkg-tls
 WafDynamic	EdgionPlugins/Waf/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	waf-dynamic
+DelegationParentRefGatewayCollisionHttp	HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	parentref-collision-http
+DelegationParentRefGatewayCollisionGrpc	GRPCRoute/Delegation/ParentRefGatewayCollision/DynamicTest	initial	grpcroutes.gateway.networking.k8s.io	grpcroute	edgion-test	parentref-collision-grpc
+ServiceDegradeThreshold	HTTPRoute/Backend/DegradeThreshold/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	service-degrade-dynamic
+DirectEndpointPortResolution	EdgionPlugins/DirectEndpoint/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	direct-port-dynamic
+AllEndpointStatusTls	EdgionPlugins/AllEndpointStatus/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	aes-tls-dynamic
+RequestMirrorReferenceGrant	EdgionPlugins/RequestMirror	DynamicTest/initial	edgionplugins.edgion.io	edgionplugins	edgion-default	mirror-grant-dynamic
+RegionRouteValidation	EdgionPlugins/RegionRoute/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	rrv-small

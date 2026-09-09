@@ -1,0 +1,13 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: parentref-collision-http
+  namespace: edgion-test
+  generation: 1
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      hostname: "*.parentref-collision-http.test"
+      protocol: HTTP
+      port: 31970

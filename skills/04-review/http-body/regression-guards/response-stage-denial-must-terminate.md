@@ -120,10 +120,20 @@ a second write.
 | CONNECT answered 2xx / interim 1xx | refused (unchanged) | unit: `local_reply_refused_for_established_connect_tunnel`, `..._interim_informational` |
 | naked `terminate()` at the response stage | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
 | `grpc_error(8, ..)` at the response stage | abort, exact code 8 | unit: `response_stage_grpc_error_arms_the_abort_with_the_exact_status`; integration blocked, see `tasks/todo/integration-dslgrpcerror-item-never-runs.md` |
-| staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state` |
+| staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state`; wire: `WafDynamic` initial phase `waf_response_invalid_status_fails_closed` |
 | staged local reply after another final owner | control-flow abort; first written response remains authoritative | unit: `response_filter_rejects_pending_reply_after_an_existing_writer` |
 
 ## Closed follow-up
+
+The native-WAF dynamic integration now exercises a path-isolated phase-3
+`deny,status:100` after an upstream 200. It verifies wire status 500, absence of
+the test backend's response markers, request-level access-log status 500, the
+preserved upstream status 200, and the exact response-header intervention
+summary (`rule_id:1003`, `status:100`). Run it with:
+
+```bash
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i Waf
+```
 
 `fail_to_proxy` fills `upstream.status` only when no earlier stage recorded a
 status. A response-stage denial therefore keeps the backend's real status in

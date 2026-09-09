@@ -1,0 +1,23 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: informational-retry
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: informational-retry-gateway
+      sectionName: http
+  hostnames: ["informational-retry.example.com"]
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        attempts: 2
+      timeouts:
+        request: 10s
+        backendRequest: 1s
+      backendRefs:
+        - name: informational-retry-h1
+          port: 30030

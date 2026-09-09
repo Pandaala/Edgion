@@ -74,7 +74,7 @@ fi
 
 echo "[INFO] validating effective initial fixture ownership in: ${CONF_ROOT}"
 
-python3 - "${CONF_ROOT}" "${INCLUDE_BOOTSTRAP}" "${INCLUDE_DYNAMIC_UPDATES}" "${FAIL_ON_IDENTICAL}" <<'PYEOF'
+python3 - "${CONF_ROOT}" "${INCLUDE_BOOTSTRAP}" "${INCLUDE_DYNAMIC_UPDATES}" "${FAIL_ON_IDENTICAL}" "${PROJECT_ROOT}/config/crd/edgion-crd" <<'PYEOF'
 import hashlib
 import os
 import re
@@ -90,6 +90,7 @@ conf_root = os.path.abspath(sys.argv[1])
 include_bootstrap = sys.argv[2] == "true"
 include_dynamic_updates = sys.argv[3] == "true"
 fail_on_identical = sys.argv[4] == "true"
+crd_root = os.path.abspath(sys.argv[5])
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -159,15 +160,35 @@ for directory, _, filenames in os.walk(conf_root):
             yaml_files.append(os.path.join(directory, filename))
 yaml_files.sort()
 
+served_edgion_versions = {}
+for filename in sorted(os.listdir(crd_root)):
+    if not filename.endswith((".yaml", ".yml")):
+        continue
+    with open(os.path.join(crd_root, filename), encoding="utf-8") as stream:
+        crd = yaml.safe_load(stream)
+    if not isinstance(crd, dict) or crd.get("kind") != "CustomResourceDefinition":
+        continue
+    spec = crd.get("spec", {})
+    if spec.get("group") != "edgion.io":
+        continue
+    kind = spec.get("names", {}).get("kind")
+    versions = {
+        f"edgion.io/{version.get('name')}"
+        for version in spec.get("versions", [])
+        if version.get("served") is True and version.get("name")
+    }
+    if kind and versions:
+        served_edgion_versions[kind] = versions
+
 owners = defaultdict(list)
 excluded_count = 0
 parse_errors = []
 
 for path in yaml_files:
     relative_path = os.path.relpath(path, conf_root).replace(os.sep, "/")
-    if is_excluded(relative_path):
+    excluded = is_excluded(relative_path)
+    if excluded:
         excluded_count += 1
-        continue
 
     try:
         with open(path, encoding="utf-8") as stream:
@@ -192,6 +213,19 @@ for path in yaml_files:
             parse_errors.append(
                 f"{relative_path}#doc={document_index}: resource must define apiVersion, kind, metadata, and metadata.name"
             )
+            continue
+
+        if str(api_version).startswith("edgion.io/"):
+            served_versions = served_edgion_versions.get(str(kind))
+            if served_versions is None or str(api_version) not in served_versions:
+                expected = ", ".join(sorted(served_versions or [])) or "a known Edgion CRD kind"
+                parse_errors.append(
+                    f"{relative_path}#doc={document_index}: apiVersion {api_version} is not served for "
+                    f"{kind}; expected {expected}"
+                )
+                continue
+
+        if excluded:
             continue
 
         namespace = metadata.get("namespace") or ""

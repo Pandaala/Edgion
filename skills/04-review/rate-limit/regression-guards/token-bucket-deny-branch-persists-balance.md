@@ -58,11 +58,15 @@ this needs a regression test rather than operational alerting.
   `cost = 3`, then requires an allow at three. It uses `eval_policy` with explicit `now_ms`
   values and a unique hash-tagged key, so it is deterministic and sleep-free. It is `#[ignore]`
   and runs only with the integration Redis fixture.
+- `edgion-tests/tests/token_bucket_fractional_refill_redis.rs` exercises the fractional state
+  against the same real Redis fixture. It proves a 3-token/1000-ms bucket sampled every 500 ms
+  replenishes six tokens over two seconds across deny and allow branches, and covers lazy
+  two-field migration, saturation credit clearing, clock rollback, and retry rounding. Each
+  scenario uses a unique hash-tagged key and explicit timestamps.
 
-The existing Redis execution test advances by exactly one token per step, so it proves whole-token
-balance persistence but does not detect fractional elapsed-time loss. Fractional real-Redis
-coverage is tracked separately in
-`tasks/todo/add-redis-token-bucket-fractional-refill-integration-coverage.md`.
+The two execution tests cover distinct boundaries: the partial-refill test proves whole-token
+balance persistence for weighted requests, while the fractional-refill test detects lost elapsed
+credit and validates the complete three-field state lifecycle.
 
 The source test alone is insufficient: a rewrite that restructures the Lua can satisfy or
 carry along a string assertion while changing real behavior. The execution test alone is
@@ -96,13 +100,13 @@ Re-open this decision only if:
 - B0061 (Gateway quality campaign) — production fix, commit `695f0ba9`
 - D0029 / `tasks/todo/add-redis-token-bucket-partial-refill-integration-coverage.md` — the
   deferred real-Redis coverage, added 2026-09-06
-- `tasks/todo/add-redis-token-bucket-fractional-refill-integration-coverage.md` — fractional
-  carry execution coverage deferred while existing integration files are frozen
 - `tasks/todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md`
   — canonical cross-caller numeric bounds
 - `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs`
 - `edgion-tests/tests/token_bucket_partial_refill_redis.rs`
+- `edgion-tests/tests/token_bucket_fractional_refill_redis.rs`
 
 ## Resolution references
 
 - `D0029` — 2026-09-06.
+- Fractional real-Redis execution coverage — 2026-09-09.

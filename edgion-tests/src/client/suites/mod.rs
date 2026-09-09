@@ -24,11 +24,12 @@ pub use http_route::{
     DnsResolutionTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite,
     H2TrailerMalformedTestSuite, H2cTestSuite, HeaderModifierTestSuite, HealthCheckTestSuite,
     HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite,
-    LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite,
-    LBLeastConnTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite, PartiallyInvalidTestSuite, PerTryTimeoutTestSuite,
-    PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite,
-    SpChangeInitialTestSuite, SpWeightedFinalTestSuite, SpWeightedInitialTestSuite, SpWeightedZeroWeightTestSuite,
-    SseStreamingTestSuite, TimeoutTestSuite, TransportTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    InformationalRetryTestSuite, LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite,
+    LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite,
+    PartiallyInvalidTestSuite, PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite,
+    SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite,
+    SpWeightedInitialTestSuite, SpWeightedZeroWeightTestSuite, SseStreamingTestSuite, TimeoutTestSuite,
+    TransportTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use edgion_backend_traffic_policy::{
@@ -43,7 +44,7 @@ pub use edgion_backend::{
 pub use grpc_route::{
     GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,
     GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcSessionPersistenceTestSuite, GrpcSpWeightedTestSuite,
-    GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
+    GrpcTestSuite, GrpcTimeoutRewriteWireTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
 };
 
 pub use tcp_route::{

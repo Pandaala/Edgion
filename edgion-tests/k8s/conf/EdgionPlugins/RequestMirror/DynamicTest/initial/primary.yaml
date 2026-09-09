@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mirror-grant-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestMirror
+      config:
+        backendRef:
+          name: mirror-grant-dynamic
+          namespace: edgion-backend
+          port: 30002
+    - type: Dsl
+      config:
+        name: mirror-grant-lkg
+        source: "let a = 1"

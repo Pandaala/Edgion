@@ -27,6 +27,18 @@ script_path="${workspace}/${canonical_script}"
 [[ -f "$script_path" ]] || fail_protocol "canonical script is missing: ${canonical_script}"
 
 echo "INFO: isolated scenario=${scenario_id} script=${canonical_script} timeout=${timeout_seconds}s"
+if [[ "$scenario_id" == "oidc_egress" ]]; then
+  resolver_library="${workspace}/target/debug/oidc_egress_resolver.so"
+  [[ -f "$resolver_library" ]] || fail_protocol "OIDC resolver library is missing"
+  resolver_addresses="$(LD_PRELOAD="$resolver_library" python3 - <<'PY'
+import socket
+print(" ".join(sorted({entry[4][0] for entry in socket.getaddrinfo("mixed.oidc-egress.test", 443)})))
+PY
+)" || fail_protocol "OIDC resolver library could not be loaded"
+  [[ "$resolver_addresses" == *"127.0.0.1"* && "$resolver_addresses" == *"::"* ]] \
+    || fail_protocol "OIDC resolver interception smoke check failed: ${resolver_addresses}"
+  echo "INFO: OIDC resolver interception smoke check passed"
+fi
 set +e
 timeout --signal=TERM --kill-after=15s "${timeout_seconds}s" bash "$script_path"
 scenario_rc=$?

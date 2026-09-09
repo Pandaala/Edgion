@@ -2312,10 +2312,11 @@ async fn shape_client_pipelines(ctx: TestContext, combo: Combo, probe: Arc<Trans
 /// and then strips `Expect` so the upstream cannot produce a second one — and
 /// that is the path `EdgionPlugins/Dsl`'s
 /// `body_expect_continue_single_interim_then_success` covers. On a route with
-/// no such plugin nothing in the gateway answers the expectation, and pingora's
-/// H1 upstream client consumes any interim the origin might send
-/// (`pingora-core/src/protocols/http/v1/client.rs`) rather than relaying it, so
-/// no interim reaches the downstream client by either route.
+/// no such plugin nothing in the gateway answers the expectation. This shape's
+/// `echo` origin emits no informational response, so no interim reaches the
+/// downstream client by either route. Informational heads that an HTTP/1 origin
+/// does emit are relayed; `HTTPRoute/Backend/InformationalRetry` covers that
+/// separate path.
 ///
 /// What this shape pins is therefore that the unanswered expectation is
 /// *harmless*, which is the part that could regress into something worse than

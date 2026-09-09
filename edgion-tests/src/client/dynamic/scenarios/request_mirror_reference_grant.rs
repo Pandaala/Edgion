@@ -1,4 +1,4 @@
-//! Local shared-topology ReferenceGrant lifecycle for both mirror publishers.
+//! Shared-topology ReferenceGrant lifecycle for both mirror publishers.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 const NAME: &str = "mirror-grant-dynamic";
 const BUFFER_NAME: &str = "mirror-grant-body-buffer";
-const NS: &str = "default";
-const TARGET_NS: &str = "mirror-grant-target";
+const NS: &str = "edgion-default";
+const TARGET_NS: &str = "edgion-backend";
 const HOST: &str = "mirror-grant-dynamic.example.com";
 const BODY: &str = "mirror authorization body";
 
@@ -33,23 +33,28 @@ async fn apply(ctx: &TestContext, value: Value) -> Result<()> {
 }
 
 async fn setup(ctx: &TestContext) -> Result<()> {
-    for (ns, port) in [(NS, 30001), (TARGET_NS, 30002)] {
-        apply(
-            ctx,
-            resource(
-                "Service",
-                ns,
-                json!({"ports":[{"name":"http","port":port,"targetPort":port}]}),
-            ),
-        )
-        .await?;
-        let mut slice = resource("EndpointSlice", ns, Value::Null);
-        slice.as_object_mut().context("slice object")?.remove("spec");
-        slice["metadata"]["labels"] = json!({"kubernetes.io/service-name":NAME});
-        slice["addressType"] = json!("IPv4");
-        slice["ports"] = json!([{"name":"http","port":port,"protocol":"TCP"}]);
-        slice["endpoints"] = json!([{"addresses":["127.0.0.1"],"conditions":{"ready":true}}]);
-        apply(ctx, slice).await?;
+    if k8s_mode() {
+        // Selector-owned Services and their single-recorder Deployments are
+        // applied from the K8s-only fixture tree by the scenario driver.
+    } else {
+        for (ns, port) in [(NS, 30001), (TARGET_NS, 30002)] {
+            apply(
+                ctx,
+                resource(
+                    "Service",
+                    ns,
+                    json!({"ports":[{"name":"http","port":port,"targetPort":port}]}),
+                ),
+            )
+            .await?;
+            let mut slice = resource("EndpointSlice", ns, Value::Null);
+            slice.as_object_mut().context("slice object")?.remove("spec");
+            slice["metadata"]["labels"] = json!({"kubernetes.io/service-name":NAME});
+            slice["addressType"] = json!("IPv4");
+            slice["ports"] = json!([{"name":"http","port":port,"protocol":"TCP"}]);
+            slice["endpoints"] = json!([{"addresses":["127.0.0.1"],"conditions":{"ready":true}}]);
+            apply(ctx, slice).await?;
+        }
     }
     let mirror = json!({"backendRef":{"name":NAME,"namespace":TARGET_NS,"port":30002}});
     apply_plugin(ctx, false).await?;
@@ -132,16 +137,33 @@ async fn gateway(ctx: &TestContext, kind: &str) -> Result<Value> {
 }
 
 async fn receipts(ctx: &TestContext, trace: &str) -> Result<Vec<Value>> {
-    let response: Value = ctx
-        .http_client
-        .get(format!("http://{}:30001/mirror/query/{trace}", ctx.target_host))
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(response["captures"].as_array().cloned().unwrap_or_default())
+    let hosts: Vec<String> = if k8s_mode() {
+        vec![
+            format!("{NAME}.{NS}.svc.cluster.local:30001"),
+            format!("{NAME}.{TARGET_NS}.svc.cluster.local:30002"),
+        ]
+    } else {
+        vec![format!("{}:30001", ctx.target_host)]
+    };
+    let mut captures = Vec::new();
+    for host in hosts {
+        let response: Value = ctx
+            .http_client
+            .get(format!("http://{host}/mirror/query/{trace}"))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        captures.extend(response["captures"].as_array().cloned().unwrap_or_default());
+    }
+    Ok(captures)
+}
+
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
 }
 
 async fn traffic(ctx: &TestContext, allowed: bool, case: &str, invalid: bool) -> Result<()> {
@@ -216,7 +238,13 @@ async fn traffic(ctx: &TestContext, allowed: bool, case: &str, invalid: bool) ->
                 mirrors.len() == 1
                     && captures.len() == 2
                     && mirrors[0]["body"] == BODY
-                    && mirrors[0]["headers"]["host"] == "127.0.0.1:30002",
+                    && (if k8s_mode() {
+                        mirrors[0]["headers"]["host"]
+                            .as_str()
+                            .is_some_and(|host| host.ends_with(":30002"))
+                    } else {
+                        mirrors[0]["headers"]["host"] == "127.0.0.1:30002"
+                    }),
                 "{case}: unexpected mirror receipts: {captures:?}"
             );
             return Ok(());
@@ -395,6 +423,8 @@ async fn cleanup(ctx: &TestContext) -> Result<()> {
         ("Service", NS, NAME),
         ("EndpointSlice", TARGET_NS, NAME),
         ("Service", TARGET_NS, NAME),
+        ("Deployment", NS, NAME),
+        ("Deployment", TARGET_NS, NAME),
     ] {
         let mut request = ctx
             .http_client
@@ -415,20 +445,23 @@ async fn cleanup(ctx: &TestContext) -> Result<()> {
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
-        ensure!(
-            !std::env::var("EDGION_TEST_K8S_MODE")
-                .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes")),
-            "RequestMirrorReferenceGrant uses local loopback endpoints; run on the local shared topology"
-        );
         cleanup(&ctx.test_ctx).await?;
         let result = async {
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(15)).await?;
+            if k8s_mode() {
+                ctx.apply_dir("DynamicTest/initial/").await?;
+            }
             // Prove both listeners and the shared receipt store before testing non-delivery.
             for port in [30001, 30002] {
                 let trace = format!("mirror-grant-control-{}", uuid::Uuid::new_v4());
                 ctx.test_ctx
                     .http_client
-                    .post(format!("http://{}:{port}/mirror/capture", ctx.test_ctx.target_host))
+                    .post(if k8s_mode() {
+                        let namespace = if port == 30001 { NS } else { TARGET_NS };
+                        format!("http://{NAME}.{namespace}.svc.cluster.local:{port}/mirror/capture")
+                    } else {
+                        format!("http://{}:{port}/mirror/capture", ctx.test_ctx.target_host)
+                    })
                     .header("x-trace-id", &trace)
                     .body(BODY)
                     .timeout(Duration::from_secs(3))

@@ -1,0 +1,24 @@
+# phase	namespace	service	port	expected_count
+absent	edgion-test	direct-port-dynamic	30001	0
+absent	edgion-test	direct-port-dynamic	30002	0
+absent	edgion-test	direct-port-dynamic	30003	0
+absent	edgion-test	direct-port-dynamic	30051	0
+initial	edgion-test	direct-port-dynamic	30001	nonempty
+initial	edgion-test	direct-port-dynamic	30002	0
+initial	edgion-test	direct-port-dynamic	30051	0
+changed	edgion-test	direct-port-dynamic	30002	nonempty
+changed	edgion-test	direct-port-dynamic	30001	0
+changed	edgion-test	direct-port-dynamic	30051	0
+unready	edgion-test	direct-port-dynamic	30001	0
+unready	edgion-test	direct-port-dynamic	30002	0
+unready	edgion-test	direct-port-dynamic	30051	0
+missing	edgion-test	direct-port-dynamic	30003	nonempty
+missing	edgion-test	direct-port-dynamic	30001	0
+missing	edgion-test	direct-port-dynamic	30002	0
+missing	edgion-test	direct-port-dynamic	30051	0
+tls	edgion-test	direct-port-dynamic	30051	nonempty
+tls	edgion-test	direct-port-dynamic	30001	0
+tls	edgion-test	direct-port-dynamic	30002	0
+invalid_tls	edgion-test	direct-port-dynamic	30001	nonempty
+invalid_tls	edgion-test	direct-port-dynamic	30002	0
+invalid_tls	edgion-test	direct-port-dynamic	30051	0
