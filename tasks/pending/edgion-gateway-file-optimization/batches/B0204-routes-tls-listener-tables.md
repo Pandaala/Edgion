@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified; awaiting local commit.
+- Pipeline state: committed locally.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/gateway_tls_routes.rs`.
 - Baseline: `9cb9bf86`.
@@ -54,4 +54,4 @@
 
 ## Handoff
 
-- Commit: pending local commit; review and verification gates passed. Never push.
+- Commit: `c70aa9fe`; review and verification gates passed. Never push.
