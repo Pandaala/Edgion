@@ -211,7 +211,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 | [`B0221`](batches/B0221-runtime-tls-matching-tests.md) | 2026-09-09 | 1 | examined-no-change | Retained all 26 TLS security tests and meaningful unique-certificate limit coverage; recorded standalone knowledge correction | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | `72454f81` | D0124 frontend-TLS knowledge task; no source/integration changes |
 
-| [`B0222`](batches/B0222-runtime-tls-matching.md) | 2026-09-09 | 1 | examined-no-change | Retained strict immutable TLS matcher; rejected low-value construction churn and separated unmeasured collision retention | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | pending | D0125 standalone P3 investigation; D0124 already owns knowledge drift |
+| [`B0222`](batches/B0222-runtime-tls-matching.md) | 2026-09-09 | 1 | examined-no-change | Retained strict immutable TLS matcher; rejected low-value construction churn and separated unmeasured collision retention | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | `b5e8156b` | D0125 standalone P3 investigation; D0124 already owns knowledge drift |
+
+| [`B0223`](batches/B0223-runtime-module.md) | 2026-09-09 | 1 | examined-no-change | Retained explicit runtime facade and private factory/trailer boundaries with actual consumers | Independent LGTM; identity 3/3, matching 45/45, workspace format/check/Clippy and all guards passed | pending | Store-owned documentation discrepancies carried forward; no source/integration changes |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

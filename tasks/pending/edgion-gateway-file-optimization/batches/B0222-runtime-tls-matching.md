@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: terminal; local commit `b5e8156b`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/matching/tls.rs`.
 - Baseline: `00f896a2`.
@@ -28,4 +28,4 @@
 
 - Fresh `b0222_final_review` LGTM. No Must Fix; its record-only wording correction was applied and rechecked so no shared HashHost API expansion is presumed. Full source/security ownership and D0125 investigation classification independently verified.
 - Fresh TLS tests 26/26 passed in 0.22 seconds (`/tmp/edgion-b0222-tls.log`). Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed.
-- No runtime or integration changes; D0124 knowledge and D0125 measurement remain separate. Ledger/changelog updated; commit pending, local only.
+- No runtime or integration changes; D0124 knowledge and D0125 measurement remain separate. Ledger/changelog updated; commit `b5e8156b`, local only.

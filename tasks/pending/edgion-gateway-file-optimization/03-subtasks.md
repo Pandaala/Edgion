@@ -142,7 +142,7 @@
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
 | `routes-shared` | 66 | 1 | 1 | 0 | pending |
-| `runtime` | 16 | 4 | 3 | 1 | pending |
+| `runtime` | 16 | 4 | 4 | 1 | pending |
 | `services` | 4 | 1 | 3 | 0 | complete |
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
@@ -660,11 +660,11 @@
 | `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | changed | B0220: reused parent-local Gateway lookup; independent LGTM, 19 route tests and adjacent matching gates passed |
 | `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | examined-no-change | B0221: independent LGTM; retained security tests, fresh 26/26; D0124 knowledge task |
 | `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | examined-no-change | B0222: independent LGTM; TLS 26/26; D0125 standalone retention investigation |
-| `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | analysis-ready | B0223: retain live explicit facade and private factory/trailer boundaries |
+| `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | examined-no-change | B0223: independent LGTM; retained explicit facade, identity 3/3 and matching 45/45 |
 | `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | changed | B0176: remove the now-unconsumed GatewayClass clone chain |
-| `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | analysis-in-progress | B0224: canonical terminal response/wire and observability value analysis |
+| `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | analysis-ready | B0224: fixed HTML body allocation candidate; D0126 terminal-header conflict separate |
 | `edgion-gateway/src/runtime/server/listener_builder.rs` | `runtime` | source | changed | B0176: derive minimal immutable listener facts at construction |
-| `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | analysis-in-progress | B0225: server module visibility and real consumer value analysis |
 | `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | pending | Added by external commit `8cbbed6c`; full audit pending |
 | `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | pending | — |
