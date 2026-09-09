@@ -421,6 +421,8 @@ fn acme_challenge_crd_matches_http01_only_runtime() {
     assert_eq!(types, &[serde_json::json!("http-01")]);
     assert!(has_property(&spec, "challenge.gatewayRef.name"));
     assert!(!has_property(&spec, "dnsCredentialSecret"));
+    assert!(!has_property(&spec, "accountSecret"));
+    assert!(has_property(&spec, "privateKeySecretRef.name"));
     for kind in ["http-01", "dns-01", "tls-alpn-01"] {
         let value = serde_json::json!({"type": kind, "gatewayRef": {"name": "gateway"}});
         let runtime_accepts = serde_json::from_value::<AcmeChallenge>(value).is_ok();

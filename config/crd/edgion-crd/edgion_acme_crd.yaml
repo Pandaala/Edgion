@@ -135,10 +135,6 @@ spec:
                       items:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
-                accountSecret:
-                  type: object
-                  description: "ACME account Secret (resolved by Controller)"
-                  x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
               description: "EdgionAcme resource status"

@@ -1663,7 +1663,6 @@ dependencies = [
  "mockall",
  "notify",
  "parking_lot",
- "percent-encoding",
  "proptest",
  "prost 0.13.5",
  "rand 0.9.5",

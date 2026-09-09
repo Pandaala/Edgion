@@ -335,11 +335,6 @@ pub struct EdgionAcmeStatus {
 // ============================================================================
 
 impl EdgionAcme {
-    /// Check if this ACME config uses HTTP-01 challenge
-    pub fn is_http01(&self) -> bool {
-        matches!(self.spec.challenge, AcmeChallenge::Http01 { .. })
-    }
-
     /// Check if any domain is a wildcard (unsupported by built-in ACME)
     pub fn has_wildcard_domains(&self) -> bool {
         self.spec.domains.iter().any(|d| d.starts_with("*."))
@@ -414,7 +409,6 @@ spec:
         assert_eq!(acme.spec.email, "admin@example.com");
         assert_eq!(acme.spec.private_key_secret_ref.name, "my-acme-account");
         assert_eq!(acme.spec.domains.len(), 2);
-        assert!(acme.is_http01());
         assert!(!acme.has_wildcard_domains());
         assert_eq!(acme.spec.server, "https://acme-v02.api.letsencrypt.org/directory");
         assert_eq!(acme.spec.renewal.renew_before, "720h");

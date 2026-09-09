@@ -27,7 +27,6 @@ PREPARE_SCRIPT="${SCRIPT_DIR}/../utils/prepare.sh"
 
 DO_CLEANUP=true
 DO_BUILD=true
-TEST_FILTER=""
 
 # Parse args
 for arg in "$@"; do
@@ -39,7 +38,8 @@ for arg in "$@"; do
             DO_BUILD=false
             ;;
         *)
-            TEST_FILTER="$arg"
+            echo "Unknown argument: $arg (supported: --no-build, --no-cleanup)" >&2
+            exit 2
             ;;
     esac
 done
