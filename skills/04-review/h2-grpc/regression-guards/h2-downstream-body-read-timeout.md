@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-The fork (`Pandaala/pingora`, branch `edgion`) now applies a per-chunk read
+The Edgion fork applies a per-chunk read
 timeout to HTTP/2 downstream request-body reads, closing the pre-existing gap
 where a client stalling mid-upload could pin a proxy pump (plus its downstream
 and upstream connections) indefinitely. HTTP/1 always had this bound
@@ -20,8 +20,9 @@ unified `HttpSession::set_read_timeout` H2 arm was a documented no-op that
 silently swallowed the timeout Edgion already sets on every request
 (`pg_early_request_filter.rs`).
 
-Re-reports of the form "H2 request body read is unbounded / a stalled upload
-pins the pump / `set_read_timeout` is a no-op for h2" are **not accepted**.
+The original fork evidence below is historical. Revalidate the currently locked
+fork and Edgion consumer before deciding whether a new stalled-upload finding
+is a regression; the old resolution alone cannot dismiss it.
 
 ## Core Rationale
 
@@ -153,3 +154,52 @@ Re-open this decision only if:
 ## Resolution references
 
 - `transport-gap-07` — 2026-08-04.
+
+## Live Gateway timeout coverage
+
+Source task: `add-downstream-request-body-timeout-408-integration`.
+The missing coverage was a real test gap, separate from the production 408
+classification already implemented in `pg_fail_to_proxy.rs` and the downstream
+failure exclusion in `pg_error_while_proxy.rs`.
+
+`edgion-tests/src/client/suites/http_route/transport/downstream_timeout.rs`
+adds H1-to-H1 and H2-to-H2 cases to the existing Transport suite. Each keeps an
+unfinished 1024-byte request open after sending 48 bytes, proves those bytes
+reached the expected raw backend, then waits for the base
+`ClientTimeout.read_timeout` of 60 seconds. The dedicated route sets
+`backendRequest: 120s` so the upstream timeout cannot win. Each case has a
+100-second outer deadline and bounded response/log/metric waits; H2 connection
+drivers abort on drop, including failed assertions and cancellation.
+
+Required observations are wire and access-log status 408, `BodyReadTimeout`
+present, `ClientClosed` absent, exactly one backend attempt without errors,
+and no completed upload. Dedicated Service identities have an outlier policy
+with `consecutiveLocalOriginFailures: 1`; the local-origin ejection counter must
+not advance. A subsequent real backend reset must increment that same counter
+exactly once, proving the policy and metric selection are live rather than
+letting a missing policy pass the negative assertion.
+The positive control ends with a bounded healthy-echo recovery probe, so an
+immediate rerun does not inherit its temporary endpoint ejection.
+
+Verified on 2026-09-09 against the current `edgion_v4` lockfile commit
+`518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`:
+
+- `run_integration.sh --no-prepare -r HTTPRoute -i Transport` passed on the
+  final build: 74 reported cases, zero failures or infrastructure errors
+  (the existing matrix retains its explicitly skipped unsupported combinations).
+  Both new live timeout cases passed in approximately 61 seconds, including
+  the reset positive control and recovery barrier. The run's final metrics,
+  unknown-field, requeue-loop, and cache-residue checks also passed.
+- `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, and
+  `cargo clippy --workspace --all-targets` passed; Clippy retained existing
+  unrelated warnings. Product/test binaries built successfully.
+- Agent-doc validation, SSA force, metrics inventory, and Pingora source policy
+  guards passed. A fresh independent reviewer approved the final test logic,
+  resource fixtures, helper lifecycle, and knowledge classification.
+
+Disposition: the integration test gap is fixed; no production behavior changed.
+Coverage does not establish cross-protocol combinations, slow-but-progressing
+uploads, CONNECT exemptions, gRPC mapping, or request-body plugin capture.
+The historical fork tests above remain separate evidence for those boundaries.
+Re-evaluate these cases when the shared client timeout, route deadline, metric
+labels, outlier threshold semantics, or transport helper lifecycle changes.

@@ -72,6 +72,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[path = "downstream_timeout.rs"]
+mod downstream_timeout;
+
 // ===========================================================================
 // The combination matrix
 // ===========================================================================
@@ -465,14 +468,14 @@ static SHAPES: &[ShapeDef] = &[
 ///
 /// The runner rejects a completely empty selection, while this exact count also
 /// detects a non-empty matrix that silently loses only some combinations.
-const EXPECTED_TRANSPORT_CASES: usize = 72;
+const EXPECTED_TRANSPORT_CASES: usize = 74;
 
 // ===========================================================================
 // The case wrapper
 // ===========================================================================
 
 fn expected_case_count() -> usize {
-    SHAPES.iter().map(|s| s.combos.len() + s.skips.len()).sum()
+    SHAPES.iter().map(|s| s.combos.len() + s.skips.len()).sum::<usize>() + downstream_timeout::CASE_COUNT
 }
 
 pub struct TransportTestSuite;
@@ -515,6 +518,7 @@ impl TestSuite for TransportTestSuite {
                 ));
             }
         }
+        cases.extend(downstream_timeout::test_cases());
         assert_eq!(
             cases.len(),
             EXPECTED_TRANSPORT_CASES,

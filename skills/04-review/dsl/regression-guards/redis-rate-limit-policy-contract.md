@@ -108,5 +108,6 @@ tests do not substitute for fresh DSL invocation coverage.
 
 - `dsl-redis-rate-limit` — completed feature task, independently reviewed and
   verified in this session. The earlier INCR examples lacked window/expiry and
-  are now explicitly cumulative-counter examples. The feature task is retained
-  under the project task lifecycle; no review finding file existed to delete.
+  are now explicitly cumulative-counter examples. The completed task directory
+  was removed at the user's request after verification. This page preserves the
+  reusable design conclusions, scope limitations, and actual verification results.

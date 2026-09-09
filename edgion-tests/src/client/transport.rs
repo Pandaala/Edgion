@@ -511,6 +511,12 @@ pub struct RawH2Conn {
     task: JoinHandle<()>,
 }
 
+impl Drop for RawH2Conn {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 impl RawH2Conn {
     pub async fn connect(host: &str, port: u16) -> Result<Self, String> {
         let stream = TcpStream::connect(format!("{host}:{port}"))

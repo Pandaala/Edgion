@@ -1,11 +1,11 @@
 # D0118 — Malformed ClientHello Wire Coverage
 
-- Status: pending
+- Status: covered
 - Severity: low (integration-test gap)
 - Discovered in: B0210 parser analysis
-- Canonical task: [Add malformed ClientHello passthrough coverage](../../../todo/add-malformed-clienthello-passthrough-coverage.md)
+- Canonical knowledge: [ClientHello read contract](../../../../skills/04-review/tls/regression-guards/sni-passthrough-clienthello-read.md)
 
-B0210 proposes unit-level nested-length rejection within the existing bounded
-single-record parser. Later wire coverage should verify malformed complete
-records close without backend relay while valid and trailing-byte traffic remains
-unchanged. Existing integration files are frozen; no new integration is added now.
+The authorized follow-up added an isolated Cargo socket integration matrix in
+`edgion-gateway/tests/tls_passthrough_clienthello.rs`. The canonical knowledge page
+owns its verification, scope, and limits. Existing integration files and production
+parser behavior remain unchanged.

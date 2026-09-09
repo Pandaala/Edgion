@@ -69,9 +69,48 @@ Inline parser matrices cover short/oversized nested lengths, incomplete unknown
 extension headers/payloads before and after SNI, malformed entries after a valid
 hostname, first-selection behavior, valid TLS 1.3 supported_versions bytes,
 post-handshake isolation, trailing EarlyData, and outer `NeedMore`. These are
-in-memory parser checks, not fresh wire-level verification; additional malformed
-passthrough integration coverage remains deferred in
-[the parser wire-coverage task](../../../../tasks/todo/add-malformed-clienthello-passthrough-coverage.md).
+in-memory parser checks; they do not alone prove rejection on a socket.
+
+`edgion-gateway/tests/tls_passthrough_clienthello.rs` adds socket coverage for
+`add-malformed-clienthello-passthrough-coverage` through the production
+`ServerApp::process_new` callback. It publishes a TLSRoute with an exact hostname
+and a reachable Service/EndpointSlice backend. For each rustls-generated TLS 1.2
+and TLS 1.3 ClientHello it independently corrupts the five nested length fields
+(zero, short, oversized, maximum), preserving the complete outer record. Each
+negative requires socket closure within the test budget, the existing
+`no SNI in ClientHello` access-log diagnostic, no upstream attempt, and no backend
+accept after the callback has finished. Timeouts are failures, not rejection
+evidence. The raw TCP backend performs no TLS handshake, so a backend TLS-library
+failure cannot make these negatives pass.
+
+Valid controls before and after the negatives prove the route/backend remains
+usable. Byte-for-byte replay and reverse traffic cover TLS 1.2/1.3 ClientHellos,
+ASCII uppercase SNI, an unknown extension, incomplete record-header/body delivery,
+and a following application-data record. These controls do not claim successful
+TLS handshakes or cryptographically valid early data. Socket write boundaries do
+not guarantee TCP packet or gateway-read boundaries; the existing in-memory replay
+test separately pins the `filled > record_end` initial-buffer case.
+
+This isolated Cargo integration executable starts no extra Gateway/Controller
+processes. It initializes configuration directly and captures the canonical access
+logger, leaving controller sync, listener construction, and process-level topology
+outside its scope. The inspection cap, absolute deadline, fragmented-handshake
+policy, hostname policy, and duplicate-extension selection are unchanged.
+Re-evaluate this coverage if parsing moves after backend connection, the log
+diagnostic changes, or read/replay boundaries change.
+
+Current verification: `cargo test -p edgion-gateway --test tls_passthrough_clienthello
+-- --nocapture` passed (one matrix: 40 malformed connections and 12 valid replay
+controls). The initial run failed its first positive control because the fixture
+omitted controller-resolved `effective_hostnames`; publishing that field alongside
+`resolved_listeners` corrected the fixture. No production change was needed.
+`cargo test -p edgion-gateway --lib routes::tls` also passed (59 tests), including
+the parser matrices and initial-buffer replay guards. `cargo fmt --all`, the
+subsequent format check, `cargo check --workspace --all-targets`, and
+`cargo clippy --workspace --all-targets` passed; Clippy reported existing workspace
+warnings. Agent-doc validation, SSA-force, metrics-inventory, and Pingora-source
+guards passed. An independent read-only review returned LGTM. These are the
+follow-up's verification results; earlier resolution dates below remain historical.
 
 `passthrough_proxy.rs::read_client_hello` is the read loop. It returns
 `(record_end, filled)`:
@@ -127,3 +166,5 @@ the bound.
 ## Resolution references
 
 - `tls-03` — 2026-05-19.
+- `add-malformed-clienthello-passthrough-coverage` / D0118 — test gap following B0210;
+  socket-level rejection coverage, with no runtime behavior change.

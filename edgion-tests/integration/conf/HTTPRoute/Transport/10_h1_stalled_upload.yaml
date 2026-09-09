@@ -1,0 +1,61 @@
+# Dedicated backend identity: other transport failures must not affect this policy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30030
+      targetPort: 30030
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: transport-stall-h1
+addressType: IPv4
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+ports:
+  - port: 30030
+    protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: transport-stall-h1
+  outlierDetection:
+    consecutiveErrors: 100
+    consecutiveGatewayErrors: 100
+    consecutiveLocalOriginFailures: 1
+    ejectionTime: 1s
+    maxEjectionTime: 1s
+    maxEjectionPercent: 0
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: transport-gateway
+  hostnames: ["transport-stall-h1.example.com"]
+  rules:
+    # The base client's 60s read timeout must win over the upstream deadline.
+    - timeouts:
+        backendRequest: 120s
+      backendRefs:
+        - name: transport-stall-h1
+          port: 30030
