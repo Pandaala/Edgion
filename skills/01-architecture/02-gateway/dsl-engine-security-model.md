@@ -116,6 +116,17 @@ predicates and `sha256()` scan storage without first constructing a complete
 body string; `read_all()` is the explicit escape hatch and fails before
 returning an oversized value.
 
+`regex_replace()` uses the HTTP-plugin common bounded replacement helper. A
+template containing no `$` stays on a literal `find_iter` branch; a template
+containing `$` is compiled to regex 1.13 interpolation tokens and uses
+`captures_iter`. Both branches check each logical output prefix before
+requesting growth of the helper-owned output string. The no-match result does
+not construct that output, so the VM can retain the original `Arc<str>`.
+These are logical-output and requested-reservation bounds: regex matching may
+use its own scratch space, an allocator may round a requested capacity, and
+conversion of the finished `String` to `Arc<str>` is a separate allocation
+boundary.
+
 `http.call` is a separate plugin-initiated bounded exchange. Its effective response
 body cap is `min(httpMaxResponseBodyBytes, max_string_len)`, enforced by the canonical
 streaming helper. Declared or streamed overflow fails the whole call; exact-cap input
@@ -167,7 +178,7 @@ Defense in depth around regex evaluation:
 | `MAX_REGEX_PATTERN_LEN = 1024 B` | `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/validator.rs:106-113` (re-checked after deserialization) | Pathologically long patterns |
 | DFA + size limit during compile | compiler, validator, and `Vm::new` | Patterns that compile to multi-MB DFA tables |
 | Body scan budget | `VmState::reserve_body_scan` | Repeated scans of adversarial or spilled input |
-| `max_string_len` | `lang/vm.rs:593,626` | Oversized `regex_find` / `regex_replace` output |
+| `max_string_len` | `lang/vm.rs`, `plugins/http/common/bounded_regex_replacement.rs` | Oversized `regex_find` output and incremental `regex_replace` output construction |
 
 The validator-side rebuild is the key safeguard against **hand-crafted
 bytecode that ships a regex pattern the compiler would have rejected**. The

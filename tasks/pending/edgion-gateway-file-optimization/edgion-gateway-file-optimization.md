@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at campaign HEAD `397d27ef`; the `2c01a075`/`bea47373`/`5cd384c6` sync chain and B0251 are complete. |
-| Coverage | 548 current Gateway files: 232 changed, 185 examined-no-change, 14 deferred, 117 non-terminal; 3 historical rows are removed. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0252: independent LGTM and commit gates pending for the narrow DSL language facade cleanup. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0253 read-only analysis of the DSL VM is active; later pending DSL files remain serial. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress at campaign HEAD `9d3d0354`; B0253 implementation, independent final review, and full verification are complete, with commit pending. |
+| Coverage | 549 current Gateway files: 235 changed, 185 examined-no-change, 14 deferred, 115 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0253: canonical bounded regex replacement for the DSL VM and AI Guard; independent final LGTM and full commit gates passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0254 (`dsl/mod.rs`) and B0255 (`dsl/plugin.rs`) are analysis-ready but must be refreshed after B0253 commits; later DSL files remain serial. D0127–D0130 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary

@@ -20,7 +20,6 @@
 //! caps. See `skills/01-architecture/02-gateway/dsl-engine-security-model.md`
 //! for the canonical breakdown of every cap and where it is enforced.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -29,6 +28,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
+use crate::plugins::http::common::{replace_all_bounded, BoundedRegexReplacementError};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession};
 use crate::request_body::{BodyOperationError, BodyTextOperation, BodyTextResult, LossyTextScanner, TextBodyScanner};
 use edgion_resources::filters::PluginRunningResult;
@@ -1235,10 +1235,25 @@ impl Vm {
                             message: format!("regex_cache[{}] missing or invalid", regex_idx),
                         });
                     };
-                    // Cow::Borrowed means nothing matched — clone the Arc to avoid allocation.
-                    let result: Arc<str> = match re.replace_all(&s, replacement.as_str()) {
-                        Cow::Borrowed(_) => Arc::clone(&s),
-                        Cow::Owned(o) => Arc::from(o.as_str()),
+                    let result: Arc<str> = match replace_all_bounded(re, &s, replacement, self.limits.max_string_len) {
+                        Ok(None) => Arc::clone(&s),
+                        Ok(Some(output)) => Arc::from(output),
+                        Err(BoundedRegexReplacementError::OutputTooLong { len }) => {
+                            return Err(RuntimeError::StringTooLong {
+                                len,
+                                limit: self.limits.max_string_len,
+                            });
+                        }
+                        Err(BoundedRegexReplacementError::AllocationFailed) => {
+                            return Err(RuntimeError::Internal {
+                                message: "bounded regex replacement output allocation failed".to_string(),
+                            });
+                        }
+                        Err(BoundedRegexReplacementError::InvariantViolation) => {
+                            return Err(RuntimeError::Internal {
+                                message: "bounded regex replacement invariant failed".to_string(),
+                            });
+                        }
                     };
                     if result.len() > self.limits.max_string_len {
                         return Err(RuntimeError::StringTooLong {

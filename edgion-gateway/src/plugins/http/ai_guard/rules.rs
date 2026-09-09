@@ -9,130 +9,14 @@ use edgion_resources::resources::edgion_plugins::{
     compile_guard_pattern, AiGuardAction, AiGuardMatcher, AiGuardRole, AiGuardRule,
 };
 
+use crate::plugins::http::common::CompiledRegexReplacement;
+
 /// One rule with its pattern already compiled under the shared DFA bounds.
 pub struct CompiledRule {
     regex: regex::Regex,
     action: AiGuardAction,
     roles: Option<Vec<AiGuardRole>>,
-    replacement: Option<CompiledReplacement>,
-}
-
-/// A replacement compiled into the literal and capture operations understood
-/// by `regex`. Keeping this private representation avoids reparsing the same
-/// replacement for every matching span.
-struct CompiledReplacement {
-    tokens: Vec<ReplacementToken>,
-}
-
-enum ReplacementToken {
-    Literal(Box<str>),
-    Capture(usize),
-}
-
-impl CompiledReplacement {
-    fn compile(regex: &regex::Regex, replacement: &str) -> Self {
-        let mut tokens = Vec::new();
-        let mut literal = String::new();
-        let mut remaining = replacement;
-
-        while let Some(dollar) = remaining.find('$') {
-            literal.push_str(&remaining[..dollar]);
-            remaining = &remaining[dollar..];
-
-            if remaining.as_bytes().get(1) == Some(&b'$') {
-                literal.push('$');
-                remaining = &remaining[2..];
-                continue;
-            }
-
-            let Some((reference, end)) = capture_reference(remaining) else {
-                literal.push('$');
-                remaining = &remaining[1..];
-                continue;
-            };
-            remaining = &remaining[end..];
-
-            let capture = reference
-                .parse::<usize>()
-                .ok()
-                .or_else(|| regex.capture_names().position(|name| name == Some(reference)));
-            let Some(capture) = capture else {
-                continue;
-            };
-            if !literal.is_empty() {
-                tokens.push(ReplacementToken::Literal(std::mem::take(&mut literal).into_boxed_str()));
-            }
-            tokens.push(ReplacementToken::Capture(capture));
-        }
-        literal.push_str(remaining);
-        if !literal.is_empty() {
-            tokens.push(ReplacementToken::Literal(literal.into_boxed_str()));
-        }
-        Self { tokens }
-    }
-
-    fn replace_all_bounded(&self, regex: &regex::Regex, current: &str, limit: usize) -> Result<Option<String>, ()> {
-        let mut captures = regex.captures_iter(current);
-        let Some(first) = captures.next() else {
-            return Ok(None);
-        };
-
-        let mut rewritten = String::new();
-        let mut previous_end = 0;
-        for captures in std::iter::once(first).chain(captures) {
-            let matched = captures.get(0).ok_or(())?;
-            append_bounded(&mut rewritten, &current[previous_end..matched.start()], limit)?;
-            for token in &self.tokens {
-                match token {
-                    ReplacementToken::Literal(text) => {
-                        append_bounded(&mut rewritten, text, limit)?;
-                    }
-                    ReplacementToken::Capture(index) => {
-                        if let Some(value) = captures.get(*index) {
-                            append_bounded(&mut rewritten, value.as_str(), limit)?;
-                        }
-                    }
-                }
-            }
-            previous_end = matched.end();
-        }
-        append_bounded(&mut rewritten, &current[previous_end..], limit)?;
-        Ok(Some(rewritten))
-    }
-}
-
-/// Parse the possible capture reference beginning at `replacement[0]`.
-///
-/// This deliberately mirrors regex-automata's interpolation grammar, including
-/// its `usize` parse followed by named-capture fallback.
-fn capture_reference(replacement: &str) -> Option<(&str, usize)> {
-    let bytes = replacement.as_bytes();
-    if bytes.len() <= 1 || bytes[0] != b'$' {
-        return None;
-    }
-    if bytes[1] == b'{' {
-        let close = bytes[2..].iter().position(|byte| *byte == b'}')? + 2;
-        return Some((&replacement[2..close], close + 1));
-    }
-
-    let mut end = 1;
-    while bytes
-        .get(end)
-        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-    {
-        end += 1;
-    }
-    (end > 1).then(|| (&replacement[1..end], end))
-}
-
-fn append_bounded(output: &mut String, value: &str, limit: usize) -> Result<(), ()> {
-    let new_len = output.len().checked_add(value.len()).ok_or(())?;
-    if new_len > limit {
-        return Err(());
-    }
-    output.try_reserve_exact(value.len()).map_err(|_| ())?;
-    output.push_str(value);
-    Ok(())
+    replacement: Option<CompiledRegexReplacement>,
 }
 
 /// The immutable compiled rule set owned by a plugin snapshot.
@@ -180,11 +64,12 @@ impl CompiledRules {
             };
             let regex = compile_guard_pattern(&pattern)?;
             let replacement = match rule.action {
-                AiGuardAction::Mask => Some(CompiledReplacement::compile(
+                AiGuardAction::Mask => Some(CompiledRegexReplacement::compile(
                     &regex,
                     rule.replacement
                         .as_deref()
-                        .ok_or_else(|| "replacement is required for action mask".to_string())?,
+                        .ok_or_else(|| "replacement is required for action mask".to_string())?
+                        .to_string(),
                 )),
                 AiGuardAction::Allow | AiGuardAction::Reject => None,
             };
@@ -252,11 +137,11 @@ impl CompiledRules {
                         let candidate_limit = max_replacement_bytes.checked_sub(other_live).ok_or(())?;
                         let rewritten = {
                             let current = masked[index].as_deref().unwrap_or(span.current);
-                            rule.replacement.as_ref().ok_or(())?.replace_all_bounded(
-                                &rule.regex,
-                                current,
-                                candidate_limit,
-                            )?
+                            rule.replacement
+                                .as_ref()
+                                .ok_or(())?
+                                .replace_all_bounded(&rule.regex, current, candidate_limit)
+                                .map_err(|_| ())?
                         };
                         let Some(rewritten) = rewritten else {
                             continue;
@@ -403,48 +288,6 @@ mod tests {
         // "a" expands to "aa": exactly two bytes.
         assert!(decide(&rules, &input, 2).is_ok());
         assert!(decide(&rules, &input, 1).is_err());
-    }
-
-    #[test]
-    fn compiled_replacement_matches_regex_interpolation_grammar() {
-        let regex = regex::Regex::new(r"(?P<name>a)(?P<π>c)?").expect("valid regex");
-        let input = "ac a";
-        let replacements = [
-            "$0",
-            "$1",
-            "$10",
-            "$name",
-            "${name}",
-            "$namesuffix",
-            "${name}suffix",
-            "$missing",
-            "${missing}",
-            "$2",
-            "${+0}",
-            "${+1}",
-            "${01}",
-            "${184467440737095516160}",
-            "$$",
-            "$$$1",
-            "$",
-            "$!",
-            "$é",
-            "${}",
-            "${ }",
-            "${π}",
-            "${wat $name ok",
-            "pre-$name-post",
-        ];
-
-        for replacement in replacements {
-            let compiled = CompiledReplacement::compile(&regex, replacement);
-            let actual = compiled
-                .replace_all_bounded(&regex, input, usize::MAX)
-                .expect("bounded expansion succeeds")
-                .expect("input matches");
-            let expected = regex.replace_all(input, replacement);
-            assert_eq!(actual, expected.as_ref(), "replacement {replacement:?}");
-        }
     }
 
     #[test]

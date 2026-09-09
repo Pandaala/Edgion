@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: ready to commit; changed; implementation and independent re-review passed.
+- Pipeline state: terminal; changed; implementation and independent re-review passed.
 - Active anchor: `edgion-gateway`.
 - Baseline HEAD: `397d27eff4aabc68df6610bf68ee37e9f4d7bd1e`.
 - Target: `edgion-gateway/src/plugins/http/dsl/lang/mod.rs`.
@@ -31,3 +31,4 @@
 - Removed only the zero-consumer `ast`, `compiler`, and `parser` aliases. Retained all live leaf aliases and Gateway-owned runtime modules.
 - Replaced the compatibility rationale with current ownership documentation. Workspace-wide search confirmed no hidden consumer of the removed paths; the standalone Redis integration imports only retained aliases.
 - Independent re-review returned LGTM with no remaining finding. `cargo check -p edgion-gateway --all-targets`, formatting, diff, and frozen-integration checks passed; no behavioral or integration test was warranted for this compile-time facade cleanup.
+- Commit: `9d3d0354`; never pushed by the campaign.

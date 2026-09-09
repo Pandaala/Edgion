@@ -201,3 +201,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Bound and redact DSL Redis error results | pending | [task](../../../todo/bound-and-redact-dsl-redis-error-results.md) |
 | Avoid DSL Redis link-key clones | pending | [task](../../../todo/avoid-dsl-redis-link-key-clones.md) |
 | Isolate shared outbound-call library unit tests from network (D0128) | pending | [task](../../../todo/isolate-shared-outbound-call-unit-tests-from-network.md) |
+| Bound DSL body reads before allocation (D0129) | pending | [task](../../../todo/bound-dsl-body-reads-before-allocation.md) |
+| Correct DSL sandbox security documentation (D0130) | pending | [task](../../../todo/correct-dsl-sandbox-security-documentation.md) |

@@ -168,7 +168,7 @@ fn test_regex_replace_literal_emits_dedicated_opcode() {
     );
 }
 
-// regex_replace with no match returns the original string unchanged (Cow::Borrowed path)
+// regex_replace with no match returns the original string unchanged (Arc clone path)
 #[test]
 fn test_regex_replace_no_match_returns_original() {
     assert_sets_request_header(
@@ -186,6 +186,25 @@ fn test_regex_replace_capture_groups() {
         r#"req.set_header("X-Out", regex_replace("2026-05-15", "(\\d{4})-(\\d{2})-(\\d{2})", "$3/$2/$1"))"#,
         "X-Out",
         "15/05/2026",
+    );
+}
+
+#[test]
+fn test_regex_replace_dynamic_named_capture_and_literal_dollar() {
+    assert_sets_request_header(
+        r#"let replacement = "${word}:$$:$1"
+req.set_header("X-Out", regex_replace("ab", "(?P<word>[a-z]+)", replacement))"#,
+        "X-Out",
+        "ab:$:ab",
+    );
+}
+
+#[test]
+fn test_regex_replace_zero_width_respects_utf8_boundaries() {
+    assert_sets_request_header(
+        r#"req.set_header("X-Out", regex_replace("é", "", "-"))"#,
+        "X-Out",
+        "-é-",
     );
 }
 
@@ -231,8 +250,40 @@ fn test_regex_replace_result_too_long() {
         ..Default::default()
     };
     // "a-b" → "aXXb" (length 4) > limit 3
-    let result = run_with_limits(r#"let v = regex_replace("a-b", "-", "XX")"#, session, limits);
-    assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+    let error = run_expect_runtime_err_with_limits(r#"let v = regex_replace("a-b", "-", "XX")"#, session, limits);
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
+}
+
+#[test]
+fn test_regex_replace_dynamic_amplification_accepts_exact_limit() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|name, value| name == "X-Out" && value == "a".repeat(32))
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let limits = VmLimits {
+        max_string_len: 32,
+        ..Default::default()
+    };
+    let source = r#"let replacement = "$1$1$1$1"
+req.set_header("X-Out", regex_replace("aaaaaaaa", "(a)", replacement))"#;
+
+    assert_eq!(run_with_limits(source, session, limits), good_next());
+}
+
+#[test]
+fn test_regex_replace_dynamic_amplification_reports_first_crossing_prefix() {
+    let session = MockPluginSession::new();
+    let limits = VmLimits {
+        max_string_len: 31,
+        ..Default::default()
+    };
+    let source = r#"let replacement = "$1$1$1$1"
+let value = regex_replace("aaaaaaaa", "(a)", replacement)"#;
+
+    let error = run_expect_runtime_err_with_limits(source, session, limits);
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 32, limit: 31 }));
 }
 
 // sha256 / md5 result must honor max_string_len like every other string builtin (F-005)

@@ -29,6 +29,7 @@ before applying a decision to current code.
 
 - [Chrono `Display::to_string()` Panic on Bad Format — FIXED, PIN-IN-PLACE](regression-guards/chrono-display-panic.md)
 - [DSL regex constants: DFA size_limit / dfa_size_limit are capped at 1MB](regression-guards/dfa-size-limit.md)
+- [DSL and AI Guard regex replacement output is bounded during construction](regression-guards/bounded-regex-replacement.md)
 - [Digest output string limit](regression-guards/digest-output-string-limit.md)
 - [DSL `http.call` response aggregation is bounded while streaming](regression-guards/http-call-full-body-read-before-truncate.md)
 - [`redis.get` / `redis.hget` / `redis.hgetall` values: silent truncation at `max_string_len` — RAISING IS NOT ACCEPTED](regression-guards/redis-read-values-truncate-to-max-string-len.md)

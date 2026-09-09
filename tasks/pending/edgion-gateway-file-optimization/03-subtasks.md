@@ -350,7 +350,8 @@
 | `edgion-gateway/src/plugins/http/common/http_client.rs` | `plugins-http-common` | source | changed | B0102: canonical default and dedicated RequestMirror singleton clients |
 | `edgion-gateway/src/plugins/http/common/http_util.rs` | `plugins-http-common` | source | examined-no-change | B0242: strict bounded JSON reader retained; dynamic OIDC errors remain owned by existing P1 task; independent LGTM |
 | `edgion-gateway/src/plugins/http/common/json_request.rs` | `plugins-http-common` | source | changed | B0243: borrowed raw HeaderMap classification removes per-request header clones; independent LGTM and focused tests passed |
-| `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | changed | B0244: allocation-free empty/single rate-limit key paths; independent plan/final approval and focused tests passed |
+| `edgion-gateway/src/plugins/http/common/bounded_regex_replacement.rs` | `plugins-http-common` | source | changed | B0253: canonical bounded regex replacement shared by DSL and AI Guard; independent plan/final LGTM |
+| `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | changed | B0244/B0253: rate-limit fast paths and canonical bounded regex helper export; independent reviews passed |
 | `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | changed | B0245: move sole-attempt requests and use monotonic passive recovery; independent revised-plan/final approval |
 | `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | changed | B0246: fail-closed active-health URL/dial validation and correct passive/active circuit ownership |
 | `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | changed | B0247: saturating TTL publication and elapsed-time DNS cache expiry remove overflow/panic paths |
@@ -373,7 +374,7 @@
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | changed | B0250: corrected stale schema/compiler/VM ownership documentation; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | changed | B0251: atomic bounded http.call failure, allocation-safe decoding and retained-header bounds; corrected independent LGTM, DSL 350/350 |
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | changed | B0252: removed three unused compatibility re-exports; independent LGTM |
-| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | REQ-BODY-BLOCKING-001 targeted owned-input JSON scan / `1eb48138`; full DSL audit pending |
+| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | changed | B0253: bounded regex construction before maxStringLen overflow; independent plan/final LGTM |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `plugins-http-dsl` | source | pending | — |
@@ -401,7 +402,7 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/runtime_errors.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/sandbox.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/terminate_tests.rs` | `plugins-http-dsl` | test | pending | — |
-| `edgion-gateway/src/plugins/http/dsl/tests/utility_functions.rs` | `plugins-http-dsl` | test | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/tests/utility_functions.rs` | `plugins-http-dsl` | test | changed | B0253: regex grammar, zero-width, exact/plus-one and amplification regressions |
 | `edgion-gateway/src/plugins/http/dsl/tests/vm_defensive_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dynamic_external_upstream/mod.rs` | `plugins-http-dynamic-external-upstream` | source | examined-no-change | B0073 |
 | `edgion-gateway/src/plugins/http/dynamic_external_upstream/plugin.rs` | `plugins-http-dynamic-external-upstream` | source | changed | B0073 |
