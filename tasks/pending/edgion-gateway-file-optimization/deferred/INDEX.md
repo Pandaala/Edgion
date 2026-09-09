@@ -203,3 +203,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Isolate shared outbound-call library unit tests from network (D0128) | pending | [task](../../../todo/isolate-shared-outbound-call-unit-tests-from-network.md) |
 | Bound DSL body reads before allocation (D0129) | pending | [task](../../../todo/bound-dsl-body-reads-before-allocation.md) |
 | Correct DSL sandbox security documentation (D0130) | pending | [task](../../../todo/correct-dsl-sandbox-security-documentation.md) |
+| Revalidate the DSL compilation trust-boundary ADR (D0131) | pending | [task](../../../todo/revalidate-dsl-compilation-trust-boundary-adr.md) |

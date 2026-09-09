@@ -45,3 +45,4 @@
 - Implementer: common helper 7/7; AI Guard rules 15/15; full AI Guard 48/48; DSL utility functions 54/54; full DSL 323/323; Gateway all-target compile; format check; diff check; agent docs; English-only; Gateway no-tracing.
 - Coordinator: `cargo fmt --all`; locked workspace check; locked workspace Clippy (exit 0 with pre-existing warnings); agent docs; SSA force; metrics inventory; Pingora source policy; Gateway no-tracing; English-only; diff check; and frozen paths all passed.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `63e974bc` (`Unify bounded regex replacement`); no push.

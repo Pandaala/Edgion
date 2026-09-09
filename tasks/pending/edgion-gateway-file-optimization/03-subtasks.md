@@ -375,7 +375,7 @@
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | changed | B0251: atomic bounded http.call failure, allocation-safe decoding and retained-header bounds; corrected independent LGTM, DSL 350/350 |
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | changed | B0252: removed three unused compatibility re-exports; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | changed | B0253: bounded regex construction before maxStringLen overflow; independent plan/final LGTM |
-| `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | changed | B0254: corrected compile/validation/runtime ownership rustdoc; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/api_errors.rs` | `plugins-http-dsl` | test | pending | — |

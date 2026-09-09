@@ -1,23 +1,27 @@
 //! EdgionDSL — Custom plugin scripting language for Edgion gateway
 //!
 //! Provides a safe, sandboxed DSL for writing inline plugin logic.
-//! Scripts are compiled to bytecode on the controller and executed
-//! via a stack-based VM on the gateway.
+//! Source or bytecode is resolved and statically validated through the shared
+//! `edgion-resources`/`edgion-dsl` path during control-plane resource ingest
+//! and again when the gateway constructs the plugin. The gateway executes the
+//! resulting `CompiledScript` through its stack-based VM and builtin dispatch.
 //!
 //! Architecture:
 //!   Source → Parser(nom) → AST → Compiler → Bytecode   (edgion-dsl crate)
 //!   Bytecode → VM(sandbox)                              (this module)
 //!
 //! The language core (parser/compiler/bytecode/validator) lives in the
-//! standalone `edgion-dsl` crate so the controller runs the same
-//! compile/validate path at resource ingest; `lang/` re-exports it and keeps
-//! the VM + builtin dispatch here.
+//! standalone `edgion-dsl` crate. `lang/` exposes its runtime-adjacent
+//! bytecode, error, validator, and value types alongside the gateway-owned VM
+//! and builtin dispatch.
 //!
 //! Security model:
 //!   Layer 0: Input limits (source size, parse budget, nesting depth)
-//!   Layer 1: Compile-time validation (instruction count, locals, constants)
-//!   Layer 2: Runtime fuel (step budget, loop budget, call budget)
-//!   Layer 3: Fault isolation (catch_unwind + error policy)
+//!   Layer 1: Shared compile-time validation (instruction count, locals, constants)
+//!   Layer 2: Gateway post-deserialization validation and bounded regex compilation
+//!   Layer 3: Runtime budgets (fuel, stack, collections, body scans, bounded outputs,
+//!            including regex-replacement construction)
+//!   Layer 4: Fault isolation (catch_unwind + error policy)
 
 pub mod config;
 pub mod lang;
