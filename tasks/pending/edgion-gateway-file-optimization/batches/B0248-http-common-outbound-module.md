@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: examined-no-change; independent review and verification complete, awaiting local record commit.
+- Pipeline state: examined-no-change; committed locally.
 - Active anchor: `edgion-gateway`.
 - Baseline HEAD: `a9236e7579d09198c4c5315929103cfcfef0d9da`.
 - Target: `edgion-gateway/src/plugins/http/common/outbound/mod.rs`.
@@ -26,4 +26,4 @@
 - B0247 did not change declarations, exports, consumers or ownership. Target blob remains `37f48cab88568a0031341f0b310701c4a2ab6756` at refresh HEAD `98b88473`.
 - No source or integration change and no new issue.
 - Verification: reviewer Gateway all-target check, Gateway no-tracing, English-only, diff and integration freeze passed; root workspace format/check/Clippy plus agent-doc, SSA, metrics, Pingora, Gateway no-tracing, English-only and freeze gates passed.
-- Commit: pending; never push.
+- Commit: `07bfdcbd`; never pushed.

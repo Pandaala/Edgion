@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0248 refreshed analysis and independent review complete at `98b88473`, awaiting record-only verification and local commit; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 231 changed, 185 examined-no-change, 15 deferred, 117 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0248 examined-no-change outbound facade: verification/record commit gate active. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0249's complex-change report was refreshed at `98b88473` with unchanged defect, scope and plan-first classification; it awaits B0248 commit. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0249 implementation, independent reviews and verification complete at `07bfdcbd`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 232 changed, 185 examined-no-change, 15 deferred, 116 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0249 canonical Service-port section resolution: commit gate complete for the target plus one necessary active-anchor discovery support file. Automatic local batch commits authorized, never push. |
+| Analysis queue | The next pending source-order Gateway file starts after B0249 commits. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

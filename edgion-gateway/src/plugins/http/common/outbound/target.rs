@@ -20,7 +20,7 @@ pub enum ResolvedTarget {
     Service {
         /// Canonical `"namespace/service-name"` key (matches EpSliceStore).
         service_key: String,
-        /// Explicit serving-port number to match, or None for first available.
+        /// Kubernetes Service port number; a missing or invalid value fails closed.
         port: Option<i32>,
         /// "http" or "https".
         scheme: &'static str,
@@ -51,11 +51,11 @@ impl ResolvedTarget {
             Self::Static(url) => Some(url.clone()),
             Self::Service {
                 service_key,
-                port,
+                port: service_port,
                 scheme,
                 cursor,
             } => {
-                let eps = get_roundrobin_store().ready_endpoints_for_port(service_key, *port);
+                let eps = get_roundrobin_store().ready_endpoints_for_port(service_key, *service_port);
                 rr_pick(&eps, cursor, scheme)
             }
         }
@@ -77,16 +77,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rr_pick_rotates_and_handles_empty() {
+    fn rr_pick_rotates_canonical_service_endpoints_and_handles_empty() {
         let cursor = AtomicUsize::new(0);
-        let eps = vec!["10.0.0.1:8080".to_string(), "[2001:db8::1]:8080".to_string()];
+        let eps = vec!["10.0.0.1:8443".to_string(), "[2001:db8::1]:9443".to_string()];
 
         let a = rr_pick(&eps, &cursor, "http");
         let b = rr_pick(&eps, &cursor, "https");
         let c = rr_pick(&eps, &cursor, "http");
-        assert_eq!(a.as_deref(), Some("http://10.0.0.1:8080"));
-        assert_eq!(b.as_deref(), Some("https://[2001:db8::1]:8080"));
-        assert_eq!(c.as_deref(), Some("http://10.0.0.1:8080"));
+        assert_eq!(a.as_deref(), Some("http://10.0.0.1:8443"));
+        assert_eq!(b.as_deref(), Some("https://[2001:db8::1]:9443"));
+        assert_eq!(c.as_deref(), Some("http://10.0.0.1:8443"));
 
         let empty: Vec<String> = vec![];
         assert_eq!(rr_pick(&empty, &cursor, "http"), None);

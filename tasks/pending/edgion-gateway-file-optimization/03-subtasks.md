@@ -357,7 +357,7 @@
 | `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | examined-no-change | B0248: refreshed minimal coherent facade retained; independent LGTM rejected visibility/re-export churn |
 | `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | changed | B0246: filter every pinned EndpointSlice address through canonical final-dial validation before rotation |
 | `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | changed | B0107: canonical framing helper reused by Wasm callouts |
-| `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | analysis-ready | B0249: canonical Service-port section resolution required; complex candidate queued |
+| `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | changed | B0249: canonical Service section maps configured Service ports to actual ready serving sockets |
 | `edgion-gateway/src/plugins/http/conf_handler_impl.rs` | `plugins-http-framework` | source | changed | B0062 |
 | `edgion-gateway/src/plugins/http/cors/mod.rs` | `plugins-http-cors` | source | examined-no-change | B0068 |
 | `edgion-gateway/src/plugins/http/cors/plugin.rs` | `plugins-http-cors` | source | changed | B0068 |
