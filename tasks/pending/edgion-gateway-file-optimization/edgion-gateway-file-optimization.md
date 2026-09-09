@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0250 documentation implementation, independent review and verification complete at `f326f280`, awaiting local commit; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 233 changed, 185 examined-no-change, 15 deferred, 115 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0250 DSL config ownership rustdoc: commit gate complete. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0251's complex `http.call` overflow-contract repair and B0252's no-change facade report are ready at `f326f280`; both require current-HEAD refresh before serial promotion. D0127 tracks the independently confirmed outbound CA gap. |
-| Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
+| Campaign status | in-progress at external user HEAD `5cd384c6`; the `2c01a075`/`bea47373`/`5cd384c6` sync chain is reconciled, and all ten B0251 baseline blobs remain unchanged. |
+| Coverage | 548 current Gateway files: 231 changed, 185 examined-no-change, 14 deferred, 118 non-terminal; 3 historical rows are removed. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0251: corrected independent LGTM and all commit gates passed for strict bounded DSL `http.call`; local commit pending. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0252's no-change facade report remains queued at `f326f280` and will require refresh after B0251. D0127 tracks the independently confirmed outbound CA gap. |
+| Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary
 

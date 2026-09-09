@@ -1578,12 +1578,12 @@ if values["id"] != nil {
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | Int | HTTP 响应状态码；网络、超时、连接时出站策略拦截或响应流失败时为 `0` |
+| `status` | Int | HTTP 响应状态码；网络、超时、连接时出站策略拦截、响应流失败或有界响应校验失败时为 `0` |
 | `body` | Str | UTF-8 响应体；失败或响应体为空时为空字符串 |
-| `headers` | Map | 响应头；键为小写头名称，值为该头名称对应的最后一个值 |
+| `headers` | Map | 保留的响应头；键为小写名称，只有在原始响应头遍历尚未停止时，后续重复项才会替换先前值 |
 
-网络故障、超时、响应流失败，以及连接时被策略拒绝的 DNS 解析地址返回 `status = 0`
-和空 body。无效参数、格式错误或不支持的 URL、被 SSRF 预检查拒绝的直接 IP 字面量，
+网络故障、超时、响应流失败、有界响应溢出，以及连接时被策略拒绝的 DNS 解析地址返回
+`status = 0`、空 body 和空 headers。无效参数、格式错误或不支持的 URL、被 SSRF 预检查拒绝的直接 IP 字面量，
 以及不透明 `Body` 调用中由调用方提供的分帧 Header 会抛出普通 DSL 运行时错误。
 不透明 Body 的访问、读取、扫描预算和大小限制失败会抛出固定 fail-close 的
 `BodyAccess` 错误。
@@ -1594,8 +1594,8 @@ if values["id"] != nil {
 - 只有第三个参数接受不透明 `Body`，通常写作 `req.body`。运行时在调用开始时取得不可变逻辑快照，从内存、溢写文件和修改分段中拉取流式发送原始字节，不会先完整物化请求体。
 - 不透明 `Body` 大小上限为 `min(httpMaxRequestBodyBytes, 网关物理请求 body 上限)`。配置默认 1 MiB，可显式提高到最多 32 MiB。从快照实际拉取的字节计入累计 `maxBodyScanPasses` 预算。
 - 不透明 `Body` 调用的调用方 Header 不得包含 `Content-Length` 或 `Transfer-Encoding`，由运行时唯一控制请求分帧。空的不透明 `Body` 发送 `Content-Length: 0`；`nil` 不附加请求体。
-- 响应体截断在 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。两者中较小者生效，保证返回给脚本的 body 与其它 DSL 字符串值共享同一长度上限。截断为静默行为，调用仍成功。
-- 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
+- 响应体硬上限为 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。声明长度或流式读取超出上限时，整个调用以状态零结果失败，不返回截断前缀。大小恰好等于上限的响应体仅在确认流结束后成功；有损 UTF-8 转换后的长度也必须满足 `max_string_len`。
+- 响应头按原始迭代顺序遍历。检查每个原始响应头之前，如果已保留的 `headers` Map 已有 `max_map_size` 个名称，则停止遍历。在已检查的原始前缀内，非 UTF-8 值会被跳过；只有在 Map 满之前遍历到重复名称时，后者才替换先前值。被忽略的尾部不会被检查。名称转为小写，且每个保留的名称和值都必须满足 `max_string_len`，否则整个调用返回状态零失败结果。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
 - `Str` 和 `Nil` 调用最多跟随 10 次重定向；当 `httpBlockPrivateIps: true` 时，每一跳都会应用直接 IP 字面量检查和连接时的 DNS 解析地址检查。不透明 `Body` 调用不跟随重定向，直接把 3xx 响应返回给脚本。
 
@@ -1605,7 +1605,7 @@ if values["id"] != nil {
 |------|------|--------|------|
 | `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
 | `httpMaxRequestBodyBytes` | Integer | `1048576` | 不透明 `Body` 请求最大字节数，范围 `1`–`33554432`，并进一步受网关物理请求 body 上限约束 |
-| `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时截断 |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时整个调用失败 |
 | `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地/未指定 IP 的出站调用，包括在连接时检查域名解析结果 |
 
 **示例 — 调用健康检查端点并根据状态分支**：

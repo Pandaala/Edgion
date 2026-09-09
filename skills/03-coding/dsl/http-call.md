@@ -27,10 +27,20 @@ Map {
 }
 ```
 
-Successful calls use the HTTP status. Network, timeout, and response-stream failures
-return status `0`, an empty body, and an empty header map. Response bodies are
-streaming-capped, then UTF-8-safely truncated to
-`min(httpMaxResponseBodyBytes, max_string_len)`.
+Successful calls use the HTTP status. Network, timeout, dial-time egress, and
+response-processing failures return status `0`, an empty body, and an empty header
+map. The response body hard cap is
+`min(httpMaxResponseBodyBytes, max_string_len)`: a declared or streamed overflow
+fails the call, never returns a truncated prefix, and an exact-cap body succeeds only
+after EOF. Invalid UTF-8 is converted lossily only after its exact expanded byte
+length is proven to fit `max_string_len`.
+
+Response header names are lowercased. Header count keeps the existing raw-traversal
+prefix rule: before inspecting each raw header, processing stops if the retained Map
+already has `max_map_size` names. Within the inspected raw prefix, non-UTF-8 values
+are skipped and a duplicate replaces an earlier value only if it is reached before
+the Map becomes full. Every retained name and value must fit `max_string_len`,
+otherwise the complete call returns the status-zero failure map.
 
 The third argument accepts `Str`, `Nil`, or the opaque `Body` value obtained from
 `req.body`. A `Body` call takes an immutable logical snapshot at call start and pulls
@@ -50,8 +60,10 @@ are not result maps.
 
 Opaque-Body availability, read, scan-budget, and request-size-limit failures raise the
 hard fail-close `RuntimeError::BodyAccess`, bypassing `DslErrorPolicy`. Network,
-timeout, response-body stream, and dial-time resolved-address rejection failures use
-the status-0 map. Preserve this split when changing validation or adding arguments.
+timeout, dial-time resolved-address rejection, response-body stream errors, response
+overflow, lossy UTF-8 expansion overflow, and retained response-header string
+overflow use the status-0 map. Preserve this split when changing validation or adding
+arguments.
 
 ## Runtime Limits
 
@@ -67,6 +79,10 @@ request limit is the smaller of `httpMaxRequestBodyBytes` and the gateway's reso
 physical request-body cap. Bytes actually fetched from the snapshot count against the
 VM's cumulative body-scan budget; unfetched bytes are refunded if the peer responds
 early or stops reading.
+
+Response aggregation uses the canonical outbound streaming cap. It does not use
+request `BodyStorage`, does not add response-side storage, and does not change the
+main proxy upstream's always-streaming response path.
 
 The shared `Value` representation is `Value::Map(Box<IndexMap<String, Value>>)`; its
 display/string conversion is `[map:<len>]`, and boxing preserves the `Value` size

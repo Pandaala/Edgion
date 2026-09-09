@@ -1,12 +1,57 @@
-//! Tests for map literal syntax, Index access, and http.call guards.
-//! http.call runtime behavior with real responses requires a live HTTP server — integration tests cover that.
+//! Tests for map literal syntax, Index access, and `http.call` guards.
+//! Response completion uses synthetic response streams so unit tests can cover
+//! hard bounds without network access; end-to-end integration coverage remains frozen.
 
 use super::*;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
 use std::collections::VecDeque;
+use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
+use crate::plugins::http::dsl::lang::builtins::complete_http_call_response;
+use crate::plugins::http::dsl::lang::value::Value;
+use crate::plugins::http::dsl::runtime::dsl_http_client;
 use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
+
+fn finish_response(
+    send_result: Result<reqwest::Response, reqwest::Error>,
+    max_response_body_bytes: usize,
+    max_string_len: usize,
+    max_map_size: usize,
+) -> Value {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(complete_http_call_response(
+            send_result,
+            max_response_body_bytes,
+            max_string_len,
+            max_map_size,
+        ))
+}
+
+fn streamed_response(parts: Vec<Result<Bytes, io::Error>>) -> reqwest::Response {
+    let body = reqwest::Body::wrap_stream(futures::stream::iter(parts));
+    http::Response::new(body).into()
+}
+
+fn result_map(value: Value) -> Box<indexmap::IndexMap<String, Value>> {
+    match value {
+        Value::Map(result) => result,
+        other => panic!("expected Map, got {other:?}"),
+    }
+}
+
+fn assert_http_failure(value: Value) {
+    let result = result_map(value);
+    assert_eq!(result.get("status"), Some(&Value::Int(0)));
+    assert_eq!(result.get("body"), Some(&Value::Str("".into())));
+    assert_eq!(result.get("headers"), Some(&Value::Map(Box::default())));
+}
 
 struct StaticSnapshotReader {
     len: u64,
@@ -122,56 +167,41 @@ fn test_map_in_condition() {
 
 #[test]
 fn test_http_call_compile_only() {
-    // Verify http.call compiles; no actual network call is made
-    // (network tests belong in integration tests)
     let source = r#"
         let http_resp = http.call("GET", "http://127.0.0.1:1", nil)
         return next()
     "#;
-    let result = run(source, MockPluginSession::new());
-    // Should succeed (http.call returns status=0 on connection failure, never panics)
-    assert_eq!(result, good_next());
+    let _vm = make_vm(source);
 }
 
 #[test]
-fn test_http_call_failure_returns_status_zero() {
-    // Connecting to a closed port returns status=0, no exception
-    let source = r#"
-        let http_resp = http.call("GET", "http://127.0.0.1:1", nil)
-        if http_resp["status"] == 0 {
-            return next()
-        }
-        return deny(500, "expected status 0 on failure")
-    "#;
-    let result = run(source, MockPluginSession::new());
-    assert_eq!(result, good_next());
+fn test_http_call_send_error_returns_status_zero_without_network() {
+    let send_result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(dsl_http_client(false, true).get("http://[").send());
+    assert!(send_result.as_ref().unwrap_err().is_builder());
+    assert_http_failure(finish_response(send_result, 1024, 1024, 16));
 }
 
 #[test]
-fn test_http_call_with_timeout() {
+fn test_http_call_with_timeout_compiles() {
     let source = r#"
         let http_resp = http.call("GET", "http://127.0.0.1:1", nil, 100)
-        if http_resp["status"] == 0 {
-            return next()
-        }
-        return deny(500, "expected status 0")
+        return next()
     "#;
-    let result = run(source, MockPluginSession::new());
-    assert_eq!(result, good_next());
+    let _vm = make_vm(source);
 }
 
 #[test]
-fn test_http_call_with_headers_map() {
+fn test_http_call_with_headers_map_compiles() {
     let source = r#"
         let headers = {"Authorization": "Bearer token123"}
         let http_resp = http.call("GET", "http://127.0.0.1:1", nil, 100, headers)
-        if http_resp["status"] == 0 {
-            return next()
-        }
-        return deny(500, "expected status 0")
+        return next()
     "#;
-    let result = run(source, MockPluginSession::new());
-    assert_eq!(result, good_next());
+    let _vm = make_vm(source);
 }
 
 #[test]
@@ -329,120 +359,217 @@ fn test_http_call_block_private_ips_rejects_ipv4_mapped_ipv6() {
 }
 
 #[test]
-fn test_http_call_caps_large_response_body() {
-    // A response body larger than max_response_body_bytes must be streamed and truncated to
-    // the cap, never fully buffered first. Unlike the other tests in this file, this one
-    // needs a live response to exercise the body-read path, so it drives a loopback server
-    // in-process (deterministic, no external dependency). The server returns 100 bytes;
-    // with the cap set to 4 the script must observe exactly the first 4 bytes.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut throwaway = [0u8; 1024];
-            let _ = sock.read(&mut throwaway).await;
-            let body = vec![b'A'; 100];
-            let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
-            let _ = sock.write_all(header.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.shutdown().await;
-        });
-        let url = format!("http://{}/", addr);
-        let source = r#"
-            let r = http.call("GET", "__URL__", nil)
-            if r["status"] == 200 {
-                if r["body"] == "AAAA" {
-                    return next()
-                }
-            }
-            return deny(500, "body not capped")
-        "#
-        .replace("__URL__", &url);
-
-        let vm = make_vm(&source);
-        let mut log = PluginLog::new("test");
-        let mut session = MockPluginSession::new();
-        let runtime = DslRuntime {
-            max_response_body_bytes: 4,
-            ..DslRuntime::default()
-        };
-        let result = execute_safe(
-            &vm,
-            &mut session as &mut dyn PluginSession,
-            &mut log,
-            &DslErrorPolicy::Deny,
-            &runtime,
-        )
-        .await;
-        assert_eq!(result, good_next());
-    });
+fn test_http_call_complete_response_preserves_status_body_and_lowercase_header() {
+    let response = http::Response::builder()
+        .status(201)
+        .header("X-Mixed-Case", "value")
+        .body(reqwest::Body::from("ok"))
+        .unwrap()
+        .into();
+    let result = result_map(finish_response(Ok(response), 16, 16, 4));
+    assert_eq!(result.get("status"), Some(&Value::Int(201)));
+    assert_eq!(result.get("body"), Some(&Value::Str("ok".into())));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.get("x-mixed-case"), Some(&Value::Str("value".into())));
 }
 
 #[test]
-fn test_http_call_body_truncated_to_max_string_len() {
-    // After streaming-truncation at max_response_body_bytes, r["body"] must also honor
-    // the sandbox-wide max_string_len. Without that cap, a body up to
-    // max_response_body_bytes (default 1 MB = 128x max_string_len) would flow into
-    // req.set_header / ctx.set / log without any further size gate. The truncation is
-    // silent (not an error) to preserve http.call's documented "never raises a runtime
-    // error" contract — mirroring the existing silent caps on body bytes
-    // (max_response_body_bytes) and headers map size (max_map_size).
-    // Setup: server returns 16 bytes, default max_response_body_bytes (1 MB) so the
-    // body-bytes cap does not fire, but max_string_len = 4 forces the new truncation.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut throwaway = [0u8; 1024];
-            let _ = sock.read(&mut throwaway).await;
-            let body = vec![b'A'; 16];
-            let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
-            let _ = sock.write_all(header.as_bytes()).await;
-            let _ = sock.write_all(&body).await;
-            let _ = sock.shutdown().await;
-        });
-        let url = format!("http://{}/", addr);
-        let source = r#"
-            let r = http.call("GET", "__URL__", nil)
-            if r["status"] == 200 {
-                if r["body"] == "AAAA" {
-                    return next()
-                }
-            }
-            return deny(500, "body not truncated to max_string_len")
-        "#
-        .replace("__URL__", &url);
+fn test_http_call_declared_oversize_fails_without_polling_body() {
+    let body = reqwest::Body::wrap_stream(futures::stream::poll_fn(
+        |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+            panic!("declared oversize body must not be polled")
+        },
+    ));
+    let response = http::Response::builder()
+        .header(reqwest::header::CONTENT_LENGTH, "5")
+        .body(body)
+        .unwrap()
+        .into();
+    assert_http_failure(finish_response(Ok(response), 4, 8, 4));
+}
 
-        let limits = VmLimits {
-            max_string_len: 4,
-            ..VmLimits::default()
-        };
-        let vm = make_vm_with_limits(&source, limits);
-        let mut log = PluginLog::new("test");
-        let mut session = MockPluginSession::new();
-        let runtime = DslRuntime::default();
-        let result = execute_safe(
-            &vm,
-            &mut session as &mut dyn PluginSession,
-            &mut log,
-            &DslErrorPolicy::Deny,
-            &runtime,
-        )
-        .await;
-        assert_eq!(result, good_next());
+#[test]
+fn test_http_call_streamed_oversize_fails_without_polling_tail() {
+    let parts = futures::stream::iter([
+        Ok::<_, io::Error>(Bytes::from_static(b"abcd")),
+        Ok(Bytes::from_static(b"e")),
+    ])
+    .chain(futures::stream::poll_fn(
+        |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> { panic!("oversize body tail must not be polled") },
+    ));
+    let response = http::Response::new(reqwest::Body::wrap_stream(parts)).into();
+    assert_http_failure(finish_response(Ok(response), 4, 8, 4));
+}
+
+#[test]
+fn test_http_call_max_string_len_is_an_effective_body_cap() {
+    let response = streamed_response(vec![Ok(Bytes::from_static(b"abcde"))]);
+    assert_http_failure(finish_response(Ok(response), 16, 4, 4));
+}
+
+#[test]
+fn test_http_call_exact_cap_succeeds_only_after_eof() {
+    let eof_seen = Arc::new(AtomicBool::new(false));
+    let eof_seen_by_stream = Arc::clone(&eof_seen);
+    let mut first = true;
+    let stream = futures::stream::poll_fn(move |_| {
+        if first {
+            first = false;
+            std::task::Poll::Ready(Some(Ok::<_, io::Error>(Bytes::from_static(b"abcd"))))
+        } else {
+            eof_seen_by_stream.store(true, Ordering::Release);
+            std::task::Poll::Ready(None)
+        }
     });
+    let response = http::Response::new(reqwest::Body::wrap_stream(stream)).into();
+    let result = result_map(finish_response(Ok(response), 4, 8, 4));
+    assert_eq!(result.get("status"), Some(&Value::Int(200)));
+    assert_eq!(result.get("body"), Some(&Value::Str("abcd".into())));
+    assert!(eof_seen.load(Ordering::Acquire));
+}
+
+#[test]
+fn test_http_call_exact_cap_followed_by_another_byte_fails() {
+    let response = streamed_response(vec![Ok(Bytes::from_static(b"abcd")), Ok(Bytes::from_static(b"e"))]);
+    assert_http_failure(finish_response(Ok(response), 4, 8, 4));
+}
+
+#[test]
+fn test_http_call_zero_cap_accepts_empty_body_after_eof() {
+    let eof_seen = Arc::new(AtomicBool::new(false));
+    let eof_seen_by_stream = Arc::clone(&eof_seen);
+    let stream = futures::stream::poll_fn(move |_| {
+        eof_seen_by_stream.store(true, Ordering::Release);
+        std::task::Poll::Ready(None::<Result<Bytes, io::Error>>)
+    });
+    let response = http::Response::new(reqwest::Body::wrap_stream(stream)).into();
+    let result = result_map(finish_response(Ok(response), 0, 8, 4));
+    assert_eq!(result.get("status"), Some(&Value::Int(200)));
+    assert_eq!(result.get("body"), Some(&Value::Str("".into())));
+    assert!(eof_seen.load(Ordering::Acquire));
+}
+
+#[test]
+fn test_http_call_zero_cap_rejects_first_nonempty_byte_without_polling_tail() {
+    let parts = futures::stream::once(async { Ok::<_, io::Error>(Bytes::from_static(b"x")) }).chain(
+        futures::stream::poll_fn(|_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+            panic!("zero-cap response tail must not be polled")
+        }),
+    );
+    let response = http::Response::new(reqwest::Body::wrap_stream(parts)).into();
+    assert_http_failure(finish_response(Ok(response), 0, 8, 4));
+}
+
+#[test]
+fn test_http_call_lossy_utf8_expansion_is_bounded_before_conversion() {
+    let response = streamed_response(vec![Ok(Bytes::from_static(&[0xFF]))]);
+    let result = result_map(finish_response(Ok(response), 3, 3, 4));
+    let Some(Value::Str(body)) = result.get("body") else {
+        panic!("expected response body Str");
+    };
+    assert_eq!(body.len(), 3);
+    assert_eq!(body.chars().count(), 1);
+    assert!(!body.is_ascii());
+
+    let response = streamed_response(vec![Ok(Bytes::from_static(&[0xFF]))]);
+    assert_http_failure(finish_response(Ok(response), 2, 2, 4));
+}
+
+#[test]
+fn test_http_call_retained_oversized_header_name_fails() {
+    let response = http::Response::builder()
+        .header("xlong", "ok")
+        .body(reqwest::Body::from(""))
+        .unwrap()
+        .into();
+    assert_http_failure(finish_response(Ok(response), 8, 4, 4));
+}
+
+#[test]
+fn test_http_call_retained_oversized_header_value_fails() {
+    let response = http::Response::builder()
+        .header("x", "long-value")
+        .body(reqwest::Body::from(""))
+        .unwrap()
+        .into();
+    assert_http_failure(finish_response(Ok(response), 8, 4, 4));
+}
+
+#[test]
+fn test_http_call_non_utf8_header_is_skipped_before_name_limit_and_slot_count() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "oversized-name",
+        reqwest::header::HeaderValue::from_bytes(&[0xFF]).unwrap(),
+    );
+    headers.insert("a", reqwest::header::HeaderValue::from_static("one"));
+    headers.insert("b", reqwest::header::HeaderValue::from_static("two"));
+    let mut response = http::Response::new(reqwest::Body::from(""));
+    *response.headers_mut() = headers;
+    let result = result_map(finish_response(Ok(response.into()), 8, 3, 3));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers.get("a"), Some(&Value::Str("one".into())));
+    assert_eq!(headers.get("b"), Some(&Value::Str("two".into())));
+}
+
+#[test]
+fn test_http_call_duplicate_header_replaces_value_while_prefix_is_open() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.append("x", reqwest::header::HeaderValue::from_static("old"));
+    headers.append("x", reqwest::header::HeaderValue::from_static("new"));
+    let mut response = http::Response::new(reqwest::Body::from(""));
+    *response.headers_mut() = headers;
+    let result = result_map(finish_response(Ok(response.into()), 8, 3, 2));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.get("x"), Some(&Value::Str("new".into())));
+}
+
+#[test]
+fn test_http_call_duplicate_header_is_ignored_after_map_is_full() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.append("x", reqwest::header::HeaderValue::from_static("old"));
+    headers.append("x", reqwest::header::HeaderValue::from_static("new"));
+    let mut response = http::Response::new(reqwest::Body::from(""));
+    *response.headers_mut() = headers;
+    let result = result_map(finish_response(Ok(response.into()), 8, 3, 1));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.get("x"), Some(&Value::Str("old".into())));
+}
+
+#[test]
+fn test_http_call_ignores_oversized_tail_after_header_map_is_full() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("a", reqwest::header::HeaderValue::from_static("ok"));
+    headers.insert("b", reqwest::header::HeaderValue::from_static("ok"));
+    let tail = headers.keys().last().expect("two headers have a tail").clone();
+    *headers.get_mut(&tail).expect("tail header is present") = reqwest::header::HeaderValue::from_static("too-long");
+    let mut response = http::Response::new(reqwest::Body::from(""));
+    *response.headers_mut() = headers;
+    let result = result_map(finish_response(Ok(response.into()), 8, 3, 1));
+    assert_eq!(result.get("status"), Some(&Value::Int(200)));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.len(), 1);
+    assert!(!headers.contains_key(tail.as_str()));
+}
+
+#[test]
+fn test_http_call_stream_error_discards_valid_prefix() {
+    let response = streamed_response(vec![
+        Ok(Bytes::from_static(b"ok")),
+        Err(io::Error::other("private upstream detail")),
+    ]);
+    assert_http_failure(finish_response(Ok(response), 8, 8, 4));
 }
 
 #[test]

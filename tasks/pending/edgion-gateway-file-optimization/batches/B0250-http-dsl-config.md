@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: changed; implementation, independent review and verification complete, awaiting local commit.
+- Pipeline state: changed; committed locally.
 - Active anchor: `edgion-gateway`.
 - Baseline HEAD: `f326f2800c03c34fce39f9fbedf73f18cacc2dc1`.
 - Target: `edgion-gateway/src/plugins/http/dsl/config.rs`.
@@ -24,4 +24,4 @@
 - The `DslConfig` re-export, visibility, API, schema, double validation and runtime behavior are unchanged. Current target blob: `eed65840462e89ccaa369140506590b35f041ebc`.
 - Fresh independent review returned LGTM with no Must Fix, Should Fix or deferred findings after verifying Cargo edges and compile/validation/runtime call chains.
 - No unit or integration test is justified for a rustdoc-only correction. Workspace format/check/Clippy plus agent-doc, SSA, metrics, Pingora, Gateway no-tracing, English-only, diff and integration-freeze gates passed.
-- Commit: pending; never push.
+- Commit: `2123fbe7`; never pushed.

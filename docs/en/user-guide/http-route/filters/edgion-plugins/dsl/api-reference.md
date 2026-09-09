@@ -1608,12 +1608,13 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | Int | HTTP response status code; `0` for network, timeout, dial-time egress rejection, or response-stream failure |
+| `status` | Int | HTTP response status code; `0` for network, timeout, dial-time egress rejection, response-stream failure, or bounded-response validation failure |
 | `body` | Str | Response body as UTF-8 text; empty string if the call failed or the body is empty |
-| `headers` | Map | Response headers; each key is the lowercase header name, each value is the last header value for that name |
+| `headers` | Map | Retained response headers; keys are lowercase, and a later duplicate replaces an earlier value only while raw-header traversal remains open |
 
-Network failures, timeouts, response-stream failures, and DNS-resolved addresses
-rejected at dial time return `status = 0` with an empty body. Invalid arguments,
+Network failures, timeouts, response-stream failures, bounded-response overflows, and
+DNS-resolved addresses rejected at dial time return `status = 0` with an empty body
+and empty headers. Invalid arguments,
 malformed or unsupported URLs, direct IP literals rejected by the SSRF precheck, and
 caller-supplied framing headers on an opaque `Body` call raise normal DSL runtime
 errors. Opaque-Body access, read, scan-budget, and limit failures raise the fixed
@@ -1625,8 +1626,8 @@ fail-close `BodyAccess` error.
 - Only the third argument accepts the opaque `Body` value, normally written as `req.body`. The runtime takes an immutable call-time snapshot and pull-streams its raw bytes from memory, spill files, and mutation segments without materializing the complete body.
 - Opaque `Body` size is capped by `min(httpMaxRequestBodyBytes, gateway physical request-body cap)`. The configured field defaults to 1 MiB and may be explicitly raised to at most 32 MiB. Bytes fetched from the snapshot count against the cumulative `maxBodyScanPasses` budget.
 - On an opaque `Body` call, caller headers must not contain `Content-Length` or `Transfer-Encoding`; either header is rejected so the runtime exclusively controls request framing. An empty opaque `Body` sends `Content-Length: 0`; `nil` attaches no body.
-- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent and the call still succeeds.
-- The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
+- The response body hard cap is `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). A declared or streamed overflow fails the complete call with the status-zero result; no truncated prefix is returned. A body exactly at the cap succeeds only after end-of-stream, and lossy UTF-8 expansion must also fit `max_string_len`.
+- Response headers are traversed in raw iteration order. Before inspecting each raw header, traversal stops if the retained `headers` Map already has `max_map_size` names. Within the inspected raw prefix, non-UTF-8 values are skipped and a duplicate replaces an earlier value only if reached before the Map becomes full. The ignored tail is not examined. Names are lowercased, and every retained name and value must fit `max_string_len`; otherwise the complete call returns the status-zero failure result.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
 - `Str` and `Nil` calls follow at most 10 redirects. When `httpBlockPrivateIps: true`, both the direct-literal and dial-time resolved-address checks apply to every redirect hop. Opaque `Body` calls never follow redirects and return the 3xx response directly.
 
@@ -1636,7 +1637,7 @@ fail-close `BodyAccess` error.
 |-------|------|---------|-------------|
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
 | `httpMaxRequestBodyBytes` | Integer | `1048576` | Maximum opaque `Body` request size; range `1`–`33554432`, further capped by the gateway physical request-body limit |
-| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); the complete call fails if exceeded |
 | `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local/unspecified IP addresses, including hostname results checked at dial time |
 
 **Example — call a health endpoint and branch on status**:

@@ -37,9 +37,9 @@ These are the `VmLimits` fields and where every breach is raised. **When adding 
 | `max_call_count` | 500 | `vm.rs:176` `tick_call` (every builtin dispatch) |
 | `max_loop_iterations` | 100 | `vm.rs` loop body counter (per `for` body) |
 | `max_stack_depth` | 128 | `vm.rs` push paths (`StackOverflow`) |
-| `max_string_len` | 8_192 | `vm.rs:327,341,355` (concat branches), `vm.rs:593` (`regex_find` result), `vm.rs:626` (`regex_replace` result), plus every checked builtin return via `checked_value_str` / `checked_value_opt_str` (defined at `builtins.rs:46-56`, used throughout) |
+| `max_string_len` | 8_192 | concat and regex results, every checked builtin return, and `http.call` response body plus each retained response-header name/value; HTTP response-limit breaches return the existing status-zero failure map |
 | `max_list_len` | 1_024 | List construction lives entirely in builtins — `builtins.rs:510-549` (`split` pre-allocation estimate, `range` with `hard_cap = max_list_len.min(1000)`); also bounds `req.header_names` / `resp.header_names` via their own hard 256 cap (predates Point 02) |
-| `max_map_size` | 512 | `vm.rs:732` `MakeMap`, `builtins.rs:943,1204` (`http.call` response headers truncate at this cap; `redis.hgetall` rejects above it), `edgion-dsl/src/validator.rs:279-290` compile-time `MakeMap(n)` operand check |
+| `max_map_size` | 512 | `vm.rs` `MakeMap`, `http.call` response-header retained-prefix traversal, `redis.hgetall` rejection, and the compile-time `MakeMap(n)` operand check in `edgion-dsl` |
 
 Request-body scanning has a separate per-plugin runtime limit,
 `DslRuntime::max_body_scan_passes` (default 4, configured as
@@ -85,13 +85,24 @@ Before 2026-05-18, `max_list_len` and `max_map_size` existed only on paper for s
 | `Split(s, delim)` | `max_list_len` (estimated, before allocation) | `builtins.rs:500-518` |
 | `Range(start, end)` | `min(max_list_len, 1000)` hard ceiling | `builtins.rs:519-549` |
 | `MakeMap` opcode | `max_map_size` runtime + compile-time | `vm.rs:732`, `edgion-dsl/src/validator.rs:279-290` |
-| `http.call` response headers | silently truncate at `max_map_size` | `builtins.rs:938-947` |
+| `http.call` response headers | inspect a raw-header prefix until the retained Map is full; do not inspect the tail | `builtins.rs` response completion helper |
 | `redis.hgetall` | reject above `max_map_size` | `builtins.rs:1204-1209` |
 | `req.header_names` / `resp.header_names` | hard 256 (separate from `max_map_size`, predates Point 02) | see `docs/.../sandbox-security.md` "Per-Function Limit Summary" |
 
 **Why two separate fields instead of one?** Maps and lists have very different growth patterns: lists accumulate via parser-driven splits/ranges with a known upper bound; maps grow from external sources (HTTP response headers, redis HGETALL replies) where the count is data-dependent. Sharing one cap would force operators to overshoot on one or the other.
 
-**Why `http.call` truncates while `redis.hgetall` rejects?** HTTP response headers are inbound third-party data we cannot retransmit — silently dropping the tail is the only way to keep the script running. Redis HGETALL operates on values the script asked for; failing loud is the safer default there.
+**Why does `http.call` retain a header prefix while `redis.hgetall` rejects an
+oversized map?** HTTP response headers are inbound third-party data we cannot
+retransmit, so ignoring the uninspected tail keeps the script running. Redis HGETALL
+operates on values the script explicitly requested; rejecting the oversized map is
+the safer established behavior there.
+
+The HTTP prefix rule is evaluated before inspecting each raw header. Non-UTF-8 values
+are skipped without consuming a slot or causing their names to be checked. A duplicate
+replaces an earlier value only when traversal reaches it before the retained Map is
+full; a duplicate in the ignored tail is not examined. Every retained lowercase name
+and UTF-8 value must fit `max_string_len`, or the complete call fails with its
+status-zero result. An ignored tail is not examined even if it is oversized.
 
 The compile-time `MakeMap(n)` operand check in `edgion-dsl/src/validator.rs:279-290` exists specifically to reject hand-crafted bytecode that ships `MakeMap(65535)` without ever having to allocate. Skipping the validator check would still be caught by the runtime check at `vm.rs:732`, but at the cost of one wasted allocation per request — undesirable on a hot path.
 
@@ -104,6 +115,13 @@ aggregate string payload retained by `json_select()`. Body
 predicates and `sha256()` scan storage without first constructing a complete
 body string; `read_all()` is the explicit escape hatch and fails before
 returning an oversized value.
+
+`http.call` is a separate plugin-initiated bounded exchange. Its effective response
+body cap is `min(httpMaxResponseBodyBytes, max_string_len)`, enforced by the canonical
+streaming helper. Declared or streamed overflow fails the whole call; exact-cap input
+must reach EOF. Lossy UTF-8 conversion is allocated only after checked preflight proves
+the expanded result fits. This does not permit aggregation of the main upstream
+response and does not create another `BodyStorage`.
 
 `sha256()` uses one lazy `[u8; 32]` once-cell per immutable Body snapshot. The
 first successful call scans the captured snapshot; concurrent and later calls

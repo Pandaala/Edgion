@@ -1,11 +1,13 @@
 # D0119 — HTTP Context Layout Expectations
 
-- Status: pending
+- Status: resolved externally in `2c01a075`
 - Severity: low (stale regression expectations)
 - Discovered in: B0207 broader context verification
-- Canonical task: [Reconcile HTTP context layout expectations](../../../todo/reconcile-http-context-layout-expectations.md)
+- Resolution: the exact context layout expectations now match 72/248/1120 bytes.
 
 Independent diagnosis reproduced three fixed-size failures caused by committed
-HTTP context changes predating B0207. Retain the failed verification record and
-reconcile documented costs before updating expectations; do not suppress budgets
-or allocation checks. B0207's function-only TLS changes may safely continue.
+HTTP context changes predating B0207. External commit `2c01a075` corrected the
+three exact expectations without suppressing the 1280-byte budget or allocation
+checks. Fresh `cargo test --locked -p edgion-gateway --lib 'ctx::'` verification
+passed 94 tests with one ignored. The complete campaign audit of `ctx.rs`,
+including `TlsConnMeta.sni` masking, remains pending in the file ledger.

@@ -5,7 +5,6 @@
 
 use bytes::Bytes;
 use edgion_resources::redis_rate_limit::validate_rate_limit_call;
-use futures::StreamExt;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,6 +13,7 @@ use tokio::sync::Notify;
 
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::runtime::store::get_redis_client;
+use crate::plugins::http::common::outbound::call::stream_body_capped;
 use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
@@ -345,6 +345,109 @@ fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     Ok(Value::Str(s.into()))
 }
 
+fn http_call_failure_map() -> Value {
+    let mut result = IndexMap::new();
+    result.insert("status".to_string(), Value::Int(0));
+    result.insert("body".to_string(), Value::Str(Arc::from("")));
+    result.insert("headers".to_string(), Value::Map(Box::new(IndexMap::new())));
+    Value::Map(Box::new(result))
+}
+
+fn checked_bounded_len(current: usize, addition: usize, limit: usize) -> Option<usize> {
+    current.checked_add(addition).filter(|total| *total <= limit)
+}
+
+/// Return the exact UTF-8 byte length produced by `String::from_utf8_lossy`
+/// without allocating the converted string.
+fn lossy_utf8_output_len(mut bytes: &[u8], limit: usize) -> Option<usize> {
+    // `from_utf8_lossy` emits a three-byte UTF-8 replacement for each error.
+    const REPLACEMENT_LEN: usize = 3;
+
+    let mut output_len = 0;
+    loop {
+        match std::str::from_utf8(bytes) {
+            Ok(valid) => return checked_bounded_len(output_len, valid.len(), limit),
+            Err(error) => {
+                output_len = checked_bounded_len(output_len, error.valid_up_to(), limit)?;
+                output_len = checked_bounded_len(output_len, REPLACEMENT_LEN, limit)?;
+
+                let Some(error_len) = error.error_len() else {
+                    return Some(output_len);
+                };
+                let consumed = error.valid_up_to().checked_add(error_len)?;
+                bytes = bytes.get(consumed..)?;
+            }
+        }
+    }
+}
+
+fn decode_http_call_body(bytes: &Bytes, limit: usize) -> Option<Arc<str>> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => {
+            checked_bounded_len(0, text.len(), limit)?;
+            Some(Arc::from(text))
+        }
+        Err(_) => {
+            lossy_utf8_output_len(bytes, limit)?;
+            Some(Arc::from(String::from_utf8_lossy(bytes).into_owned()))
+        }
+    }
+}
+
+/// Convert one completed outbound attempt into the script-visible `http.call`
+/// result while enforcing every response-string and response-body bound.
+pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
+    send_result: Result<reqwest::Response, reqwest::Error>,
+    max_response_body_bytes: usize,
+    max_string_len: usize,
+    max_map_size: usize,
+) -> Value {
+    let response = match send_result {
+        Ok(response) => response,
+        Err(_) => return http_call_failure_map(),
+    };
+    let effective_body_cap = max_response_body_bytes.min(max_string_len);
+    if response
+        .content_length()
+        .is_some_and(|length| usize::try_from(length).map_or(true, |length| length > effective_body_cap))
+    {
+        return http_call_failure_map();
+    }
+
+    let status = response.status().as_u16() as i64;
+    let mut response_headers = IndexMap::new();
+    for (name, value) in response.headers() {
+        if response_headers.len() >= max_map_size {
+            break;
+        }
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        let name = name.as_str().to_lowercase();
+        if name.len() > max_string_len || value.len() > max_string_len {
+            return http_call_failure_map();
+        }
+        response_headers.insert(name, Value::Str(Arc::from(value)));
+    }
+
+    let (body, truncated) = match stream_body_capped(response, effective_body_cap).await {
+        Ok(result) => result,
+        Err(_) => return http_call_failure_map(),
+    };
+    if truncated {
+        return http_call_failure_map();
+    }
+    let Some(body) = decode_http_call_body(&body, max_string_len) else {
+        return http_call_failure_map();
+    };
+
+    let mut result = IndexMap::new();
+    result.insert("status".to_string(), Value::Int(status));
+    result.insert("body".to_string(), Value::Str(body));
+    result.insert("headers".to_string(), Value::Map(Box::new(response_headers)));
+    Value::Map(Box::new(result))
+}
+
 #[cfg(test)]
 fn body_bytes_to_value(bytes: &[u8], limit: usize) -> Result<Value, RuntimeError> {
     checked_value_str(String::from_utf8_lossy(bytes).into_owned(), limit)
@@ -359,7 +462,8 @@ fn body_bytes_to_value(bytes: &[u8], limit: usize) -> Result<Value, RuntimeError
 /// externally-controlled Redis values. We *truncate* rather than raise
 /// `StringTooLong` because the redis dispatcher carries the documented "never
 /// raises a runtime error" contract (errors surface as a `redis_err` Map value,
-/// not a propagated `RuntimeError`); this mirrors the `http.call` body cap.
+/// not a propagated `RuntimeError`). This Redis-specific compatibility behavior
+/// does not apply to `http.call`, whose bounded exchange fails on overflow.
 /// Without it an oversized Redis value (up to 512 MB) would flow into
 /// `req.set_header` / `ctx.set` / `log` without further size gating.
 fn truncate_to_max_string_len(mut s: String, limit: usize) -> String {
@@ -1318,14 +1422,6 @@ impl Vm {
             }
         }
 
-        let failure_map = || {
-            let mut m = IndexMap::new();
-            m.insert("status".to_string(), Value::Int(0));
-            m.insert("body".to_string(), Value::Str(Arc::from("")));
-            m.insert("headers".to_string(), Value::Map(Box::new(IndexMap::new())));
-            Value::Map(Box::new(m))
-        };
-
         let send_result = builder.send().await;
         if let Some((reserved, tracking)) = body_accounting {
             // A response head can arrive before an HTTP/2 request body has
@@ -1338,78 +1434,13 @@ impl Vm {
                 return Err(body_access_error(error.to_string()));
             }
         }
-
-        let resp = match send_result {
-            Ok(response) => response,
-            Err(_) => return Ok(failure_map()),
-        };
-
-        let status = resp.status().as_u16() as i64;
-
-        // Silently truncate at max_map_size — response header count is controlled by the
-        // upstream server (SSRF + large-response amplification vector), so cap rather than
-        // raise. Matches the take(256) pattern used for ReqHeaderNames / RespHeaderNames.
-        let mut resp_headers: IndexMap<String, Value> = IndexMap::new();
-        for (k, v) in resp.headers() {
-            if resp_headers.len() >= self.limits.max_map_size {
-                break;
-            }
-            if let Ok(val) = v.to_str() {
-                resp_headers.insert(k.as_str().to_lowercase(), Value::Str(Arc::from(val)));
-            }
-        }
-
-        // Stream the response body, accumulating at most max_response_body_bytes and
-        // discarding the rest. Buffering the whole body first (resp.bytes()) then
-        // truncating let a slow/large upstream allocate the full body before the cap
-        // applied (memory exhaustion / SSRF amplification, esp. with block_private_ips
-        // false). Streaming bounds peak memory to the cap plus one chunk. A read error
-        // yields failure_map(), preserving the prior all-or-nothing bytes() semantics.
-        // Mirrors http_util::fetch_json_limited and webhook stream_body_capped.
-        let max_body = runtime.max_response_body_bytes;
-        let mut stream = resp.bytes_stream();
-        let mut buf: Vec<u8> = Vec::with_capacity(8192.min(max_body));
-        loop {
-            match stream.next().await {
-                Some(Ok(chunk)) => {
-                    let remaining = max_body - buf.len();
-                    if chunk.len() >= remaining {
-                        buf.extend_from_slice(&chunk[..remaining]);
-                        break;
-                    }
-                    buf.extend_from_slice(&chunk);
-                }
-                Some(Err(_)) => return Ok(failure_map()),
-                None => break,
-            }
-        }
-
-        let mut body_text = String::from_utf8_lossy(&buf).to_string();
-        // Restore the sandbox invariant "no DSL string value exceeds max_string_len"
-        // for r["body"]: without this guard, a body up to max_response_body_bytes
-        // (default 1 MB = 128x max_string_len) would flow into req.set_header /
-        // resp.set_header / ctx.set / log without further size gating. We *truncate*
-        // rather than raise StringTooLong to keep http.call's documented "never raises
-        // a runtime error" contract and to stay consistent with the other size caps in
-        // the same return value (body bytes capped silently at max_response_body_bytes,
-        // headers map capped silently at max_map_size). Operators who need to see a
-        // larger body must raise max_string_len. Walk back to a UTF-8 char boundary so
-        // String::truncate cannot panic — String::from_utf8_lossy guarantees valid
-        // UTF-8, so is_char_boundary(0) always succeeds and the loop terminates.
-        if body_text.len() > self.limits.max_string_len {
-            let mut end = self.limits.max_string_len;
-            while !body_text.is_char_boundary(end) {
-                end -= 1;
-            }
-            body_text.truncate(end);
-        }
-
-        let mut result = IndexMap::new();
-        result.insert("status".to_string(), Value::Int(status));
-        result.insert("body".to_string(), Value::Str(body_text.into()));
-        result.insert("headers".to_string(), Value::Map(Box::new(resp_headers)));
-
-        Ok(Value::Map(Box::new(result)))
+        Ok(complete_http_call_response(
+            send_result,
+            runtime.max_response_body_bytes,
+            self.limits.max_string_len,
+            self.limits.max_map_size,
+        )
+        .await)
     }
 }
 
@@ -1994,7 +2025,7 @@ mod truncate_tests {
 mod body_tests {
     use super::super::validator::{compile_dsl_source, ValidationLimits};
     use super::super::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
-    use super::body_bytes_to_value;
+    use super::{body_bytes_to_value, checked_bounded_len, lossy_utf8_output_len};
     use crate::plugins::http::dsl::lang::bytecode::CompiledScript;
     use crate::plugins::http::dsl::runtime::DslRuntime;
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
@@ -2004,6 +2035,22 @@ mod body_tests {
 
     use super::RuntimeError;
     use super::Value;
+
+    #[test]
+    fn checked_bounded_len_rejects_limit_and_integer_overflow() {
+        assert_eq!(checked_bounded_len(3, 2, 5), Some(5));
+        assert_eq!(checked_bounded_len(3, 3, 5), None);
+        assert_eq!(checked_bounded_len(usize::MAX, 1, usize::MAX), None);
+    }
+
+    #[test]
+    fn lossy_utf8_output_len_preflights_replacement_expansion() {
+        assert_eq!(lossy_utf8_output_len(b"plain", 5), Some(5));
+        assert_eq!(lossy_utf8_output_len(&[0xFF], 3), Some(3));
+        assert_eq!(lossy_utf8_output_len(&[0xFF], 2), None);
+        assert_eq!(lossy_utf8_output_len(&[b'a', 0xFF, b'b'], 5), Some(5));
+        assert_eq!(lossy_utf8_output_len(&[0xF0, 0x90, 0x80], 3), Some(3));
+    }
 
     #[test]
     fn body_bytes_to_value_decodes_utf8() {

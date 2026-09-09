@@ -90,7 +90,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Precompile backend port resolution and fail closed on missing mappings | fixed (2026-09-08) | [resolution](../../../../skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
-| Promote BackendTLSPolicy handling atomically to v1 only | pending | [task](../../../todo/backend-tls-policy-v1-only-atomic-promotion.md) |
+| Promote BackendTLSPolicy handling atomically to v1 only | resolved externally in `5cd384c6` | [maintained knowledge](../../../../skills/04-review/controller/regression-guards/backend-tls-policy-canonical-api-ingress.md) |
 | Publish Service backend traffic policy through one immutable snapshot | pending | [task](../../../todo/backend-traffic-policy-atomic-service-snapshot.md) |
 | Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/conf-sync/intentional-design/conf-sync-cert-watch-mtime-length-signature.md) |
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
@@ -142,7 +142,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Upgrade Wasmtime for RUSTSEC-2026-0268 and RUSTSEC-2026-0269 | completed | [campaign finding](D0062-upgrade-wasmtime-security-patches.md) |
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
-| Verify RegionRoute validation across hot reload and management APIs | pending | [task](../../../todo/region-route-validation-integration.md) |
+| Verify RegionRoute validation across hot reload and management APIs | resolved externally in `2c01a075` | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/region-route-effective-table-validation.md) |
 | Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |
 | Correct TraceContext documentation semantics | pending | [task](../../../todo/correct-trace-context-documentation-semantics.md) |
@@ -189,7 +189,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Apply sensitive mode to TLS log surfaces | pending | [task](../../../todo/apply-sensitive-mode-to-tls-log-surfaces.md) |
 | Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |
 | Add malformed ClientHello passthrough coverage (D0118) | pending | [task](../../../todo/add-malformed-clienthello-passthrough-coverage.md) |
-| Reconcile HTTP context layout expectations (D0119) | pending | [task](../../../todo/reconcile-http-context-layout-expectations.md) |
+| Reconcile HTTP context layout expectations (D0119) | resolved externally in `2c01a075` | [campaign resolution](D0119-http-context-layout-expectations.md) |
 | Retire UDP sessions by generation (D0120) | pending | [task](../../../todo/retire-udp-sessions-by-generation.md) |
 | Validate UDP upstream response source (D0121) | pending | [task](../../../todo/validate-udp-upstream-response-source.md) |
 | Wire UDP listener process shutdown (D0122) | pending | [task](../../../todo/wire-udp-listener-process-shutdown.md) |
@@ -198,4 +198,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Investigate Gateway TLS collision retention (D0125) | needs-investigation | [task](../../../todo/investigate-gateway-tls-collision-snapshot-retention.md) |
 | Enforce canonical gRPC terminal status headers (D0126) | pending | [task](../../../todo/enforce-canonical-grpc-terminal-status-headers.md) |
 | Reject empty individual outbound CA bundles (D0127) | pending | [task](../../../todo/reject-empty-individual-outbound-ca-bundles.md) |
+| Bound and redact DSL Redis error results | pending | [task](../../../todo/bound-and-redact-dsl-redis-error-results.md) |
+| Avoid DSL Redis link-key clones | pending | [task](../../../todo/avoid-dsl-redis-link-key-clones.md) |
 | Isolate shared outbound-call library unit tests from network (D0128) | pending | [task](../../../todo/isolate-shared-outbound-call-unit-tests-from-network.md) |

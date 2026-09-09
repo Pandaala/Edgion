@@ -248,7 +248,7 @@
 | `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/mod.rs` | `config-root` | source | examined-no-change | CONFIG-001 / `4621d075` |
-| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | OBS-LOG-001 follow-up: verify `TlsConnMeta.sni` masking; OBS-METRICS-001 baseline: arm64 Rust 1.96.1 reports 1120 bytes against the committed 1104-byte lock |
+| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | External `2c01a075` updated layout assertion/docs; full audit and `TlsConnMeta.sni` masking verification remain pending |
 | `edgion-gateway/src/geoip/config.rs` | `geoip` | source | changed | `B0059`: rejected enabled zero updater durations and byte cap |
 | `edgion-gateway/src/geoip/info.rs` | `geoip` | source | examined-no-change | `B0059`: retained request-owned projection and IPv4-mapped normalization |
 | `edgion-gateway/src/geoip/mod.rs` | `geoip` | source | examined-no-change | `B0059`: retained startup initialization, same-directory guard, and atomic provider publication |
@@ -334,7 +334,7 @@
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | changed | B0237: bounded capture expansion and live replacement accounting; independent revised-plan/final LGTM, AI Guard 40/40 |
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | changed | B0238: decoded-bound correctness, duplicate-part fail-close and bounded discriminator decoding; independent plan/final LGTM, AI Guard 49/49 |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | examined-no-change | B0064 |
-| `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | changed | B0064 |
+| `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | pending | Reopened after external `bea47373` removed undeclared dye producers; B0064 history retained |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0239: request/endpoint isolation and canonical egress/TLS/bounds retained; independent LGTM, focused tests 18/18 |
@@ -371,7 +371,7 @@
 | `edgion-gateway/src/plugins/http/direct_endpoint/mod.rs` | `plugins-http-direct-endpoint` | source | examined-no-change | B0072 |
 | `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs` | `plugins-http-direct-endpoint` | source | changed | B0072 |
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | changed | B0250: corrected stale schema/compiler/VM ownership documentation; independent LGTM |
-| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | analysis-ready | B0251: DSL http.call must fail rather than truncate bounded response data; complex candidate |
+| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | changed | B0251: atomic bounded http.call failure, allocation-safe decoding and retained-header bounds; corrected independent LGTM, DSL 350/350 |
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | analysis-ready | B0252: zero-runtime compatibility facade retained; no worthwhile API tidiness churn |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | REQ-BODY-BLOCKING-001 targeted owned-input JSON scan / `1eb48138`; full DSL audit pending |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
@@ -465,7 +465,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | changed | B0094: borrowed claim scopes and allocation-free issuer selection |
 | `edgion-gateway/src/plugins/http/openid_connect/discovery_jwks.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
 | `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; D0058 remains unresolved beyond response caps |
-| `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
+| `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `bea47373` added stage-aware OIDC dye test support; B0092 history retained |
 | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` | `plugins-http-openid-connect` | source | changed | B0090 |
 | `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/mod.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0094: minimal live module facade and visibility boundary retained |
@@ -473,7 +473,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/refresh_flight_registry.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0092 |
 | `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0093 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
-| `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | changed | B0090; support reopened in B0091, B0093, and B0094 |
+| `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | pending | Reopened after external `bea47373` added session-refresh JWKS dye coverage; B0090/B0091/B0093/B0094 history retained |
 | `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical CACHE-001/B0091/B0093 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0090/B0091 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
@@ -528,7 +528,7 @@
 | `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | changed | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
-| `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | deferred | B0122 / D0083 |
+| `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | pending | D0083 resolved externally in `bea47373`; reopen changed file for current campaign audit; B0122 history retained |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | changed | B0123: decision-scoped immutable snapshot capture and torn-generation regression |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | changed | B0124: bounded inline CORS header pairs and validated-only construction |

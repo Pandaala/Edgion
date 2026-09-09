@@ -9,7 +9,7 @@
 - Baseline blob: `e574f1a202f6697cf39efa0b07daf8ab5fbcc1de`
 - Exact implementation allow-list:
   - `edgion-gateway/src/routes/common.rs`
-  - `tasks/todo/delegation-parentref-gateway-name-collision.md`
+  - `tasks/todo/delegation-parentref-gateway-name-collision.md` (historical batch artifact; resolved externally and deleted, with evidence retained in `skills/04-review/routing/regression-guards/delegation-parentref-gateway-name-collision.md`)
   - `tasks/todo/route-parent-status-canonical-identity.md`
 
 ## Handoff

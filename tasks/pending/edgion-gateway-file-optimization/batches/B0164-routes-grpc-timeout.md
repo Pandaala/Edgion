@@ -9,7 +9,7 @@
 - Baseline blob: `c926bb1d32e00d7e6b89d30ec79cf3955031d8bf`
 - Exact implementation allow-list:
   - `edgion-gateway/src/routes/grpc/grpc_timeout.rs`
-  - `tasks/todo/grpc-timeout-upstream-rewrite-wire-coverage.md`
+  - `tasks/todo/grpc-timeout-upstream-rewrite-wire-coverage.md` (historical batch artifact; resolved externally and deleted, with evidence retained in the gRPC timeout regression knowledge)
 
 ## Handoff
 
