@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change with owning documentation correction; awaiting local commit.
+- Pipeline state: committed locally; examined-no-change with owning documentation correction.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/udp/route_unit.rs`.
 - Baseline: `86e2002c`.
@@ -29,4 +29,4 @@
 
 - Single-page correction complete, blob `7795fd2053cf26de89f897b502f5d7c910343d3e`; anchor unchanged. Current unit ownership, new-session enforcement and inactivity semantics now separated from historical evidence; stale link and blanket re-report suppression corrected.
 - Implementer docs (1,265 files) and diff checks passed. Coordinator unit 5/5, selector 22/22, UDP 34/34, workspace format/check/Clippy, SSA, metrics, Pingora source, Gateway tracing, English-only and 3,120-file freeze passed.
-- Independent reviewer: `b0214_final_review`; LGTM, no Must Fix or Should Fix at `2f51deff`, both hashes unchanged. Personally checked schema/unit/handler, actual plugin and established-session paths, both activity refresh branches and periodic cleanup. Historical evidence and corrected link no longer imply a fixed revocation contract or suppress new reports. Independent docs (1,265 files) and diff passed; no runtime/integration changes. Commit pending; no push.
+- Independent reviewer: `b0214_final_review`; LGTM, no Must Fix or Should Fix at `2f51deff`, both hashes unchanged. Personally checked schema/unit/handler, actual plugin and established-session paths, both activity refresh branches and periodic cleanup. Historical evidence and corrected link no longer imply a fixed revocation contract or suppress new reports. Independent docs (1,265 files) and diff passed; no runtime/integration changes. Commit: `aa178a25`; no push.

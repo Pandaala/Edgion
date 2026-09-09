@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: analysis-ready; queued, not the active mutation batch.
+- Pipeline state: verified examined-no-change; awaiting local commit.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/udp/routes_mgr.rs`.
 - Baseline: `aec5caf5`.
@@ -20,3 +20,9 @@
 - Both stats counters feed admin output; diagnostic counts do not require a new cross-field transaction lock. No local runtime/logging/transport defect found.
 - Existing manager-cache documentation task extended with UDP per-packet versus new-session lookup, stale raw-schema/full-rebuild comments, UDP architecture from_routes and shared-index wording. No separate duplicate issue or technical allow-list.
 - At promotion independently review and rerun manager, handler or complete UDP filters. Prior B0211 all-UDP results are historical, not this report's fresh full verification.
+
+## Promotion and Verification
+
+- Original analyst revalidated at `aa178a25`: target, shared helpers and publication callers unchanged; B0212 bookkeeping and B0214 knowledge updates preserve the manager/session boundary. Fresh analyst manager tests 6/6 passed without warnings.
+- Independent reviewer: `b0215_manager_review`; Approved at `aa178a25`, target blob unchanged. Personally verified shared lock/caller ownership, canonical clear/sweep and per-listener publication, real pinned-session consumers and admin stats. Fresh independent manager 6/6 and handler 10/10 passed. No cross-listener atomicity or session revocation claim; no new target-local issue.
+- No source/integration edits. Fresh coordinator manager 6/6, handler 10/10, UDP 34/34, workspace format/check/Clippy, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Commit pending; no push.
