@@ -77,10 +77,13 @@ impl AiGuard {
     }
 
     /// Render a refusal in the operator-selected mode.
-    fn refuse(&self, session: &mut dyn PluginSession, model: &str, streaming: bool) -> PluginRunningResult {
+    fn refuse(&self, session: &mut dyn PluginSession, body: &[u8]) -> PluginRunningResult {
         match self.rejection_mode {
             AiGuardRejectionMode::Error => openai_error_response(session, AiProxyError::ContentFiltered),
-            AiGuardRejectionMode::ContentFilter => content_filter_response(session, model, streaming),
+            AiGuardRejectionMode::ContentFilter => {
+                let facts = request_facts(body);
+                content_filter_response(session, &facts.model, facts.streaming)
+            }
         }
     }
 
@@ -109,8 +112,7 @@ impl AiGuard {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
         kind: &'static str,
-        model: &str,
-        streaming: bool,
+        body: &[u8],
     ) -> PluginRunningResult {
         log.push_err(kind);
         // Latch even here: a backendRef-scoped guard is re-entered on every
@@ -120,7 +122,7 @@ impl AiGuard {
         if self.fail_open {
             PluginRunningResult::GoodNext
         } else {
-            self.refuse(session, model, streaming)
+            self.refuse(session, body)
         }
     }
 }
@@ -195,10 +197,9 @@ impl RequestFilter for AiGuard {
             }
             Err(_) => {
                 log.push_err("body unavailable");
-                return self.refuse(session, "", false);
+                return self.refuse(session, &[]);
             }
         };
-        let facts = request_facts(&body);
 
         let Some(generation) = session.ctx().request_body.generation() else {
             return Self::configuration_fault(session, log, "body not buffered", EdgionErrorCode::BodyRefusedStage);
@@ -206,7 +207,7 @@ impl RequestFilter for AiGuard {
 
         // Both span caps default to the resolved request-body cap, so the guard
         // can never reject a long-context request that AiProxy would accept.
-        let body_cap = session.ctx().request_body_config.max_body_size_bytes as usize;
+        let body_cap = usize::try_from(session.ctx().request_body_config.max_body_size_bytes).unwrap_or(usize::MAX);
         let limits = SpanLimits {
             max_spans: self.max_spans,
             max_span_bytes: self.max_span_bytes.unwrap_or(body_cap),
@@ -214,12 +215,8 @@ impl RequestFilter for AiGuard {
         };
         let spans = match select_spans(&body, limits) {
             Ok(spans) => spans,
-            Err(SpanError::Unparseable) => {
-                return self.dependency_failure(session, log, "request unguardable", &facts.model, facts.streaming)
-            }
-            Err(SpanError::Bounds) => {
-                return self.dependency_failure(session, log, "span bounds", &facts.model, facts.streaming)
-            }
+            Err(SpanError::Unparseable) => return self.dependency_failure(session, log, "request unguardable", &body),
+            Err(SpanError::Bounds) => return self.dependency_failure(session, log, "span bounds", &body),
         };
 
         let rule_spans: Vec<RuleSpan<'_, GuardSpanKey>> = spans
@@ -232,7 +229,7 @@ impl RequestFilter for AiGuard {
             .collect();
 
         let Ok(outcome) = self.rules.evaluate(&rule_spans, self.max_replacement_bytes) else {
-            return self.dependency_failure(session, log, "replacement bounds", &facts.model, facts.streaming);
+            return self.dependency_failure(session, log, "replacement bounds", &body);
         };
         let flagged = outcome.flagged;
         let mut decision = outcome.decision;
@@ -241,15 +238,18 @@ impl RequestFilter for AiGuard {
         // never leaves the box. A local reject short-circuits it entirely.
         if let Some(evaluator) = self.evaluator.as_ref() {
             if !matches!(decision, GuardDecision::Reject) {
-                let merged = apply_local(&spans, &decision);
-                match evaluator.decide(session, &merged).await {
+                let external = {
+                    let merged = apply_local(&spans, &decision);
+                    evaluator.decide(session, &merged).await
+                };
+                match external {
                     Ok(GuardDecision::Pass) => {}
                     Ok(GuardDecision::Reject) => decision = GuardDecision::Reject,
                     Ok(GuardDecision::Replace(items)) => {
                         decision = merge(decision, items);
                     }
                     Err(kind) => {
-                        return self.dependency_failure(session, log, kind, &facts.model, facts.streaming);
+                        return self.dependency_failure(session, log, kind, &body);
                     }
                 }
             }
@@ -265,25 +265,13 @@ impl RequestFilter for AiGuard {
                         // An evaluator naming a span that was never sent is a
                         // dependency protocol error, so it follows the failure
                         // policy rather than being reported as a gateway fault.
-                        return self.dependency_failure(
-                            session,
-                            log,
-                            "evaluator bad key",
-                            &facts.model,
-                            facts.streaming,
-                        );
+                        return self.dependency_failure(session, log, "evaluator bad key", &body);
                     };
                     // Whole quoted tokens in, whole quoted tokens out: the mask
                     // never addresses an interior byte, so a code point cannot
                     // be split and the body stays valid JSON.
                     let Ok(encoded) = serde_json::to_string(text) else {
-                        return self.dependency_failure(
-                            session,
-                            log,
-                            "replacement encode",
-                            &facts.model,
-                            facts.streaming,
-                        );
+                        return self.dependency_failure(session, log, "replacement encode", &body);
                     };
                     edits.push((span.token.clone(), Bytes::from(encoded)));
                 }
@@ -310,9 +298,7 @@ impl RequestFilter for AiGuard {
                         log.push_err("mask exceeds body cap");
                         return openai_error_response(session, AiProxyError::RequestTooLarge);
                     }
-                    Err(_) => {
-                        return self.dependency_failure(session, log, "mask failed", &facts.model, facts.streaming)
-                    }
+                    Err(_) => return self.dependency_failure(session, log, "mask failed", &body),
                 }
             }
         };
@@ -327,7 +313,7 @@ impl RequestFilter for AiGuard {
         match outcome {
             Outcome::Reject => {
                 log.push("Deny content filter");
-                self.refuse(session, &facts.model, facts.streaming)
+                self.refuse(session, &body)
             }
             Outcome::Masked(count) => {
                 log.push_fmt(
@@ -351,8 +337,8 @@ impl RequestFilter for AiGuard {
     }
 }
 
-/// Materialize the post-local-mask text of every span, for the evaluator.
-fn apply_local(spans: &[GuardSpan], decision: &GuardDecision<GuardSpanKey>) -> Vec<(GuardSpanKey, String)> {
+/// Borrow the post-local-mask text of every span for the evaluator.
+fn apply_local<'a>(spans: &'a [GuardSpan], decision: &'a GuardDecision<GuardSpanKey>) -> Vec<(GuardSpanKey, &'a str)> {
     let replaced = match decision {
         GuardDecision::Replace(items) => items.as_slice(),
         _ => &[],
@@ -363,8 +349,8 @@ fn apply_local(spans: &[GuardSpan], decision: &GuardDecision<GuardSpanKey>) -> V
             let text = replaced
                 .iter()
                 .find(|(key, _)| *key == span.key)
-                .map(|(_, text)| text.clone())
-                .unwrap_or_else(|| span.current.clone());
+                .map(|(_, text)| text.as_str())
+                .unwrap_or(span.current.as_str());
             (span.key, text)
         })
         .collect()
@@ -396,6 +382,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use super::super::spans::GuardPart;
     use crate::ai::attempt_plan::{AiAttemptPlan, AiPlanError};
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::request_body::BodyStorage;
@@ -516,6 +503,30 @@ mod tests {
             guard.run_request(&mut session, &mut log).await,
             PluginRunningResult::GoodNext
         );
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_body_is_refused_without_latching_even_when_fail_open() {
+        for (mode, expected_status) in [("error", 403), ("contentFilter", 200)] {
+            let guard = guard(reject_rule(), &format!("rejectionMode: {mode}\nfailOpen: true\n"));
+            let mut session = MockPluginSession::new();
+            session.expect_ctx().return_const(ctx_with_body());
+            session.expect_get_method().return_const("POST".to_string());
+            session
+                .expect_get_path()
+                .return_const("/v1/chat/completions".to_string());
+            session
+                .expect_read_request_body()
+                .returning(|_| Err(BodyReadError::Unimplemented));
+            session.expect_set_response_header().returning(|_, _| Ok(()));
+            session.expect_record_ai_guard_decision().never();
+
+            let mut log = PluginLog::new("AiGuard");
+            assert!(matches!(
+                guard.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrResponse { status, .. } if status == expected_status
+            ));
+        }
     }
 
     #[tokio::test]
@@ -710,5 +721,47 @@ mod tests {
             guard.run_request(&mut session, &mut log).await,
             PluginRunningResult::GoodNext
         );
+    }
+
+    #[test]
+    fn evaluator_projection_borrows_ordered_span_and_replacement_text() {
+        let spans = vec![
+            GuardSpan {
+                key: GuardSpanKey {
+                    message_index: 0,
+                    part: GuardPart::Content,
+                },
+                role: None,
+                context: String::new(),
+                current: "unchanged".to_string(),
+                token: 0..11,
+            },
+            GuardSpan {
+                key: GuardSpanKey {
+                    message_index: 1,
+                    part: GuardPart::Content,
+                },
+                role: None,
+                context: String::new(),
+                current: "original".to_string(),
+                token: 12..22,
+            },
+        ];
+        let replacement_key = spans[1].key;
+        let decision = GuardDecision::Replace(vec![(replacement_key, "replacement".to_string())]);
+
+        let projected = apply_local(&spans, &decision);
+
+        assert_eq!(
+            projected.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            spans.iter().map(|span| span.key).collect::<Vec<_>>()
+        );
+        assert_eq!(projected[0].1, "unchanged");
+        assert_eq!(projected[0].1.as_ptr(), spans[0].current.as_ptr());
+        let GuardDecision::Replace(replacements) = &decision else {
+            panic!("decision must contain a replacement");
+        };
+        assert_eq!(projected[1].1, "replacement");
+        assert_eq!(projected[1].1.as_ptr(), replacements[0].1.as_ptr());
     }
 }

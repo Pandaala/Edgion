@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0234 changed and committed as `899436e7`; external user commits through `72be06f1` reconciled. |
-| Coverage | 548 current Gateway files: 222 changed, 181 examined-no-change, 14 deferred, 131 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0235 AI Guard facade: sole serial record commit gate at `899436e7`; independent review and all verification passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0236 plugin is analysis-ready for post-B0234 plan-first refresh; B0237 rules is analysis-in-progress. D0127 tracks the independently confirmed outbound CA gap. |
-| Integration freeze | 3,136 files. External test changes through `72be06f1` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0236 changed and passed its commit gate on external baseline `6a5e428a`; external user commits through that revision reconciled. |
+| Coverage | 548 current Gateway files: 223 changed, 181 examined-no-change, 14 deferred, 130 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0236 AI Guard plugin: independent plan/final review and full verification passed; exact local commit is next. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0237 rules is analysis-ready and requires plan-first bounded replacement construction. D0127 tracks the independently confirmed outbound CA gap. |
+| Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 

@@ -23,4 +23,4 @@
 - Decision: examined-no-change. The eight-line facade contains no execution logic; private implementation modules and the sole AiGuard export are minimal, conventional and have live flat-re-export/PluginRuntime consumers. Visibility or file reshaping would add churn without runtime or correctness value.
 - Fresh independent reviewer `b0233_final_review`: LGTM, no Must Fix or Should Fix at `899436e7`; target blob `584fcb2b49d6bb818d4d0849af4b8efb6c86d12c`, no target diff. B0234 changed no facade contract. D0082 remains the independent publication-order owner.
 - Verification: full AI Guard 30/30; workspace format/check/Clippy, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and frozen-path checks passed. No source, knowledge, issue or integration change.
-- Commit SHA is backfilled after the local record commit; never push.
+- Commit: `3a4cc119`; never pushed by the campaign.

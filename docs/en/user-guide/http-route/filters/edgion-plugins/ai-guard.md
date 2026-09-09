@@ -200,14 +200,18 @@ never softens an ordering fault.
 
 ## Bounds
 
-| Field | Default | Maximum |
+| Field | Default | Maximum when explicitly configured |
 |---|---|---|
 | `maxSpans` | 256 | 512 |
-| `maxSpanBytes` | 8 KiB | 64 KiB |
-| `maxTotalSpanBytes` | the gateway request-body limit | 8 MiB |
+| `maxSpanBytes` | resolved gateway physical request-body cap | 8 MiB |
+| `maxTotalSpanBytes` | resolved gateway physical request-body cap | 8 MiB |
 | `maxReplacementBytes` | 64 KiB | 1 MiB |
 | `evaluator.maxRequestBytes` | 1 MiB | 1 MiB |
 | `evaluator.maxConcurrent` | 64 | 1024 |
+
+When `maxSpanBytes` or `maxTotalSpanBytes` is omitted, it inherits the resolved
+gateway physical request-body cap and may therefore exceed the explicit 8 MiB
+configuration maximum. The default physical request-body cap is 32 MiB.
 
 Rule count is capped at 64 and a pattern at 4096 bytes.
 

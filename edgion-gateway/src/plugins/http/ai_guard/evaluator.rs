@@ -144,7 +144,7 @@ impl CompiledEvaluator {
     pub async fn decide(
         &self,
         session: &dyn PluginSession,
-        spans: &[(GuardSpanKey, String)],
+        spans: &[(GuardSpanKey, &str)],
     ) -> Result<GuardDecision<GuardSpanKey>, &'static str> {
         if spans.is_empty() || spans.iter().all(|(_, text)| text.is_empty()) {
             return Ok(GuardDecision::Pass);
@@ -157,7 +157,7 @@ impl CompiledEvaluator {
             .map(|(key, current)| RequestSpan {
                 message_index: key.message_index,
                 part: key.part.into(),
-                current: current.as_str(),
+                current: *current,
             })
             .collect();
         let request = encode_request(&payload, self.max_request_bytes)?;

@@ -16,7 +16,11 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0235: examined the eight-line AI Guard facade with no code change. Independent LGTM retained its private implementation modules and live AiGuard export; full AI Guard 30/30 and all workspace/guard checks passed. D0082 remains separate; no integration change. Local record commit SHA pending; no push.
+- B0236: saturated resolved request-body cap conversion on narrow targets, parsed model/stream only for actual ContentFilter refusals, and borrowed post-local-mask text through evaluator serialization. Corrected explicit-versus-inherited span-bound documentation and added direct body-unavailable and borrow-source regressions. Independent plan approval and final LGTM; AI Guard 32/32 and all workspace/guard checks passed. External `6a5e428a` changed one frozen WebSocket integration file; independent provenance supported its exact manifest refresh, while this batch made no integration edit. Local commit SHA pending; never push.
+
+- External sync: user commit `6a5e428a` changed one existing WebSocket integration file plus its owning knowledge/task records, resolving the separate connection-established-log coverage task. Independent byte/mode provenance confirmed that sole integration path and unchanged B0236 blobs; the 3,136-entry freeze was refreshed exactly, without a campaign integration edit. See [reconciliation evidence](external-sync-6a5e428a.md).
+
+- B0235: examined the eight-line AI Guard facade with no code change. Independent LGTM retained its private implementation modules and live AiGuard export; full AI Guard 30/30 and all workspace/guard checks passed. D0082 remains separate; no integration change. Commit `3a4cc119`; no push.
 
 - B0234: borrowed selected AI Guard span text through capped evaluator serialization, removing one String allocation/full copy per nonempty span while retaining payload Vec and encoded Bytes. Independent LGTM; evaluator 6/6, full AI Guard 30/30 and all workspace/guard checks passed. No integration change. Commit `899436e7`; no push.
 
