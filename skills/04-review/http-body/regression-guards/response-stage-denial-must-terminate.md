@@ -2,7 +2,7 @@
 name: response-stage-denial-must-terminate
 description: Use when reviewing response-stage plugin denials, local-reply refusal predicates, or Upgrade/CONNECT/gRPC/101 handling; covers why the refusal must be decided from the response and why a refused reply must still terminate the exchange.
 status: fixed
-finding_id: response-body-gate-sync-stage F2
+finding_id: response-body-gate-sync-stage F2, D0104
 closed: 2026-08-03
 knowledge_type: regression-guards
 ---
@@ -121,11 +121,12 @@ a second write.
 | naked `terminate()` at the response stage | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
 | `grpc_error(8, ..)` at the response stage | abort, exact code 8 | unit: `response_stage_grpc_error_arms_the_abort_with_the_exact_status`; integration blocked, see `tasks/todo/integration-dslgrpcerror-item-never-runs.md` |
 | staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state`; wire: `WafDynamic` initial phase `waf_response_invalid_status_fails_closed` |
+| native WAF phase-3 disruption with `status:100` after an upstream 200 | client and request-level access log receive terminal 500; the upstream body is not forwarded and the attempt retains status 200 | integration: `waf_response_invalid_status_fails_closed` (`EdgionPlugins/Waf`) |
 | staged local reply after another final owner | control-flow abort; first written response remains authoritative | unit: `response_filter_rejects_pending_reply_after_an_existing_writer` |
 
 ## Closed follow-up
 
-The native-WAF dynamic integration now exercises a path-isolated phase-3
+The native-WAF dynamic integration now exercises a header-isolated phase-3
 `deny,status:100` after an upstream 200. It verifies wire status 500, absence of
 the test backend's response markers, request-level access-log status 500, the
 preserved upstream status 200, and the exact response-header intervention
@@ -150,3 +151,6 @@ Related: [[body-admission-reads-pre-plugin-snapshots]],
 ## Resolution references
 
 - `response-body-gate-sync-stage F2` — 2026-08-03.
+- `D0104` — 2026-09-09. Added the native-WAF wire regression after the
+  B0186 integration freeze ended; the targeted `EdgionPlugins/Waf` run passed
+  all four cases and verified terminal/upstream access-log status ownership.

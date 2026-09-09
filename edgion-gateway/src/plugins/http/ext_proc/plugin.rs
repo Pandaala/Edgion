@@ -901,7 +901,6 @@ impl UpstreamResponse for ExtProc {
                         self.failure_mode_allow,
                         self.disable_immediate_response,
                         effective.response_trailer_mode.is_send(),
-                        session.current_dye_plan(),
                     ),
                 ))
             {
@@ -999,7 +998,6 @@ impl UpstreamResponse for ExtProc {
                             self.failure_mode_allow,
                             self.disable_immediate_response,
                             effective.response_trailer_mode.is_send(),
-                            session.current_dye_plan(),
                         ),
                     )) {
                         return self.fail_response_processor_install(&owner, session, log);

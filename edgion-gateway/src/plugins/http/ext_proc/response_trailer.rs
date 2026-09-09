@@ -1,4 +1,5 @@
 //! Atomic ExtProc response-trailer exchange and mutation.
+//! Trailer outcomes cannot mutate committed response headers and do not record dye.
 
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 
 use super::attached::AttachedExtProc;
 use super::plugin::exchange_failure_reason;
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, UpstreamResponseTrailer, UpstreamTrailerResult};
+use crate::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseTrailer, UpstreamTrailerResult};
 use edgion_common::ext_proc::proto::{
     processing_request, processing_response, HeaderAppendAction, HeaderMutation, HttpTrailers, ProcessingRequest,
     ProcessingResponse,
@@ -67,19 +68,17 @@ impl ExtProcResponseTrailer {
 
     fn finish_failure(
         &mut self,
-        session: &mut dyn PluginSession,
+        _session: &mut dyn PluginSession,
         log: &mut PluginLog,
         reason: &'static str,
     ) -> UpstreamTrailerResult {
         self.done = true;
         if self.failure_mode_allow {
             self.owner.terminal("fail-open", reason);
-            session.record_outcome(DyeOutcome::FailOpen, reason);
             log.push("ext_proc trailer fail-open");
             UpstreamTrailerResult::Continue
         } else {
             self.owner.terminal("fail-close", reason);
-            session.record_outcome(DyeOutcome::FailClose, reason);
             log.push("ext_proc trailer fail-close");
             UpstreamTrailerResult::FailClose
         }
@@ -186,7 +185,6 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
         *trailers = candidate;
         self.done = true;
         self.owner.terminal("success", "response-trailers");
-        session.record_outcome(DyeOutcome::Success, "response-trailers");
         UpstreamTrailerResult::Continue
     }
 
@@ -430,7 +428,7 @@ mod tests {
         trailers.append("x-value", HeaderValue::from_static("one"));
         trailers.append("x-value", HeaderValue::from_static("two"));
         let mut session = session(false, true, true);
-        session.expect_record_outcome().times(1).return_const(());
+        session.expect_record_outcome().times(0).return_const(());
         let mut log = PluginLog::new("ExtProc");
 
         assert_eq!(
@@ -475,7 +473,7 @@ mod tests {
         trailers.insert("x-ok", HeaderValue::from_static("original"));
         let original = trailers.clone();
         let mut session = session(false, true, true);
-        session.expect_record_outcome().times(1).return_const(());
+        session.expect_record_outcome().times(0).return_const(());
         let mut log = PluginLog::new("ExtProc");
 
         assert_eq!(
@@ -511,7 +509,7 @@ mod tests {
             );
             let input_original = invalid_input.clone();
             let mut input_session = session(false, true, true);
-            input_session.expect_record_outcome().times(1).return_const(());
+            input_session.expect_record_outcome().times(0).return_const(());
             assert_eq!(
                 input_processor
                     .run_upstream_response_trailer(
@@ -543,7 +541,7 @@ mod tests {
                 trailers.insert("x-ok", HeaderValue::from_static("original"));
                 let original = trailers.clone();
                 let mut session = session(false, true, true);
-                session.expect_record_outcome().times(1).return_const(());
+                session.expect_record_outcome().times(0).return_const(());
                 assert_eq!(
                     processor
                         .run_upstream_response_trailer(
@@ -580,7 +578,7 @@ mod tests {
             trailers.insert("grpc-status", HeaderValue::from_static("0"));
             let original = trailers.clone();
             let mut session = session(true, true, true);
-            session.expect_record_outcome().times(1).return_const(());
+            session.expect_record_outcome().times(0).return_const(());
             let mut log = PluginLog::new("ExtProc");
             assert_eq!(
                 processor
@@ -603,7 +601,7 @@ mod tests {
             let mut trailers = HeaderMap::new();
             trailers.insert("x-old", HeaderValue::from_static("kept"));
             let mut session = session(false, true, allowed);
-            session.expect_record_outcome().times(1).return_const(());
+            session.expect_record_outcome().times(0).return_const(());
             let mut log = PluginLog::new("ExtProc");
             processor
                 .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
@@ -625,7 +623,7 @@ mod tests {
         let original = oversized.clone();
         let (mut input_processor, owner) = processor(Ok(response(None)), true, false);
         let mut input_session = session(false, true, true);
-        input_session.expect_record_outcome().times(1).return_const(());
+        input_session.expect_record_outcome().times(0).return_const(());
         let mut log = PluginLog::new("ExtProc");
         input_processor
             .run_upstream_response_trailer(Some(&mut oversized), &mut input_session, &mut log)
@@ -655,7 +653,7 @@ mod tests {
         original_map.insert("x", HeaderValue::from_static("v"));
         let expected = original_map.clone();
         let mut session = session(false, true, true);
-        session.expect_record_outcome().times(1).return_const(());
+        session.expect_record_outcome().times(0).return_const(());
         processor
             .run_upstream_response_trailer(Some(&mut original_map), &mut session, &mut PluginLog::new("ExtProc"))
             .await;
@@ -693,7 +691,7 @@ mod tests {
             let mut trailers = HeaderMap::new();
             trailers.insert("x", HeaderValue::from_static("v"));
             let mut session = session(false, true, true);
-            session.expect_record_outcome().times(1).return_const(());
+            session.expect_record_outcome().times(0).return_const(());
             assert_eq!(
                 processor
                     .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut PluginLog::new("ExtProc"),)
@@ -742,7 +740,7 @@ mod tests {
         trailers.insert("x-value", HeaderValue::from_static("kept"));
         let original = trailers.clone();
         let mut session = session(false, false, true);
-        session.expect_record_outcome().times(1).return_const(());
+        session.expect_record_outcome().times(0).return_const(());
         let mut log = PluginLog::new("ExtProc");
         assert_eq!(
             processor

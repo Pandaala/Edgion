@@ -20,23 +20,22 @@ gating, and which outcomes it actually records).
   enable: true
   dye:
     request:
-      - name: X-Release-Track          # on omitted => [success]; value omitted => plugin-recorded value
+      - name: X-Release-Track
     response:
       - name: X-Edgion-Outcome
-        on: [fallback, reject]
-      - name: X-Edgion-Degraded
-        on: [fail-open, fail-close]
-        value: degraded                # operator-authored literal override
-        conditions:                    # optional; reuses the same PluginConditions shape as entry-level `conditions`
+        on: [reject]
+        value: "selection rejected for ${header:X-Account-Id}"
+        conditions:
           run:
             allOf:
               - type: keyExist
                 key: { type: header, name: X-Debug-Token }
-      - name: X-Edgion-Debug
-        on: [fallback]
-        value: "fallback for ${header:X-Account-Id}"   # template on the shared ${type:name} engine
   config:
-    # ... plugin config; dye is NOT nested under config ...
+    enable: true
+    activeProfile: stable
+    profiles:
+      stable: { name: app-v1 }
+    onInvalid: reject
 ```
 
 `DyeSuite { request: [DyeRule], response: [DyeRule] }`;
@@ -66,24 +65,37 @@ in v1 — request-direction failure dye (surfacing degraded mode to the
 upstream) is a documented future extension, not supported today. Put failure
 outcomes only on `response`-direction rules.
 
-## Capability table — which plugin types record which outcomes
+## Capability by stage and configuration
 
-Configuring an outcome a plugin type never records is an admission error
-(rejected at the Controller and at Gateway compile), not a header that
-silently never appears:
+Controller and Gateway share `EdgionPlugin::dye_capabilities(DyeStage)`.
+An unsupported outcome reports a configuration error and disables that entry's
+**dye plan**; it does not by itself disable the plugin or reject traffic.
 
-| Plugin | Outcomes it can dye |
+| Plugin | Supported stage and outcomes |
 |---|---|
-| `Canary`, `DynamicInternalUpstream`, `DynamicExternalUpstream`, `DirectEndpoint` | `success`, `fallback`, `reject` |
-| `RegionRoute` | `success`, `fallback` (no `reject` — RegionRoute has no `onMissing`/`onNoMatch`/`onInvalid` reject-shaped config path in v1) |
-| `RateLimitRedis`, `ExtProc`, `Wasm`, `Dsl`, `OpenidConnect` | `fail-open`, `fail-close` |
-| `ForwardAuth`, `LdapAuth` | `fail-close` only (auth class never fails open by policy) |
-| Everything else | none |
+| `Canary` | Request: `success` plus the configured `onInvalid` outcome. |
+| `DynamicInternalUpstream` | Request: `success`, configured `onMissing`/`onInvalid` outcomes; `onNoMatch` only in rules mode. |
+| `DynamicExternalUpstream`, `DirectEndpoint` | Request: selection success and the outcomes selected by applicable fallback/reject policies. |
+| `RegionRoute` | Request: success with routing rules and a region source; fallback only with an applicable `overrideRef`; never reject. |
+| `RateLimitRedis` | Request: `onRedisFailure: Allow` permits `fail-open`; `Deny` permits `fail-close`. |
+| `ExtProc` | Request entry, including attached callbacks before response headers commit: the outcome selected by `failureModeAllow`. |
+| `Wasm` | Request or upstream response filter: the outcome selected by `failOpen`. No response-body dye. |
+| `Dsl` | Request or upstream response filter: `deny`/`denyWith` permit `fail-close`; `ignore` also permits `fail-open`. Hard body/scanner errors remain fail-close. |
+| `OpenidConnect` | Request: JWKS stale-cache `fail-open` and unavailable `fail-close`, when JWKS verification, nonce validation, or session renewal (`bearerOnly: false`, `renewAccessTokenOnExpiry: true`) is enabled. Session refresh timeouts can reach JWKS even with `IntrospectionOnly`; introspection verification itself produces neither. |
+| `ForwardAuth`, `LdapAuth` | Request: `fail-close` for dependency failures. |
+| `AiProxy` and other plugins | No entry-level dye. |
 
-The plugin-type → capability mapping is `EdgionPlugin::dye_capabilities`
-(`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`) — the
-table above must match it; treat that function as the source of truth if
-they ever diverge.
+Capabilities describe supported execution paths, not a guarantee that every
+request or script emits an outcome. Conditions, protocol gating and Canary's
+internal kill switch can suppress execution while preserving valid declarations.
+Choose only outcomes supported by the effective policy; for example,
+`Wasm failOpen: true` cannot subscribe to `fail-close`.
+
+Response headers must still be mutable when an outcome is recorded. Request-stage
+response dye is queued; response-header callbacks write the current header.
+ExtProc response-body/trailer results and Wasm body observation occur too late
+and do not produce response-header dye. A stream terminated after headers commit
+cannot replace the already-sent status or add a dye header.
 
 ## Value provenance
 
@@ -127,26 +139,15 @@ detail entirely and renders your literal instead.
 
 ## Anti-spoof strip
 
-Before a plugin runs — before its `enable: false` kill switch, any protocol
-gating, and its own entry-level `conditions` — the runtime removes the
-entry's configured **request**-direction rule names from the incoming
-request. This targets only the client-supplied value; it is a stripped-first,
-render-after-if-triggered sequence, not a toggle:
+For an active entry with a valid dye plan, the runtime removes configured
+**request**-direction header names before plugin execution, protocol gating and
+entry conditions. It strips each name once per request, so an earlier entry's
+gateway-authored dye is not removed again.
 
-- the strip runs **once per header name per request**, at the first entry in
-  the pipeline that declares that name — a value rendered by an earlier
-  entry's own request-direction dye rule is gateway-authored and is never
-  re-stripped by a later entry (or a later runtime tier: route → backend →
-  gateway → global run in sequence) that happens to share the same header
-  name;
-- the strip runs even when the plugin is kill-switched (`enable: false`) or
-  when its entry-level `conditions` skip it — conditions gate whether a rule
-  *renders*, never whether the strip runs. A disabled or condition-skipped
-  plugin's configured dye names are still removed from client input.
-
-This means a client can never forge a value under a name your route has
-configured for dye, regardless of which path the matching plugin takes on a
-given request.
+Canary's internal `config.enable: false` pauses selection but retains this strip.
+The outer entry `enable: false` and policy Bypass/Block are different: they do not
+compile a normal dye plan. Invalid dye configurations also install no plan. A
+condition-skipped active entry still strips; rule conditions only gate rendering.
 
 ## Header name validation
 
@@ -211,5 +212,5 @@ a fixed literal instead of the plugin-recorded diagnostic string.
   [Direct Endpoint](./direct-endpoint.md), [RegionRoute](./region-route.md) —
   per-plugin value provenance and examples.
 - [Filters Overview](../overview.md)
-- Design record: [`2026-07-20-entry-level-dye-suite-design.md`](../../../../../../docs/superpowers/specs/2026-07-20-entry-level-dye-suite-design.md)
+- Design record: [`entry-level-dye.md`](../../../../../../skills/01-architecture/02-gateway/entry-level-dye.md)
   (full mechanism, validation, and runtime rendering detail).

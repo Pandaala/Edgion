@@ -1380,6 +1380,160 @@ async fn test_run_request_empty_refresh_token_with_unavailable_secret_attempts_o
     assert!(cookies.lock().is_none());
 }
 
+#[tokio::test(start_paused = true)]
+async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce() {
+    use crate::plugins::runtime::PluginRuntime;
+    use edgion_resources::resources::edgion_plugins::{EdgionPlugin, RequestFilterEntry};
+
+    for mode in [VerificationMode::IntrospectionOnly, VerificationMode::Auto] {
+        for stale_cache in [false, true] {
+            let mut cfg = base_config();
+            cfg.verification_mode = mode;
+            cfg.use_jwks = false;
+            cfg.use_nonce = false;
+            cfg.bearer_only = false;
+            cfg.renew_access_token_on_expiry = true;
+            cfg.timeout = 1;
+            cfg.introspection_cache_ttl = 60;
+            cfg.clock_skew_seconds = 0;
+            cfg.access_token_expires_leeway = 0;
+            cfg.token_signing_alg = Some("HS256".to_string());
+            cfg.allowed_signing_algs = Some(vec!["HS256".to_string()]);
+            cfg.unauth_action = UnauthAction::Pass;
+            cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+            cfg.resolved_oidc_client_secret = Some("test-client-secret".to_string());
+
+            let mut entry = RequestFilterEntry::new(EdgionPlugin::OpenidConnect(Box::new(cfg.clone())));
+            entry.dye = Some(
+                serde_json::from_value(json!({
+                    "response": [{"name": "X-OIDC-Degraded", "on": ["fail-open", "fail-close"]}]
+                }))
+                .unwrap(),
+            );
+            assert_eq!(entry.validate_dye(), None);
+            let mut runtime = PluginRuntime::new();
+            assert!(runtime
+                .add_from_request_filters(&[entry], "default", "default/oidc-dye")
+                .is_empty());
+            let plan = runtime
+                .request_plugins_iter()
+                .next()
+                .unwrap()
+                .dye_plan()
+                .unwrap()
+                .clone();
+            assert_eq!(plan.response.len(), 1);
+
+            let plugin = Arc::new(OpenidConnect::new(&cfg, "default".to_string()));
+            // The existing egress policy rejects this JWKS destination before dialing.
+            plugin
+                .jwks_provider
+                .seed_discovery(DiscoveryDocument {
+                    issuer: "https://idp.example.com".to_string(),
+                    jwks_uri: "http://169.254.169.254/jwks".to_string(),
+                    authorization_endpoint: None,
+                    token_endpoint: None,
+                    introspection_endpoint: Some("http://169.254.169.254/introspect".to_string()),
+                    userinfo_endpoint: None,
+                    end_session_endpoint: None,
+                    revocation_endpoint: None,
+                })
+                .await;
+            if stale_cache {
+                plugin
+                    .jwks_provider
+                    .seed_stale_jwks(
+                        serde_json::from_value(json!({
+                            "keys": [{"kty": "oct", "k": "c2VjcmV0", "alg": "HS256"}]
+                        }))
+                        .unwrap(),
+                    )
+                    .await;
+            }
+
+            let now = OpenidConnect::now_unix_secs();
+            let claims = json!({"active": true, "iss": "https://idp.example.com", "exp": now - 120});
+            let token = jsonwebtoken::encode(
+                &Header::new(Algorithm::HS256),
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+            )
+            .unwrap();
+            // Seed the exact expired introspection result consumed by the verifier,
+            // bypassing network I/O and normal cache TTL clipping at token expiry.
+            plugin.introspection_cache.insert(
+                OpenidConnect::introspection_cache_key(&token),
+                IntrospectionCacheEntry { claims },
+                Duration::from_secs(60),
+            );
+            let payload = OidcSessionCookie {
+                session_ref: "dye-session".to_string(),
+                access_token: token,
+                created_at: now,
+                expires_at: Some(now + 3600),
+                id_token: None,
+                refresh_token: Some("refresh-token".to_string()),
+            };
+            let cookie =
+                OpenidConnect::encode_signed_cookie_payload(&payload, plugin.session_cipher().unwrap()).unwrap();
+            let flight = plugin
+                .refresh_singleflight
+                .get_or_create(&OpenidConnect::refresh_lock_key(&cookie));
+            let held_guard = flight.lock().lock().await;
+            let mut session = MockPluginSession::new();
+            session.expect_get_path().return_const("/".to_string());
+            session.expect_get_query_param().returning(|_| None);
+            let cookies = install_request_cookies(&mut session, &format!("edgion_oidc_session={cookie}"));
+            let expected = if stale_cache {
+                DyeOutcome::FailOpen
+            } else {
+                DyeOutcome::FailClose
+            };
+            let recorded = Arc::new(Mutex::new(Vec::new()));
+            let records = recorded.clone();
+            session
+                .expect_record_outcome()
+                .times(1)
+                .returning(move |outcome, value| {
+                    assert_eq!(outcome, expected);
+                    assert_eq!(
+                        value,
+                        if stale_cache {
+                            "jwks-stale-cache"
+                        } else {
+                            "jwks-unreachable"
+                        }
+                    );
+                    assert!(plan.response[0].on.contains(&outcome));
+                    records.lock().push(outcome);
+                });
+            let handle = tokio::spawn(async move {
+                let start = tokio::time::Instant::now();
+                let mut log = PluginLog::new("OpenidConnect");
+                let result = plugin.run_request(&mut session, &mut log).await;
+                (result, log, start.elapsed())
+            });
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_millis(999)).await;
+            tokio::task::yield_now().await;
+            assert!(!handle.is_finished());
+            assert!(recorded.lock().is_empty());
+            tokio::time::advance(Duration::from_millis(1)).await;
+            let (result, log, elapsed) = handle.await.unwrap();
+            drop(held_guard);
+            assert_eq!(elapsed, Duration::from_secs(1));
+            assert_eq!(*recorded.lock(), vec![expected]);
+            // Even zero leeway reaches JWKS before rejecting stale-token reuse.
+            assert_eq!(result, PluginRunningResult::GoodNext);
+            assert_eq!(
+                plugin_log_entries(&log),
+                vec!["err: token refresh fail", "no token; pass"]
+            );
+            assert!(cookies.lock().is_none());
+        }
+    }
+}
+
 #[test]
 fn strip_gateway_owned_cookies_removes_session_and_state_keeps_others() {
     let plugin = OpenidConnect::new(&base_config(), "default".to_string());

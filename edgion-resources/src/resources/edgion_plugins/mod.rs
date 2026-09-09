@@ -29,7 +29,7 @@ mod tests;
 // Re-exports
 pub use access_decision::AccessDecision;
 pub use body_requirement::{BodyReadFailureMode, BodyRequirement};
-pub use dye::{sanitize_field_value, DyeOutcome, DyeRule, DyeSuite, DENIED_DYE_HEADER_NAMES};
+pub use dye::{sanitize_field_value, DyeOutcome, DyeRule, DyeStage, DyeSuite, DENIED_DYE_HEADER_NAMES};
 pub use edgion_plugin::{BodyStage, EdgionPlugin};
 pub use entry::{
     duplicate_alias_error, dye_set_clobber_error, PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry,

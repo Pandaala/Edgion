@@ -104,7 +104,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback]` — RegionRoute has no `reject` capability, see below). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the final region name (post-`failoverTo`) on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
+| `dye` | Object | none | Traffic-tagging headers keyed on outcome (separate `on: [success]` and `on: [fallback]` rules, subject to the configured routing rules and overlay reference; RegionRoute has no `reject` capability). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the final region name (post-`failoverTo`) on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
 
 Controller and Gateway use the same region-table validation rules. Invalid base configuration is reflected in the `EdgionPlugins` `Accepted` condition; overlay resolution or effective-table validation failures are reflected in `ResolvedRefs` and fall back to the valid base table. Generic resource writes retain status-based validation feedback; not every invalid write is rejected at ingestion.
 
@@ -247,7 +247,7 @@ Targets must exist; self-references and cycles are invalid. Acyclic chains are a
 
 ## Dye Headers
 
-See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs even for `enable: false` and condition-skipped entries), header-name validation, and security guidance. This section covers only what is specific to RegionRoute.
+See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs for active entries even when conditions skip execution; outer `enable: false` entries are inert), header-name validation, and security guidance. This section covers only what is specific to RegionRoute.
 
 `dye` is default-off: when omitted, the plugin sets no headers and strips nothing. When configured, it tags the request (or, on `response`-direction rules, the response) with operator-chosen HTTP headers:
 
@@ -267,6 +267,11 @@ spec:
           - name: X-Edgion-Outcome
             on: [fallback]            # value omitted => region_route:fallback:overlay-fail-to-base
       config:
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Region
         regions:
           - name: us-east
             hashRange: [0, 999]
@@ -278,7 +283,7 @@ spec:
 - `request` entries are set on the request forwarded to the upstream (or, for a local-region pass, on the request continuing through the gateway's own chain); `response` entries are set on the response returned to the client.
 - An omitted `value` on `success` carries the **final region name** — that is the region *after* any `failoverTo` redirect is applied, not the originally-matched region.
 - `success` dyeing applies whenever a rule (`RouteByDirectRegion`, `RouteByKeyConfMatch`, or the terminal `RouteByHashRange`) actually selects a region, including the **local-region pass** case — when the resolved region is this gateway's own region, no cross-region jump happens, but the request was still routed to a region, so it is dyed with that region's name.
-- RegionRoute declares `success` and `fallback` — **not** `reject` — dye capabilities: its only failure-shaped branch is the overlay fail-to-base path (`RegionRouteOverride` resolution failing back to the base routing rules), recorded as `fallback` with cause `overlay-fail-to-base`. Dyeing does not happen when another plugin has already locked the upstream jump, or when no rule matches at all — neither is a recorded outcome today. `reject` is reserved for when the pre-existing `SetJumpOutcome::Rejected`-silently-proceeds bug is fixed (tracked separately; see the design record).
+- RegionRoute declares `success` and `fallback` — **not** `reject` — dye capabilities: its only failure-shaped branch is the overlay fail-to-base path (`RegionRouteOverride` resolution failing back to the base routing rules), recorded as `fallback` with cause `overlay-fail-to-base`. Dyeing does not happen when another plugin has already locked the upstream jump, or when no rule matches at all — neither is a recorded outcome today. A rejected jump does not record a dye outcome. Success requires nonempty `routeRules` and a region source (`regions` or `overrideRef`); fallback requires an `overrideRef` and nonempty `routeRules` or `regions`. The base configuration must also pass the region-table validation described above. Unsupported subscriptions invalidate the entire dye plan.
 
 ---
 

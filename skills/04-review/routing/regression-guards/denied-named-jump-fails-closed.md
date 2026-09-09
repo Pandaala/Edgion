@@ -250,3 +250,13 @@ reviewer confirmed the registration and knowledge boundary. No production behavi
 - `task-fail-closed-on-denied-l7-named-jumps` — 2026-09-05.
 - `add-denied-named-jump-integration-coverage` — test gap corrected, 2026-09-07;
   dedicated integration coverage with the explicit reachability limits above.
+
+## D0083 dye subscription alignment
+
+The stage/effective-policy dye contract now rejects impossible subscriptions.
+Three frozen named-jump fixtures still subscribe to both reject and fallback
+although their policy selects only one. Their historical end-to-end dye and
+anti-spoof assertions require [fixture alignment](../../../../tasks/todo/align-named-jump-dye-integration-subscriptions.md)
+before they can pass with the new validation. The denial, legal-fallback, no
+backend-contact, and spoofed-header assertions remain required; this is not
+acceptance of weaker security behavior or a claim of a fresh full-suite pass.

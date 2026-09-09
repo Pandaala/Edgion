@@ -19,7 +19,6 @@ pub(crate) fn test_response_processor(
         failure_mode_allow,
         false,
         false,
-        None,
     ))
 }
 

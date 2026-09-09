@@ -9,3 +9,4 @@ spec:
     rules: |
       SecRule REQUEST_HEADERS:X-Waf-Version "!@streq v1" "id:1001,phase:1,deny,status:403"
       SecRule REQUEST_BODY "@contains blocked" "id:1002,phase:2,deny,status:406"
+      SecRule REQUEST_HEADERS:X-Waf-Invalid-Status "@streq trigger" "id:1003,phase:3,deny,status:100"

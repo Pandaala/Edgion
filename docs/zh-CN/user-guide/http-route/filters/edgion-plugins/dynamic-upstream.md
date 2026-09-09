@@ -50,7 +50,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback, reject]`）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带解析出的目标 `[ns/]name`。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
+| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success]` 与失败规则分开配置；失败规则根据实际失败策略选择 `fallback` 或 `reject`）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带解析出的目标 `[ns/]name`。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
 
 ### 使用场景
 
@@ -191,7 +191,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback, reject]`）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带解析出的目标 `domain:port`。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
+| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success]` 与失败规则分开配置；失败规则根据实际失败策略选择 `fallback` 或 `reject`）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带解析出的目标 `domain:port`。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
 
 ### DomainTarget 子字段
 
@@ -271,7 +271,7 @@ requestPlugins:
 
 ## 染色请求头
 
-完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（即使插件被 `enable: false` 关闭或被 conditions 跳过也会执行）、请求头名校验，以及安全指引。本节只覆盖这两个插件特有的部分。
+完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（启用的条目即使被 conditions 跳过仍执行；外层 `enable: false` 的条目不执行）、请求头名校验，以及安全指引。本节只覆盖这两个插件特有的部分。
 
 `dye` 默认关闭：不配置时，两个子插件都不会设置任何请求头，也不会剥离任何请求头。配置后，会附加运维自定义的 HTTP 头：
 

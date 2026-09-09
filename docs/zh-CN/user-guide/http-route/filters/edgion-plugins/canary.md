@@ -86,7 +86,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback, reject]`）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带已解析的 profile 名。完整参考见 [染色（Dye）](./dye.md)，Canary 特有的部分见下方[染色请求头](#染色请求头)。 |
+| `dye` | Object | 无 | 用不同规则分别订阅 `success` 和 `onInvalid` 指定的结果。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带已解析的 profile 名。完整参考见 [染色（Dye）](./dye.md)，Canary 特有的部分见下方[染色请求头](#染色请求头)。 |
 
 ### EdgionConfigDataRef（用于 `activeProfileRef`）
 
@@ -187,7 +187,7 @@ requestPlugins:
 
 ### 染色请求头
 
-完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（即使插件被 `enable: false` 关闭或被 conditions 跳过也会执行）、请求头名校验，以及安全指引。本节只覆盖 Canary 特有的部分。
+完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（活跃条目在内部 `config.enable: false` 或被 conditions 跳过时仍保留剥离）、请求头名校验，以及安全指引。本节只覆盖 Canary 特有的部分。
 
 `dye` 默认关闭：不配置时，Canary 不设置任何请求头，也不做任何剥离。配置后，会附加运维自定义的 HTTP 头，方便后端（或观测系统）识别本次请求由哪个 profile 处理，或走了哪条 fallback/reject 路径：
 
@@ -201,7 +201,7 @@ requestPlugins:
         - name: X-Served-By
           value: edge-cluster-1      # 显式静态值
         - name: X-Edgion-Outcome
-          on: [fallback, reject]     # 不设置 value => canary:fallback:on-invalid / canary:reject:on-invalid
+          on: [reject]               # onInvalid defaults to reject
     config:
       enable: true
       activeProfile: stable
@@ -217,7 +217,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
 ```
 
 - `success` 上不设置 `value` 时携带**已解析的 profile 名**（如 `stable`、`canary`）。
-- Canary 支持 `success`、`fallback`、`reject` 三种染色能力——`fallback`/`reject` 规则会给 `onInvalid: fallback` / `onInvalid: reject` 路径染色（这是该插件仅有的失败类分支）；`enable: false` 和无路由都不是"结果"，因此不会染色。
+- Canary 支持 `success` 和 `onInvalid` 指定的结果（`fallback` 或 `reject`），同一配置不能同时订阅两种失败结果，否则染色计划无效。内部 `config.enable: false` 和无路由时不输出染色；内部开关仍保留活跃条目的防伪造计划。外层条目的 `enable: false` 则完全不参与。
 
 ## 行为细节
 
@@ -257,7 +257,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
 
 ### Q4：可以给每个 profile 附加不同的业务自定义请求头（而不只是携带已解析 profile 名的固定头）吗？
 
-**A**：`dye` 支持任意运维自定义的请求头名和方向，值可以是基于共享 `${type:name}` 引擎的模板（不允许 `secretRef`），也可以不设置（携带插件记录的值）——这已经覆盖了常见业务场景（`X-Release-Track: <当前生效 profile>`），模板形式也覆盖了大多数自定义业务头场景。按 profile 配置不同的 `{name, value}` 覆盖列表目前仍是刻意的非目标（non-goal）：常见业务场景已被"不设置 value 即用已解析值"以及模板覆盖，若未来出现具体需求可以再补充。完整参考见 [染色（Dye）](./dye.md)，完整设计参见设计文档 [`2026-07-20-entry-level-dye-suite-design.md`](../../../../../../docs/superpowers/specs/2026-07-20-entry-level-dye-suite-design.md)。
+**A**：`dye` 支持任意运维自定义的请求头名和方向，值可以是基于共享 `${type:name}` 引擎的模板（不允许 `secretRef`），也可以不设置（携带插件记录的值）——这已经覆盖了常见业务场景（`X-Release-Track: <当前生效 profile>`），模板形式也覆盖了大多数自定义业务头场景。按 profile 配置不同的 `{name, value}` 覆盖列表目前仍是刻意的非目标（non-goal）：常见业务场景已被"不设置 value 即用已解析值"以及模板覆盖，若未来出现具体需求可以再补充。完整参考见 [染色（Dye）](./dye.md)，完整设计参见设计文档 [`entry-level-dye.md`](../../../../../../skills/01-architecture/02-gateway/entry-level-dye.md)。
 
 ## 相关文档
 

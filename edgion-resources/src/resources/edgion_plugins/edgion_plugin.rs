@@ -4,7 +4,7 @@ use edgion_dsl::bytecode::BuiltinId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::dye::DyeOutcome;
+use super::dye::{DyeOutcome, DyeStage};
 use super::plugin_configs::{
     AiGuardConfig, AiProxyConfig, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig,
     CorsConfig, CredentialInjectorConfig, CsrfConfig, CtxSetConfig, DebugAccessLogToHeaderConfig, DirectEndpointConfig,
@@ -18,10 +18,31 @@ use super::plugin_configs::{
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
-const DYE_SELECTION: &[DyeOutcome] = &[DyeOutcome::Success, DyeOutcome::Fallback, DyeOutcome::Reject];
-const DYE_SELECTION_FALLBACK_ONLY: &[DyeOutcome] = &[DyeOutcome::Success, DyeOutcome::Fallback];
 const DYE_FAIL_BOTH: &[DyeOutcome] = &[DyeOutcome::FailOpen, DyeOutcome::FailClose];
+const DYE_FAIL_OPEN_ONLY: &[DyeOutcome] = &[DyeOutcome::FailOpen];
 const DYE_FAIL_CLOSE_ONLY: &[DyeOutcome] = &[DyeOutcome::FailClose];
+
+fn selection_dye(success: bool, fallback: bool, reject: bool) -> &'static [DyeOutcome] {
+    use DyeOutcome::*;
+    match (success, fallback, reject) {
+        (true, true, true) => &[Success, Fallback, Reject],
+        (true, true, false) => &[Success, Fallback],
+        (true, false, true) => &[Success, Reject],
+        (true, false, false) => &[Success],
+        (false, true, true) => &[Fallback, Reject],
+        (false, true, false) => &[Fallback],
+        (false, false, true) => &[Reject],
+        (false, false, false) => &[],
+    }
+}
+
+fn selection_policy_dye(success: bool, policies: &[super::UpstreamFallback]) -> &'static [DyeOutcome] {
+    selection_dye(
+        success,
+        policies.iter().any(|p| matches!(p, super::UpstreamFallback::Fallback)),
+        policies.iter().any(|p| matches!(p, super::UpstreamFallback::Reject)),
+    )
+}
 
 /// Plugin enum for all supported plugin types
 ///
@@ -344,26 +365,85 @@ impl EdgionPlugin {
         }
     }
 
-    /// Outcomes this plugin type records (`record_outcome` call sites exist).
-    /// The dye capability table: configuring an outcome not listed here is an
-    /// admission error (no silent no-op — the `body:` precedent). Grows as
-    /// wiring grows.
-    pub fn dye_capabilities(&self) -> &'static [DyeOutcome] {
+    /// Renderable outcomes for this entry's stage and effective configuration.
+    /// This is the shared Controller/Gateway contract. It includes request-owned
+    /// callbacks before response-header commit, never body/trailer response dye.
+    /// Runtime input matching is not predicted here; stage and policy exclusions are.
+    pub fn dye_capabilities(&self, stage: DyeStage) -> &'static [DyeOutcome] {
+        use super::plugin_configs::{DslErrorPolicy, OnRedisFailure, VerificationMode};
+        let stages = super::validate::applicable_stages_by_name(self.type_name());
+        let applicable = match stage {
+            DyeStage::Request => stages.request,
+            DyeStage::UpstreamResponseFilter => stages.upstream_response_filter,
+            DyeStage::UpstreamResponseBodyFilter => false,
+            DyeStage::UpstreamResponse => stages.upstream_response,
+        };
+        if !applicable {
+            return &[];
+        }
         match self {
-            // Selection plugins: success + fallback/reject branches.
-            EdgionPlugin::Canary(_)
-            | EdgionPlugin::DynamicInternalUpstream(_)
-            | EdgionPlugin::DynamicExternalUpstream(_)
-            | EdgionPlugin::DirectEndpoint(_) => DYE_SELECTION,
-            // region_route: no reject capability until the Rejected-silent-GoodNext
-            // pre-existing bug is fixed (see spec, wiring notes).
-            EdgionPlugin::RegionRoute(_) => DYE_SELECTION_FALLBACK_ONLY,
+            EdgionPlugin::Canary(c) => {
+                // The internal kill switch pauses selection, not the entry's
+                // anti-spoof ownership. Keep its valid request dye plan installed.
+                selection_policy_dye(true, &[c.on_invalid])
+            }
+            EdgionPlugin::DynamicInternalUpstream(c) => {
+                if c.rules.is_some() {
+                    selection_policy_dye(true, &[c.on_missing, c.on_invalid, c.on_no_match])
+                } else {
+                    selection_policy_dye(true, &[c.on_missing, c.on_invalid])
+                }
+            }
+            EdgionPlugin::DynamicExternalUpstream(c) => {
+                selection_policy_dye(!c.domain_map.is_empty(), &[c.on_missing, c.on_no_match])
+            }
+            EdgionPlugin::DirectEndpoint(c) => selection_policy_dye(true, &[c.on_missing, c.on_invalid]),
+            EdgionPlugin::RegionRoute(c) => selection_dye(
+                !c.route_rules.is_empty() && (!c.regions.is_empty() || c.override_ref.is_some()),
+                c.override_ref.is_some() && (!c.route_rules.is_empty() || !c.regions.is_empty()),
+                false,
+            ),
             // Dependency-failure plugins.
-            EdgionPlugin::RateLimitRedis(_)
-            | EdgionPlugin::ExtProc(_)
-            | EdgionPlugin::Wasm(_)
-            | EdgionPlugin::Dsl(_)
-            | EdgionPlugin::OpenidConnect(_) => DYE_FAIL_BOTH,
+            EdgionPlugin::RateLimitRedis(c) => match c.on_redis_failure {
+                OnRedisFailure::Allow => DYE_FAIL_OPEN_ONLY,
+                OnRedisFailure::Deny => DYE_FAIL_CLOSE_ONLY,
+            },
+            EdgionPlugin::ExtProc(c) => {
+                if c.failure_mode_allow {
+                    DYE_FAIL_OPEN_ONLY
+                } else {
+                    DYE_FAIL_CLOSE_ONLY
+                }
+            }
+            EdgionPlugin::Wasm(c) => {
+                if c.fail_open {
+                    DYE_FAIL_OPEN_ONLY
+                } else {
+                    DYE_FAIL_CLOSE_ONLY
+                }
+            }
+            EdgionPlugin::Dsl(c) => match c.error_policy.as_ref().unwrap_or(&DslErrorPolicy::Ignore) {
+                // BodyAccess (including string regex scanner errors) stays
+                // fixed fail-close even under Ignore, in both supported stages.
+                // This is language capability, not arbitrary-script reachability.
+                DslErrorPolicy::Ignore => DYE_FAIL_BOTH,
+                DslErrorPolicy::Deny | DslErrorPolicy::DenyWith { .. } => DYE_FAIL_CLOSE_ONLY,
+            },
+            EdgionPlugin::OpenidConnect(c) => {
+                // Nonce validation on the callback also uses JWKS, independently
+                // of bearer verification mode (and before bearer_only dispatch).
+                // Session refresh wait timeouts also verify the expired JWT via
+                // JWKS before checking whether it is within the stale-token leeway.
+                if c.use_nonce
+                    || c.verification_mode == VerificationMode::JwksOnly
+                    || (c.verification_mode == VerificationMode::Auto && c.use_jwks)
+                    || (!c.bearer_only && c.renew_access_token_on_expiry)
+                {
+                    DYE_FAIL_BOTH
+                } else {
+                    &[]
+                }
+            }
             // forward_auth/ldap_auth: fixed fail-close by policy (auth class never fails
             // open — the degrade switch was removed, see failure-policy-freeze design).
             EdgionPlugin::ForwardAuth(_) | EdgionPlugin::LdapAuth(_) => DYE_FAIL_CLOSE_ONLY,
@@ -792,6 +872,226 @@ mod dye_capability_tests {
     use super::*;
     use crate::resources::edgion_plugins::dye::DyeOutcome;
 
+    const STAGES: [DyeStage; 4] = [
+        DyeStage::Request,
+        DyeStage::UpstreamResponseFilter,
+        DyeStage::UpstreamResponseBodyFilter,
+        DyeStage::UpstreamResponse,
+    ];
+
+    #[test]
+    fn dependency_dye_capabilities_follow_effective_policy_and_stage() {
+        use super::super::plugin_configs::OnRedisFailure;
+        for allow in [false, true] {
+            let expected = [if allow {
+                DyeOutcome::FailOpen
+            } else {
+                DyeOutcome::FailClose
+            }];
+            let wasm = EdgionPlugin::Wasm(WasmConfig {
+                fail_open: allow,
+                ..Default::default()
+            });
+            let ext = EdgionPlugin::ExtProc(ExtProcConfig {
+                failure_mode_allow: allow,
+                ..Default::default()
+            });
+            let redis = EdgionPlugin::RateLimitRedis(RateLimitRedisConfig {
+                on_redis_failure: if allow {
+                    OnRedisFailure::Allow
+                } else {
+                    OnRedisFailure::Deny
+                },
+                ..Default::default()
+            });
+            for stage in STAGES {
+                assert_eq!(
+                    wasm.dye_capabilities(stage),
+                    if matches!(stage, DyeStage::Request | DyeStage::UpstreamResponseFilter) {
+                        &expected[..]
+                    } else {
+                        &[]
+                    }
+                );
+                for plugin in [&ext, &redis] {
+                    assert_eq!(
+                        plugin.dye_capabilities(stage),
+                        if stage == DyeStage::Request { &expected[..] } else { &[] }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn selection_dye_excludes_inactive_configuration_branches() {
+        use super::super::UpstreamFallback::{Fallback, Reject};
+        for missing in [Fallback, Reject] {
+            for invalid in [Fallback, Reject] {
+                for no_match in [Fallback, Reject] {
+                    let mut internal = DynamicInternalUpstreamConfig {
+                        on_missing: missing,
+                        on_invalid: invalid,
+                        on_no_match: no_match,
+                        ..Default::default()
+                    };
+                    let plugin = EdgionPlugin::DynamicInternalUpstream(internal.clone());
+                    assert_eq!(
+                        plugin
+                            .dye_capabilities(DyeStage::Request)
+                            .contains(&DyeOutcome::Fallback),
+                        missing == Fallback || invalid == Fallback
+                    );
+                    assert_eq!(
+                        plugin.dye_capabilities(DyeStage::Request).contains(&DyeOutcome::Reject),
+                        missing == Reject || invalid == Reject
+                    );
+                    internal.rules = Some(
+                        serde_json::from_value(serde_json::json!([
+                            {"value":"key","backendRef":{"name":"app"}}
+                        ]))
+                        .unwrap(),
+                    );
+                    // A rules table enables on-no-match; direct mode does not.
+                    assert!(EdgionPlugin::DynamicInternalUpstream(internal)
+                        .dye_capabilities(DyeStage::Request)
+                        .contains(&if no_match == Fallback {
+                            DyeOutcome::Fallback
+                        } else {
+                            DyeOutcome::Reject
+                        }));
+                }
+                let direct = EdgionPlugin::DirectEndpoint(DirectEndpointConfig {
+                    on_missing: missing,
+                    on_invalid: invalid,
+                    ..Default::default()
+                });
+                assert_eq!(
+                    direct
+                        .dye_capabilities(DyeStage::Request)
+                        .contains(&DyeOutcome::Fallback),
+                    missing == Fallback || invalid == Fallback
+                );
+                assert_eq!(
+                    direct.dye_capabilities(DyeStage::Request).contains(&DyeOutcome::Reject),
+                    missing == Reject || invalid == Reject
+                );
+                for stage in &STAGES[1..] {
+                    assert!(direct.dye_capabilities(*stage).is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn oidc_nonce_callback_keeps_jwks_dye_independent_of_bearer_mode() {
+        use super::super::VerificationMode;
+        for mode in [
+            VerificationMode::Auto,
+            VerificationMode::JwksOnly,
+            VerificationMode::IntrospectionOnly,
+        ] {
+            for use_jwks in [false, true] {
+                for use_nonce in [false, true] {
+                    let expected =
+                        use_nonce || mode == VerificationMode::JwksOnly || (mode == VerificationMode::Auto && use_jwks);
+                    for bearer_only in [false, true] {
+                        let plugin = EdgionPlugin::OpenidConnect(Box::new(OpenidConnectConfig {
+                            verification_mode: mode,
+                            use_jwks,
+                            use_nonce,
+                            bearer_only,
+                            renew_access_token_on_expiry: false,
+                            ..Default::default()
+                        }));
+                        assert_eq!(
+                            plugin.dye_capabilities(DyeStage::Request),
+                            if expected { DYE_FAIL_BOTH } else { &[] }
+                        );
+                        for stage in &STAGES[1..] {
+                            assert!(plugin.dye_capabilities(*stage).is_empty());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn oidc_session_refresh_dye_requires_session_mode_and_renewal() {
+        use super::super::{RequestFilterEntry, VerificationMode};
+        for mode in [VerificationMode::IntrospectionOnly, VerificationMode::Auto] {
+            for (bearer_only, renew, supported) in [
+                (false, true, true),
+                (false, false, false),
+                (true, true, false),
+                (true, false, false),
+            ] {
+                let plugin = EdgionPlugin::OpenidConnect(Box::new(OpenidConnectConfig {
+                    verification_mode: mode,
+                    use_jwks: false,
+                    use_nonce: false,
+                    bearer_only,
+                    renew_access_token_on_expiry: renew,
+                    ..Default::default()
+                }));
+                let mut entry = RequestFilterEntry::new(plugin);
+                entry.dye = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "response": [{"name": "X-OIDC-Degraded", "on": ["fail-open", "fail-close"]}]
+                    }))
+                    .unwrap(),
+                );
+                assert_eq!(
+                    entry.validate_dye().is_none(),
+                    supported,
+                    "{mode:?}/{bearer_only}/{renew}"
+                );
+                assert_eq!(
+                    entry.plugin.dye_capabilities(DyeStage::Request),
+                    if supported { DYE_FAIL_BOTH } else { &[] }
+                );
+                for stage in &STAGES[1..] {
+                    assert!(entry.plugin.dye_capabilities(*stage).is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dsl_ignore_retains_hard_error_capability_in_both_header_stages() {
+        use super::super::plugin_configs::DslErrorPolicy;
+        for policy in [
+            None,
+            Some(DslErrorPolicy::Ignore),
+            Some(DslErrorPolicy::Deny),
+            Some(DslErrorPolicy::DenyWith {
+                status: 503,
+                body: None,
+            }),
+        ] {
+            let expected = if matches!(policy, None | Some(DslErrorPolicy::Ignore)) {
+                DYE_FAIL_BOTH
+            } else {
+                DYE_FAIL_CLOSE_ONLY
+            };
+            let plugin = EdgionPlugin::Dsl(DslConfig {
+                error_policy: policy,
+                ..Default::default()
+            });
+            for stage in STAGES {
+                assert_eq!(
+                    plugin.dye_capabilities(stage),
+                    if matches!(stage, DyeStage::Request | DyeStage::UpstreamResponseFilter) {
+                        expected
+                    } else {
+                        &[]
+                    }
+                );
+            }
+        }
+    }
+
     #[test]
     fn selection_plugins_declare_success() {
         use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget, UpstreamFallback};
@@ -813,9 +1113,9 @@ mod dye_capability_tests {
             on_invalid: UpstreamFallback::Reject,
         };
         let p = EdgionPlugin::Canary(cfg);
-        assert!(p.dye_capabilities().contains(&DyeOutcome::Success));
-        assert!(p.dye_capabilities().contains(&DyeOutcome::Fallback));
-        assert!(p.dye_capabilities().contains(&DyeOutcome::Reject));
+        assert!(p.dye_capabilities(DyeStage::Request).contains(&DyeOutcome::Success));
+        assert!(!p.dye_capabilities(DyeStage::Request).contains(&DyeOutcome::Fallback));
+        assert!(p.dye_capabilities(DyeStage::Request).contains(&DyeOutcome::Reject));
         assert_eq!(p.dye_type_prefix(), "canary");
     }
 
@@ -823,7 +1123,7 @@ mod dye_capability_tests {
     fn unwired_plugin_declares_nothing() {
         use crate::resources::plugin_configs::CorsConfig;
         let p = EdgionPlugin::Cors(CorsConfig::default());
-        assert!(p.dye_capabilities().is_empty());
+        assert!(p.dye_capabilities(DyeStage::Request).is_empty());
     }
 
     #[test]
@@ -831,7 +1131,7 @@ mod dye_capability_tests {
         use crate::resources::plugin_configs::RateLimitRedisConfig;
         let p = EdgionPlugin::RateLimitRedis(RateLimitRedisConfig::default());
         assert_eq!(p.dye_type_prefix(), "rate_limit_redis");
-        assert!(p.dye_capabilities().contains(&DyeOutcome::FailOpen));
+        assert!(p.dye_capabilities(DyeStage::Request).contains(&DyeOutcome::FailOpen));
     }
 
     #[test]
@@ -887,8 +1187,8 @@ mod dye_capability_tests {
             vec!["X-Hash".to_string(), "X-Key".to_string(), "X-Region".to_string()]
         );
         assert_eq!(
-            EdgionPlugin::RegionRoute(RegionRouteConfig::default()).dye_capabilities(),
-            &[DyeOutcome::Success, DyeOutcome::Fallback]
+            EdgionPlugin::RegionRoute(RegionRouteConfig::default()).dye_capabilities(DyeStage::Request),
+            &[]
         );
     }
 }

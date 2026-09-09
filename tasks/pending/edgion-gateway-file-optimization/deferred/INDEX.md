@@ -76,7 +76,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0080 — Reduce per-chunk condition extraction cost | needs-investigation | [campaign finding](D0080-response-body-condition-extraction-cost.md) |
 | D0081 — Fail closed on plugin IP matcher limit violations | needs-investigation | [campaign finding](D0081-plugin-ip-matcher-limit-activation.md) |
 | D0082 — Fail closed on invalid AiGuard/AiProxy ordering | needs-investigation | [campaign finding](D0082-ai-guard-proxy-order-activation.md) |
-| D0083 — Define stage-aware dye capability and producer parity | needs-discussion | [campaign finding](D0083-stage-aware-dye-capability-parity.md) |
 | D0085 — Complete native Gateway API CORS validation parity | needs-implementation | [campaign finding](D0085-native-gateway-api-cors-validation-parity.md) |
 | D0086 — Decide credentialed native CORS expose-headers wildcard semantics | needs-discussion | [campaign finding](D0086-credentialed-native-cors-expose-headers-wildcard.md) |
 | D0087 — Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
@@ -159,7 +158,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reduce per-chunk response-body condition extraction cost | pending | [task](../../../todo/reduce-response-body-condition-extraction-cost.md) |
 | Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
 | Fail closed on invalid AiGuard/AiProxy ordering | pending | [task](../../../todo/fail-closed-ai-guard-proxy-order-violations.md) |
-| Define stage-aware dye capability and producer parity | pending | [task](../../../todo/define-stage-aware-dye-capability-and-producer-parity.md) |
 | Complete native Gateway API CORS validation parity | pending | [task](../../../todo/complete-native-gateway-api-cors-validation-parity.md) |
 | Decide credentialed native CORS expose-headers wildcard semantics | pending | [task](../../../todo/decide-credentialed-native-cors-expose-headers-wildcard.md) |
 | Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
@@ -175,7 +173,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Align response-body filter terminal documentation | pending | [task](../../../todo/align-response-body-filter-terminal-documentation.md) |
 | Avoid Wasm response in-flight cache-key allocation | pending | [task](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md) |
 | Unify terminal local-reply status validation | pending | [task](../../../todo/unify-terminal-local-reply-status-validation.md) |
-| Add native WAF response-stage invalid-status integration coverage | pending | [task](../../../todo/add-native-waf-response-invalid-status-integration.md) |
+| Add native WAF response-stage invalid-status integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/http-body/regression-guards/response-stage-denial-must-terminate.md) |
 | Unify response Content-Encoding classification | pending | [task](../../../todo/unify-response-content-encoding-classification.md) |
 | Define backendRef upstream-selection plugin semantics | pending | [task](../../../todo/define-backendref-upstream-selection-plugin-semantics.md) |
 | Add deferred-credential Connection nomination integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md) |

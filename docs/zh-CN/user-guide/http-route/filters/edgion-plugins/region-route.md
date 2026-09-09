@@ -104,7 +104,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback]`——RegionRoute 没有 `reject` 能力，见下文）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带最终区域名（`failoverTo` 重定向之后的区域）。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
+| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（分别使用 `on: [success]` 和 `on: [fallback]` 规则，能力取决于路由规则和覆盖层引用；RegionRoute 没有 `reject` 能力）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带最终区域名（`failoverTo` 重定向之后的区域）。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
 
 Controller 与 Gateway 使用相同的区域表校验规则。基础配置错误反映在 `EdgionPlugins` 的 `Accepted` 状态中；覆盖层解析或生效表校验失败反映在 `ResolvedRefs` 中，并回退到有效基础表。普通资源写入仍采用状态反馈机制，并非所有错误都会在写入时被拒绝。
 
@@ -247,7 +247,7 @@ spec:
 
 ## 染色请求头
 
-完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（即使插件被 `enable: false` 关闭或被 conditions 跳过也会执行）、请求头名校验，以及安全指引。本节只覆盖 RegionRoute 特有的部分。
+完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（启用的条目即使被 conditions 跳过仍执行；外层 `enable: false` 的条目不执行）、请求头名校验，以及安全指引。本节只覆盖 RegionRoute 特有的部分。
 
 `dye` 默认关闭：不配置时插件不设置任何请求头，也不做任何剥离。配置后，会在请求上（或在 `response` 方向规则的响应上）附加运维自定义的 HTTP 头：
 
@@ -267,6 +267,11 @@ spec:
           - name: X-Edgion-Outcome
             on: [fallback]            # 不设置 value => region_route:fallback:overlay-fail-to-base
       config:
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Region
         regions:
           - name: us-east
             hashRange: [0, 999]
@@ -278,7 +283,7 @@ spec:
 - `request` 条目设置在转发给上游的请求上（对于本地区域直通场景，则设置在继续经过网关自身处理链的请求上）；`response` 条目设置在返回给客户端的响应上。
 - `success` 上不设置 `value` 时携带**最终区域名**——即经过 `failoverTo` 重定向之后的区域，而不是最初匹配到的区域。
 - `success` 染色适用于任何一条规则（`RouteByDirectRegion`、`RouteByKeyConfMatch`，或终止性的 `RouteByHashRange`）实际选中区域的情形，包括**本地区域直通**场景——当解析出的区域正是本网关自身所在区域时，不会发生跨区域跳转，但请求仍然被路由到了一个区域，因此仍会以该区域名染色。
-- RegionRoute 只支持 `success` 和 `fallback` 两种染色能力——**不支持** `reject`：它唯一的失败类分支是 overlay fail-to-base 路径（`RegionRouteOverride` 解析失败后回落到基础路由规则），会以 `fallback`、cause 为 `overlay-fail-to-base` 记录。当其他插件已经锁定了上游跳转，或没有任何规则匹配时，不会染色——这两种情况目前都不是已记录的结果。`reject` 能力将在 `SetJumpOutcome::Rejected` 静默放行这个已知的历史 bug 修复后才会开放（该 bug 单独跟踪，详见设计文档）。
+- RegionRoute 只支持 `success` 和 `fallback` 两种染色能力——**不支持** `reject`：它唯一的失败类分支是 overlay fail-to-base 路径（`RegionRouteOverride` 解析失败后回落到基础路由规则），会以 `fallback`、cause 为 `overlay-fail-to-base` 记录。当其他插件已经锁定了上游跳转，或没有任何规则匹配时，不会染色——这两种情况目前都不是已记录的结果。跳转被拒绝时不记录染色结果。`success` 需要非空 `routeRules` 和区域来源（`regions` 或 `overrideRef`）；`fallback` 需要 `overrideRef`，且 `routeRules` 或 `regions` 至少一个非空。基础配置还必须通过前述区域表校验。不支持的订阅会使整个染色计划无效。
 
 ---
 

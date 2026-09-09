@@ -14,9 +14,9 @@
 - Analysis: change; complex. A response-stage native-WAF denial can stage an admitted informational status, fail `claim_final_response`, and currently fall through to the original upstream response. The minimal fix must return a nonretryable `HTTPStatus(500)` before any downstream commit. The same-file compression selector can also skip framing-header scans immediately when compression is disabled or the response is SSE.
 - Frozen implementation scope: `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` and `skills/04-review/http-body/regression-guards/response-stage-denial-must-terminate.md`.
 - Required preservation: valid 200–599 local replies, interim/101 handling, response onion, H1 close, retry/outlier ownership, SSE/AI eligibility, head holding, streaming body/trailer processing, and canonical access-log ownership.
-- Deferred candidates: audit terminal-status validation across WAF and other producers, and later add a standalone native-WAF response-stage status-100 integration scenario without editing existing integration files.
+- Deferred candidates: audit terminal-status validation across WAF and other producers. The native-WAF response-stage status-100 integration follow-up was later resolved by D0104.
 - Baseline tests: target 8/8 passed.
-- Deferred records: `D0103` owns the wider producer/schema terminal-status audit; `D0104` owns later wire integration coverage. Existing integration files remain frozen.
+- Deferred records: `D0103` owns the wider producer/schema terminal-status audit. D0104's wire integration follow-up is resolved in [maintained knowledge](../../../../skills/04-review/http-body/regression-guards/response-stage-denial-must-terminate.md). Existing integration files remained frozen during B0186.
 - Previous batch: `29f620b8`; never push.
 
 ## Implementation Plan

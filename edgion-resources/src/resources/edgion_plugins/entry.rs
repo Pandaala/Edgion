@@ -2,7 +2,7 @@
 
 use super::body_requirement::BodyRequirement;
 use super::conditions::PluginConditions;
-use super::dye::{DyeOutcome, DyeSuite};
+use super::dye::{DyeOutcome, DyeStage, DyeSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +115,7 @@ pub struct PluginEntry {
     pub alias: Option<String>,
 
     /// Entry-level dye suite (traffic tagging on outcomes). See
-    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dye: Option<DyeSuite>,
 
@@ -160,7 +160,7 @@ impl PluginEntry {
         let dye = self.dye.as_ref()?;
         let keys = self.plugin.key_header_names();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        dye.validation_error(true, self.plugin.dye_capabilities(), &key_refs)
+        dye.validation_error(true, self.plugin.dye_capabilities(DyeStage::Request), &key_refs)
     }
 
     /// Check if this plugin is enabled
@@ -219,7 +219,7 @@ pub struct RequestFilterEntry {
     pub body: Option<BodyRequirement>,
 
     /// Entry-level dye suite (traffic tagging on outcomes). See
-    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dye: Option<DyeSuite>,
 
@@ -268,7 +268,7 @@ impl RequestFilterEntry {
         let dye = self.dye.as_ref()?;
         let keys = self.plugin.key_header_names();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        dye.validation_error(true, self.plugin.dye_capabilities(), &key_refs)
+        dye.validation_error(true, self.plugin.dye_capabilities(DyeStage::Request), &key_refs)
     }
 
     /// Check if this plugin is enabled
@@ -318,7 +318,7 @@ pub struct UpstreamResponseFilterEntry {
     pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
     /// Entry-level dye suite (traffic tagging on outcomes). See
-    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dye: Option<DyeSuite>,
 
@@ -365,7 +365,11 @@ impl UpstreamResponseFilterEntry {
         let dye = self.dye.as_ref()?;
         let keys = self.plugin.key_header_names();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        dye.validation_error(false, self.plugin.dye_capabilities(), &key_refs)
+        dye.validation_error(
+            false,
+            self.plugin.dye_capabilities(DyeStage::UpstreamResponseFilter),
+            &key_refs,
+        )
     }
 
     /// Check if this plugin is enabled
@@ -415,7 +419,7 @@ pub struct UpstreamResponseBodyFilterEntry {
     pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
     /// Entry-level dye suite (traffic tagging on outcomes). See
-    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dye: Option<DyeSuite>,
 
@@ -462,7 +466,11 @@ impl UpstreamResponseBodyFilterEntry {
         let dye = self.dye.as_ref()?;
         let keys = self.plugin.key_header_names();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        dye.validation_error(false, self.plugin.dye_capabilities(), &key_refs)
+        dye.validation_error(
+            false,
+            self.plugin.dye_capabilities(DyeStage::UpstreamResponseBodyFilter),
+            &key_refs,
+        )
     }
 
     /// Check if this plugin is enabled
@@ -518,7 +526,7 @@ pub struct UpstreamResponseEntry {
     pub body: Option<BodyRequirement>,
 
     /// Entry-level dye suite (traffic tagging on outcomes). See
-    /// `edgion_plugins/dye.rs` and the 2026-07-20 entry-level dye suite spec.
+    /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dye: Option<DyeSuite>,
 
@@ -567,7 +575,11 @@ impl UpstreamResponseEntry {
         let dye = self.dye.as_ref()?;
         let keys = self.plugin.key_header_names();
         let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-        dye.validation_error(false, self.plugin.dye_capabilities(), &key_refs)
+        dye.validation_error(
+            false,
+            self.plugin.dye_capabilities(DyeStage::UpstreamResponse),
+            &key_refs,
+        )
     }
 
     /// Check if this plugin is enabled
@@ -738,7 +750,7 @@ mod dye_entry_tests {
         let mut entry = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
         entry.dye = Some(dye_response("X-O", &[DyeOutcome::FailOpen]));
         let err = entry.validate_dye().expect("cors records nothing");
-        assert!(err.contains("never records"), "{err}");
+        assert!(err.contains("cannot render in this stage and configuration"), "{err}");
         assert!(RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()))
             .validate_dye()
             .is_none());

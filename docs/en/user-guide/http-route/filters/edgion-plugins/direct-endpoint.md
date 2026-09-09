@@ -47,7 +47,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback, reject]`). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the resolved endpoint `ip:port` on `success`. See [Dye](./dye.md) for the full reference, and [Scenario 2: Dye Headers](#scenario-2-dye-headers) below for the plugin-specific summary. |
+| `dye` | Object | none | Traffic-tagging headers keyed on outcome (separate `on: [success]` rules and failure rules selecting `fallback` or `reject` according to the configured failure policies). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the resolved endpoint `ip:port` on `success`. See [Dye](./dye.md) for the full reference, and [Scenario 2: Dye Headers](#scenario-2-dye-headers) below for the plugin-specific summary. |
 
 ---
 
@@ -73,7 +73,7 @@ curl -H "X-Target-IP: 10.0.1.5" https://api.example.com/debug
 
 ### Scenario 2: Dye Headers
 
-See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs even for `enable: false` and condition-skipped entries), header-name validation, and security guidance. This section covers only what is specific to DirectEndpoint.
+See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs for active entries even when conditions skip execution; outer `enable: false` entries are inert), header-name validation, and security guidance. This section covers only what is specific to DirectEndpoint.
 
 ```yaml
 requestPlugins:

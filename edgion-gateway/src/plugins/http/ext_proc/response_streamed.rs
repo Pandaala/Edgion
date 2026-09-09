@@ -1,4 +1,5 @@
 //! Bounded lockstep response-body processing for attached ExtProc sessions.
+//! Response headers are committed here; terminal diagnostics never enqueue dye headers.
 
 use std::sync::Arc;
 
@@ -9,9 +10,8 @@ use pingora_proxy::ResponseBodySink;
 use super::attached::AttachedExtProc;
 use super::plugin::{exchange_failure_reason, has_unsupported_common_fields};
 use crate::ctx::ResponseStreamKind;
-use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::traits::{StreamingResponseEvent, StreamingResponseProcessor};
-use crate::plugins::runtime::{DyeOutcome, PluginSession};
+use crate::plugins::runtime::PluginSession;
 use edgion_common::ext_proc::proto::{
     body_mutation, common_response::ResponseStatus, processing_request, processing_response, HttpBody,
     ProcessingRequest, ProcessingResponse,
@@ -59,7 +59,6 @@ pub(super) struct ExtProcResponseProcessor {
     disable_immediate_response: bool,
     response_trailers_send: bool,
     done: bool,
-    dye_plan: Option<Arc<CompiledDyePlan>>,
 }
 
 impl ExtProcResponseProcessor {
@@ -68,7 +67,6 @@ impl ExtProcResponseProcessor {
         failure_mode_allow: bool,
         disable_immediate_response: bool,
         response_trailers_send: bool,
-        dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             owner,
@@ -76,7 +74,6 @@ impl ExtProcResponseProcessor {
             disable_immediate_response,
             response_trailers_send,
             done: false,
-            dye_plan,
         }
     }
 
@@ -88,20 +85,17 @@ impl ExtProcResponseProcessor {
         reason: &'static str,
     ) {
         self.done = true;
-        session.install_dye_plan(self.dye_plan.clone());
         if !self.failure_mode_allow {
             if !session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProcessorFailure) {
                 self.owner.terminal("superseded", "terminal-lost");
                 return;
             }
             self.owner.terminal("fail-close", reason);
-            session.record_outcome(DyeOutcome::FailClose, reason);
             *chunk = None;
             session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
             sink.terminate();
         } else {
             self.owner.terminal("fail-open", reason);
-            session.record_outcome(DyeOutcome::FailOpen, reason);
         }
     }
 }
@@ -213,8 +207,6 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
         }
         if end_of_stream {
             self.done = true;
-            session.install_dye_plan(self.dye_plan.clone());
-            session.record_outcome(DyeOutcome::Success, "response-eos");
         }
     }
 
@@ -303,7 +295,6 @@ mod tests {
                 disable_immediate_response: false,
                 response_trailers_send: false,
                 done: false,
-                dye_plan: None,
             },
             exchange,
         )
@@ -329,8 +320,8 @@ mod tests {
 
         let (mut skip_trailers, owner) = processor(Ok(verdict(None, false)), false);
         let mut session = mock_session();
-        session.expect_install_dye_plan().times(1).return_const(());
-        session.expect_record_outcome().times(1).return_const(());
+        session.expect_install_dye_plan().times(0).return_const(());
+        session.expect_record_outcome().times(0).return_const(());
         skip_trailers
             .on_event(
                 &mut chunk,
@@ -355,8 +346,8 @@ mod tests {
         let mut chunk = None;
         let mut sink = ResponseBodySink::new();
         let mut session = mock_session();
-        session.expect_install_dye_plan().times(1).return_const(());
-        session.expect_record_outcome().times(1).return_const(());
+        session.expect_install_dye_plan().times(0).return_const(());
+        session.expect_record_outcome().times(0).return_const(());
         processor
             .on_event(
                 &mut chunk,
@@ -375,14 +366,11 @@ mod tests {
         assert!(body.end_of_stream);
     }
 
-    fn failure_session(outcome: DyeOutcome) -> MockPluginSession {
+    fn failure_session() -> MockPluginSession {
         let mut session = mock_session();
-        session.expect_install_dye_plan().times(1).return_const(());
-        session
-            .expect_record_outcome()
-            .withf(move |actual, _| std::mem::discriminant(actual) == std::mem::discriminant(&outcome))
-            .times(1)
-            .return_const(());
+        // Headers are committed: no response dye or retained dye plan is allowed.
+        session.expect_install_dye_plan().times(0);
+        session.expect_record_outcome().times(0);
         session
     }
 
@@ -454,7 +442,7 @@ mod tests {
         let (mut oversized, _) = processor(Ok(verdict(None, false)), false);
         let mut chunk = Some(Bytes::from(vec![b'x'; RESPONSE_WINDOW_CAP + 1]));
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::FailClose);
+        let mut session = failure_session();
         oversized
             .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
@@ -485,7 +473,7 @@ mod tests {
         );
         let mut input = Some(Bytes::from_static(b"x"));
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::FailClose);
+        let mut session = failure_session();
         oversized_replacement
             .on_chunk(&mut input, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
@@ -498,7 +486,7 @@ mod tests {
         let (mut bad_headers, _) = processor(Ok(verdict(None, true)), false);
         let mut chunk = Some(Bytes::from_static(b"secret"));
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::FailClose);
+        let mut session = failure_session();
         bad_headers
             .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
@@ -514,7 +502,7 @@ mod tests {
         let (mut fail_open, terminal) = processor(Ok(immediate), true);
         let mut original = Some(Bytes::from_static(b"original"));
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::FailOpen);
+        let mut session = failure_session();
         fail_open
             .on_chunk(&mut original, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
@@ -572,7 +560,7 @@ mod tests {
             let (mut processor, _) = processor(Ok(verdict), false);
             let mut chunk = Some(Bytes::from_static(b"unreleased"));
             let mut sink = ResponseBodySink::new();
-            let mut session = failure_session(DyeOutcome::FailClose);
+            let mut session = failure_session();
             processor
                 .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
                 .await;
@@ -598,7 +586,7 @@ mod tests {
         let (mut processor, _) = processor(Ok(response), false);
         let mut chunk = Some(Bytes::from_static(b"original"));
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::FailClose);
+        let mut session = failure_session();
         processor
             .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
@@ -607,11 +595,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disconnect_fail_open_preserves_window_and_eos_records_success() {
+    async fn disconnect_fail_open_and_eos_never_attempt_response_header_dye() {
         let (mut disconnected, _) = processor(Err(tonic::Status::unavailable("private detail")), true);
         let mut chunk = Some(Bytes::from_static(b"original"));
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::FailOpen);
+        let mut session = failure_session();
         disconnected
             .on_chunk(&mut chunk, false, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
@@ -620,7 +608,7 @@ mod tests {
         let (mut eos, owner) = processor(Ok(verdict(None, false)), false);
         let mut empty = None;
         let mut sink = ResponseBodySink::new();
-        let mut session = failure_session(DyeOutcome::Success);
+        let mut session = failure_session();
         eos.on_chunk(&mut empty, true, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
         assert!(!sink.is_terminated());

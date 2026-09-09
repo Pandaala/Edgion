@@ -24,6 +24,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Dye stage and producer parity](regression-guards/dye-stage-producer-parity.md)
+
 - [Invalid stream GeoIP generation denial and recovery](regression-guards/invalid-stream-geoip-generation-fail-closed.md)
 - [EdgionConfigData partial publication is incremental and atomic](regression-guards/edgion-config-data-incremental-atomic-publication.md)
 - [HTTPRoute Native ExternalAuth Construction Failures Must Seal Fail-Closed — FIXED](regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)

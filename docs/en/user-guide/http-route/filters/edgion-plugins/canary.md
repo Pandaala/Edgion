@@ -86,7 +86,7 @@ With no `activeProfileRef` configured, every request is pinned to the `stable` p
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback, reject]`). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the resolved profile name on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the Canary-specific summary. |
+| `dye` | Object | none | Traffic-tagging headers for `success` and the outcome selected by `onInvalid`, in separate rules. `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the resolved profile name on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the Canary-specific summary. |
 
 ### EdgionConfigDataRef (for `activeProfileRef`)
 
@@ -187,7 +187,7 @@ requestPlugins:
 
 ### Dye Headers
 
-See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs even for `enable: false` and condition-skipped entries), header-name validation, and security guidance. This section covers only what is specific to Canary.
+See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (retained for internal `config.enable: false` and condition-skipped active entries), header-name validation, and security guidance. This section covers only what is specific to Canary.
 
 `dye` is default-off: when omitted, Canary sets no headers and strips nothing. When configured, it tags the request/response with operator-chosen HTTP headers so the backend (or an observer) can see which profile served the request, or which fallback/reject path fired:
 
@@ -201,7 +201,7 @@ requestPlugins:
         - name: X-Served-By
           value: edge-cluster-1      # explicit static value
         - name: X-Edgion-Outcome
-          on: [fallback, reject]     # value omitted => canary:fallback:on-invalid / canary:reject:on-invalid
+          on: [reject]               # onInvalid defaults to reject
     config:
       enable: true
       activeProfile: stable
@@ -217,7 +217,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # upstream sees X-Can
 ```
 
 - An omitted `value` on `success` carries the **resolved profile name** (e.g. `stable`, `canary`).
-- Canary declares `success`, `fallback`, and `reject` dye capabilities — `fallback`/`reject` rules dye the `onInvalid: fallback` / `onInvalid: reject` paths (the plugin's only failure-shaped branches); `enable: false` and no-route never dye, since neither is an outcome.
+- Canary accepts `success` and the outcome selected by `onInvalid`: `fallback` or `reject`, never both for one configuration. Subscribing to the other outcome invalidates the dye plan. Internal `config.enable: false` and no-route emit no outcome; the internal switch retains the active entry's anti-spoof plan. Outer entry `enable: false` remains inert.
 
 ## Behavior Details
 
@@ -257,7 +257,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # upstream sees X-Can
 
 ### Q4: Can I attach per-profile business headers (e.g. a different header value for each profile, not just the resolved profile name)?
 
-**A**: `dye` supports any operator-chosen header name and direction, with either a template value (the shared `${type:name}` engine, `secretRef` excluded) or the plugin-recorded value (omitted `value`) — this covers the common case (`X-Release-Track: <active profile>`) with a fixed name, and the template form covers most custom per-request business headers too. Per-profile override lists (a different `{name, value}` pair configured per profile) remain a deliberate non-goal: the common business case is already covered by the resolved-value default and templates, and per-profile overrides can be added later if a concrete consumer needs them. See [Dye](./dye.md) and the design record [`2026-07-20-entry-level-dye-suite-design.md`](../../../../../../docs/superpowers/specs/2026-07-20-entry-level-dye-suite-design.md) for the full design.
+**A**: `dye` supports any operator-chosen header name and direction, with either a template value (the shared `${type:name}` engine, `secretRef` excluded) or the plugin-recorded value (omitted `value`) — this covers the common case (`X-Release-Track: <active profile>`) with a fixed name, and the template form covers most custom per-request business headers too. Per-profile override lists (a different `{name, value}` pair configured per profile) remain a deliberate non-goal: the common business case is already covered by the resolved-value default and templates, and per-profile overrides can be added later if a concrete consumer needs them. See [Dye](./dye.md) and the design record [`entry-level-dye.md`](../../../../../../skills/01-architecture/02-gateway/entry-level-dye.md) for the full design.
 
 ## Related Docs
 

@@ -3,7 +3,7 @@
 //! One rule shape, two value provenances: omitted `value` renders the
 //! plugin-recorded outcome value; present `value` is an operator template on
 //! the shared `${type:name}` engine (secretRef excluded — client-visible
-//! output). See docs/superpowers/specs/2026-07-20-entry-level-dye-suite-design.md.
+//! output). See skills/01-architecture/02-gateway/entry-level-dye.md.
 
 use super::conditions::PluginConditions;
 use super::plugin_configs::{template_has_secret_ref, CompiledTemplate};
@@ -34,6 +34,17 @@ pub enum DyeOutcome {
     Reject,
     FailOpen,
     FailClose,
+}
+
+/// The configured entry's execution stage, not the dye header direction.
+/// Request entries may own later callbacks (ExtProc); only callbacks before
+/// response-header commit can contribute to their response dye capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DyeStage {
+    Request,
+    UpstreamResponseFilter,
+    UpstreamResponseBodyFilter,
+    UpstreamResponse,
 }
 
 impl DyeOutcome {
@@ -104,7 +115,7 @@ impl DyeSuite {
     ///
     /// `is_request_stage`: entry sits in a request-stage array (request-direction
     /// rules are meaningless elsewhere — headers already sent upstream).
-    /// `capabilities`: outcomes the plugin type declares it records.
+    /// `capabilities`: renderable outcomes resolved for the entry's stage and config.
     /// `key_header_names`: the plugin's own header-typed key sources
     /// (request-direction collision with the anti-spoof strip).
     pub fn validation_error(
@@ -138,8 +149,8 @@ impl DyeSuite {
                 for o in &rule.on {
                     if !capabilities.contains(o) {
                         return Some(format!(
-                            "dye.{}: '{}' declares outcome '{}' which this plugin type never \
-                             records (configured dye would never render)",
+                            "dye.{}: '{}' declares outcome '{}' which this plugin cannot \
+                             render in this stage and configuration (configured dye would never render)",
                             direction,
                             rule.name,
                             o.as_str()

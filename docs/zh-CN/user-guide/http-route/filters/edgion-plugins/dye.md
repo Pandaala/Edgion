@@ -11,23 +11,22 @@
   enable: true
   dye:
     request:
-      - name: X-Release-Track          # 不设置 on => [success]；不设置 value => 插件记录的值
+      - name: X-Release-Track
     response:
       - name: X-Edgion-Outcome
-        on: [fallback, reject]
-      - name: X-Edgion-Degraded
-        on: [fail-open, fail-close]
-        value: degraded                # 运维自定义的静态值覆盖
-        conditions:                    # 可选；与条目级 conditions 复用同一套 PluginConditions 结构
+        on: [reject]
+        value: "selection rejected for ${header:X-Account-Id}"
+        conditions:
           run:
             allOf:
               - type: keyExist
                 key: { type: header, name: X-Debug-Token }
-      - name: X-Edgion-Debug
-        on: [fallback]
-        value: "fallback for ${header:X-Account-Id}"   # 基于共享 ${type:name} 引擎的模板
   config:
-    # ... 插件配置；dye 不嵌套在 config 之下 ...
+    enable: true
+    activeProfile: stable
+    profiles:
+      stable: { name: app-v1 }
+    onInvalid: reject
 ```
 
 `DyeSuite { request: [DyeRule], response: [DyeRule] }`；
@@ -47,19 +46,28 @@
 
 **方向**：`request` 方向的规则在 v1 中只能配置 `on: [success]`——请求方向的失败染色（向上游暴露降级状态）是文档化的未来扩展，目前尚不支持。失败结果只能配置在 `response` 方向的规则上。
 
-## 能力表——哪些插件类型能记录哪些结果
+## 按执行阶段和配置确定能力
 
-配置一个插件类型从不记录的结果是准入错误（在 Controller 与 Gateway 编译阶段均会拒绝），而不是一个静默永不出现的请求头：
+Controller 和 Gateway 共用 `EdgionPlugin::dye_capabilities(DyeStage)`。
+不支持的结果会报配置错误，并停止生成该条目的**染色计划**；不会仅因染色错误就禁用插件或拒绝请求。
 
-| 插件 | 可染色的结果 |
+| 插件 | 支持的阶段与结果 |
 |---|---|
-| `Canary`、`DynamicInternalUpstream`、`DynamicExternalUpstream`、`DirectEndpoint` | `success`、`fallback`、`reject` |
-| `RegionRoute` | `success`、`fallback`（无 `reject`——RegionRoute 在 v1 中没有 `onMissing`/`onNoMatch`/`onInvalid` 这类会走到 reject 的配置路径） |
-| `RateLimitRedis`、`ExtProc`、`Wasm`、`Dsl`、`OpenidConnect` | `fail-open`、`fail-close` |
-| `ForwardAuth`、`LdapAuth` | 仅 `fail-close` 是既定策略（鉴权类插件永不 fail-open） |
-| 其余插件 | 无 |
+| `Canary` | 请求阶段：`success`，以及 `onInvalid` 配置的结果。 |
+| `DynamicInternalUpstream` | 请求阶段：`success`、`onMissing`/`onInvalid` 配置的结果；仅 rules 模式包含 `onNoMatch`。 |
+| `DynamicExternalUpstream`、`DirectEndpoint` | 请求阶段：选择成功，以及适用的 fallback/reject 策略所指定的结果。 |
+| `RegionRoute` | 请求阶段：有路由规则和区域来源时支持 success；有适用的 `overrideRef` 才支持 fallback；不支持 reject。 |
+| `RateLimitRedis` | 请求阶段：`onRedisFailure: Allow` 支持 `fail-open`，`Deny` 支持 `fail-close`。 |
+| `ExtProc` | 请求条目及其挂载的响应头提交前回调：由 `failureModeAllow` 决定失败结果。 |
+| `Wasm` | 请求阶段或上游响应头过滤阶段：由 `failOpen` 决定失败结果；响应体阶段不支持染色。 |
+| `Dsl` | 请求阶段或上游响应头过滤阶段：`deny`/`denyWith` 支持 `fail-close`；`ignore` 还支持 `fail-open`。请求体或扫描器硬错误仍固定 fail-close。 |
+| `OpenidConnect` | 请求阶段：启用 JWKS 验证、nonce 验证或会话续期（`bearerOnly: false`、`renewAccessTokenOnExpiry: true`）时，支持旧缓存 `fail-open` 和不可用 `fail-close`。即使使用 `IntrospectionOnly`，会话刷新等待超时仍可进入 JWKS 路径；introspection 验证本身不产生这两种结果。 |
+| `ForwardAuth`、`LdapAuth` | 请求阶段：依赖失败的 `fail-close`。 |
+| `AiProxy` 和其他插件 | 无条目级染色能力。 |
 
-插件类型到能力的映射实现为 `EdgionPlugin::dye_capabilities`（`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`）——上表须与其保持一致；若两者出现分歧，以代码为准。
+能力描述支持的执行路径，不保证每个请求或脚本都会产生结果。条件、协议限制和 Canary 内部开关可以暂停执行，但保留有效声明。只能订阅有效策略支持的结果，例如 `Wasm failOpen: true` 不能订阅 `fail-close`。
+
+记录结果时响应头必须尚可修改。请求阶段的响应染色先排队，响应头回调直接修改当前响应头。ExtProc 响应体/trailer 结果及 Wasm 响应体观察发生得太晚，不产生响应头染色。响应头提交后的流终止不能替换已发送的状态或补上染色头。
 
 ## Value 的两种来源
 
@@ -78,12 +86,9 @@
 
 ## 防伪造剥离（Anti-spoof strip）
 
-在插件运行之前——早于它的 `enable: false` kill-switch、任何协议限定，以及它自身的条目级 `conditions`——运行时会从入站请求中移除该条目所配置的**请求方向**规则名对应的请求头。这只针对客户端提供的值，是"先剥离、命中后再渲染"的固定顺序，而不是一个开关：
+对于具有有效染色计划的活跃条目，运行时会在插件执行、协议判断和条目条件之前移除配置的**请求方向**头名。每个名称在每个请求中只剥离一次，不会再次删除之前条目写入的网关染色值。
 
-- 剥离**每个请求头名在每个请求中只执行一次**，在流水线中第一个声明该名称的条目处执行——由更早的条目自身的请求方向 dye 规则渲染出来的值，是网关自己写入的，不会被后面共享同一个头名的条目（或后面的运行时层级——route → backend → gateway → global 依次执行）再次剥离；
-- 即使插件被 kill-switch（`enable: false`）关闭，或被它自身的条目级 `conditions` 跳过，剥离依然会执行——conditions 只决定规则是否*渲染*，从不决定剥离是否执行。一个被禁用或被 conditions 跳过的插件，其配置的 dye 名称仍然会从客户端输入中被移除。
-
-这意味着，无论匹配的插件在某次请求中走了哪条路径，客户端都永远无法伪造路由已配置用于染色的名称下的值。
+Canary 内部的 `config.enable: false` 只暂停选路，仍保留剥离。外层条目的 `enable: false` 与 policy Bypass/Block 不同：它们不会编译普通染色计划。无效染色配置也没有计划。被条件跳过的活跃条目仍执行剥离；染色规则条件只控制输出。
 
 ## 请求头名校验
 
@@ -116,4 +121,4 @@
 
 - [Canary](./canary.md)、[Dynamic Upstream](./dynamic-upstream.md)、[Direct Endpoint](./direct-endpoint.md)、[RegionRoute](./region-route.md)——各插件特有的 value 来源与示例。
 - [过滤器总览](../overview.md)
-- 设计文档：[`2026-07-20-entry-level-dye-suite-design.md`](../../../../../../docs/superpowers/specs/2026-07-20-entry-level-dye-suite-design.md)（完整机制、校验与运行时渲染细节）。
+- 设计文档：[`entry-level-dye.md`](../../../../../../skills/01-architecture/02-gateway/entry-level-dye.md)（完整机制、校验与运行时渲染细节）。

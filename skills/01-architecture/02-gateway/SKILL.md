@@ -69,3 +69,7 @@ description: edgion-gateway data plane architecture — Pingora integration, rou
 │  LinkSys (ES, Redis, Etcd, Webhook, File)                    │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+## Entry-level dye
+
+- [Capability, producer ownership, and response-header timing](entry-level-dye.md)

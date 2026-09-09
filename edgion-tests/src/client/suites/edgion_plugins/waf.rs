@@ -4,6 +4,49 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
 
 const HOST: &str = "waf-dynamic.example.com";
+const LISTENER_ATTEMPTS: usize = 20;
+const LISTENER_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+async fn send_waf_request(
+    ctx: &TestContext,
+    version: &str,
+    body: Option<&str>,
+    invalid_response_status: bool,
+    trace_id: Option<&str>,
+) -> Result<reqwest::Response, String> {
+    let url = format!("http://{}:{}/test/waf-dynamic", ctx.target_host, ctx.http_port);
+    let mut last_error = None;
+    for attempt in 1..=LISTENER_ATTEMPTS {
+        let mut request = if body.is_some() {
+            ctx.http_client.post(&url).header("content-type", "text/plain")
+        } else {
+            ctx.http_client.get(&url)
+        };
+        request = request.header("host", HOST).header("x-waf-version", version);
+        if invalid_response_status {
+            request = request.header("x-waf-invalid-status", "trigger");
+        }
+        if let Some(trace_id) = trace_id {
+            request = request
+                .header("x-trace-id", trace_id)
+                .header("access_log", "test_store");
+        }
+        if let Some(body) = body {
+            request = request.body(body.to_string());
+        }
+        match request.send().await {
+            Ok(response) => return Ok(response),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt < LISTENER_ATTEMPTS {
+            tokio::time::sleep(LISTENER_RETRY_DELAY).await;
+        }
+    }
+    Err(format!(
+        "request failed after {LISTENER_ATTEMPTS} attempts: {}",
+        last_error.map_or_else(|| "unknown request error".to_string(), |error| error.to_string())
+    ))
+}
 
 fn request_case(
     name: &'static str,
@@ -15,17 +58,7 @@ fn request_case(
     TestCase::new(name, description, move |ctx: TestContext| {
         Box::pin(async move {
             let start = Instant::now();
-            let url = format!("http://{}:{}/test/waf-dynamic", ctx.target_host, ctx.http_port);
-            let mut request = if body.is_some() {
-                ctx.http_client.post(url).header("content-type", "text/plain")
-            } else {
-                ctx.http_client.get(url)
-            };
-            request = request.header("host", HOST).header("x-waf-version", version);
-            if let Some(body) = body {
-                request = request.body(body);
-            }
-            match request.send().await {
+            match send_waf_request(&ctx, version, body, false, None).await {
                 Ok(response) if response.status().as_u16() == expected_status => TestResult::passed(start.elapsed()),
                 Ok(response) => TestResult::failed(
                     start.elapsed(),
@@ -38,19 +71,7 @@ fn request_case(
 }
 
 async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result<(), String> {
-    let url = format!(
-        "http://{}:{}/test/waf-dynamic/invalid-status",
-        ctx.target_host, ctx.http_port
-    );
-    let response = ctx
-        .http_client
-        .get(url)
-        .header("host", HOST)
-        .header("x-waf-version", "v1")
-        .header("x-trace-id", trace)
-        .header("access_log", "test_store")
-        .send()
-        .await;
+    let response = send_waf_request(ctx, "v1", None, true, Some(trace)).await;
     let mut failures = Vec::new();
     match response {
         Ok(response) => {
@@ -60,7 +81,7 @@ async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result
                     if status != 500 {
                         failures.push(format!("expected wire status 500, got {status}; body={body:?}"));
                     }
-                    for upstream_marker in ["Server: 0.0.0.0:30001", "Path: /test/waf-dynamic/invalid-status"] {
+                    for upstream_marker in ["Server: 0.0.0.0:30001", "Path: /test/waf-dynamic"] {
                         if body.contains(upstream_marker) {
                             failures.push(format!(
                                 "invalid WAF status leaked the upstream response marker {upstream_marker:?}; body={body:?}"
@@ -124,7 +145,7 @@ fn invalid_response_status_case() -> TestCase {
         |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
-                let trace = uuid::Uuid::new_v4().to_string();
+                let trace = format!("waf-invalid-response-status-{}", uuid::Uuid::new_v4());
                 let result = tokio::time::timeout(Duration::from_secs(15), check_invalid_response_status(&ctx, &trace))
                     .await
                     .unwrap_or_else(|_| Err("WAF invalid-status assertions exceeded their deadline".to_string()));

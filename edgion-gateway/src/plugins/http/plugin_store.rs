@@ -787,6 +787,207 @@ mod compile_plugins_tests {
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 
+    #[test]
+    fn dye_stage_policy_and_inert_entries_have_controller_gateway_parity() {
+        use edgion_resources::resources::edgion_plugins::{
+            DyeStage, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
+        };
+        let file = tempfile::Builder::new().suffix(".wasm").tempfile().unwrap();
+        std::fs::write(file.path(), wat::parse_str("(module)").unwrap()).unwrap();
+        for stage in [
+            DyeStage::Request,
+            DyeStage::UpstreamResponseFilter,
+            DyeStage::UpstreamResponseBodyFilter,
+            DyeStage::UpstreamResponse,
+        ] {
+            for fail_open in [false, true] {
+                for outcome in [DyeOutcome::FailOpen, DyeOutcome::FailClose] {
+                    // Disabled, bypassed and blocked entries remain inert for
+                    // dye validation; a policy block still owns its existing denial.
+                    for (enable, policy) in [
+                        (true, None),
+                        (false, None),
+                        (true, Some(PluginPolicyAction::Bypass)),
+                        (true, Some(PluginPolicyAction::Block { status: 403 })),
+                    ] {
+                        let plugin: EdgionPlugin = serde_json::from_value(serde_json::json!({
+                            "type": "Wasm", "config": { "source": { "file": file.path() }, "failOpen": fail_open }
+                        }))
+                        .unwrap();
+                        let dye = Some(DyeSuite {
+                            request: vec![],
+                            response: vec![DyeRule {
+                                name: "X-Dye".into(),
+                                on: vec![outcome],
+                                value: None,
+                                conditions: None,
+                            }],
+                        });
+                        let active = enable && policy.is_none();
+                        let supported = matches!(stage, DyeStage::Request | DyeStage::UpstreamResponseFilter)
+                            && (outcome == DyeOutcome::FailOpen) == fail_open;
+                        let mut resource = EdgionPlugins::new("dye", EdgionPluginsSpec::default());
+                        macro_rules! entry {
+                            ($ty:ident, $field:ident) => {{
+                                let mut entry = $ty::new(plugin);
+                                entry.enable = enable;
+                                entry.policy_action = policy;
+                                entry.dye = dye;
+                                resource.spec.$field = Some(vec![entry]);
+                            }};
+                        }
+                        match stage {
+                            DyeStage::Request => entry!(RequestFilterEntry, request_plugins),
+                            DyeStage::UpstreamResponseFilter => {
+                                entry!(UpstreamResponseFilterEntry, upstream_response_filter_plugins)
+                            }
+                            DyeStage::UpstreamResponseBodyFilter => {
+                                entry!(UpstreamResponseBodyFilterEntry, upstream_response_body_filter_plugins)
+                            }
+                            DyeStage::UpstreamResponse => entry!(UpstreamResponseEntry, upstream_response_plugins),
+                        }
+                        let schema = resource.validate_plugins();
+                        let compiled = compile_plugins(&resource);
+                        assert_eq!(schema, compiled.preparse_errors, "{stage:?} {outcome:?} {fail_open}");
+                        assert_eq!(
+                            schema
+                                .iter()
+                                .any(|e| e.contains("cannot render in this stage and configuration")),
+                            active && !supported
+                        );
+                        let has_plan = match stage {
+                            DyeStage::Request => compiled
+                                .plugin_runtime
+                                .request_plugins_iter()
+                                .any(|p| p.dye_plan().is_some()),
+                            DyeStage::UpstreamResponseFilter => compiled
+                                .plugin_runtime
+                                .upstream_response_plugins_iter()
+                                .any(|p| p.dye_plan().is_some()),
+                            DyeStage::UpstreamResponseBodyFilter => compiled
+                                .plugin_runtime
+                                .upstream_response_body_plugins_iter()
+                                .any(|p| p.dye_plan().is_some()),
+                            DyeStage::UpstreamResponse => compiled
+                                .plugin_runtime
+                                .upstream_response_async_plugins_iter()
+                                .any(|p| p.dye_plan().is_some()),
+                        };
+                        assert_eq!(has_plan, active && supported);
+                        if active && stage != DyeStage::UpstreamResponse {
+                            assert!(
+                                compiled.is_activatable,
+                                "a dye error must not disable the plugin itself"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dye_policy_update_replaces_plan_and_recovers_without_retaining_old_rules() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::DslErrorPolicy;
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "dye".into(),
+            source: Some("return next()".into()),
+            error_policy: Some(DslErrorPolicy::Deny),
+            ..Default::default()
+        }));
+        entry.dye = Some(DyeSuite {
+            request: vec![],
+            response: vec![DyeRule {
+                name: "X-Dye".into(),
+                on: vec![DyeOutcome::FailClose],
+                value: None,
+                conditions: None,
+            }],
+        });
+        let mut resource = dsl_resource(entry);
+        let store = PluginStore::new();
+        let key = "default/dye".to_string();
+        for outcome in [DyeOutcome::FailClose, DyeOutcome::FailOpen, DyeOutcome::FailClose] {
+            resource.spec.request_plugins.as_mut().unwrap()[0]
+                .dye
+                .as_mut()
+                .unwrap()
+                .response[0]
+                .on = vec![outcome];
+            let compiled = compile_plugins(&resource);
+            assert_eq!(resource.validate_plugins(), compiled.preparse_errors);
+            assert!(compiled.is_activatable, "{:?}", compiled.preparse_errors);
+            assert!(!compiled.retain_previous_on_invalid_update);
+            store.apply_delta(
+                HashMap::new(),
+                HashMap::from([(key.clone(), compiled)]),
+                &HashSet::new(),
+            );
+            assert_eq!(
+                store.with_plugin(&key, |p| p
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .any(|f| f.dye_plan().is_some())),
+                Some(outcome == DyeOutcome::FailClose)
+            );
+        }
+    }
+
+    #[test]
+    fn dye_canary_internal_kill_switch_keeps_anti_spoof_plan() {
+        let mut resource: EdgionPlugins = serde_yaml::from_str(include_str!(
+            "../../../../edgion-tests/integration/conf/EdgionPlugins/Canary/20_EdgionPlugins_default_canary-kill-switch-strip.yaml"
+        )).unwrap();
+        let compiled = compile_plugins(&resource);
+        assert!(resource.validate_plugins().is_empty());
+        assert!(compiled.preparse_errors.is_empty());
+        let plan = compiled
+            .plugin_runtime
+            .request_plugins_iter()
+            .next()
+            .unwrap()
+            .dye_plan()
+            .unwrap();
+        assert_eq!(plan.request[0].name, "X-Canary-Active");
+        // The outer switch is different: no entry, no plan and no stripping.
+        resource.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+        let compiled = compile_plugins(&resource);
+        assert_eq!(compiled.plugin_runtime.request_plugins_count(), 0);
+    }
+
+    #[test]
+    fn dye_frozen_named_jump_fixtures_reject_unreachable_subscriptions_consistently() {
+        // D0083 intentionally tightens validation. These frozen broad
+        // subscriptions need fixture alignment before their old end-to-end
+        // outcome/anti-spoof assertions can run under the new contract.
+        let fixtures = [
+            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-fallback.yaml")),
+            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-reject.yaml")),
+            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-fallback.yaml")),
+            (true, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-reject.yaml")),
+        ];
+        for (valid, yaml) in fixtures {
+            let resource: EdgionPlugins = serde_yaml::from_str(yaml).unwrap();
+            let errors = resource.validate_plugins();
+            let compiled = compile_plugins(&resource);
+            assert_eq!(errors, compiled.preparse_errors);
+            assert_eq!(errors.is_empty(), valid, "{:?}: {errors:?}", resource.metadata.name);
+            if !valid {
+                assert!(errors
+                    .iter()
+                    .any(|e| e.contains("cannot render in this stage and configuration")));
+            }
+            assert!(compiled.is_activatable, "only dye is rejected");
+            assert_eq!(
+                compiled
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .any(|p| p.dye_plan().is_some()),
+                valid
+            );
+        }
+    }
+
     fn header_modifier() -> EdgionPlugin {
         EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
             set: Some(vec![HTTPHeader {

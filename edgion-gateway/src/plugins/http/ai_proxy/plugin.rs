@@ -23,7 +23,7 @@ use crate::ai::{
     AiProxyError, ReadyAiAttemptPlan,
 };
 use crate::backends::policy::backend_traffic::get_backend_traffic_policy_store;
-use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::routes::http::match_unit::CompiledBackendTarget;
 
 const DEFAULT_MAXIMUM_REQUEST_DURATION: Duration = Duration::from_secs(300);
@@ -495,13 +495,11 @@ impl AiProxy {
                     None
                 }
                 QuotaAdmission::DependencyBypass => {
-                    session.record_outcome(DyeOutcome::FailOpen, "quota-redis-unreachable");
                     log.push_err("quota-redis-fail-open");
                     quota_status = Some("fail_open");
                     None
                 }
                 QuotaAdmission::IdentityMissing => {
-                    session.record_outcome(DyeOutcome::FailClose, "quota-identity-missing");
                     return Self::reject(session, log, "quota-identity-missing", AiProxyError::QuotaUnavailable);
                 }
                 QuotaAdmission::Exhausted(retry_after) => match quota.on_exceeded() {
@@ -546,13 +544,11 @@ impl AiProxy {
                                 None
                             }
                             QuotaAdmission::DependencyBypass => {
-                                session.record_outcome(DyeOutcome::FailOpen, "quota-redis-unreachable");
                                 log.push_err("quota-redis-fail-open");
                                 quota_status = Some("fail_open");
                                 None
                             }
                             QuotaAdmission::IdentityMissing => {
-                                session.record_outcome(DyeOutcome::FailClose, "quota-identity-missing");
                                 return Self::reject(
                                     session,
                                     log,
@@ -564,7 +560,6 @@ impl AiProxy {
                                 return reject_quota_exhausted(session, log, second_retry_after);
                             }
                             QuotaAdmission::DependencyFailed => {
-                                session.record_outcome(DyeOutcome::FailClose, "quota-redis-unreachable");
                                 return Self::reject(session, log, "quota-unavailable", AiProxyError::QuotaUnavailable);
                             }
                         };
@@ -584,7 +579,6 @@ impl AiProxy {
                     }
                 },
                 QuotaAdmission::DependencyFailed => {
-                    session.record_outcome(DyeOutcome::FailClose, "quota-redis-unreachable");
                     return Self::reject(session, log, "quota-unavailable", AiProxyError::QuotaUnavailable);
                 }
             }
@@ -754,7 +748,6 @@ fn reject_quota_exhausted(
     log: &mut PluginLog,
     retry_after: Duration,
 ) -> PluginRunningResult {
-    session.record_outcome(DyeOutcome::Reject, "quota-exhausted");
     let retry_seconds = retry_after
         .as_secs()
         .saturating_add(u64::from(retry_after.subsec_nanos() > 0))

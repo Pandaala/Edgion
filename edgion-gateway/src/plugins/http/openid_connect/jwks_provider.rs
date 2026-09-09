@@ -397,6 +397,16 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         *self.discovery_failure.write().await = None;
         *self.discovery_doc.write().await = Some(Arc::new(doc));
     }
+
+    /// Seed an expired set so callers can exercise stale fallback without network I/O.
+    #[cfg(test)]
+    pub async fn seed_stale_jwks(&self, set: JwkSet) {
+        *self.jwks_state.write().await = JwksState {
+            set: Some(Arc::new(set)),
+            expires_at: Some(Instant::now()),
+            last_refresh_at: None,
+        };
+    }
 }
 
 #[cfg(test)]
