@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0214 committed locally as `aa178a25`; external updates incorporated through `256733d7` |
-| Coverage | 546 current Gateway files: 222 changed, 171 examined-no-change, 13 deferred, 140 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
-| Active batch | B0215 UDP manager verified examined-no-change; committing locally. D0119 separately tracks independently diagnosed pre-existing context layout failures. |
-| Analysis queue | B0216 table and plan-first B0217 Gateway identity are analysis-ready; B0218 runtime handler analysis is running. D0114 remains a high-severity attachment-projection defect; D0120–D0122 separately track UDP retirement, sender validation and shutdown issues. D0118 defers malformed-input wire coverage. |
+| Campaign status | in-progress; B0215 committed locally as `f01f3c86`; external updates incorporated through `256733d7` |
+| Coverage | 546 current Gateway files: 222 changed, 172 examined-no-change, 13 deferred, 139 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
+| Active batch | B0216 UDP table verified examined-no-change; committing locally. D0119 separately tracks independently diagnosed pre-existing context layout failures. |
+| Analysis queue | Plan-first B0217 Gateway identity, deferred B0218 handler and no-change B0219 matching facade are analysis-ready. D0123 tracks coalesced Gateway add divergence separately from D0003; known TLS/UDP lifecycle findings remain open. |
 | Integration freeze | 3,120 files. External `7534a9bf` README, `bfc2691e` four existing/six added paths, and `264847df` one new test were reconciled individually after byte/mode verification. No campaign integration-test edit occurred. |
 
 ## AI guide summary

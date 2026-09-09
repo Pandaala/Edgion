@@ -197,3 +197,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Retire UDP sessions by generation (D0120) | pending | [task](../../../todo/retire-udp-sessions-by-generation.md) |
 | Validate UDP upstream response source (D0121) | pending | [task](../../../todo/validate-udp-upstream-response-source.md) |
 | Wire UDP listener process shutdown (D0122) | pending | [task](../../../todo/wire-udp-listener-process-shutdown.md) |
+| Replace Gateway generations on coalesced add (D0123) | pending | [task](../../../todo/replace-gateway-generations-on-coalesced-add.md) |

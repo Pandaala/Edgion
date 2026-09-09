@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: committed locally; examined-no-change.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/udp/routes_mgr.rs`.
 - Baseline: `aec5caf5`.
@@ -25,4 +25,4 @@
 
 - Original analyst revalidated at `aa178a25`: target, shared helpers and publication callers unchanged; B0212 bookkeeping and B0214 knowledge updates preserve the manager/session boundary. Fresh analyst manager tests 6/6 passed without warnings.
 - Independent reviewer: `b0215_manager_review`; Approved at `aa178a25`, target blob unchanged. Personally verified shared lock/caller ownership, canonical clear/sweep and per-listener publication, real pinned-session consumers and admin stats. Fresh independent manager 6/6 and handler 10/10 passed. No cross-listener atomicity or session revocation claim; no new target-local issue.
-- No source/integration edits. Fresh coordinator manager 6/6, handler 10/10, UDP 34/34, workspace format/check/Clippy, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Commit pending; no push.
+- No source/integration edits. Fresh coordinator manager 6/6, handler 10/10, UDP 34/34, workspace format/check/Clippy, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Commit: `f01f3c86`; no push.

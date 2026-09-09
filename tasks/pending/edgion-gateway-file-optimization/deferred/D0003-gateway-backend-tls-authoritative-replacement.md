@@ -11,7 +11,7 @@
 
 `GatewayHandler::full_set` clears and rebuilds the authoritative Gateway store, but it updates `GatewayBackendTlsStore` only for Gateway keys present in the incoming snapshot. A Gateway omitted from a smaller or empty authoritative snapshot is therefore not removed from the backend TLS identity store. Its resolved client-certificate Secret remains resident and the admin store count remains stale until an explicit later remove or same-key update occurs.
 
-Partial add, update, and remove events do maintain the TLS store correctly. Production mutations are serialized by the Gateway store write guard, so this is an authoritative replacement gap rather than a concurrent-writer lost update.
+Ordinary non-duplicate add, update, and remove paths perform the corresponding TLS identity mutation. This does not establish consistency for an add replacing an existing key: B0218 found a compressed delete/add can update identity while retaining the old Gateway, separately tracked in [D0123](D0123-gateway-coalesced-add-generation.md). Production mutations are serialized by the Gateway store write guard; D0003 remains the authoritative full-set replacement gap, not a concurrent-writer lost update or the separate delta-generation defect.
 
 ## Why deferred
 

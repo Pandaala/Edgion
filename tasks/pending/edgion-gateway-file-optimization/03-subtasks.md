@@ -652,10 +652,10 @@
 | `edgion-gateway/src/routes/udp/mod.rs` | `routes-shared` | source | deferred | B0213: independent approval of D0122 shutdown ownership task; UDP 34/34 |
 | `edgion-gateway/src/routes/udp/route_unit.rs` | `routes-shared` | source | examined-no-change | B0214: runtime retained; owning plugin-key/inactivity knowledge corrected with independent LGTM |
 | `edgion-gateway/src/routes/udp/routes_mgr.rs` | `routes-shared` | source | examined-no-change | B0215: independent approval of canonical serialized publication/retained-handle cleanup; manager 6/6, handler 10/10 |
-| `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | analysis-ready | B0216: retain deterministic compiled-unit table and route-count semantics |
+| `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | examined-no-change | B0216: deterministic owned-unit lookup and route-count contract retained; independent approval, table 4/4 |
 | `edgion-gateway/src/runtime/gateway_info.rs` | `runtime` | source | analysis-ready | B0217: plan-first cached immutable Gateway key with exact consumer scope |
-| `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | analysis-in-progress | B0218: Gateway update publication and derived listener state analysis |
-| `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | analysis-ready | B0218: defer coalesced-add generation divergence D0123; D0003 remains separate |
+| `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | analysis-ready | B0219: retain declaration-only facade and consumed matching exports |
 | `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | pending | — |
 | `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | — |
