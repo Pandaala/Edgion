@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0202 committed locally as `02bc7699`; external updates incorporated through `bfc2691e` |
-| Coverage | 546 current Gateway files: 218 changed, 168 examined-no-change, 11 deferred, 149 non-terminal; 3 historical rows are removed |
-| Active batch | B0203 verified after external-sync reconciliation; exact staging and commit gate |
-| Analysis queue | B0204 TLS table is analysis-ready, complex plan-first; B0205 TLS module is analysis-ready, proposed defer via D0115. D0114 remains a separate high-severity attachment-projection defect. |
-| Integration freeze | 3,119 files. External `7534a9bf` README and `bfc2691e` four existing/six added paths were reconciled individually after old-baseline/current-HEAD byte and mode verification. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0204 verified for local commit; external updates incorporated through `256733d7` |
+| Coverage | 546 current Gateway files: 217 changed, 167 examined-no-change, 11 deferred, 151 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
+| Active batch | B0204 TLS table verification complete; committing locally before B0205 promotion |
+| Analysis queue | B0205 TLS module is analysis-ready, proposed defer via D0115; B0206 passthrough is analysis-ready, proposed ownership cleanup with separate D0116/D0117. D0114 remains a high-severity attachment-projection defect. |
+| Integration freeze | 3,120 files. External `7534a9bf` README, `bfc2691e` four existing/six added paths, and `264847df` one new test were reconciled individually after byte/mode verification. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 
@@ -29,7 +29,7 @@ The user clarified that every completed batch must be committed locally, never p
 - Prefer small local extractions and existing shared mechanisms over new frameworks or broad redesigns.
 - Use an implementation subagent for each batch and a separate review subagent after implementation.
 - Do not use the interactive `fix-issue-cn` workflow.
-- Do not modify or delete existing integration-test files. New integration-test coverage may be added only when a behavior change genuinely requires it.
+- Do not modify or delete existing integration-test files. Per the user's additional constraint, record needed new integration coverage as deferred issues for later implementation.
 - Record every completed batch in `07-changelog.md`, then create a local commit. Never push.
 - Treat `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, and `waf-architecture-and-multi-pattern-matching.md` as protected user-owned paths.
 

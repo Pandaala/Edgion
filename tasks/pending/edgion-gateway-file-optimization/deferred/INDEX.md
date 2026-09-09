@@ -152,7 +152,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
 | Isolate Wasm host panics at VM boundaries | completed | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
-| Offload Wasm OCI manifest parsing and archive extraction | pending | [task](../../../todo/offload-wasm-oci-manifest-parsing-and-extraction.md) |
+| Offload Wasm OCI manifest parsing and archive extraction (D0075) | completed externally in 256733d7 | [maintained knowledge](../../../../skills/04-review/wasm/intentional-design/bounded-oci-artifact-memory-cache.md#manifest-and-archive-cpu-boundary-d0075) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |
 | Emit bounded diagnostics for outbound warnIfMissing fields | pending | [task](../../../todo/outbound-warn-if-missing-diagnostics.md) |
@@ -190,3 +190,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Refresh L4 connect-timeout knowledge | pending | [task](../../../todo/refresh-l4-connect-timeout-knowledge.md) |
 | Scope TLSRoute effective hostnames to attachments | pending (high) | [task](../../../todo/scope-tlsroute-effective-hostnames-to-attachments.md) |
 | Remove TLSRoute Stage-1 fallback coherently | pending | [task](../../../todo/remove-tlsroute-stage1-fallback-coherently.md) |
+| Apply sensitive mode to TLS log surfaces | pending | [task](../../../todo/apply-sensitive-mode-to-tls-log-surfaces.md) |
+| Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |

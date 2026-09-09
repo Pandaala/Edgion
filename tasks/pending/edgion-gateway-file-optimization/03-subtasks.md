@@ -326,8 +326,8 @@
 | `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
-| `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained canonical RedisLinkClient execution and typed reply/failure boundaries |
-| `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | changed | `B0061`: preserved partial TokenBucket refills across denied weighted requests |
+| `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | pending | Reopened after external `264847df`; historical B0061 no-change retained |
+| `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | pending | Reopened after external `264847df`; historical B0061 TokenBucket refill fix retained |
 | `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | REQ-BODY-CORE-001 follow-up: replace the 32-bit-truncating physical-cap `as usize` cast during the full plugin audit |
@@ -482,7 +482,7 @@
 | `edgion-gateway/src/plugins/http/rate_limit/mod.rs` | `plugins-http-rate-limit` | source | examined-no-change | B0096 |
 | `edgion-gateway/src/plugins/http/rate_limit/plugin.rs` | `plugins-http-rate-limit` | source | changed | B0096 |
 | `edgion-gateway/src/plugins/http/rate_limit_redis/mod.rs` | `plugins-http-rate-limit-redis` | source | examined-no-change | B0097 |
-| `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | changed | B0097 |
+| `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | pending | Reopened after external `264847df`; historical B0097 retained |
 | `edgion-gateway/src/plugins/http/real_ip/mod.rs` | `plugins-http-real-ip` | source | examined-no-change | B0098 |
 | `edgion-gateway/src/plugins/http/real_ip/plugin.rs` | `plugins-http-real-ip` | source | changed | B0098 |
 | `edgion-gateway/src/plugins/http/region_route/log_consts.rs` | `plugins-http-region-route` | source | examined-no-change | B0099 |
@@ -640,9 +640,9 @@
 | `edgion-gateway/src/routes/tcp/routes_mgr.rs` | `routes-shared` | source | changed | B0169: retained nonempty manager tests for shared L4 removal |
 | `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | `routes-shared` | source | examined-no-change | B0202: runtime retained; owning ListenerKey/order/compilation documentation corrected |
 | `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | `routes-shared` | source | changed | B0203: preserve incoming TLS schema Arcs through full/delta compilation |
-| `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | analysis-ready | B0204: borrow hostnames and publish only match winners; plan-first |
+| `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | changed | B0204: borrowed hostname inputs and winner-only published tables; independent LGTM, TLS 48/48 and routes 591/591 |
 | `edgion-gateway/src/routes/tls/mod.rs` | `routes-shared` | source | analysis-ready | B0205: defer coordinated Stage-1 fallback removal while tests remain frozen |
-| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | analysis-ready | B0206: shorten table/ClientHello ownership and borrow endpoint address |
 | `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | pending | — |

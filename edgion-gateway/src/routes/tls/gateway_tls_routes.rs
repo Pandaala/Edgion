@@ -23,11 +23,10 @@ pub struct TlsRouteTable {
     /// Entries are gateway-side [`TlsRouteUnit`]s. A route serving multiple SNI
     /// hostnames shares ONE `Arc<TlsRouteUnit>` across all its buckets so the
     /// per-route WRR cursor is not split per hostname.
-    host_map: HashHost<Vec<Arc<TlsRouteUnit>>>,
+    host_map: HashHost<Arc<TlsRouteUnit>>,
 
-    /// Routes with no hostname specified.
-    /// Reserved for future use; not currently populated.
-    catch_all_routes: Option<Vec<Arc<TlsRouteUnit>>>,
+    /// Selected fallback route with no effective hostname restriction.
+    catch_all_route: Option<Arc<TlsRouteUnit>>,
 }
 
 /// Deterministic precedence for TLSRoutes colliding on the same hostname.
@@ -72,15 +71,15 @@ impl TlsRouteTable {
     pub fn new() -> Self {
         Self {
             host_map: HashHost::new(),
-            catch_all_routes: None,
+            catch_all_route: None,
         }
     }
 
     /// Build a TlsRouteTable from a flat set of routes belonging to one port.
     ///
     /// When the controller has set `resolved_listeners`, we use
-    /// `effective_hostnames` (the route×listener intersection) for bucketing.
-    /// Otherwise we fall back to raw `spec.hostnames` for backward compat.
+    /// `effective_hostnames` (the current route-global projection) for bucketing.
+    /// Otherwise we use raw `spec.hostnames` for unprocessed inputs.
     /// A processed route with explicit hostnames but an empty intersection must
     /// not become catch-all.
     pub fn from_units(units: &HashMap<String, Arc<TlsRouteUnit>>) -> Self {
@@ -94,12 +93,11 @@ impl TlsRouteTable {
             // preserved across unrelated route-table rebuilds.
             let route = &unit.route;
 
-            let hostnames: Vec<String> = if route.spec.resolved_listeners.is_some() {
-                // Controller has processed this route; use the computed intersection.
-                route.spec.effective_hostnames.as_ref().cloned().unwrap_or_default()
+            let hostnames = if route.spec.resolved_listeners.is_some() {
+                // Controller has processed this route; use its computed projection.
+                route.spec.effective_hostnames.as_deref().unwrap_or_default()
             } else {
-                // Legacy path: route not yet processed by the new controller.
-                route.spec.hostnames.as_ref().cloned().unwrap_or_default()
+                route.spec.hostnames.as_deref().unwrap_or_default()
             };
 
             if hostnames.is_empty() {
@@ -112,22 +110,26 @@ impl TlsRouteTable {
                 continue;
             }
 
-            for hostname in &hostnames {
+            for hostname in hostnames {
                 let lower = hostname.to_ascii_lowercase();
                 buckets.entry(lower).or_default().push(unit.clone());
             }
         }
 
-        let mut host_map: HashHost<Vec<Arc<TlsRouteUnit>>> = HashHost::new();
+        let mut host_map = HashHost::new();
         for (hostname, mut route_vec) in buckets {
             if route_vec.len() > 1 {
-                // Several TLSRoutes claim the same hostname on this listener. `match_route`
-                // returns the first, so without a stable sort the chosen route would depend
+                // Several TLSRoutes claim the same hostname on this listener. We select
+                // the first, so without a stable sort the chosen route would depend
                 // on HashMap iteration order. Resolve by Gateway API precedence and warn.
                 route_vec.sort_by(tls_route_precedence);
                 warn_tls_route_collision(&hostname, &route_vec);
             }
-            host_map.insert(&hostname, route_vec);
+            // Keep candidates only while resolving precedence and warning. The canonical
+            // unit cache retains configured runners-up for the next listener rebuild.
+            if let Some(winner) = route_vec.into_iter().next() {
+                host_map.insert(&hostname, winner);
+            }
         }
 
         if catch_all.len() > 1 {
@@ -137,7 +139,7 @@ impl TlsRouteTable {
 
         Self {
             host_map,
-            catch_all_routes: if catch_all.is_empty() { None } else { Some(catch_all) },
+            catch_all_route: catch_all.into_iter().next(),
         }
     }
 
@@ -149,23 +151,14 @@ impl TlsRouteTable {
     pub fn match_route(&self, sni_hostname: &str) -> Option<Arc<TlsRouteUnit>> {
         // Case normalization is handled inside HashHost::get() — no need to
         // pre-lowercase here. Callers may pass raw SNI strings.
-        if let Some(routes) = self.host_map.get(sni_hostname) {
-            if let Some(route) = routes.first() {
-                return Some(route.clone());
-            }
-        }
-
-        if let Some(routes) = &self.catch_all_routes {
-            if let Some(route) = routes.first() {
-                return Some(route.clone());
-            }
-        }
-
-        None
+        self.host_map
+            .get(sni_hostname)
+            .or(self.catch_all_route.as_ref())
+            .cloned()
     }
 
     pub fn has_catch_all(&self) -> bool {
-        self.catch_all_routes.is_some()
+        self.catch_all_route.is_some()
     }
 }
 
@@ -293,5 +286,169 @@ mod tests {
             Arc::ptr_eq(&a, &b),
             "both SNI hostname buckets must reference the same unit Arc (shared WRR cursor)"
         );
+        assert!(Arc::ptr_eq(&a.backend_finder, &b.backend_finder));
+    }
+
+    fn slot_route(namespace: &str, name: &str, hostname: Option<&str>) -> TLSRoute {
+        let mut route = create_test_tls_route(namespace, name, "unused.example.com");
+        route.spec.hostnames = hostname.map(|host| vec![host.to_string()]);
+        route
+    }
+
+    #[test]
+    fn test_exact_longest_wildcard_and_catch_all_priority() {
+        let units = [
+            ("exact", Some("API.DEEP.EXAMPLE.COM")),
+            ("specific", Some("*.deep.example.com")),
+            ("broad", Some("*.example.com")),
+            ("fallback", None),
+        ]
+        .into_iter()
+        .map(|(name, host)| {
+            let unit = unit(slot_route("default", name, host));
+            (unit.key_name(), unit)
+        })
+        .collect();
+        let table = TlsRouteTable::from_units(&units);
+        for (sni, expected) in [
+            ("api.deep.example.com", "exact"),
+            ("A.B.DEEP.EXAMPLE.COM", "specific"),
+            ("deep.example.com", "broad"),
+            ("a.b.example.com", "broad"),
+            ("example.com", "fallback"),
+            ("unrelated.test", "fallback"),
+        ] {
+            assert_eq!(
+                table.match_route(sni).unwrap().route.metadata.name.as_deref(),
+                Some(expected)
+            );
+        }
+        assert!(table.has_catch_all());
+    }
+
+    #[test]
+    fn test_collision_precedence_for_every_slot_kind() {
+        use chrono::{TimeZone, Utc};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+
+        let older = Some(Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()));
+        let newer = Some(Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()));
+        for host in [Some("shared.example.com"), Some("*.example.com"), None] {
+            for (winner_ns, winner_name, winner_ts, loser_ns, loser_name, loser_ts) in [
+                ("z", "z", older.clone(), "a", "a", newer.clone()),
+                ("z", "z", None, "a", "a", older.clone()),
+                ("a", "z", None, "b", "a", None),
+                ("a", "a", older.clone(), "a", "b", older.clone()),
+            ] {
+                let mut winner = slot_route(winner_ns, winner_name, host);
+                winner.metadata.creation_timestamp = winner_ts;
+                let winner = unit(winner);
+                let mut loser = slot_route(loser_ns, loser_name, host);
+                loser.metadata.creation_timestamp = loser_ts;
+                let loser = unit(loser);
+                for ordered in [[winner.clone(), loser.clone()], [loser.clone(), winner.clone()]] {
+                    let units = ordered.into_iter().map(|unit| (unit.key_name(), unit)).collect();
+                    let table = TlsRouteTable::from_units(&units);
+                    assert!(Arc::ptr_eq(&table.match_route("shared.example.com").unwrap(), &winner));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_raw_and_effective_hostname_inputs() {
+        // This checks consumption of the existing route-global projection, not
+        // attachment-specific correctness (tracked separately).
+        for processed in [false, true] {
+            for raw in [None, Some(vec![]), Some(vec!["raw.example.com".to_string()])] {
+                for effective in [None, Some(vec![]), Some(vec!["effective.example.com".to_string()])] {
+                    let mut route = slot_route("default", "route", None);
+                    route.spec.hostnames = raw.clone();
+                    route.spec.effective_hostnames = effective.clone();
+                    route.spec.resolved_listeners = processed.then(Vec::new);
+                    let unit = unit(route);
+                    let units = HashMap::from([(unit.key_name(), unit)]);
+                    let table = TlsRouteTable::from_units(&units);
+                    let has_raw = raw.as_ref().is_some_and(|hosts| !hosts.is_empty());
+                    let has_effective = effective.as_ref().is_some_and(|hosts| !hosts.is_empty());
+                    let catch_all = !has_raw && (!processed || !has_effective);
+                    assert_eq!(table.has_catch_all(), catch_all);
+                    assert_eq!(table.match_route("unrelated.test").is_some(), catch_all);
+                    assert_eq!(
+                        table.match_route("raw.example.com").is_some(),
+                        catch_all || (!processed && has_raw)
+                    );
+                    assert_eq!(
+                        table.match_route("effective.example.com").is_some(),
+                        catch_all || (processed && has_effective)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_published_slots_do_not_retain_losers() {
+        for host in [Some("shared.example.com"), Some("*.example.com"), None] {
+            let winner = unit(slot_route("default", "a", host));
+            let loser = unit(slot_route("default", "z", host));
+            let winner_weak = Arc::downgrade(&winner);
+            let loser_weak = Arc::downgrade(&loser);
+            let units = HashMap::from([(winner.key_name(), winner), (loser.key_name(), loser)]);
+            let table = TlsRouteTable::from_units(&units);
+            // Configured losers remain owned by the canonical cache in production.
+            // Remove the input owners here to isolate the published table's ownership.
+            drop(units);
+            assert!(loser_weak.upgrade().is_none());
+            assert!(Arc::ptr_eq(
+                &table.match_route("shared.example.com").unwrap(),
+                &winner_weak.upgrade().unwrap()
+            ));
+            drop(table);
+            assert!(winner_weak.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn test_rebuild_promotes_runner_up_without_mutating_old_snapshot() {
+        use crate::routes::tls::routes_mgr::TlsRouteManager;
+
+        for host in [Some("shared.example.com"), Some("*.example.com"), None] {
+            let manager = TlsRouteManager::new();
+            let winner = unit(slot_route("default", "a", host));
+            let loser = unit(slot_route("default", "z", host));
+            let winner_weak = Arc::downgrade(&winner);
+            let loser_weak = Arc::downgrade(&loser);
+            let winner_key = winner.key_name();
+            let mut units = HashMap::from([(winner_key.clone(), winner), (loser.key_name(), loser)]);
+            manager.rebuild(&units);
+            let old = Arc::clone(&manager.load_route_table());
+            units.remove(&winner_key);
+            assert_eq!(
+                manager
+                    .load_route_table()
+                    .match_route("shared.example.com")
+                    .unwrap()
+                    .key_name(),
+                "default/a"
+            );
+            manager.rebuild(&units);
+            let new = Arc::clone(&manager.load_route_table());
+            assert_eq!(old.match_route("shared.example.com").unwrap().key_name(), "default/a");
+            assert!(Arc::ptr_eq(
+                &new.match_route("shared.example.com").unwrap(),
+                &loser_weak.upgrade().unwrap()
+            ));
+            units.clear();
+            manager.rebuild(&units);
+            assert!(manager.load_route_table().match_route("shared.example.com").is_none());
+            assert!(winner_weak.upgrade().is_some());
+            assert!(loser_weak.upgrade().is_some());
+            drop(old);
+            assert!(winner_weak.upgrade().is_none());
+            assert!(loser_weak.upgrade().is_some());
+            drop(new);
+            assert!(loser_weak.upgrade().is_none());
+        }
     }
 }

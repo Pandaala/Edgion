@@ -31,8 +31,8 @@ edgion-gateway/src/routes/tls/
 
 ```rust
 pub struct TlsRouteTable {
-    host_map: HashHost<Vec<Arc<TLSRoute>>>,
-    catch_all_routes: Option<Vec<Arc<TLSRoute>>>,
+    host_map: HashHost<Arc<TlsRouteUnit>>,
+    catch_all_route: Option<Arc<TlsRouteUnit>>,
 }
 ```
 
@@ -40,13 +40,31 @@ Match priority:
 
 1. **Exact hostname match**: `HashHost` exact lookup, O(1).
 2. **Wildcard hostname match**: `HashHost` handles wildcards such as `*.example.com` internally and returns the most specific wildcard match.
-3. **Catch-all**: routes without `spec.hostnames` serve as a fallback.
+3. **Catch-all**: eligible routes without a hostname restriction serve as a fallback.
 
-`TlsRouteTable::from_routes` build process:
+`TlsRouteTable::from_units` build process:
 
-1. Iterate all routes and bucket by `spec.hostnames` (lowercased).
-2. Routes without a hostname go into `catch_all_routes`.
-3. Insert the bucketed result into the `HashHost` matcher.
+1. Borrow hostname slices from each compiled unit's schema: use `effective_hostnames`
+   when `resolved_listeners` is present, otherwise use raw `spec.hostnames`.
+   Allocate lowercased bucket keys without first copying the input strings.
+2. Empty selected hostnames enter the temporary catch-all candidates, except a
+   processed route with explicit nonempty raw hostnames and an empty effective
+   intersection, which is excluded rather than widened to catch-all.
+3. Sort colliding candidate vectors by oldest creation timestamp, namespace, then
+   name; preserve config-rebuild collision warnings. Publish only the winner Arc
+   per hostname/catch-all. The canonical unit cache still retains configured
+   runners-up, allowing the next rebuild to promote one after winner removal.
+
+All SNI slots selecting one route share its compiled unit and backend selector.
+`HashHost::get` preserves Gateway API multi-depth wildcard matching, not the
+single-label certificate-selection rule. Old snapshots retain their selected
+units until their readers release them; only the outer manager publishes via
+`ArcSwap`.
+
+The effective-hostname input is currently a route-global projection. This table
+does not repair its missing per-attachment association; the known isolation and
+catch-all limitation remains tracked in
+[the attachment-scoping task](../../../../tasks/todo/scope-tlsroute-effective-hostnames-to-attachments.md).
 
 ## Route management, bucketing, rebuild, ConfHandler
 

@@ -1,6 +1,8 @@
 # B0112 — Wasm OCI Manifest Parsing and Extraction
 
 ## Scope
+
+- Historical D0075 deferral was resolved externally in `256733d7`; current evidence lives in `skills/04-review/wasm/intentional-design/bounded-oci-artifact-memory-cache.md`. Original batch decisions and test results below remain historical; no fresh Wasm execution is claimed.
 - Baseline: `93ccf75f`
 - Pipeline state: commit-ready
 - Active anchor crate: `edgion-gateway`

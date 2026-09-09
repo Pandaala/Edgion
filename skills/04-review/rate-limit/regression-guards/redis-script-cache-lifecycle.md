@@ -33,11 +33,16 @@ The corrected source is
 policies retain their existing contracts. The shared LinkSys pool still routes
 each operation, including fallback, by its supplied keys.
 
-This follows the canonical shared Redis executor in
-`skills/01-architecture/00-common/05-unification-points.md`. The investigated
-precedent is Traefik v3.7.12 with go-redis v9.21.0's local script SHA and targeted
-cache-miss fallback; the research report is
-[Redis rate-limit practices](../../../../tasks/todo/redis-rate-limit-practices/README.md).
+This follows the canonical
+[shared Redis executor](../../../01-architecture/00-common/05-unification-points.md).
+The committed
+[script lifecycle integration test](../../../../edgion-tests/tests/redis_script_lifecycle.rs)
+provides executable coverage of the cache lifecycle contract.
+
+The original change attributed its design precedent to a
+`redis-rate-limit-practices` research report. That report is not included in this
+repository; its external version comparisons are not independently verifiable
+from the committed evidence and are not a correctness premise for this guard.
 
 ## Alternatives and limits
 

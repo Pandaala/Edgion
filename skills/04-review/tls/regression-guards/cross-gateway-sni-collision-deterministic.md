@@ -17,8 +17,9 @@ the matcher slot holds several entries and the selection used to follow upstream
 HashMap iteration order (it could flip on every rebuild/restart, silently). All
 three affected matchers now sort each colliding slot at **rebuild time** by the
 Gateway API conflict-resolution rule and emit a config-sync `tracing::warn!`. The
-data-plane lookups (`match_sni` / `match_route`) are unchanged — they still return
-`first()`, which is now a **deterministic** winner.
+data-plane lookups select that **deterministic** winner. TLSRoute now publishes
+only the selected unit Arc; its temporary build-time candidates still use the
+same sort and warning sequence.
 
 **Tiebreak = Gateway API precedence: oldest `creationTimestamp` wins, then namespace,
 then name** (then `listener_name` for the Gateway-listener case). This matches the
@@ -40,9 +41,13 @@ Three matchers, all fixed the same way:
    membership or the selected resource changes; renewal alone does not re-warn.
    The immutable candidate vector stays ordered for `cert_matcher.rs::match_sni`.
 3. **`TlsRouteTable`** (`edgion-gateway/src/routes/tls/gateway_tls_routes.rs`) — TLSRoute
-   passthrough routing. `from_routes` sorts each colliding hostname bucket (and the
+   terminate/passthrough routing. `from_units` sorts each colliding hostname bucket (and the
    catch-all) via `tls_route_precedence` and warns via `warn_tls_route_collision`.
-   `match_route` unchanged. (Lower severity — picks a route/backend, not a cert — but
+   It consumes the sorted vector into one selected `Arc<TlsRouteUnit>` per slot;
+   `match_route` clones that Arc with unchanged selection semantics. Configured
+   runners-up remain in the canonical unit cache for the next listener rebuild;
+   published snapshots no longer retain losing candidate Arcs or their vectors.
+   (Lower severity — picks a route/backend, not a cert — but
    the same non-determinism class, and the Gateway API tiebreak now applies.)
 
 Re-reports of the form "`match_sni`/`match_route` silently returns only the first of
@@ -78,7 +83,8 @@ collisions reach the data plane unguarded.
   rebuild paths iterate, so plumbing it is one field (Gateway case) or zero (EdgionTls
   / TLSRoute read `.metadata` directly).
 - Sorting happens at **rebuild time** (config-sync path), so the handshake/lookup paths
-  stay plain `first()` calls with zero added cost.
+  retain their existing winner selection without runtime sorting. TLSRoute now
+  clones the preselected Arc directly.
 - Every `tracing::warn!` lives only in a rebuild path, never in `match_sni`/`match_route`,
   so the data-plane handshake hot-path tracing prohibition
   ([03-coding/01-log-safety.md](../../../03-coding/01-log-safety.md)) is respected.
@@ -149,6 +155,21 @@ Unit tests in `tls_store.rs` (EdgionTls):
 
 Unit test in `gateway_tls_routes.rs` (TLSRoute):
 - `test_same_hostname_collision_prefers_oldest_deterministically`.
+- `test_collision_precedence_for_every_slot_kind` covers timestamp, missing
+  timestamp, namespace and name ordering across exact, wildcard and catch-all.
+- `test_exact_longest_wildcard_and_catch_all_priority` and
+  `test_raw_and_effective_hostname_inputs` preserve the existing lookup/input
+  semantics; `test_same_unit_shared_across_sni_hostnames` checks unit and selector
+  identity.
+- `test_published_slots_do_not_retain_losers` isolates snapshot ownership with
+  Weak handles after dropping input owners; it does not claim configured losers
+  disappear from the canonical cache.
+- `test_rebuild_promotes_runner_up_without_mutating_old_snapshot` verifies new
+  winner publication, old snapshot stability, clearing and final unit release.
+
+These TLSRoute tests do not establish correct listener-specific hostname
+projection. That known defect remains in
+[the attachment-scoping task](../../../../tasks/todo/scope-tlsroute-effective-hostnames-to-attachments.md).
 
 Integration scenario `EdgionTls/sni_collision` (`edgion-tests/integration/conf/EdgionTls/sni_collision/`
 + suite `edgion-tests/src/client/suites/edgion_tls/sni_collision/`): two EdgionTls bind the same
@@ -165,8 +186,9 @@ test, it **skips when only LibreSSL is present** (macOS dev) and runs under genu
 
 - Gateway API defines explicit cross-Gateway / cross-resource SNI collision semantics —
   re-check the tiebreak against the spec.
-- A matcher stops using `first()` (e.g. multi-cert SNI selection lands) — re-check the
-  deterministic-slot invariant.
+- A matcher changes winner selection (e.g. multi-cert SNI selection lands) —
+  re-check the deterministic-slot invariant. TLSRoute's winner-only publication
+  preserves the sorted first candidate rather than introducing failover.
 - A controller-side collision status condition is implemented — cross-link it here.
 
 ## Reference
