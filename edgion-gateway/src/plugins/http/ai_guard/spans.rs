@@ -12,7 +12,30 @@
 
 use edgion_resources::resources::edgion_plugins::AiGuardRole;
 
-use crate::ai::json_span::{decode_json_string, Field, Node, Parser};
+use crate::ai::json_span::{decode_json_string, Field, Node, Parser, StringToken};
+
+const MAX_RECOGNIZED_ROLE_BYTES: usize = 9;
+const TEXT_PART_TYPE_BYTES: usize = 4;
+
+/// Maximum quoted JSON token size that can decode to at most `limit` bytes.
+///
+/// Escaped ASCII (`\u00XX`) establishes the worst-case ratio: six encoded
+/// bytes for one decoded byte. Saturation only disables this early rejection;
+/// the decoded length remains authoritative.
+fn max_encoded_json_string_token_bytes(limit: usize) -> usize {
+    limit.saturating_mul(6).saturating_add(2)
+}
+
+fn token_can_decode_within(token: &StringToken, limit: usize) -> bool {
+    token.end.saturating_sub(token.start) <= max_encoded_json_string_token_bytes(limit)
+}
+
+fn decode_fixed_value(body: &[u8], token: &StringToken, max_recognized_bytes: usize) -> Option<String> {
+    if !token_can_decode_within(token, max_recognized_bytes) {
+        return None;
+    }
+    decode_json_string(&body[token.start..token.end])
+}
 
 /// Which text position inside a message a span came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -93,7 +116,7 @@ pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, S
                 // A wrong-typed role is as unguardable as a missing one: a
                 // role-restricted rule would silently not apply.
                 let token = node.string_token().ok_or(SpanError::Unparseable)?;
-                decode_json_string(&body[token.start..token.end])
+                decode_fixed_value(body, token, MAX_RECOGNIZED_ROLE_BYTES)
                     .as_deref()
                     .and_then(parse_role)
             }
@@ -109,15 +132,19 @@ pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, S
         };
 
         let push = |key: GuardSpanKey,
-                    token: &crate::ai::json_span::StringToken,
+                    token: &StringToken,
                     spans: &mut Vec<GuardSpan>,
                     total: &mut usize|
          -> Result<(), SpanError> {
-            // Check the raw token length first: it is an upper bound on the
-            // decoded length, so an oversized span is rejected without ever
-            // materializing it. Decoding first would make peak allocation
-            // follow the body size rather than the configured span bound.
-            if token.end.saturating_sub(token.start) > limits.max_span_bytes.saturating_add(2) {
+            // The count is already exhausted, so decoding another selected
+            // value cannot change the result and would waste bounded work.
+            if spans.len() >= limits.max_spans {
+                return Err(SpanError::Bounds);
+            }
+            // A valid JSON string can consume at most six encoded bytes per
+            // decoded byte. Reject only when even that worst case exceeds the
+            // configured decoded limit.
+            if !token_can_decode_within(token, limits.max_span_bytes) {
                 return Err(SpanError::Bounds);
             }
             let text = decode_json_string(&body[token.start..token.end]).ok_or(SpanError::Unparseable)?;
@@ -126,9 +153,6 @@ pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, S
             }
             *total = total.checked_add(text.len()).ok_or(SpanError::Bounds)?;
             if *total > limits.max_total_span_bytes {
-                return Err(SpanError::Bounds);
-            }
-            if spans.len() >= limits.max_spans {
                 return Err(SpanError::Bounds);
             }
             spans.push(GuardSpan {
@@ -152,26 +176,33 @@ pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, S
             Node::Array(parts) => {
                 for (part_index, part) in parts.iter().enumerate() {
                     let part_index = u32::try_from(part_index).map_err(|_| SpanError::Bounds)?;
+                    if part.object_marker().is_none() {
+                        continue;
+                    }
                     let is_text = match crate::ai::json_span::field(part, "type") {
-                        Field::Unique(node) => node
-                            .string_token()
-                            .and_then(|token| decode_json_string(&body[token.start..token.end]))
-                            .is_some_and(|value| value == "text"),
-                        Field::Missing | Field::Ambiguous => false,
+                        Field::Unique(node) => node.string_token().is_some_and(|token| {
+                            decode_fixed_value(body, token, TEXT_PART_TYPE_BYTES).is_some_and(|value| value == "text")
+                        }),
+                        Field::Missing => false,
+                        Field::Ambiguous => return Err(SpanError::Unparseable),
                     };
                     if !is_text {
                         // Non-text parts are rejected downstream by the provider
                         // translators, so they are not a live guarded path.
                         continue;
                     }
-                    if let Field::Unique(node) = crate::ai::json_span::field(part, "text") {
-                        if let Some(token) = node.string_token() {
-                            let key = GuardSpanKey {
-                                message_index,
-                                part: GuardPart::TextPart(part_index),
-                            };
-                            push(key, token, &mut spans, &mut total)?;
+                    match crate::ai::json_span::field(part, "text") {
+                        Field::Unique(node) => {
+                            if let Some(token) = node.string_token() {
+                                let key = GuardSpanKey {
+                                    message_index,
+                                    part: GuardPart::TextPart(part_index),
+                                };
+                                push(key, token, &mut spans, &mut total)?;
+                            }
                         }
+                        Field::Missing => {}
+                        Field::Ambiguous => return Err(SpanError::Unparseable),
                     }
                 }
             }
@@ -228,6 +259,132 @@ mod tests {
         let body = r#"{"messages":[{"role":"user","content":"café \"q\" €"}]}"#.as_bytes();
         let spans = select_spans(body, limits()).expect("selects");
         assert_eq!(spans[0].current, "café \"q\" €");
+    }
+
+    #[test]
+    fn escaped_text_uses_its_decoded_length_for_bounds() {
+        let exact = br#"{"messages":[{"role":"user","content":"\u0061"}]}"#;
+        let one_byte = SpanLimits {
+            max_spans: 1,
+            max_span_bytes: 1,
+            max_total_span_bytes: 1,
+        };
+        let spans = select_spans(exact, one_byte).expect("escaped byte fits decoded bound");
+        assert_eq!(spans[0].current, "a");
+
+        let plus_one = br#"{"messages":[{"role":"user","content":"\u0061\u0062"}]}"#;
+        assert_eq!(select_spans(plus_one, one_byte), Err(SpanError::Bounds));
+    }
+
+    #[test]
+    fn surrogate_pair_uses_its_decoded_utf8_length_for_bounds() {
+        let four_bytes = SpanLimits {
+            max_spans: 1,
+            max_span_bytes: 4,
+            max_total_span_bytes: 4,
+        };
+        let exact = br#"{"messages":[{"role":"user","content":"\uD83D\uDE00"}]}"#;
+        let spans = select_spans(exact, four_bytes).expect("four-byte scalar fits");
+        assert_eq!(spans[0].current, "😀");
+
+        let plus_one = br#"{"messages":[{"role":"user","content":"\uD83D\uDE00a"}]}"#;
+        assert_eq!(select_spans(plus_one, four_bytes), Err(SpanError::Bounds));
+    }
+
+    #[test]
+    fn zero_and_overflow_encoded_bounds_are_safe() {
+        assert_eq!(max_encoded_json_string_token_bytes(usize::MAX), usize::MAX);
+
+        let zero = SpanLimits {
+            max_spans: 1,
+            max_span_bytes: 0,
+            max_total_span_bytes: 0,
+        };
+        let empty = br#"{"messages":[{"role":"user","content":""}]}"#;
+        assert_eq!(select_spans(empty, zero).expect("empty span fits")[0].current, "");
+
+        let nonempty = br#"{"messages":[{"role":"user","content":"\u0061"}]}"#;
+        assert_eq!(select_spans(nonempty, zero), Err(SpanError::Bounds));
+    }
+
+    #[test]
+    fn escaped_fixed_vocabulary_and_overlong_unknown_values_keep_their_semantics() {
+        let escaped = br#"{"messages":[{"role":"\u0075ser","content":[{"type":"t\u0065xt","text":"x"}]}]}"#;
+        let spans = select_spans(escaped, limits()).expect("escaped fixed values decode");
+        assert_eq!(spans[0].role, Some(AiGuardRole::User));
+        assert_eq!(spans[0].current, "x");
+
+        let long_role = "r".repeat(55);
+        let long_type = "t".repeat(25);
+        let body = format!(
+            r#"{{"messages":[{{"role":"{long_role}","content":"unknown role"}},{{"role":"user","content":[{{"type":"{long_type}","text":"skipped"}},{{"type":"text","text":"selected"}}]}}]}}"#
+        );
+        let spans = select_spans(body.as_bytes(), limits()).expect("overlong unknown values skip decoding");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].role, None);
+        assert_eq!(spans[0].current, "unknown role");
+        assert_eq!(spans[1].current, "selected");
+    }
+
+    #[test]
+    fn mixed_non_object_parts_are_skipped_without_hiding_valid_text() {
+        let body =
+            br#"{"messages":[{"role":"user","content":["raw",null,[],7,true,{"type":"text","text":"selected"}]}]}"#;
+        let spans = select_spans(body, limits()).expect("non-object parts are skipped");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].key.part, GuardPart::TextPart(5));
+        assert_eq!(spans[0].current, "selected");
+    }
+
+    #[test]
+    fn duplicate_part_type_is_unparseable_in_either_order() {
+        for part in [
+            r#"{"type":"text","type":"image_url","text":"x"}"#,
+            r#"{"type":"image_url","type":"text","text":"x"}"#,
+        ] {
+            let body = format!(r#"{{"messages":[{{"role":"user","content":[{part}]}}]}}"#);
+            assert_eq!(select_spans(body.as_bytes(), limits()), Err(SpanError::Unparseable));
+        }
+    }
+
+    #[test]
+    fn duplicate_text_on_a_text_part_is_unparseable_in_either_order() {
+        for part in [
+            r#"{"type":"text","text":"first","text":"second"}"#,
+            r#"{"type":"text","text":"second","text":"first"}"#,
+        ] {
+            let body = format!(r#"{{"messages":[{{"role":"user","content":[{part}]}}]}}"#);
+            assert_eq!(select_spans(body.as_bytes(), limits()), Err(SpanError::Unparseable));
+        }
+    }
+
+    #[test]
+    fn duplicate_text_on_a_non_text_part_is_not_inspected() {
+        let body = br#"{"messages":[{"role":"user","content":[{"type":"image_url","text":"first","text":"second"},{"type":"text","text":"selected"}]}]}"#;
+        let spans = select_spans(body, limits()).expect("non-text fields are skipped");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].current, "selected");
+    }
+
+    #[test]
+    fn span_count_is_checked_before_decoding_the_first_excess_value() {
+        let body = br#"{"messages":[{"role":"user","content":"first"},{"role":"user","content":"\q"}]}"#;
+        let one_span = SpanLimits {
+            max_spans: 1,
+            max_span_bytes: 64,
+            max_total_span_bytes: 128,
+        };
+        assert_eq!(select_spans(body, one_span), Err(SpanError::Bounds));
+        assert_eq!(
+            select_spans(
+                body,
+                SpanLimits {
+                    max_spans: 2,
+                    ..one_span
+                }
+            ),
+            Err(SpanError::Unparseable)
+        );
     }
 
     #[test]

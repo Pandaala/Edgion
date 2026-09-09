@@ -28,4 +28,4 @@
 - Sixteen rule tests cover exact upstream interpolation differentially, exact/plus-one limits, repeated-capture amplification, multi-span aggregate overflow, chained shrink/restoration, zero-cap deletion, missing replacement and oversized no-match behavior. Existing order, role, allow/reject, flagged and later-rule semantics remain covered.
 - Fresh independent final reviewer `b0236_ai_guard_plugin_analysis`: LGTM, no Must Fix or Should Fix. It independently checked the locked upstream grammar, empty-match iteration, byte arithmetic/reservation, aggregate accounting, failure routing, full call chains and project hard rules.
 - Verification: rules 16/16 and full AI Guard 40/40; workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed. No integration, schema, logging, metric, documentation or public interface edit.
-- Local commit SHA is backfilled by the next batch; never push.
+- Commit: `e0e6c1a3`; never pushed by the campaign.

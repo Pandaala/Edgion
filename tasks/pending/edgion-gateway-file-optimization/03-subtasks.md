@@ -332,12 +332,12 @@
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | examined-no-change | B0235: minimal private-module facade retained; independent LGTM, AI Guard 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | changed | B0236: saturated physical-cap conversion, lazy refusal facts and borrowed evaluator projection; independent plan/final LGTM, AI Guard 32/32 |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | changed | B0237: bounded capture expansion and live replacement accounting; independent revised-plan/final LGTM, AI Guard 40/40 |
-| `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | analysis-in-progress | B0238: bounded JSON span selection, ownership and token-range analysis |
+| `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | changed | B0238: decoded-bound correctness, duplicate-part fail-close and bounded discriminator decoding; independent plan/final LGTM, AI Guard 49/49 |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | examined-no-change | B0064 |
 | `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | changed | B0064 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
-| `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | pending | Added by external commit `d6d83bc5`; full audit pending |
+| `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | analysis-ready | B0239: current transport satisfies canonical egress/TLS/bounds; queued independent no-change review after B0238 commit |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/mod.rs` | `plugins-http-bandwidth-limit` | source | examined-no-change | B0065 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs` | `plugins-http-bandwidth-limit` | source | changed | B0065 |
 | `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | examined-no-change | B0067 |

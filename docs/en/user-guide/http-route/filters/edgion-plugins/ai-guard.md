@@ -113,9 +113,14 @@ Only text an LLM would actually read:
 - `messages[i].content` when it is a string;
 - `messages[i].content[j].text` when the part's `type` is `text`.
 
-Non-text content parts (images, audio, files) are not inspected. A message whose
-`role` or `content` is missing, duplicated, or ambiguous makes the request
-unguardable, which follows the failure policy below.
+Each message must have exactly one string `role`; a missing, non-string, or
+duplicate role makes the request unguardable. Duplicate message `content` also
+makes the request unguardable, while missing or unsupported message content is
+skipped. In a content array, non-object elements and parts with a missing,
+non-string, or unrecognized `type` are skipped. A duplicate `type` makes the
+request unguardable. When the unique type is `text`, a duplicate `text` makes
+the request unguardable, while missing or non-string text is skipped. Text
+fields of non-text parts are not inspected.
 
 ## Masking
 
